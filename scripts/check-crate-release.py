@@ -265,8 +265,15 @@ def unique_object(pairs):
     return result
 
 
+def reject_json_constant(value):
+    raise ValueError("invalid JSON constant")
+
+
 def read_json(data):
-    return json.loads(data, object_pairs_hook=unique_object)
+    try:
+        return json.loads(data, object_pairs_hook=unique_object, parse_constant=reject_json_constant)
+    except RecursionError as error:
+        raise ValueError("invalid JSON depth") from error
 
 
 def validate_receipt_data(data):
@@ -490,7 +497,7 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise GateError("greennode: invalid release commit")
     if (not isinstance(release, dict) or release.get("tagName") != tag or release.get("isDraft") is not False
-            or (publish and release.get("isImmutable") is not True)):
+            or release.get("isImmutable") is not True):
         raise GateError("greennode: invalid release publication")
     published_at = release.get("publishedAt")
     try:
@@ -520,7 +527,7 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
         if (not isinstance(users, list) or not all(isinstance(user, dict) for user in users)
                 or not any(user.get("kind") == "user" and user.get("login") == "dannyota" for user in users)):
             raise GateError(f"{name}: required owner missing")
-    if not isinstance(tree, bytes) or not tree or not tree.endswith(b"\0"):
+    if not isinstance(tree, bytes) or not tree or len(tree) > 8 * 1024 * 1024 or not tree.endswith(b"\0"):
         raise GateError("greennode: invalid tagged tree")
     paths = set()
     for entry in tree[:-1].split(b"\0"):
@@ -551,6 +558,8 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
     expected = {platform: {f"greennode-{platform}.{extension}", f"greennode-{platform}.sha256"}
                 for platform, extension in layouts.items()}
     expected["crate-checksums"] = {"crate-checksums.json"}
+    if set(by_name) != set().union(*expected.values()):
+        raise GateError("greennode: unexpected release assets")
     artifacts = Path(artifacts)
     if artifacts.is_symlink() or not artifacts.is_dir() or {path.name for path in artifacts.iterdir()} != set(expected):
         raise GateError("greennode: invalid artifact directories")
@@ -563,15 +572,28 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
             asset = by_name.get(name, {})
             if path.is_symlink() or not path.is_file() or asset.get("state") != "uploaded":
                 raise GateError("greennode: missing release artifact")
+            limit = 1024 * 1024 if name == "crate-checksums.json" or name.endswith(".sha256") else 128 * 1024 * 1024
             try:
+                if path.stat().st_size > limit:
+                    raise GateError("greennode: release artifact too large")
                 with path.open("rb") as stream:
                     if name == "crate-checksums.json":
-                        receipt_bytes = stream.read(1024 * 1024 + 1)
-                        if len(receipt_bytes) > 1024 * 1024:
+                        receipt_bytes = stream.read(limit + 1)
+                        if len(receipt_bytes) > limit:
                             raise GateError("greennode: invalid release receipt")
                         digest = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
                     else:
-                        digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+                        hashed = hashlib.sha256()
+                        total = 0
+                        while True:
+                            data = stream.read(min(65536, limit + 1 - total))
+                            if not data:
+                                break
+                            total += len(data)
+                            if total > limit:
+                                raise GateError("greennode: release artifact too large")
+                            hashed.update(data)
+                        digest = "sha256:" + hashed.hexdigest()
             except OSError as error:
                 raise GateError("greennode: unreadable release artifact") from error
             if asset.get("digest") != digest:
@@ -586,6 +608,17 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
                     raise GateError("greennode: invalid release receipt") from error
     for name in unregistered:
         print(f"{name}: unregistered")
+
+
+def evidence_file(path, limit):
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise GateError("greennode: invalid evidence file")
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise GateError("greennode: evidence file too large")
+    return data
 
 
 def main(args, root=None, fetch=None, sleep=None):
@@ -604,11 +637,12 @@ def main(args, root=None, fetch=None, sleep=None):
             publish = len(args) == 10
             if publish and args[9] != "--publish":
                 raise GateError("greennode: invalid evidence arguments")
-            release = read_json(Path(args[3]).read_bytes())
-            runs = read_json(Path(args[4]).read_bytes())
-            owners = {"greennode-sdk": read_json(Path(args[5]).read_bytes()),
-                      "greennode": read_json(Path(args[6]).read_bytes())}
-            evidence(args[1], args[2], release, runs, owners, Path(args[7]), Path(args[8]).read_bytes(), publish)
+            release = read_json(evidence_file(args[3], 1024 * 1024))
+            runs = read_json(evidence_file(args[4], 1024 * 1024))
+            owners = {"greennode-sdk": read_json(evidence_file(args[5], 1024 * 1024)),
+                      "greennode": read_json(evidence_file(args[6], 1024 * 1024))}
+            evidence(args[1], args[2], release, runs, owners, Path(args[7]),
+                     evidence_file(args[8], 8 * 1024 * 1024), publish)
             return 0
         if args and args[0] == "manifest":
             rest = args[1:]

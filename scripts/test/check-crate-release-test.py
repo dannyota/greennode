@@ -6,6 +6,7 @@ import threading
 import importlib.util
 import io
 import json
+import os
 import ssl
 import tarfile
 import sys
@@ -1160,7 +1161,7 @@ class Evidence(unittest.TestCase):
         self.save_receipt()
         self.assertIsNone(self.validate())
 
-    def test_evidence_command(self):
+    def command_args(self):
         files = []
         for name, data in (("release.json", self.release), ("runs.json", self.runs),
                            ("sdk.json", self.owners["greennode-sdk"]), ("tool.json", self.owners["greennode"])):
@@ -1169,7 +1170,80 @@ class Evidence(unittest.TestCase):
             files.append(str(path))
         tree = self.root / "tree"
         tree.write_bytes(self.tree)
-        args = ["evidence", self.tag, self.commit, *files, str(self.artifacts), str(tree), "--publish"]
+        return ["evidence", self.tag, self.commit, *files, str(self.artifacts), str(tree), "--publish"]
+
+    def test_evidence_json_files_have_size_limits(self):
+        args = self.command_args()
+        for position in (3, 4, 5, 6):
+            with self.subTest(position=position):
+                path = Path(args[position])
+                original = path.read_bytes()
+                path.write_bytes(original + b" " * (1024 * 1024 + 1))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertNotEqual(check.main(args), 0)
+                path.write_bytes(original)
+                self.assertEqual(check.main(args), 0)
+
+    def test_evidence_tree_has_size_limit(self):
+        args = self.command_args()
+        path = Path(args[8])
+        original = path.read_bytes()
+        entry = b"100644 blob " + b"a" * 40 + b"\tfile"
+        count = (8 * 1024 * 1024 // (len(entry) + 7)) + 1
+        path.write_bytes(b"".join(entry + f"{i:06x}".encode() + b"\0" for i in range(count)))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertNotEqual(check.main(args), 0)
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_evidence_archive_has_size_limit(self):
+        path = self.artifacts / "darwin-arm64" / "greennode-darwin-arm64.tar.gz"
+        original = path.read_bytes()
+        asset = self.release["assets"][0]
+        digest = asset["digest"]
+        with path.open("wb") as stream:
+            stream.truncate(128 * 1024 * 1024 + 1)
+        with path.open("rb") as stream:
+            asset["digest"] = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(original)
+        asset["digest"] = digest
+        self.assertIsNone(self.validate())
+
+    def test_json_rejects_nonfinite_constants(self):
+        for value in (b"NaN", b"Infinity", b"-Infinity"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    check.read_json(b'{"extra":' + value + b'}')
+        self.assertEqual(check.read_json(b'{"extra":1}'), {"extra": 1})
+
+    def test_deep_json_fails_safely(self):
+        args = self.command_args()
+        path = Path(args[3])
+        original = path.read_bytes()
+        path.write_bytes(b'{"x":' * 50000 + b"0" + b"}" * 50000)
+        errors = io.StringIO()
+        limit = sys.getrecursionlimit()
+        scanner = json.scanner.make_scanner
+        try:
+            sys.setrecursionlimit(100)
+            json.scanner.make_scanner = json.scanner.py_make_scanner
+            try:
+                with contextlib.redirect_stderr(errors):
+                    result = check.main(args)
+            except RecursionError:
+                self.fail("deep JSON escaped as an exception")
+        finally:
+            json.scanner.make_scanner = scanner
+            sys.setrecursionlimit(limit)
+        self.assertNotEqual(result, 0)
+        self.assertIn("invalid", errors.getvalue())
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_evidence_command(self):
+        args = self.command_args()
         self.assertEqual(check.main(args), 0)
         self.assertNotEqual(check.main(args[:-1] + ["--bad"]), 0)
 
@@ -1194,11 +1268,92 @@ class Evidence(unittest.TestCase):
         self.release["tagName"] = self.tag
         self.assertIsNone(self.validate())
 
-    def test_immutable_only_required_to_publish(self):
+    def test_immutable_required_in_all_modes(self):
         self.release["isImmutable"] = False
+        for publish in (False, True):
+            with self.subTest(publish=publish):
+                with self.assertRaises(ValueError):
+                    self.validate(publish=publish)
+        self.release["isImmutable"] = True
+        self.assertIsNone(self.validate(publish=False))
+
+    def test_zero_runs_refused(self):
+        run = self.runs.pop()
         with self.assertRaises(ValueError):
             self.validate()
-        self.assertIsNone(self.validate(publish=False))
+        self.runs.append(run)
+        self.assertIsNone(self.validate())
+
+    def test_extra_release_asset_refused(self):
+        self.release["assets"].append({"name": "unexpected", "state": "uploaded", "digest": "sha256:" + "0" * 64})
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].pop()
+        self.assertIsNone(self.validate())
+
+    def test_not_uploaded_asset_refused(self):
+        asset = self.release["assets"][0]
+        asset["state"] = "new"
+        with self.assertRaises(ValueError):
+            self.validate()
+        asset["state"] = "uploaded"
+        self.assertIsNone(self.validate())
+
+    def test_other_digest_algorithm_refused(self):
+        asset = self.release["assets"][0]
+        original = asset["digest"]
+        asset["digest"] = "sha512:" + original.removeprefix("sha256:")
+        with self.assertRaises(ValueError):
+            self.validate()
+        asset["digest"] = original
+        self.assertIsNone(self.validate())
+
+    def test_missing_owner_login_refused(self):
+        users = self.owners["greennode"]["users"]
+        users[0]["login"] = "another-user"
+        with self.assertRaises(ValueError):
+            self.validate()
+        users[0]["login"] = "dannyota"
+        self.assertIsNone(self.validate())
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires FIFO support")
+    def test_special_artifact_refused(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        os.mkfifo(path)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_symlinked_artifact_directory_refused(self):
+        path = self.artifacts / "crate-checksums"
+        backup = self.root / "receipt-dir"
+        path.rename(backup)
+        path.symlink_to(backup, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        backup.rename(path)
+        self.assertIsNone(self.validate())
+
+    def test_submodule_refused(self):
+        old = self.tree
+        self.tree += b"160000 commit " + b"c" * 40 + b"\tmodule\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = old
+        self.assertIsNone(self.validate())
+
+    def test_bare_cargo_config_refused(self):
+        old = self.tree
+        self.tree += b"100644 blob " + b"c" * 40 + b"\t.cargo/config\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = old
+        self.assertIsNone(self.validate())
 
     def test_run_exactly_one(self):
         self.runs.append(self.runs[0].copy())
