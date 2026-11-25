@@ -379,15 +379,38 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             Ok(best.clone())
         }
         ("sort", [Value::Array(values)]) => {
-            let mut sorted = values.clone();
-            sorted.sort_by(|a, b| match (a, b) {
-                (Value::Number(a), Value::Number(b)) => {
-                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                }
-                (Value::String(a), Value::String(b)) => a.cmp(b),
-                _ => std::cmp::Ordering::Equal,
-            });
-            Ok(Value::Array(sorted))
+            if values.iter().all(|value| matches!(value, Value::Number(_))) {
+                let mut numbers = values
+                    .iter()
+                    .map(|value| match value {
+                        Value::Number(number) if number.is_finite() => Ok(*number),
+                        Value::Number(_) => Err(EvaluationError::NonFinite),
+                        _ => Err(EvaluationError::FunctionType),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                numbers.sort_by(|a, b| {
+                    if a == b {
+                        std::cmp::Ordering::Equal
+                    } else {
+                        a.total_cmp(b)
+                    }
+                });
+                Ok(Value::Array(
+                    numbers.into_iter().map(Value::Number).collect(),
+                ))
+            } else {
+                let mut strings = values
+                    .iter()
+                    .map(|value| match value {
+                        Value::String(string) => Ok(string.clone()),
+                        _ => Err(EvaluationError::FunctionType),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                strings.sort();
+                Ok(Value::Array(
+                    strings.into_iter().map(Value::String).collect(),
+                ))
+            }
         }
         ("merge", values) => {
             let mut merged = std::collections::BTreeMap::new();
@@ -454,6 +477,21 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn sort_rejects_nonfinite_numbers() {
+        assert_eq!(
+            call(
+                "sort",
+                &[Value::Array(vec![
+                    Value::Number(1.0),
+                    Value::Number(f64::NAN),
+                    Value::Number(2.0)
+                ])]
+            ),
+            Err(EvaluationError::NonFinite)
+        );
+    }
 
     #[test]
     fn aggregate_functions_follow_go() {

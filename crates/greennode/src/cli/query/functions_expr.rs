@@ -79,38 +79,64 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         }
         return Ok(best.clone());
     }
-    let mut sorted = values.clone();
-    let mut failed = None;
-    sorted.sort_by(|a, b| {
-        let result = execute(reference, a).and_then(|ka| {
-            execute(reference, b)
-                .and_then(|kb| compare_keys(&ka, &kb, numeric).ok_or(EvaluationError::FunctionType))
-        });
-        match result {
-            Ok(order) => order,
-            Err(error) => {
-                if matches!(
-                    error,
-                    EvaluationError::Depth
-                        | EvaluationError::SliceOverflow
-                        | EvaluationError::NonFinite
-                        | EvaluationError::Uncomparable
-                        | EvaluationError::FunctionPanic
-                        | EvaluationError::Unsupported
-                        | EvaluationError::InvalidNode
-                ) {
-                    failed = Some(error);
-                } else if failed.is_none() {
-                    failed = Some(EvaluationError::FunctionComparison);
-                }
-                std::cmp::Ordering::Equal
-            }
-        }
-    });
-    if let Some(error) = failed {
-        return Err(error);
+    let mut keys = Vec::with_capacity(values.len());
+    keys.push(key);
+    for value in &values[1..] {
+        keys.push(execute(reference, value).map_err(comparison_error)?);
     }
-    Ok(Value::Array(sorted))
+    if numeric {
+        let mut indexed = keys
+            .into_iter()
+            .zip(values.iter())
+            .map(|(key, value)| match key {
+                Value::Number(number) if number.is_finite() => Ok((number, value)),
+                Value::Number(_) => Err(EvaluationError::NonFinite),
+                _ => Err(EvaluationError::FunctionComparison),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        indexed.sort_by(|(a, _), (b, _)| {
+            if a == b {
+                std::cmp::Ordering::Equal
+            } else {
+                a.total_cmp(b)
+            }
+        });
+        Ok(Value::Array(
+            indexed
+                .into_iter()
+                .map(|(_, value)| value.clone())
+                .collect(),
+        ))
+    } else {
+        let mut indexed = keys
+            .into_iter()
+            .zip(values.iter())
+            .map(|(key, value)| match key {
+                Value::String(string) => Ok((string, value)),
+                _ => Err(EvaluationError::FunctionComparison),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Ok(Value::Array(
+            indexed
+                .into_iter()
+                .map(|(_, value)| value.clone())
+                .collect(),
+        ))
+    }
+}
+
+fn comparison_error(error: EvaluationError) -> EvaluationError {
+    match error {
+        EvaluationError::Depth
+        | EvaluationError::SliceOverflow
+        | EvaluationError::NonFinite
+        | EvaluationError::Uncomparable
+        | EvaluationError::FunctionPanic
+        | EvaluationError::Unsupported
+        | EvaluationError::InvalidNode => error,
+        _ => EvaluationError::FunctionComparison,
+    }
 }
 
 fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, EvaluationError> {
@@ -209,6 +235,31 @@ mod tests {
                 Value::Array(vec![Value::Number(1.0), Value::Number(2.0)]),
                 Value::Number(2.0)
             ]))
+        );
+    }
+
+    #[test]
+    fn sort_by_keeps_signed_zero_order() {
+        let query = compile("sort_by(@, &@)").unwrap();
+        let input = Value::Array(vec![Value::Number(0.0), Value::Number(-0.0)]);
+        let Value::Array(values) = evaluate(&query, &input).unwrap() else {
+            panic!("expected array");
+        };
+        let [Value::Number(first), Value::Number(second)] = values.as_slice() else {
+            panic!("expected numbers");
+        };
+        assert_eq!(
+            (first.to_bits(), second.to_bits()),
+            (0.0f64.to_bits(), (-0.0f64).to_bits())
+        );
+    }
+
+    #[test]
+    fn sort_by_rejects_mixed_keys() {
+        let query = compile("sort_by(`[1,null,2]`, &@)").unwrap();
+        assert_eq!(
+            evaluate(&query, &Value::Null),
+            Err(super::EvaluationError::FunctionComparison)
         );
     }
 
