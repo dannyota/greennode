@@ -2,7 +2,7 @@
 
 use crate::cli::render::Value;
 
-use super::interpreter::{EvaluationError, WorkBudget, check};
+use super::interpreter::{EvaluationError, WorkBudget, charge_sort, charge_sort_bytes, check};
 
 #[derive(Clone, Copy)]
 pub(super) enum Type {
@@ -371,20 +371,6 @@ fn bytes_equal(
     Ok(true)
 }
 
-pub(super) fn charge_sort(length: usize, budget: &mut WorkBudget) -> Result<(), EvaluationError> {
-    let count = u64::try_from(length).map_err(|_| EvaluationError::WorkBudget)?;
-    let log = if length <= 1 {
-        0
-    } else {
-        usize::BITS - (length - 1).leading_zeros()
-    };
-    let units = count
-        .checked_mul(u64::from(log))
-        .and_then(|value| value.checked_add(count))
-        .ok_or(EvaluationError::WorkBudget)?;
-    budget.charge(units)
-}
-
 #[cfg(test)]
 fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
     call_budgeted(name, arguments, &mut WorkBudget::new())
@@ -423,6 +409,7 @@ pub(super) fn call_budgeted(
             let mut result = Vec::new();
             for key in values.keys() {
                 budget.charge(2)?;
+                budget.charge_bytes(key)?;
                 result.push(Value::String(key.clone()));
             }
             Ok(Value::Array(result))
@@ -432,7 +419,7 @@ pub(super) fn call_budgeted(
             let mut result = Vec::new();
             for value in values.values() {
                 budget.charge(1)?;
-                check(value, 1)?;
+                check(value, 1, budget)?;
                 budget.charge_value(value)?;
                 result.push(value.clone());
             }
@@ -462,21 +449,20 @@ pub(super) fn call_budgeted(
             if needle.len() > value.len() {
                 return Ok(Value::Bool(false));
             }
-            for start in 0..=value.len() - needle.len() {
-                if bytes_equal(
-                    &value.as_bytes()[start..start + needle.len()],
-                    needle.as_bytes(),
-                    budget,
-                )? {
-                    return Ok(Value::Bool(true));
-                }
-            }
-            Ok(Value::Bool(false))
+            let bytes = value
+                .len()
+                .checked_add(needle.len())
+                .ok_or(EvaluationError::WorkBudget)?;
+            budget.charge(u64::try_from(bytes).map_err(|_| EvaluationError::WorkBudget)?)?;
+            Ok(Value::Bool(value.contains(needle)))
         }
         ("contains", [Value::String(_), _]) => Ok(Value::Bool(false)),
         ("contains", [Value::Array(values), needle]) => {
             for value in values {
                 budget.charge(1)?;
+                if let (Value::String(left), Value::String(right)) = (value, needle) {
+                    budget.charge_compare_bytes(left, right)?;
+                }
                 if matches!(
                     (value, needle),
                     (Value::Array(_), Value::Array(_)) | (Value::Object(_), Value::Object(_))
@@ -519,7 +505,7 @@ pub(super) fn call_budgeted(
         }
         ("to_array", [value]) => {
             budget.charge(1)?;
-            check(value, 1)?;
+            check(value, 1, budget)?;
             budget.charge_value(value)?;
             Ok(Value::Array(vec![value.clone()]))
         }
@@ -569,7 +555,10 @@ pub(super) fn call_budgeted(
                 budget.charge(1)?;
                 let ordering = match (value, best) {
                     (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
-                    (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+                    (Value::String(a), Value::String(b)) => {
+                        budget.charge_compare_bytes(a, b)?;
+                        Some(a.cmp(b))
+                    }
                     _ => return Err(EvaluationError::FunctionType),
                 };
                 if (name == "max" && ordering == Some(std::cmp::Ordering::Greater))
@@ -583,13 +572,18 @@ pub(super) fn call_budgeted(
         }
         ("sort", [Value::Array(values)]) => {
             budget.charge(1)?;
+            let mut max_bytes = 0;
             for value in values {
                 budget.charge(1)?;
+                if let Value::String(value) = value {
+                    max_bytes = max_bytes.max(value.len());
+                }
                 if matches!(value, Value::Number(number) if !number.is_finite()) {
                     return Err(EvaluationError::NonFinite);
                 }
             }
             charge_sort(values.len(), budget)?;
+            charge_sort_bytes(values.len(), max_bytes, budget)?;
             for value in values {
                 budget.charge_value(value)?;
             }
@@ -611,7 +605,9 @@ pub(super) fn call_budgeted(
                 };
                 for (key, value) in map {
                     budget.charge(1)?;
+                    budget.charge_bytes(key)?;
                     budget.charge_value(value)?;
+                    budget.charge_map_key(key, merged.len())?;
                     merged.insert(key.clone(), value.clone());
                 }
             }
@@ -700,11 +696,121 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn sort_charge_uses_ceiling_logarithm() {
+    fn merge_charges_key_comparisons() {
+        let prefix = "x".repeat(1_024);
+        let left = Value::Object(BTreeMap::from([(format!("{prefix}a"), Value::Null)]));
+        let right = Value::Object(BTreeMap::from([(format!("{prefix}b"), Value::Null)]));
         let mut budget = WorkBudget::new();
-        budget.charge(9_999_991).unwrap();
-        assert_eq!(charge_sort(3, &mut budget), Ok(()));
-        assert_eq!(budget.charge(1), Err(EvaluationError::WorkBudget));
+        budget.charge(9_997_500).unwrap();
+        assert_eq!(
+            call_budgeted("merge", &[left, right], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn contains_long_repeated_strings_uses_linear_work() {
+        let input = Value::String("a".repeat(1024 * 1024));
+        let needle = Value::String(format!("{}b", "a".repeat(32 * 1024)));
+        let mut budget = WorkBudget::new();
+        budget.charge(8_000_000).unwrap();
+        assert_eq!(
+            call_budgeted("contains", &[input, needle], &mut budget),
+            Ok(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn extrema_and_sort_charge_string_comparison_bytes() {
+        let prefix = "x".repeat(1_024);
+        let input = Value::Array(vec![
+            Value::String(format!("{prefix}a")),
+            Value::String(format!("{prefix}b")),
+        ]);
+        for (name, used) in [("min", 9_998_500), ("max", 9_998_500), ("sort", 9_995_000)] {
+            let mut budget = WorkBudget::new();
+            budget.charge(used).unwrap();
+            assert_eq!(
+                call_budgeted(name, std::slice::from_ref(&input), &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn contains_charges_long_string_comparisons() {
+        let prefix = "x".repeat(64 * 1024);
+        let haystack = Value::Array(vec![Value::String(format!("{prefix}a")); 64]);
+        let needle = Value::String(format!("{prefix}b"));
+        let args = [haystack, needle];
+        let mut budget = WorkBudget::new();
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn standalone_key_copies_consume_byte_budget() {
+        for name in ["keys", "merge"] {
+            let input = Value::Object(BTreeMap::from([("x".repeat(1_024), Value::Null)]));
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            assert_eq!(
+                call_budgeted(name, &[input], &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sort_charge_uses_ceiling_logarithm() {
+        for n in 1usize..=200 {
+            let log = if n <= 1 {
+                0
+            } else {
+                usize::BITS - (n - 1).leading_zeros()
+            };
+            let allowed = n as u64 * (u64::from(log) + 32);
+            let mut budget = WorkBudget::new();
+            budget.charge(10_000_000 - allowed).unwrap();
+            assert_eq!(charge_sort(n, &mut budget), Ok(()));
+            assert_eq!(budget.charge(1), Err(EvaluationError::WorkBudget));
+            for variant in 0..3 {
+                let mut values = (0..n).collect::<Vec<_>>();
+                if variant == 1 {
+                    values.reverse();
+                }
+                if variant == 2 {
+                    let mut state = 12345u64;
+                    for index in (1..n).rev() {
+                        state = state
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1);
+                        values.swap(index, (state as usize) % (index + 1));
+                    }
+                }
+                let mut comparisons = 0u64;
+                values.sort_by(|a, b| {
+                    comparisons += 1;
+                    a.cmp(b)
+                });
+                assert!(
+                    comparisons <= allowed,
+                    "n={n}, variant={variant}, comparisons={comparisons}, allowed={allowed}"
+                );
+            }
+        }
     }
 
     #[test]

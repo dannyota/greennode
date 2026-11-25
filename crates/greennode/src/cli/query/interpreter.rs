@@ -95,11 +95,16 @@ impl WorkBudget {
                     return Ok(false);
                 }
                 for ((ka, va), (kb, vb)) in a.iter().zip(b) {
+                    self.charge_compare_bytes(ka, kb)?;
                     if ka != kb || !self.equal_at(va, vb, depth + 1)? {
                         return Ok(false);
                     }
                 }
                 Ok(true)
+            }
+            (Value::String(left), Value::String(right)) => {
+                self.charge_compare_bytes(left, right)?;
+                Ok(left == right)
             }
             _ => Ok(left == right),
         }
@@ -127,13 +132,43 @@ impl WorkBudget {
                 if depth >= 128 {
                     return Err(EvaluationError::Depth);
                 }
-                for value in values.values() {
+                for (key, value) in values {
+                    self.charge_bytes(key)?;
                     self.charge_value_at(value, depth + 1)?;
                 }
             }
+            Value::String(value) => self.charge_bytes(value)?,
             _ => {}
         }
         Ok(())
+    }
+
+    pub(super) fn charge_compare_bytes(
+        &mut self,
+        left: &str,
+        right: &str,
+    ) -> Result<(), EvaluationError> {
+        self.charge(
+            u64::try_from(left.len().min(right.len())).map_err(|_| EvaluationError::WorkBudget)?,
+        )
+    }
+
+    pub(super) fn charge_map_key(
+        &mut self,
+        key: &str,
+        entries: usize,
+    ) -> Result<(), EvaluationError> {
+        let bytes = u64::try_from(key.len()).map_err(|_| EvaluationError::WorkBudget)?;
+        let count = u64::try_from(entries).map_err(|_| EvaluationError::WorkBudget)?;
+        self.charge(
+            bytes
+                .checked_mul(count)
+                .ok_or(EvaluationError::WorkBudget)?,
+        )
+    }
+
+    pub(super) fn charge_bytes(&mut self, value: &str) -> Result<(), EvaluationError> {
+        self.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)
     }
 
     pub(super) fn charge(&mut self, units: u64) -> Result<(), EvaluationError> {
@@ -149,7 +184,44 @@ impl WorkBudget {
     }
 }
 
-pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
+fn sort_units(length: usize) -> Result<u64, EvaluationError> {
+    let count = u64::try_from(length).map_err(|_| EvaluationError::WorkBudget)?;
+    let log = if length <= 1 {
+        0
+    } else {
+        usize::BITS - (length - 1).leading_zeros()
+    };
+    count
+        .checked_mul(u64::from(log) + 32)
+        .ok_or(EvaluationError::WorkBudget)
+}
+
+pub(super) fn charge_sort(length: usize, budget: &mut WorkBudget) -> Result<(), EvaluationError> {
+    budget.charge(sort_units(length)?)
+}
+
+pub(super) fn charge_sort_bytes(
+    length: usize,
+    max_bytes: usize,
+    budget: &mut WorkBudget,
+) -> Result<(), EvaluationError> {
+    if length <= 1 {
+        return Ok(());
+    }
+    let bytes = u64::try_from(max_bytes).map_err(|_| EvaluationError::WorkBudget)?;
+    budget.charge(
+        sort_units(length)?
+            .checked_mul(bytes)
+            .ok_or(EvaluationError::WorkBudget)?,
+    )
+}
+
+pub(super) fn check(
+    value: &Value,
+    depth: usize,
+    budget: &mut WorkBudget,
+) -> Result<(), EvaluationError> {
+    budget.charge(1)?;
     if depth > 128 {
         return Err(EvaluationError::Depth);
     }
@@ -160,7 +232,7 @@ pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> 
                 return Err(EvaluationError::Depth);
             }
             for item in items {
-                check(item, depth + 1)?;
+                check(item, depth + 1, budget)?;
             }
             Ok(())
         }
@@ -169,7 +241,7 @@ pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> 
                 return Err(EvaluationError::Depth);
             }
             for item in items.values() {
-                check(item, depth + 1)?;
+                check(item, depth + 1, budget)?;
             }
             Ok(())
         }
@@ -185,15 +257,15 @@ pub(in crate::cli) fn evaluate(
     query: &CompiledQuery,
     input: &Value,
 ) -> Result<Value, EvaluationError> {
-    check(input, 0)?;
     let mut budget = WorkBudget::new();
+    check(input, 0, &mut budget)?;
     let result = execute(&query.0, input, &mut budget)?;
-    check(&result, 0)?;
+    check(&result, 0, &mut budget)?;
     Ok(result)
 }
 
 fn copy(value: &Value, budget: &mut WorkBudget) -> Result<Value, EvaluationError> {
-    check(value, 0)?;
+    check(value, 0, budget)?;
     budget.charge_value(value)?;
     Ok(value.clone())
 }
@@ -203,7 +275,7 @@ fn push(
     value: Value,
     budget: &mut WorkBudget,
 ) -> Result<(), EvaluationError> {
-    check(&value, 1)?;
+    check(&value, 1, budget)?;
     budget.charge(1)?;
     items.push(value);
     Ok(())
@@ -282,10 +354,13 @@ pub(super) fn execute(
             _ => Err(EvaluationError::InvalidNode),
         },
         NodeKind::Field => match (&node.value, input) {
-            (NodeValue::Text(key), Value::Object(map)) => match map.get(key) {
-                Some(value) => copy(value, budget),
-                None => Ok(Value::Null),
-            },
+            (NodeValue::Text(key), Value::Object(map)) => {
+                budget.charge_map_key(key, map.len())?;
+                match map.get(key) {
+                    Some(value) => copy(value, budget),
+                    None => Ok(Value::Null),
+                }
+            }
             (NodeValue::Text(_), _) => Ok(Value::Null),
             _ => Err(EvaluationError::InvalidNode),
         },
@@ -401,8 +476,10 @@ pub(super) fn execute(
                     return Err(EvaluationError::InvalidNode);
                 };
                 let value = execute(child, input, budget)?;
-                check(&value, 1)?;
+                check(&value, 1, budget)?;
                 budget.charge(1)?;
+                budget.charge_bytes(key)?;
+                budget.charge_map_key(key, result.len())?;
                 result.insert(key.clone(), value);
             }
             Ok(Value::Object(result))
@@ -443,7 +520,7 @@ fn slice(
     while if step < 0 { index > stop } else { index < stop } {
         let position = usize::try_from(index).map_err(|_| EvaluationError::InvalidSlice)?;
         let value = items.get(position).ok_or(EvaluationError::InvalidSlice)?;
-        check(value, 1)?;
+        check(value, 1, budget)?;
         budget.charge_value(value)?;
         result.push(value.clone());
         let next = i64::try_from(index)
@@ -458,6 +535,124 @@ fn slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recursive_comparisons_charge_string_and_key_bytes() {
+        let long = "x".repeat(1_024);
+        for value in [
+            Value::String(long.clone()),
+            Value::Object(BTreeMap::from([(long.clone(), Value::Null)])),
+        ] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            assert_eq!(
+                budget.equal(&value, &value),
+                Err(EvaluationError::WorkBudget)
+            );
+        }
+    }
+
+    #[test]
+    fn multiselect_charges_key_comparisons() {
+        let prefix = "x".repeat(1_024);
+        let query =
+            super::super::compile(&format!("{{\"{prefix}a\": @, \"{prefix}b\": @}}")).unwrap();
+        let mut budget = WorkBudget::new();
+        budget.charge(9_997_500).unwrap();
+        assert_eq!(
+            execute(&query.0, &Value::Bool(true), &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn object_lookup_charges_key_comparison_bytes() {
+        let key = "x".repeat(1_024);
+        let query = super::super::compile(&format!("\"{key}\"")).unwrap();
+        let input = Value::Object(BTreeMap::from([(key, Value::Null)]));
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_500).unwrap();
+        assert_eq!(
+            execute(&query.0, &input, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn repeated_contains_with_long_prefixes_hits_budget() {
+        let prefix = "x".repeat(64 * 1024);
+        let input = Value::Object(BTreeMap::from([
+            (
+                "items".into(),
+                Value::Array(vec![Value::String(format!("{prefix}a")); 64]),
+            ),
+            ("needle".into(), Value::String(format!("{prefix}b"))),
+        ]));
+        let query = super::super::compile(
+            "contains(items, needle) || contains(items, needle) || contains(items, needle)",
+        )
+        .unwrap();
+        assert!(matches!(
+            evaluate(&query, &input),
+            Err(EvaluationError::WorkBudget)
+        ));
+    }
+
+    #[test]
+    fn validation_visits_consume_budget() {
+        let input = Value::Array(vec![Value::Null; 1_000_000]);
+        let mut budget = WorkBudget::new();
+        budget.charge(9_000_000).unwrap();
+        assert_eq!(
+            check(&input, 0, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn repeated_singleton_validation_stops_at_budget() {
+        let expression = vec!["[@]"; 32].join(" | ");
+        let query = super::super::compile(&expression).unwrap();
+        let input = Value::Array(vec![Value::Null; 1_000_000]);
+        assert!(matches!(
+            evaluate(&query, &input),
+            Err(EvaluationError::WorkBudget)
+        ));
+    }
+
+    #[test]
+    fn large_string_doubling_hits_work_budget() {
+        let expression = ["[@,@]"; 8].join(" | ");
+        let query = super::super::compile(&expression).unwrap();
+        let input = Value::String("x".repeat(1024 * 1024));
+        assert!(matches!(
+            evaluate(&query, &input),
+            Err(EvaluationError::WorkBudget)
+        ));
+    }
+
+    #[test]
+    fn multiselect_key_copy_charges_bytes() {
+        let expression = format!("{{\"{}\": @}}", "k".repeat(1_024));
+        let query = super::super::compile(&expression).unwrap();
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_500).unwrap();
+        assert_eq!(
+            execute(&query.0, &Value::Bool(true), &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn clone_budget_charges_string_and_key_bytes() {
+        let mut budget = WorkBudget::new();
+        let value = Value::Object(BTreeMap::from([(
+            "abc".into(),
+            Value::String("defg".into()),
+        )]));
+        assert_eq!(budget.charge_value(&value), Ok(()));
+        assert_eq!(budget.used, 9);
+    }
+
     #[test]
     fn empty_filter_charges_produced_container() {
         let query = super::super::compile("[?@]").unwrap();
@@ -544,7 +739,7 @@ mod tests {
             )])),
         ]);
         assert_eq!(budget.charge_value(&value), Ok(()));
-        assert_eq!(budget.used, 5);
+        assert_eq!(budget.used, 6);
     }
     #[test]
     fn work_budget_stops_before_exceeding_limit() {

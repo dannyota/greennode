@@ -17,7 +17,7 @@ pub(super) fn call(
     input: &Value,
     budget: &mut WorkBudget,
 ) -> Result<Value, EvaluationError> {
-    let mut arguments = Vec::with_capacity(nodes.len());
+    let mut arguments = Vec::new();
     for node in nodes {
         if node.kind == NodeKind::ExpRef {
             budget.charge(1)?;
@@ -56,7 +56,7 @@ pub(super) fn call(
         for value in values {
             budget.charge(1)?;
             match execute(reference, value, budget).and_then(|item| {
-                check(&item, 1)?;
+                check(&item, 1, budget)?;
                 Ok(item)
             }) {
                 Ok(item) => {
@@ -84,11 +84,15 @@ pub(super) fn call(
     }
     let mut ordinary = None;
     let mut numeric = None;
+    let mut max_bytes = 0;
     let mut keys = Vec::new();
     for (index, value) in values.iter().enumerate() {
         budget.charge(1)?;
         match execute(reference, value, budget) {
             Ok(key) => {
+                if let Value::String(value) = &key {
+                    max_bytes = max_bytes.max(value.len());
+                }
                 if index == 0 {
                     numeric = match key {
                         Value::Number(_) => Some(true),
@@ -131,6 +135,9 @@ pub(super) fn call(
         let mut best = 0;
         for index in 1..keys.len() {
             budget.charge(2)?;
+            if let (Value::String(left), Value::String(right)) = (&keys[index], &keys[best]) {
+                budget.charge_compare_bytes(left, right)?;
+            }
             let ordering = compare_keys(&keys[index], &keys[best], numeric)
                 .ok_or(EvaluationError::FunctionType)?;
             if (name == "max_by" && ordering.is_gt()) || (name == "min_by" && ordering.is_lt()) {
@@ -141,7 +148,8 @@ pub(super) fn call(
         return Ok(values[best].clone());
     }
     budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
-    super::functions::charge_sort(keys.len(), budget)?;
+    super::interpreter::charge_sort(keys.len(), budget)?;
+    super::interpreter::charge_sort_bytes(keys.len(), max_bytes, budget)?;
     if numeric {
         let mut indexed = keys
             .into_iter()
@@ -302,6 +310,29 @@ fn compare_keys(a: &Value, b: &Value, numeric: bool) -> Option<std::cmp::Orderin
 mod tests {
     use super::super::{compile, evaluate};
     use crate::cli::render::Value;
+
+    #[test]
+    fn by_functions_charge_string_key_comparisons() {
+        let prefix = "x".repeat(1_024);
+        let input = Value::Array(vec![
+            Value::String(format!("{prefix}a")),
+            Value::String(format!("{prefix}b")),
+        ]);
+        for (name, used) in [
+            ("max_by", 9_994_500),
+            ("min_by", 9_994_500),
+            ("sort_by", 9_992_000),
+        ] {
+            let query = compile(&format!("{name}(@, &@)")).unwrap();
+            let mut budget = super::WorkBudget::new();
+            budget.charge(used).unwrap();
+            assert_eq!(
+                super::call(name, &query.0.children, &input, &mut budget),
+                Err(super::EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn contains_reference_charges_array_scan() {
