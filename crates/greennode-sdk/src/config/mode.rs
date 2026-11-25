@@ -293,7 +293,7 @@ mod tests {
     fn absolute(path: &str) -> PathBuf {
         #[cfg(windows)]
         {
-            Path::new(r"C:").join(path.trim_start_matches('/'))
+            Path::new(r"C:\").join(path.trim_start_matches('/'))
         }
         #[cfg(not(windows))]
         {
