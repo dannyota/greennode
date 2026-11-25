@@ -400,9 +400,16 @@ fn absent_credentials_cannot_appear_as_config_alias() {
         config_source: Some("option"),
         credentials_source: Some("~/.greennode"),
     };
-    let result = open_settings_with(&selection, || {
-        std::fs::hard_link(&config, &credentials).unwrap();
-    });
+    let opens = std::cell::Cell::new(0);
+    let result = open_settings_guarded(
+        &selection,
+        || {
+            std::fs::hard_link(&config, &credentials).unwrap();
+        },
+        || None,
+        || opens.set(opens.get() + 1),
+    );
+    assert_eq!(opens.get(), 0);
     assert!(
         matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.reason() == "changed during read"))
     );

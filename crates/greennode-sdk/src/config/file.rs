@@ -391,6 +391,29 @@ fn open_settings_guarded(
     }
     before_open();
     guard()?;
+    if credentials_identity.is_none()
+        && let Some(path) = selection.credentials.as_deref()
+    {
+        let observed = identity_path(path, &|| check().is_some());
+        guard()?;
+        match observed {
+            Err("not found") => {}
+            Ok(_) => {
+                return Err(changed(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                ));
+            }
+            Err(reason) => {
+                return Err(file_error(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                    reason,
+                ));
+            }
+        }
+    }
+    guard()?;
     if config_path.is_some() {
         on_open();
     }

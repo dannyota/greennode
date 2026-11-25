@@ -108,20 +108,44 @@ impl Config {
         options: &ConfigOptions,
         source: &dyn crate::ConfigSource,
     ) -> Result<ResolvedProfile, crate::Error> {
-        if let Some(end) = ctx.check(&crate::SystemClock) {
-            return Err(end.into());
-        }
-        let snapshot = SourceSnapshot::capture(options, source);
-        if let Some(end) = ctx.check(&crate::SystemClock) {
-            return Err(end.into());
-        }
-        let options = options.clone();
-        let worker_ctx = ctx.clone();
-        let worker = tokio::task::spawn_blocking(move || {
-            resolve_profile_local(&options, snapshot, &worker_ctx)
-        });
-        wait_profile_worker(ctx, worker).await
+        resolve_profile_with(ctx, options, source, || {}, || {}).await
     }
+}
+
+struct WorkerLifetime(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for WorkerLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "The public API returns Error by value"
+)]
+async fn resolve_profile_with(
+    ctx: &crate::RequestContext,
+    options: &ConfigOptions,
+    source: &dyn crate::ConfigSource,
+    before_io: impl FnOnce() + Send + 'static,
+    on_io: impl FnOnce() + Send + 'static,
+) -> Result<ResolvedProfile, crate::Error> {
+    if let Some(end) = ctx.check(&crate::SystemClock) {
+        return Err(end.into());
+    }
+    let snapshot = SourceSnapshot::capture(options, source);
+    if let Some(end) = ctx.check(&crate::SystemClock) {
+        return Err(end.into());
+    }
+    let options = options.clone();
+    let worker_ctx = ctx.clone();
+    let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let _lifetime = WorkerLifetime(ended.clone());
+    let worker = tokio::task::spawn_blocking(move || {
+        resolve_profile_local(&options, snapshot, &worker_ctx, &ended, before_io, on_io)
+    });
+    wait_profile_worker(ctx, worker).await
 }
 
 #[expect(
@@ -229,11 +253,22 @@ fn resolve_profile_local(
     options: &ConfigOptions,
     source: SourceSnapshot,
     ctx: &crate::RequestContext,
+    ended: &std::sync::atomic::AtomicBool,
+    before_io: impl FnOnce(),
+    on_io: impl FnOnce(),
 ) -> Result<ResolvedProfile, crate::Error> {
-    let check = || ctx.check(&crate::SystemClock);
+    let check = || {
+        ctx.check(&crate::SystemClock).or_else(|| {
+            ended
+                .load(std::sync::atomic::Ordering::Acquire)
+                .then_some(crate::ContextEnd::Cancelled)
+        })
+    };
+    before_io();
     if let Some(end) = check() {
         return Err(end.into());
     }
+    on_io();
     let cwd = std::path::absolute(".").ok();
     let selection = mode::select(
         options.config_file.as_deref(),
@@ -323,5 +358,57 @@ mod worker_tests {
             release_tx.send(()).unwrap();
             done_rx.await.unwrap();
         }
+    }
+    #[tokio::test]
+    async fn dropping_resolution_stops_worker_before_file_io() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Empty;
+        impl crate::ConfigSource for Empty {
+            fn var_os(&self, _: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+                None
+            }
+        }
+        struct Completion(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Completion {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let wrote = Arc::new(AtomicBool::new(false));
+        let recorded = wrote.clone();
+        let completion = Completion(Some(done_tx));
+        let (ctx, _) = crate::RequestContext::new();
+        let options = ConfigOptions::default();
+        let source = Empty;
+        let mut future = Box::pin(resolve_profile_with(
+            &ctx,
+            &options,
+            &source,
+            move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            },
+            move || {
+                let _completion = completion;
+                recorded.store(true, Ordering::SeqCst);
+            },
+        ));
+        tokio::select! { _ = started_rx => {}, _ = &mut future => panic!("worker finished before pause") }
+        drop(future);
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), done_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!wrote.load(Ordering::SeqCst));
+        assert!(ctx.check(&crate::SystemClock).is_none());
     }
 }
