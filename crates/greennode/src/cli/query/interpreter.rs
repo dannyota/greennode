@@ -27,6 +27,26 @@ pub(in crate::cli) enum EvaluationError {
     FunctionPanic,
 }
 
+impl EvaluationError {
+    pub(super) fn is_safety(&self) -> bool {
+        match self {
+            Self::Unsupported
+            | Self::Depth
+            | Self::SliceOverflow
+            | Self::InvalidNode
+            | Self::NonFinite
+            | Self::Uncomparable
+            | Self::FunctionPanic => true,
+            Self::InvalidSlice
+            | Self::FunctionArity
+            | Self::FunctionVariadicArity
+            | Self::FunctionType
+            | Self::UnknownFunction
+            | Self::FunctionComparison => false,
+        }
+    }
+}
+
 pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
     if depth > 128 {
         return Err(EvaluationError::Depth);
@@ -82,14 +102,7 @@ fn push(items: &mut Vec<Value>, value: Value) -> Result<(), EvaluationError> {
 
 fn source(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match execute(node, input) {
-        Err(
-            EvaluationError::InvalidSlice
-            | EvaluationError::FunctionArity
-            | EvaluationError::FunctionVariadicArity
-            | EvaluationError::FunctionType
-            | EvaluationError::UnknownFunction
-            | EvaluationError::FunctionComparison,
-        ) => Ok(Value::Null),
+        Err(error) if !error.is_safety() => Ok(Value::Null),
         other => other,
     }
 }

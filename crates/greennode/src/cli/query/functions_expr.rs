@@ -164,24 +164,11 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     }
 }
 
-fn is_safety_error(error: &EvaluationError) -> bool {
-    matches!(
-        error,
-        EvaluationError::Depth
-            | EvaluationError::SliceOverflow
-            | EvaluationError::NonFinite
-            | EvaluationError::Uncomparable
-            | EvaluationError::FunctionPanic
-            | EvaluationError::Unsupported
-            | EvaluationError::InvalidNode
-    )
-}
-
 fn record_error(
     error: EvaluationError,
     ordinary: &mut Option<EvaluationError>,
 ) -> Result<(), EvaluationError> {
-    if is_safety_error(&error) {
+    if error.is_safety() {
         return Err(error);
     }
     if ordinary.is_none() {
@@ -191,7 +178,7 @@ fn record_error(
 }
 
 fn comparison_error(error: EvaluationError) -> EvaluationError {
-    if is_safety_error(&error) {
+    if error.is_safety() {
         error
     } else {
         EvaluationError::FunctionComparison
