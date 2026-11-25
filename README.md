@@ -3,18 +3,17 @@
 [![CI](https://github.com/dannyota/greennode/actions/workflows/ci.yml/badge.svg)](https://github.com/dannyota/greennode/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/dannyota/greennode)](LICENSE)
 
-An AWS-style command-line tool for [GreenNode](https://greennode.ai), formerly
-VNG Cloud, written in Rust.
+A Rust SDK and an AWS-style command-line tool for
+[GreenNode](https://greennode.ai), formerly VNG Cloud.
 
 This is a personal, unofficial project, not affiliated with or endorsed by
 GreenNode or VNG.
 
 ## Status
 
-greennode is the Rust port of the Go CLI in
-[vngcloud](https://github.com/dannyota/vngcloud), and the port has just started.
-The only command today is `greennode version`. No release exists yet, and the
-crate is not on crates.io.
+greennode is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud),
+and the port has just started. The only command today is `greennode version`,
+and the SDK has no code yet. No release exists, and nothing is on crates.io.
 
 Use [vngcloud](https://github.com/dannyota/vngcloud) for real work until the
 commands you need are ported. The [architecture](docs/design/architecture.md)

@@ -5,6 +5,7 @@ The [security design](../docs/design/security.md) owns the requirements. These r
 ## Credentials
 
 - Never read credential values into a conversation, log, fixture, or report. That covers `.env`, `~/.greennode`, `~/.vngcloud`, crates.io tokens, and `gh` tokens.
+- greennode reads `~/.vngcloud` and `VNGCLOUD_` variables as a fallback on the owner's machine, so a command run outside a test can reach a real account. Run the built tool only with a cleared environment and a temporary home.
 - Use toy credentials in tests. Check them by comparison, not by printing.
 - Treat IP addresses, hostnames, project IDs, resource IDs, account names, and emails from a real account as sensitive. Fixtures hold placeholders such as `<project-id>` or short synthetic IDs.
 

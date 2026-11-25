@@ -41,11 +41,17 @@ drift from the code and mislead agents (owner, 2026-11-18).
 - Code has no comments, with two exceptions: tool directives and generated-code
   markers, and one line on why for a behavior of an external tool or service
   that no design document owns, naming its source.
-- Write no doc comments, including `///` and `//!`.
+- A public item of the SDK crate has a `///` doc comment that tells a caller
+  what the signature does not: units, limits, errors, and what a write changes.
+  The SDK's crate root and public modules have a `//!` summary. These comments
+  are the SDK's reference on docs.rs. Never restate the name.
+- Write no other doc comments. Private items and the command-line crate have
+  none.
 - A rule the code must keep belongs in the design that owns it, or in a test
   that fails when it breaks.
 
 `scripts/check-comments.py` fails on any comment in a tracked Rust file unless
+it is a doc comment under `crates/greennode-sdk/src/` or
 `scripts/comments-allowlist.txt` lists it. Each allowlist line is
 `path:line: text`, exactly as the script prints the finding, and lines starting
 with `#` are ignored.
@@ -53,10 +59,10 @@ with `#` are ignored.
 ## File size
 
 Markdown stays at or under 400 lines. Rust stays at or under 700 lines, not
-counting a top-level `#[cfg(test)]` module or files directly in `tests/` and
-under `tests/support/`. Split by concern and name each file after its concern.
-Plans under `docs/plans/` are exempt because they are deleted when their work
-lands.
+counting a top-level `#[cfg(test)]` module or files directly in a crate's
+`tests/` and under its `tests/support/`. Split by concern and name each file
+after its concern. Plans under `docs/plans/` are exempt because they are deleted
+when their work lands.
 
 `scripts/lengths-baseline.txt` caps files that were already over the limit, and
 a cap may only fall. A baselined file cannot be renamed; split it instead.

@@ -3,6 +3,7 @@
 - Write the failing test first. A bug fix keeps a test that fails without the fix.
 - Tests drive real code paths with only the network faked. Mock servers listen on loopback and answer with shapes copied from the baseline's sanitized fixtures or from documented responses.
 - Tests never touch the owner's home directory or environment. In-process tests build the injected environment themselves. A process test clears the child's environment and sets each variable it needs, with a temporary directory as its home.
+- A fallback test builds both the `GREENNODE_` and `VNGCLOUD_` sides, and both directories, inside its temporary home.
 - Tests are deterministic: inject clocks and randomness, never sleep to wait for a condition, and never retry a flaky test into a pass.
 - When you set `HOME` for a test run from a shell, set it for the test command only, never for Git commands, because Git reads the commit identity and signing key from it. Tests must not spawn Git.
 - Name a test after the behavior it proves.

@@ -32,7 +32,7 @@ Give standing answers for routine ambiguity: pick the safer reading, list the ch
 
 ## Parallel work
 
-- Each concurrent writer gets its own worktree and disjoint paths. A service task owns `src/services/<service>/`, `tests/<service>.rs`, `tests/fixtures/<service>/`, and its generated documentation page, and nothing else.
+- Each concurrent writer gets its own worktree and disjoint paths. A service task owns that service's paths in both crates, as the [layout](../docs/design/architecture.md#layout) lists them, and nothing else.
 - A file two tasks need, such as `Cargo.toml` or a shared type, has one owner per round. The primary lands that change first or edits the file itself when merging.
 - A worker's worktree never contains `.env` or other credentials.
 - Run one `make check` at a time per worktree. Do not start workers to repeat verification.
