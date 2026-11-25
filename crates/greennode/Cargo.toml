@@ -1,0 +1,14 @@
+[package]
+name = "greennode"
+version.workspace = true
+description = "Unofficial AWS-style command-line tool for GreenNode, formerly VNG Cloud"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["greennode", "vngcloud", "cloud", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }

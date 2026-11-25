@@ -6,7 +6,7 @@ Shared rules live here and in `instructions/`. [CLAUDE.md](CLAUDE.md) adds Claud
 
 `greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. It is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud), licensed under Apache-2.0, and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
 
-The crate builds one command, `greennode version`. Remaining work is in the [foundation plan](docs/plans/foundation.md).
+The tool builds one command, `greennode version`, and the SDK crate is empty. Remaining work is in the [foundation plan](docs/plans/foundation.md).
 
 ## Map
 
@@ -37,9 +37,10 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 
 |Path|Owns|
 |-|-|
-|`src/main.rs`|Process entry: passes arguments and streams to `cli::run`|
-|`src/cli.rs`|Root command and `version`|
-|`tests/cli.rs`|Process tests of the built binary|
+|`crates/greennode/src/main.rs`|Process entry: passes arguments and streams to `cli::run`|
+|`crates/greennode/src/cli.rs`|Root command and `version`|
+|`crates/greennode/tests/cli.rs`|Process tests of the built binary|
+|`crates/greennode-sdk/src/lib.rs`|SDK crate root; no API yet|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
 
 The [architecture](docs/design/architecture.md#layout) owns the intended layout. Add a row here in the change that adds the path.
