@@ -47,7 +47,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/tests/cli.rs`|Process tests of the built binary|
 |`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
-|`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0 so far: lexer, parser, `compile`; its license and compliance suite|
+|`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0 so far: lexer, parser, `compile`, core evaluation; its license and compliance suite|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`|Configuration loading so far: INI reader, safe file opening, mode and path selection, settings resolution (crate-private)|

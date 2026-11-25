@@ -1,9 +1,17 @@
 #![allow(dead_code)]
 
+mod interpreter;
 mod lexer;
 mod literal;
 mod parser;
 
+pub(super) type EvaluationError = interpreter::EvaluationError;
+pub(super) fn evaluate(
+    query: &CompiledQuery,
+    input: &crate::cli::render::Value,
+) -> Result<crate::cli::render::Value, EvaluationError> {
+    interpreter::evaluate(query, input)
+}
 pub(super) use lexer::SyntaxError;
 
 pub(super) struct CompiledQuery(parser::Node);
