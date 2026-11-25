@@ -49,6 +49,8 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
+|`crates/greennode-sdk/src/config/`|Configuration loading so far: INI reader, safe file opening, mode and path selection, settings resolution (crate-private)|
+|`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
 
 The [architecture](docs/design/architecture.md#layout) owns the intended layout. Add a row here in the change that adds the path.
