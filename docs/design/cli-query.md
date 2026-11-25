@@ -136,7 +136,9 @@ same source and license. Behavior go-jmespath takes from the Go standard library
 (`strconv` float parsing, `sort.Stable`) is reimplemented from its documented
 results and differential tests, never translated, so no Go BSD notice is needed.
 `sort_by` returns a sorted copy; Go sorts its input in place, which a later
-reference to the same array in one query can observe.
+reference to the same array in one query can observe. `map`, `sort_by`, `max_by`
+and `min_by` keep evaluating after an ordinary error so a later safety error is
+reported; Go stops at the first error.
 
 [go-jmespath]: https://github.com/jmespath/go-jmespath/tree/v0.4.0
 [go-license]: https://github.com/jmespath/go-jmespath/blob/v0.4.0/LICENSE
