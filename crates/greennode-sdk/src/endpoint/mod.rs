@@ -62,7 +62,7 @@ pub(crate) fn defaults(
         signin: Some("https://signin.greennode.ai".into()),
         dashboard: Some(dashboard.clone()),
         token: Some(token),
-        billing: Some(dashboard),
+        billing: Some("https://dashboard.console.greennode.ai/".into()),
         cdn_docs: Some("https://docs.greennode.ai/faq/vcdn".into()),
         monitor: Some("https://vmonitor.console.greennode.ai/".into()),
         iam: Some("https://iam.console.greennode.ai/".into()),
@@ -162,12 +162,15 @@ impl Base {
         {
             return Err(BaseError::InvalidUrl);
         }
-        let (_, rest) = input.split_once("://").ok_or(BaseError::InvalidUrl)?;
+        let (scheme, rest) = input.split_once("://").ok_or(BaseError::InvalidUrl)?;
+        if !scheme.eq_ignore_ascii_case("https") {
+            return Err(BaseError::InvalidUrl);
+        }
         let authority = rest
             .split(['/', '?', '#'])
             .next()
             .ok_or(BaseError::InvalidUrl)?;
-        if authority.contains('@') {
+        if authority.is_empty() || authority.contains('@') {
             return Err(BaseError::InvalidUrl);
         }
         if authority.ends_with(':') {
@@ -177,7 +180,15 @@ impl Base {
             url::ParseError::InvalidPort => BaseError::InvalidPort,
             _ => BaseError::InvalidUrl,
         })?;
+        if let Some(url::Host::Ipv4(address)) = url.host() {
+            let host = authority.split(':').next().ok_or(BaseError::InvalidUrl)?;
+            if host != address.to_string() {
+                return Err(BaseError::InvalidUrl);
+            }
+        }
         if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
             || url.host().is_none()
             || url.query().is_some()
             || url.fragment().is_some()
@@ -193,8 +204,10 @@ impl Base {
     }
 
     pub(crate) fn route(&self, template: &str, segments: &[&str]) -> Result<String, ()> {
-        let mut route = self.0.as_str().trim_end_matches('/').to_owned();
-        route.push('/');
+        let mut route = self.0.as_str().to_owned();
+        if !route.ends_with('/') {
+            route.push('/');
+        }
         route.push_str(template.trim_matches('/'));
         for segment in segments {
             if segment.is_empty() || *segment == "." || *segment == ".." || segment.contains('/') {
@@ -217,6 +230,65 @@ impl Base {
 #[cfg(test)]
 mod tests {
     use super::{Base, BaseError, EndpointOverrides, defaults, vnetwork_regional_gateway};
+
+    #[test]
+    fn rejects_extra_authority_slash() {
+        assert!(Base::parse("https://example.test/").is_ok());
+        for input in [
+            "https:///user@example.test/",
+            "https:///example.test:/",
+            "https:///example.test/",
+        ] {
+            assert!(Base::parse(input).is_err());
+        }
+    }
+
+    #[test]
+    fn requires_canonical_ipv4() {
+        assert!(Base::parse("https://127.0.0.1/").is_ok());
+        assert!(Base::parse("https://example.test/").is_ok());
+        for input in [
+            "https://127.1/",
+            "https://0177.0.0.1/",
+            "https://0x7f.0.0.1/",
+            "https://127.00.0.1/",
+        ] {
+            assert!(Base::parse(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn route_preserves_base_slashes() {
+        for (base, expected) in [
+            (
+                "https://example.test/prefix//",
+                "https://example.test/prefix//items/id",
+            ),
+            (
+                "https://example.test/prefix",
+                "https://example.test/prefix/items/id",
+            ),
+        ] {
+            assert_eq!(
+                Base::parse(base).unwrap().route("items", &["id"]).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_override_rejected() {
+        let good = EndpointOverrides {
+            vserver: Some("https://example.test/".into()),
+            ..Default::default()
+        };
+        assert!(defaults("hcm-3", good).is_ok());
+        let bad = EndpointOverrides {
+            vserver: Some("http://example.test/".into()),
+            ..Default::default()
+        };
+        assert!(defaults("hcm-3", bad).is_err());
+    }
 
     #[test]
     fn regional_fallback() {
@@ -380,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_sets_token_and_billing_unless_overridden() {
+    fn dashboard_sets_token_but_not_billing() {
         let input = EndpointOverrides {
             dashboard: Some("https://dashboard.test/".into()),
             ..Default::default()
@@ -390,7 +462,10 @@ mod tests {
             set.token.as_deref(),
             Some("https://dashboard.test/accounts-api/v1/auth/token")
         );
-        assert_eq!(set.billing.as_deref(), Some("https://dashboard.test/"));
+        assert_eq!(
+            set.billing.as_deref(),
+            Some("https://dashboard.console.greennode.ai/")
+        );
         let input = EndpointOverrides {
             dashboard: Some("https://dashboard.test/".into()),
             token: Some("https://token.test/exchange".into()),
@@ -442,8 +517,10 @@ mod tests {
         let a = Base::parse("https://EXAMPLE.test:443/").unwrap();
         let b = Base::parse("https://example.test/").unwrap();
         let c = Base::parse("https://example.test:444/").unwrap();
+        let d = Base::parse("https://other.test:443/").unwrap();
         assert!(a.same_origin(&b));
         assert!(!a.same_origin(&c));
+        assert!(!a.same_origin(&d));
     }
 
     #[test]
