@@ -2,6 +2,7 @@
 
 mod clock;
 mod context;
+mod endpoint;
 mod error;
 mod event;
 mod model;
