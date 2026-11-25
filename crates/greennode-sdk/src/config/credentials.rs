@@ -226,7 +226,8 @@ pub(super) fn select_checked(
 ) -> Result<Selected, Box<Error>> {
     let mut ini = if selection.credentials_present {
         let file = file.ok_or_else(|| failure(crate::ErrorClass::NoCredentials))?;
-        let parsed = super::ini::parse_secrets(CheckedReader { file, check });
+        let parsed =
+            super::ini::parse_secrets_checked(CheckedReader { file, check }, &|| check().is_some());
         if let Some(end) = check() {
             return Err(Box::new(end.into()));
         }

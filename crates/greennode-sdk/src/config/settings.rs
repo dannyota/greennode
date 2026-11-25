@@ -132,6 +132,8 @@ pub(super) fn resolve(
 struct CheckedReader<'a> {
     file: std::fs::File,
     check: &'a dyn Fn() -> Option<crate::ContextEnd>,
+    #[cfg(test)]
+    hooks: Option<&'a super::ParseHooks>,
 }
 
 impl std::io::Read for CheckedReader<'_> {
@@ -139,7 +141,12 @@ impl std::io::Read for CheckedReader<'_> {
         if (self.check)().is_some() {
             return Err(std::io::ErrorKind::Other.into());
         }
-        std::io::Read::read(&mut self.file, buffer)
+        let result = std::io::Read::read(&mut self.file, buffer);
+        #[cfg(test)]
+        if let (Some(hooks), Ok(count)) = (self.hooks, &result) {
+            (hooks.on_read)(*count);
+        }
+        result
     }
 }
 
@@ -150,6 +157,27 @@ pub(super) fn resolve_checked(
     source: &dyn ConfigSource,
     policy: Policy,
     check: &dyn Fn() -> Option<crate::ContextEnd>,
+) -> Result<Settings, SettingsError> {
+    resolve_guarded(
+        paths,
+        config_file,
+        options,
+        source,
+        policy,
+        check,
+        #[cfg(test)]
+        None,
+    )
+}
+
+pub(super) fn resolve_guarded(
+    paths: &Selection,
+    config_file: Option<std::fs::File>,
+    options: &Options,
+    source: &dyn ConfigSource,
+    policy: Policy,
+    check: &dyn Fn() -> Option<crate::ContextEnd>,
+    #[cfg(test)] hooks: Option<&super::ParseHooks>,
 ) -> Result<Settings, SettingsError> {
     use super::{Slot, ini};
     use std::ffi::OsStr;
@@ -179,18 +207,28 @@ pub(super) fn resolve_checked(
             return Err(SettingsError::InvalidConfig);
         }
         Some(_) if !paths.config_present => ini::Ini::default(),
-        Some(_) => ini::parse(
-            Slot::Config,
-            CheckedReader {
+        Some(_) => {
+            let reader = CheckedReader {
                 file: config_file.ok_or(SettingsError::InvalidConfig)?,
                 check,
-            },
-        )
-        .map_err(|diagnostic| SettingsError::Parse {
-            mode: paths.mode,
-            source: paths.config_source,
-            diagnostic,
-        })?,
+                #[cfg(test)]
+                hooks,
+            };
+            #[cfg(test)]
+            let parsed = match hooks {
+                Some(hooks) => {
+                    ini::parse_observed(Slot::Config, reader, &|| check().is_some(), &hooks.on_line)
+                }
+                None => ini::parse_checked(Slot::Config, reader, &|| check().is_some()),
+            };
+            #[cfg(not(test))]
+            let parsed = ini::parse_checked(Slot::Config, reader, &|| check().is_some());
+            parsed.map_err(|diagnostic| SettingsError::Parse {
+                mode: paths.mode,
+                source: paths.config_source,
+                diagnostic,
+            })?
+        }
     };
     let section_name = if profile == "default" {
         profile.clone()

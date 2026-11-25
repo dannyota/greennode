@@ -121,13 +121,15 @@ fn load_local(
     }
     let selection = selection.map_err(|error| *error)?;
     let pair = file::open_pair_checked(&selection, check).map_err(|error| *error)?;
-    let resolved = settings::resolve_checked(
+    let resolved = settings::resolve_guarded(
         &selection,
         pair.config,
         &settings_options,
         &source,
         settings::Policy::Read,
         &check,
+        #[cfg(test)]
+        options.hooks.as_deref(),
     );
     if let Some(end) = check() {
         return Err(end.into());
@@ -178,6 +180,75 @@ mod tests {
     use super::*;
     use crate::ConfigSource;
     use std::env;
+    #[tokio::test]
+    async fn dropping_load_at_read_stops_parsing() {
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Empty;
+        impl crate::ConfigSource for Empty {
+            fn var_os(&self, _: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+                None
+            }
+        }
+        struct Done(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let path = env::temp_dir().join(format!(
+            "greennode-drop-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(
+            path.join("config"),
+            format!("[default]\nregion=hcm-3\n{}", "key=value\n".repeat(200)),
+        )
+        .unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let started = Mutex::new(Some(started_tx));
+        let release = Mutex::new(release_rx);
+        let parsed = Arc::new(AtomicBool::new(false));
+        let recorded = parsed.clone();
+        let done = Done(Some(done_tx));
+        let hooks = super::super::ParseHooks {
+            on_read: Box::new(move |count| {
+                if count == 0
+                    && let Some(sender) = started.lock().unwrap().take()
+                {
+                    let _ = sender.send(());
+                    let _ = release.lock().unwrap().recv();
+                }
+            }),
+            on_line: Box::new(move || {
+                let _ = &done;
+                recorded.store(true, Ordering::SeqCst);
+            }),
+        };
+        let mut options = ConfigOptions::default().with_config_file(path.join("config"));
+        options.hooks = Some(Arc::new(hooks));
+        let (ctx, _) = crate::RequestContext::new();
+        let source = Empty;
+        let mut future = Box::pin(Config::load(&ctx, options, &source));
+        tokio::select! { started = started_rx => assert!(started.is_ok()), _ = &mut future => panic!("load completed before read hook") }
+        drop(future);
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!parsed.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
     #[test]
     fn relative_paths_use_cwd_at_call() {
         const CHILD: &str = "GREENNODE_TEST_CWD_CHILD";

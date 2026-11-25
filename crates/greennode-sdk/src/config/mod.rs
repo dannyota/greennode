@@ -29,6 +29,14 @@ pub struct ConfigOptions {
     config_file: Option<std::path::PathBuf>,
     credentials_file: Option<std::path::PathBuf>,
     provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
+    #[cfg(test)]
+    hooks: Option<std::sync::Arc<ParseHooks>>,
+}
+
+#[cfg(test)]
+struct ParseHooks {
+    on_read: Box<dyn Fn(usize) + Send + Sync>,
+    on_line: Box<dyn Fn() + Send + Sync>,
 }
 
 impl ConfigOptions {
@@ -103,7 +111,7 @@ impl ResolvedProfile {
     pub fn section_present(&self) -> bool {
         self.section_present
     }
-    /// Returns a stored non-credential setting from the selected section.
+    /// Returns a raw stored non-credential value from the selected config section.
     pub fn profile_setting(&self, key: &str) -> Option<&str> {
         self.settings.get(key).map(String::as_str)
     }
@@ -118,7 +126,7 @@ impl ResolvedProfile {
 }
 
 impl Config {
-    /// Loads configuration and credentials without network access.
+    /// Loads configuration offline; requires a Tokio runtime with timers.
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
@@ -134,11 +142,11 @@ impl Config {
     pub fn region(&self) -> &str {
         &self.region
     }
-    /// Returns a non-credential profile setting.
+    /// Returns a raw stored non-credential value from the selected config section.
     pub fn profile_setting(&self, key: &str) -> Option<&str> {
         self.settings.get(key).map(String::as_str)
     }
-    /// Resolves local profile settings without reading credentials.
+    /// Resolves profile settings offline; requires a Tokio runtime with timers.
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
