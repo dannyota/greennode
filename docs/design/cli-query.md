@@ -45,7 +45,10 @@ input JSON and expression literals. Compare numbers exactly in equality and
 within recursive array/object equality; ordering comparisons are numeric only.
 Preserve Go's false values, short-circuit return values, expression references,
 projection null handling, pipes, Unicode strings and slices. The unqueried JSON
-path never passes through the query value tree.
+path never passes through the query value tree. An expression reference is a
+value only as a direct function argument; anywhere else Go would store or return
+one (a multiselect, an index, a pipe, a projection or the result) is an
+evaluation error instead.
 
 Port the functions as Go implements them, not as a newer specification might.
 `to_number('true')` returns null, and string parsing follows Go's `ParseFloat`,
