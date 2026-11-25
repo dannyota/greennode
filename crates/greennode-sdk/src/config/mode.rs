@@ -24,6 +24,40 @@ pub(super) struct Paths {
     pub credentials_named: bool,
 }
 
+#[cfg(windows)]
+pub(super) fn probe(path: &Path) -> Presence {
+    probe_windows_with(path, |options, path| options.open(path))
+}
+
+#[cfg(windows)]
+fn probe_windows_with(
+    path: &Path,
+    open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<std::fs::File>,
+) -> Presence {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, SECURITY_IDENTIFICATION,
+        SECURITY_SQOS_PRESENT,
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .security_qos_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION);
+    match open(&options, path) {
+        Ok(file) => {
+            if file.metadata().is_ok() && winapi_util::file::typ(&file).is_ok() {
+                Presence::Present
+            } else {
+                Presence::Ambiguous
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Presence::Absent,
+        Err(_) => Presence::Ambiguous,
+    }
+}
+
+#[cfg(not(windows))]
 pub(super) fn probe(path: &Path) -> Presence {
     match std::fs::symlink_metadata(path) {
         Ok(_) => Presence::Present,
@@ -415,6 +449,55 @@ mod tests {
             }
         });
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_presence_probe_never_blocks() {
+        let dir = env::temp_dir().join(format!("greennode-mode-fifo-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = send.send(probe(&path));
+        });
+        let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(result, Ok(Presence::Present));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_probe_uses_identification_and_metadata_only() {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, SECURITY_IDENTIFICATION,
+            SECURITY_SQOS_PRESENT,
+        };
+        let result = probe_windows_with(Path::new(r"C:\missing"), |options, _| {
+            let debug = format!("{options:?}");
+            assert!(debug.contains("access_mode: Some(0)"));
+            assert!(debug.contains(&format!(
+                "custom_flags: {}",
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+            )));
+            assert!(debug.contains(&format!(
+                "security_qos_flags: {}",
+                SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION
+            )));
+            Err(std::io::ErrorKind::NotFound.into())
+        });
+        assert_eq!(result, Presence::Absent);
+        let denied = probe_windows_with(Path::new(r"C:\denied"), |_, _| {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        });
+        assert_eq!(denied, Presence::Ambiguous);
     }
 
     #[cfg(unix)]
