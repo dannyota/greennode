@@ -14,6 +14,7 @@ pub(in crate::cli) enum EvaluationError {
     Unsupported,
     Depth,
     InvalidSlice,
+    SliceOverflow,
     InvalidNode,
     NonFinite,
 }
@@ -25,19 +26,19 @@ fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
     match value {
         Value::Number(n) if !n.is_finite() => Err(EvaluationError::NonFinite),
         Value::Array(items) => {
+            if depth >= 128 {
+                return Err(EvaluationError::Depth);
+            }
             for item in items {
-                if depth >= 128 {
-                    return Err(EvaluationError::Depth);
-                }
                 check(item, depth + 1)?;
             }
             Ok(())
         }
         Value::Object(items) => {
+            if depth >= 128 {
+                return Err(EvaluationError::Depth);
+            }
             for item in items.values() {
-                if depth >= 128 {
-                    return Err(EvaluationError::Depth);
-                }
                 check(item, depth + 1)?;
             }
             Ok(())
@@ -69,6 +70,13 @@ fn push(items: &mut Vec<Value>, value: Value) -> Result<(), EvaluationError> {
     check(&value, 1)?;
     items.push(value);
     Ok(())
+}
+
+fn source(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
+    match execute(node, input) {
+        Err(EvaluationError::InvalidSlice) => Ok(Value::Null),
+        other => other,
+    }
 }
 
 fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
@@ -112,7 +120,7 @@ fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
             _ => Err(EvaluationError::InvalidNode),
         },
         NodeKind::Flatten => {
-            let source = execute(child(node, 0)?, input)?;
+            let source = source(child(node, 0)?, input)?;
             let Value::Array(items) = source else {
                 return Ok(Value::Null);
             };
@@ -130,7 +138,11 @@ fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
             Ok(Value::Array(result))
         }
         NodeKind::Projection | NodeKind::ValueProjection => {
-            let source = execute(child(node, 0)?, input)?;
+            let source = if node.kind == NodeKind::ValueProjection {
+                source(child(node, 0)?, input)?
+            } else {
+                execute(child(node, 0)?, input)?
+            };
             let mut result = Vec::new();
             match (node.kind, source) {
                 (NodeKind::Projection, Value::Array(items)) => {
@@ -211,9 +223,11 @@ fn slice(items: &[Value], parts: [Option<i64>; 3]) -> Result<Value, EvaluationEr
         let value = items.get(position).ok_or(EvaluationError::InvalidSlice)?;
         check(value, 1)?;
         result.push(value.clone());
-        index = index
-            .checked_add(step)
-            .ok_or(EvaluationError::InvalidSlice)?;
+        let next = i64::try_from(index)
+            .map_err(|_| EvaluationError::SliceOverflow)?
+            .checked_add(i64::try_from(step).map_err(|_| EvaluationError::SliceOverflow)?)
+            .ok_or(EvaluationError::SliceOverflow)?;
+        index = i128::from(next);
     }
     Ok(Value::Array(result))
 }
@@ -255,7 +269,7 @@ mod tests {
             "wildcard",
         ];
         let mut passed = 0;
-        let mut skipped = 0;
+        let mut skipped = Vec::new();
         let mut syntax_rejections = 0;
         let mut mismatches = Vec::new();
         for file in files {
@@ -265,12 +279,12 @@ mod tests {
             );
             let data = std::fs::read_to_string(path).unwrap();
             let suites: serde_json::Value = serde_json::from_str(&data).unwrap();
-            for suite in suites.as_array().unwrap() {
+            for (suite_index, suite) in suites.as_array().unwrap().iter().enumerate() {
                 let input = crate::cli::render::project(&suite["given"])
                     .unwrap()
                     .for_query()
                     .unwrap();
-                for case in suite["cases"].as_array().unwrap() {
+                for (case_index, case) in suite["cases"].as_array().unwrap().iter().enumerate() {
                     let expression = case["expression"].as_str().unwrap();
                     let expected_error = case["error"].is_string();
                     let query = match super::super::compile(expression) {
@@ -285,7 +299,7 @@ mod tests {
                         }
                     };
                     if !supported(&query.0) {
-                        skipped += 1;
+                        skipped.push(format!("{file}:{suite_index}:{case_index}:{expression}"));
                         continue;
                     }
                     let actual = evaluate(&query, &input);
@@ -310,12 +324,98 @@ mod tests {
             }
         }
         eprintln!(
-            "compliance: {passed} evaluated, {syntax_rejections} syntax errors, {skipped} unsupported, {} mismatches",
+            "compliance: {passed} evaluated, {syntax_rejections} syntax errors, {} unsupported, {} mismatches",
+            skipped.len(),
             mismatches.len()
         );
-        assert_eq!(passed + syntax_rejections + skipped, 430);
+        assert_eq!(passed + syntax_rejections + skipped.len(), 430);
+        assert_eq!(
+            skipped,
+            vec![
+                "multiselect:8:0:foo.[baz[*].not_there || baz[*].bar, qux[0]]",
+                "pipe:1:8:foo.bam || foo.bar | baz",
+                "pipe:1:9:foo | not_there || bar",
+            ]
+        );
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
+    #[test]
+    fn go_slice_index_overflow_is_error() {
+        let input = Value::Array(vec![
+            Value::Number(11.0),
+            Value::Number(22.0),
+            Value::Number(33.0),
+        ]);
+        let bad = super::super::compile("@[1::9223372036854775807]").unwrap();
+        let good = super::super::compile("@[1::2]").unwrap();
+        assert!(evaluate(&bad, &input).is_err());
+        assert_eq!(
+            evaluate(&good, &input),
+            Ok(Value::Array(vec![Value::Number(22.0)]))
+        );
+    }
+
+    #[test]
+    fn source_slice_errors_are_suppressed_only_on_go_nodes() {
+        let input = Value::Array(vec![Value::Number(1.0), Value::Number(2.0)]);
+        for expression in ["@[::0][]", "(@[::0]).*"] {
+            assert_eq!(
+                evaluate(&super::super::compile(expression).unwrap(), &input),
+                Ok(Value::Null)
+            );
+        }
+        assert_eq!(
+            evaluate(&super::super::compile("@[::0]").unwrap(), &input),
+            Err(EvaluationError::InvalidSlice)
+        );
+        for expression in [
+            "(@[1::9223372036854775807])[]",
+            "(@[1::9223372036854775807]).*",
+        ] {
+            assert_eq!(
+                evaluate(&super::super::compile(expression).unwrap(), &input),
+                Err(EvaluationError::SliceOverflow)
+            );
+        }
+        assert_eq!(
+            evaluate(&super::super::compile("(foo(@)).*").unwrap(), &input),
+            Err(EvaluationError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn empty_container_depth_matches_renderers() {
+        let nested =
+            |count| (0..count).fold(Value::Array(vec![]), |value, _| Value::Array(vec![value]));
+        let query = super::super::compile("@").unwrap();
+        let valid = evaluate(&query, &nested(127)).unwrap();
+        assert!(crate::cli::render::write_text(&mut Vec::new(), &valid).is_ok());
+        assert!(crate::cli::render::write_table(&mut Vec::new(), &valid).is_ok());
+        assert!(crate::cli::render::project(&valid).is_ok());
+        assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
+        assert!(crate::cli::render::write_text(&mut Vec::new(), &nested(128)).is_err());
+        assert!(crate::cli::render::write_table(&mut Vec::new(), &nested(128)).is_err());
+        assert!(crate::cli::render::project(&nested(128)).is_err());
+    }
+
+    #[test]
+    fn wildcard_order_uses_utf8_key_bytes() {
+        let input = Value::Object(BTreeMap::from([
+            ("é".into(), Value::Number(3.0)),
+            ("z".into(), Value::Number(2.0)),
+            ("A".into(), Value::Number(1.0)),
+        ]));
+        let expected = Value::Array(vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::Number(3.0),
+        ]);
+        assert_eq!(
+            evaluate(&super::super::compile("*").unwrap(), &input),
+            Ok(expected)
+        );
+    }
+
     #[test]
     fn depth_limit() {
         let nested = |count| (0..count).fold(Value::Null, |value, _| Value::Array(vec![value]));
