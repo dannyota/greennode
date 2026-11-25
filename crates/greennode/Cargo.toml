@@ -9,6 +9,7 @@ repository.workspace = true
 readme = "../../README.md"
 keywords = ["greennode", "vngcloud", "cloud", "cli"]
 categories = ["command-line-utilities"]
+exclude = ["tests/fixtures/"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
