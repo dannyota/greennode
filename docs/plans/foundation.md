@@ -1,47 +1,38 @@
 # Foundation plan
 
-Remaining work from one crate with one command to the first crates.io release and parallel service porting. The [architecture](../design/architecture.md) owns the contract and [workflow](../../instructions/workflow.md) owns how a task runs. Delete a task when it lands and this file when all of it has.
+Remaining work from an empty SDK and a one-command tool to the first crates.io release and parallel service porting. The [architecture](../design/architecture.md) owns the contract and [workflow](../../instructions/workflow.md) owns how a task runs. Delete a task when it lands and this file when all of it has.
+
+## Shared files
+
+The primary is the integration owner. Only the primary edits the workspace `Cargo.toml`, `Cargo.lock`, each crate's `Cargo.toml`, `crates/greennode-sdk/src/lib.rs`, `crates/greennode/src/services/mod.rs`, the `Makefile`, the workflows, and the AGENTS.md code map. A brief names the manifest lines its worker may add in its own worktree; the primary regenerates the lockfile when merging. A new shared type or a change to one goes through the primary before the tasks that depend on it.
 
 ## Order
 
-Tasks 1, 2, and 3 start now and run in parallel. Tasks 4 and 5 follow 1 and 2 and run in parallel. Task 6 follows 5. Task 7 follows 4 and 6. Task 8 follows 7. Task 9 starts when task 7 lands and runs as many services at once as the laptop allows.
+Task 1 gates every task that builds on a design. Tasks 2 and 3 run beside it because the baseline's own code fixes their behavior. Task 4 follows 1. Tasks 5, 6, and 7 follow 4 and run in parallel. Task 8 follows 5 and 6. Task 9 follows 7 and 8. Task 10 follows 9. Task 11 can start after 1 and must land before the first release. Task 12 starts when 9 lands.
 
 ## Tasks
 
-- [ ] **1. Design review.** Reviewer (Astra) reviews [architecture](../design/architecture.md), [security](../design/security.md), [release](../design/release.md), and [ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md), with the [fallback rules](../design/architecture.md#fallback-to-vngcloud-settings) traced against the baseline's precedence and file safety rules. Accept: findings resolved and the design status lines removed.
-- [ ] **2. Workspace split.** Implementer. Turn the single crate into a workspace with `crates/greennode-sdk` (library, no code yet beyond a documented crate root) and `crates/greennode` (the current binary and tests), one shared version, and the tool depending on the exact SDK version. Make the length gate treat each crate's `tests/` as the standard says, and make the comment gate allow doc comments under `crates/greennode-sdk/src/` only. Owns `Cargo.toml`, `Cargo.lock`, `src/`, `tests/`, `crates/`, `scripts/check-lengths.sh`, `scripts/check-comments.py`, and their tests. Accept: `make check` and `make deny` pass; each gate change has a failing-then-passing script test; `cargo package --list --package greennode-sdk` shows only the files the crate needs, with the license and a README.
-- [ ] **3. Parity list.** Implementer. A script reads the baseline's `docs/wiki/CLI-*.md` pages and writes `crates/greennode/tests/parity/commands.json`: service, operation, kind, and each flag with type and required state. Owns `scripts/parity-list.py`, `scripts/test/parity-list-test.py`, `crates/greennode/tests/parity/`, and one `Makefile` target. Accept: the list holds 19 services and every operation heading in those pages; the script's test covers a read, a write, and an operation with no flags; rerunning the script changes nothing.
-- [ ] **4. CLI frame.** Primary writes `docs/design/cli.md` from the baseline's `docs/design/cli.md` and `cli-usability.md`, recording only greennode's choices: how a command is declared, the injected process value, the error document, and the JMESPath crate. Reviewer (Astra) accepts it. Then implementer: global flags, guards, JSON, table, and text output, `--query`, the stderr error document, exit codes, the hidden documentation generator, and the parity test. Owns `crates/greennode/`. Accept: the baseline's `internal/cli` tests for these rules are ported and pass; the parity test fails when a registered command differs from the list.
-- [ ] **5. SDK core: configuration and transport.** Primary writes `docs/design/sdk.md`: the public shape of the configuration, clients, inputs, outputs, and errors, how outputs carry the baseline's JSON names, and the async runtime and HTTP crates. Reviewer (Astra) accepts it. Then two implementers in parallel. One: the INI reader, profiles, precedence, file safety, and the [fallback rules](../design/architecture.md#fallback-to-vngcloud-settings); baseline `internal/ini/`, `internal/core/load.go`, `docs/design/sdk-and-cli.md#configuration-and-credentials`. The other: the HTTP transport with TLS, redirect refusal, size limits, retry rules, and debug logging; baseline `internal/transport/`. Adversarial review (Sol) of both: file modes, symbolic links, tampered files, mixed credential sources, redirects, endpoint overrides, oversized bodies, and log content.
-- [ ] **6. Sign-in and token cache.** Implementer. Static token, service account, and IAM user sign-in with one-time codes; the token cache with its lock and the one-time-code step marker; project discovery. Baseline: `internal/core/`, `internal/iamuser/`, `internal/tokencache/`, `internal/discovery/`, `docs/design/service-account-auth.md`. Owns the sign-in and cache files in the SDK. Adversarial review (Sol) with canary tests for every secret.
-- [ ] **7. First service and configure.** Two implementers in parallel. One: billing reads in the SDK and `billing list-budgets` with the other billing reads in the tool, as the template every service follows. The other: `configure` with `set`, `get`, and `list`, including the copy from `~/.vngcloud` on first write; baseline `internal/cli/configure*.go` and `docs/design/cli.md#configure`; adversarial review (Sol). Afterwards the primary updates [porting](../../instructions/porting.md) with the pattern, registers the remaining 18 services as empty modules in both crates so later tasks touch no shared file, and asks the owner to approve one read-only live run.
-- [ ] **8. Release workflows and first publish.** Implementer ports `release.yml`, `publish-crates.yml`, `scripts/check-crate-release.py`, and its test from duolane for two crates, as the [release design](../design/release.md) describes. Adversarial review (Sol). The primary does the one-time GitHub setup. The owner approves the `v0.1.0` tag and publishes the first version of both crates by hand, then adds the two Trusted Publishers.
-- [ ] **9. Services.** One implementer and one worktree per service, reads before writes, each write with adversarial review. Each task owns `crates/greennode-sdk/src/<service>/`, `crates/greennode-sdk/tests/<service>.rs`, `crates/greennode-sdk/tests/fixtures/<service>/`, `crates/greennode/src/services/<service>.rs`, and `crates/greennode/tests/<service>.rs`.
+- [ ] **1. Design review.** Reviewer (Astra) reviews the eight designs in the [design index](../design/README.md) and [ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md) against the baseline. Accept: findings resolved, the designs' status lines removed, and the owner's answers recorded for the baseline tag and the SDK doc comment exception.
+- [ ] **2. Parity list.** In review. Lands `scripts/parity-list.py`, its test, and `crates/greennode/tests/parity/commands.json`.
+- [ ] **3. Output formatter and goldens.** Implementer. The Go-compatible JSON writer, the table and text renderers, and their escaping, as [CLI output](../design/cli-output.md) specifies, with the baseline's golden files copied under `crates/greennode/tests/fixtures/`. Baseline: `internal/cli/encode.go`, `render.go`, `redact_maps.go`, their tests, and `internal/cli/testdata/golden`. Owns `crates/greennode/src/cli/render.rs`, `crates/greennode/src/cli/render/`, `crates/greennode/tests/render.rs`, `crates/greennode/tests/fixtures/render/`. Accept: every copied golden matches byte for byte; no query engine yet.
+- [ ] **4. Shared contracts.** Implementer. The SDK's public shapes with no I/O behind them: the request context and cancellation, the clock, `Secret`, the error class, error, failure, and write-dispatch types, the list and paged-list models, the configuration source trait, and the debug event types, as the [SDK design](../design/sdk.md) specifies. Owns `crates/greennode-sdk/src/context.rs`, `secret.rs`, `error.rs`, `model/`, `tests/core_contracts.rs`. Review (Sol) with canary tests for `Secret`. Everything after this task compiles against these types.
+- [ ] **5. Configuration.** Implementer. The INI reader, profile and mode selection, the incomplete-pair refusal, file safety, the offline `resolve_profile` step, and the `load_resolved` step up to the point of choosing a credential source, as the [configuration design](../design/config.md) specifies. Baseline: `internal/ini/`, `internal/core/load.go`, `internal/core/cdnkey.go`. Owns `crates/greennode-sdk/src/config/`, `tests/core_config.rs`, `tests/fixtures/core/config/`. Adversarial review (Sol) against the design's test table.
+- [ ] **6. Connection and product sender.** Implementer. The private socket and TLS layer, endpoint validation, and the product sender with its redirect, retry, bound, and event rules, plus the loopback test server, as the [request policies](../design/sdk-requests.md) specify. Baseline: `internal/transport/`, `internal/endpoints/`. Owns `crates/greennode-sdk/src/wire/connection.rs`, `wire/product/`, `src/endpoint/`, `tests/support/`, `tests/core_wire.rs`. Adversarial review (Sol).
+- [ ] **7. CLI frame.** Implementer. The root, global flags, the operation declaration and registry, `--cli-input-json`, dispatch and guards, the error classifier and exit codes, the query adapter, the documentation generator, the parity test, and process injection, as the [CLI design](../design/cli.md) specifies, with one toy service in tests only. Baseline: `internal/cli/root.go`, `op.go`, `flags.go`, `input.go`, `errors.go`, `errors_exit.go`, `gendocs.go`, `cmd/vngcloud/main.go`. Owns `crates/greennode/src/main.rs`, `src/cli/` except the render files, `tests/cli.rs`, `tests/frame_*.rs`, `tests/parity.rs`. Review (Sol).
+- [ ] **8. Sign-in, cache, and discovery.** Four implementers on disjoint paths, then one adversarial review (Sol) of the whole with a canary for every secret. The token cache with its lock and one-time-code marker (`src/cache/`; baseline `internal/tokencache/`). The service-account exchange (`src/wire/credential/service_account.rs`; baseline `internal/core/service_account_*.go`). The IAM user sign-in with one-time codes (`src/wire/credential/iam_user.rs`; baseline `internal/iamuser/`). The session, provider contract, refresh gates, and project discovery (`src/session/`, `src/discovery/`; baseline `internal/core/`, `internal/discovery/`).
+- [ ] **9. First service and configure.** Two implementers in parallel. One: billing reads in the SDK and their commands in the tool, as the template every service follows, with the generated documentation page. The other: `configure` with `set`, `get`, and `list`, including the refusal in legacy mode; baseline `internal/cli/configure*.go`, `configfile.go`; adversarial review (Sol). Afterwards the primary updates [porting](../../instructions/porting.md) with the pattern and asks the owner to approve one read-only live run.
+- [ ] **10. First release.** The primary does the one-time GitHub setup. The owner approves the `v0.1.0` tag and publishes both crates by hand as the [release design](../design/release.md) describes, then adds the two Trusted Publishers.
+- [ ] **11. Release tooling.** Implementer. `release.yml`, `publish-crates.yml`, the release checker with its receipt and registry-state commands, the checksum-checking credential helper, the manifest gate in `make check`, and their tests, ported from duolane and extended for two crates as the [release design](../design/release.md#implementation-boundary) lists. Adversarial review (Sol). Accept: the loopback-registry test in the design's unverified list passes on macOS and Ubuntu.
+- [ ] **12. Services.** In waves. Before each wave the primary registers the wave's services in both crates and lands any shared model or quote and discovery code they need. One implementer and one worktree per service or slice, reads before writes, each write with adversarial review. A slice owns its service's paths in both crates as the [layout](../design/architecture.md#layout) lists them.
 
-## Service order
+## Waves
 
-Smallest first, so the pattern settles on cheap services before the large ones. Lines are the baseline's Go source without tests.
+Smallest first, so the pattern settles on cheap services. Lines are the baseline's Go source without tests. Large services are split by concern into slices of about 1,500 lines, each with its own brief.
 
-|Service|Operations|Go lines|
-|-|-|-|
-|`project`|1|46|
-|`backup`|2|275|
-|`portal`|5|327|
-|`tagging`|3|434|
-|`vks`|5|636|
-|`database`|9|1,236|
-|`containerregistry`|9|1,329|
-|`dns`|10|1,431|
-|`pricing`|2|1,448|
-|`globalloadbalancer`|16|2,281|
-|`cdn`|16|2,591|
-|`billing` writes|17 with reads|2,635|
-|`volume`|21|2,675|
-|`compute`|31|4,328|
-|`iam`|38|4,564|
-|`loadbalancer`|33|5,155|
-|`storage`|35|6,523|
-|`monitor`|48|9,135|
-|`network`|71|10,198|
-
-The shared Go code the core tasks port is about 3,300 lines in `internal/core`, 2,100 in `internal/transport`, and 14,600 in `internal/cli`, most of the last being per-service operation tables that move with each service.
+|Wave|Services|Operations|Go lines|Needs first|
+|-|-|-|-|-|
+|1|`project`, `backup`, `portal`, `tagging`, `vks`|16|1,718|Nothing beyond task 9|
+|2|`database`, `containerregistry`, `dns`, `billing` writes|35|5,300|The write conventions proven on billing|
+|3|`pricing`, `volume`, `globalloadbalancer`, `cdn`|55|8,995|Shared quote and discovery code; the vCDN key path|
+|4|`compute`, `iam`, `loadbalancer`|102|14,047|The shared server model|
+|5|`storage`, `monitor`, `network`|154|25,856|The S3 sender for storage objects; compute and pricing for network|
