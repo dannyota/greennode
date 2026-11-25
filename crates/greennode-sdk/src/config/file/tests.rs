@@ -25,14 +25,26 @@ impl Drop for Dir {
 #[test]
 fn windows_open_uses_identification_security_qos() {
     use windows_sys::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
-    assert_eq!(
-        security_qos_flags(),
-        SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT
-    );
+    let dir = Dir::new();
+    let path = dir.0.join("regular");
+    std::fs::write(&path, b"ok").unwrap();
+    let file = open_windows(&path, |options, path| {
+        let expected = SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT;
+        assert!(format!("{options:?}").contains(&format!("security_qos_flags: {expected}")));
+        options.open(path)
+    });
+    assert!(file.is_ok());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_refuses_non_disk_handles_before_metadata() {
     let dir = Dir::new();
     let path = dir.0.join("regular");
     std::fs::write(&path, b"ok").unwrap();
     assert!(open(&path, Slot::Config).is_ok());
+    let error = open(Path::new("NUL"), Slot::Config).err().unwrap();
+    assert_eq!(error, "config: not a regular file");
 }
 
 #[test]

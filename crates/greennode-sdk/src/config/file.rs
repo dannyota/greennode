@@ -18,9 +18,17 @@ fn open_flags() -> rustix::fs::OFlags {
 }
 
 #[cfg(windows)]
-fn security_qos_flags() -> u32 {
+fn open_windows(
+    path: &Path,
+    open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<File>,
+) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
-    SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .security_qos_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION);
+    open(&options, path)
 }
 
 pub(super) fn open(path: &Path, slot: Slot) -> Result<File, String> {
@@ -31,16 +39,17 @@ pub(super) fn open(path: &Path, slot: Slot) -> Result<File, String> {
             .map_err(|_| error("open failed"))?,
     );
     #[cfg(windows)]
-    let file = {
-        use std::os::windows::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .security_qos_flags(security_qos_flags())
-            .open(path)
-            .map_err(|_| error("open failed"))?
-    };
+    let file =
+        open_windows(path, |options, path| options.open(path)).map_err(|_| error("open failed"))?;
     #[cfg(not(any(unix, windows)))]
     let file = File::open(path).map_err(|_| error("open failed"))?;
+    #[cfg(windows)]
+    if !winapi_util::file::typ(&file)
+        .map_err(|_| error("metadata failed"))?
+        .is_disk()
+    {
+        return Err(error("not a regular file"));
+    }
     let metadata = file.metadata().map_err(|_| error("metadata failed"))?;
     if !metadata.is_file() {
         return Err(error("not a regular file"));

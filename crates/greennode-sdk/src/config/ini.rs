@@ -111,7 +111,7 @@ mod tests {
     fn debug_redacts_parsed_values() {
         let parsed = parse(Slot::Credentials, b"[default]\nkey=canary\n".as_slice()).unwrap();
         assert!(!format!("{parsed:?}").contains("canary"));
-        assert_eq!(parsed["default"]["key"], "canary");
+        assert!(parsed["default"]["key"] == "canary", "parsed value changed");
     }
 
     #[test]
