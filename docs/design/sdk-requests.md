@@ -175,10 +175,13 @@ Decoders may receive bounded response bytes and typed status internally. Accept
 peer error codes and message fields only through the operation's safe
 classifier. On credential-bearing or secret-bearing paths withhold fields that
 are not known safe; use status fallback and fixed diagnostics. Even a field that
-looks like an identifier can be a reflected credential. Never expose raw
-headers, response bodies, unbounded peer text, URLs, or decode errors via an
-error source, capture, or debug event. Keep per-attempt credentials available
-only within the logical request for reflection checks, including across retries.
+looks like an identifier can be a reflected credential. When any credential was
+sent, keep only `code` and `message`, and withhold a message with non-ASCII
+text, a credential field marker or a sent credential in any encoding; this is
+stricter than Go, which case-folds Unicode. Never expose raw headers, response
+bodies, unbounded peer text, URLs, or decode errors via an error source,
+capture, or debug event. Keep per-attempt credentials available only within the
+logical request for reflection checks, including across retries.
 
 ### Signed S3
 

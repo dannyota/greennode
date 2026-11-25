@@ -89,6 +89,10 @@ pub(crate) struct SentCredentials {
     values: Vec<Secret>,
 }
 impl SentCredentials {
+    #[cfg(test)]
+    pub(crate) fn for_test(values: Vec<Secret>) -> Self {
+        Self { values }
+    }
     fn record(&mut self, secret: &Secret) {
         let value = secret.expose_secret();
         if !value.is_empty() && !self.values.iter().any(|item| item.expose_secret() == value) {
