@@ -178,7 +178,6 @@ fn load_local(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ConfigSource;
     use std::env;
     #[tokio::test]
     async fn dropping_load_at_read_stops_parsing() {
@@ -251,22 +250,30 @@ mod tests {
 
     #[test]
     fn relative_paths_use_cwd_at_call() {
-        const CHILD: &str = "GREENNODE_TEST_CWD_CHILD";
-        if crate::ProcessConfigSource
-            .var_os(std::ffi::OsStr::new(CHILD))
+        let original = env::current_dir().unwrap();
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "--ignored",
+                "config::load::tests::cwd_child_entry",
+            ])
+            .env_clear()
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(env::current_dir().unwrap(), original);
+    }
+
+    #[test]
+    #[ignore]
+    fn cwd_child_entry() {
+        assert!(
+            crate::ConfigSource::var_os(
+                &crate::ProcessConfigSource,
+                std::ffi::OsStr::new("GREENNODE_TEST_CWD_CHILD")
+            )
             .is_none()
-        {
-            let status = std::process::Command::new(env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "config::load::tests::relative_paths_use_cwd_at_call",
-                ])
-                .env(CHILD, "1")
-                .status()
-                .unwrap();
-            assert!(status.success());
-            return;
-        }
+        );
         struct Empty;
         impl crate::ConfigSource for Empty {
             fn var_os(&self, _: &std::ffi::OsStr) -> Option<std::ffi::OsString> {

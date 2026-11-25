@@ -146,7 +146,7 @@ impl Config {
     pub fn profile_setting(&self, key: &str) -> Option<&str> {
         self.settings.get(key).map(String::as_str)
     }
-    /// Resolves profile settings offline; requires a Tokio runtime with timers.
+    /// Resolves settings with credentials metadata only; requires a Tokio runtime with timers.
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
