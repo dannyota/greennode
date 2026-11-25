@@ -1,3 +1,5 @@
+mod signin;
+
 use crate::Secret;
 use data_encoding::BASE64URL_NOPAD;
 use sha2::{Digest, Sha256};
