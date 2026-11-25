@@ -68,6 +68,75 @@ fn rejects_oversized_opened_file() {
 }
 
 #[test]
+fn opened_pair_rejects_hard_link_alias() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, b"[unfinished").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    std::fs::hard_link(&config, &credentials).unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    assert!(open_pair(&selection).is_err());
+    std::fs::remove_file(&credentials).unwrap();
+    std::fs::write(&credentials, b"[default]\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let result = open_pair(&selection);
+    assert!(result.is_ok());
+    let pair = result.ok().unwrap();
+    assert!(pair.config.is_some() && pair.credentials.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn opened_pair_rejects_distinct_symlink_aliases() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let dir = Dir::new();
+    let target = dir.0.join("target");
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&target, b"[default]\n").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    symlink(&target, &config).unwrap();
+    symlink(&target, &credentials).unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config),
+            credentials: Some(credentials),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    assert!(open_pair(&selection).is_err());
+}
+
+#[test]
 fn detects_file_identity_from_open_handles() {
     let dir = Dir::new();
     let first = dir.0.join("first");

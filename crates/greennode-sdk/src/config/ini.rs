@@ -25,6 +25,75 @@ impl std::ops::DerefMut for Ini {
     }
 }
 
+#[derive(Default)]
+pub(super) struct SecretsIni(pub BTreeMap<String, BTreeMap<String, crate::Secret>>);
+
+impl std::fmt::Debug for SecretsIni {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretsIni([REDACTED])")
+    }
+}
+
+pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    input
+        .take(1_048_577)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "credentials:1: read failed".to_owned())?;
+    if bytes.len() > 1_048_576 {
+        return Err("credentials:1: file too large".into());
+    }
+    let mut result = SecretsIni::default();
+    let mut section: Option<String> = None;
+    for (index, raw) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
+        let number = index + 1;
+        let error = |reason| format!("credentials:{number}: {reason}");
+        if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
+            return Err(error("line too long"));
+        }
+        let line = std::str::from_utf8(raw).map_err(|_| error("invalid UTF-8"))?;
+        let line = if index == 0 {
+            line.strip_prefix('\u{feff}').unwrap_or(line)
+        } else {
+            line
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[') {
+            let name = header
+                .strip_suffix(']')
+                .ok_or_else(|| error("unclosed section header"))?
+                .trim()
+                .to_owned();
+            result.0.entry(name.clone()).or_default();
+            section = Some(name);
+        } else {
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| error("line has no '='"))?;
+            let current = section
+                .as_ref()
+                .ok_or_else(|| error("key before any section"))?;
+            let key: String = key
+                .trim()
+                .chars()
+                .map(|ch| ch.to_lowercase().next().unwrap_or(ch))
+                .collect();
+            if key.is_empty() {
+                return Err(error("empty key"));
+            }
+            result
+                .0
+                .entry(current.clone())
+                .or_default()
+                .insert(key, crate::Secret::new(value.trim().to_owned()));
+        }
+    }
+    Ok(result)
+}
+
 pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
     let slot = slot.label();
     let mut bytes = Vec::new();
@@ -88,6 +157,35 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
 #[cfg(test)]
 mod tests {
     use super::{Slot, parse};
+
+    #[test]
+    fn credential_parser_preserves_baseline_grammar_and_bounds() {
+        let input = "\u{feff}[default]\nPassword=first\n[other]\nx=y\n[default]\nPASSWORD=last\n";
+        let parsed = super::parse_secrets(input.as_bytes()).unwrap();
+        assert!(parsed.0["default"]["password"].expose_secret() == "last");
+        let valid = format!("[x]\nk={}\n", "a".repeat(65533));
+        let invalid = format!("[x]\nk={}\n", "a".repeat(65534));
+        assert!(super::parse_secrets(valid.as_bytes()).is_ok());
+        assert!(super::parse_secrets(invalid.as_bytes()).is_err());
+        let line = format!("#{}\n", "a".repeat(65534));
+        let exact = line.repeat(16);
+        assert!(super::parse_secrets(exact.as_bytes()).is_ok());
+        assert!(super::parse_secrets(format!("{exact}\n").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn credential_parser_redacts_values_and_errors() {
+        let parsed = super::parse_secrets(b"[default]\npassword=toy-canary\n".as_slice());
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert!(parsed.0["default"]["password"].expose_secret() == "toy-canary");
+        assert!(!format!("{parsed:?}").contains("toy-canary"));
+        let error = super::parse_secrets(b"[default]\nx=ok\ntoy-canary\n".as_slice())
+            .err()
+            .unwrap();
+        assert!(error.starts_with("credentials:3:"));
+        assert!(!error.contains("toy-canary"));
+    }
 
     #[test]
     fn parses_baseline_sections_and_values() {

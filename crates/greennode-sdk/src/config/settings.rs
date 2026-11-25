@@ -89,11 +89,12 @@ pub(super) fn preflight(
 
 pub(super) fn resolve(
     paths: &Selection,
+    config_file: Option<std::fs::File>,
     options: &Options,
     source: &dyn ConfigSource,
     policy: Policy,
 ) -> Result<Settings, SettingsError> {
-    use super::{Slot, file, ini};
+    use super::{Slot, ini};
     use std::ffi::OsStr;
     let mut read_only_source = preflight(options, source, policy)?;
     let variable = |name: &str| -> Result<Option<String>, SettingsError> {
@@ -127,9 +128,9 @@ pub(super) fn resolve(
             return Err(SettingsError::InvalidConfig);
         }
         Some(_) if !paths.config_present => ini::Ini::default(),
-        Some(path) => ini::parse(
+        Some(_) => ini::parse(
             Slot::Config,
-            file::open(path, Slot::Config).map_err(|_| SettingsError::InvalidConfig)?,
+            config_file.ok_or(SettingsError::InvalidConfig)?,
         )
         .map_err(|diagnostic| SettingsError::Parse {
             mode: paths.mode,
@@ -204,6 +205,25 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
+    fn resolve(
+        paths: &Selection,
+        options: &Options,
+        source: &dyn ConfigSource,
+        policy: Policy,
+    ) -> Result<Settings, SettingsError> {
+        preflight(options, source, policy)?;
+        let config = if paths.config_present {
+            let path = paths.config.as_ref().ok_or(SettingsError::InvalidConfig)?;
+            Some(
+                crate::config::file::open(path, crate::config::Slot::Config)
+                    .map_err(|_| SettingsError::InvalidConfig)?,
+            )
+        } else {
+            None
+        };
+        super::resolve(paths, config, options, source, policy)
+    }
+
     #[derive(Default)]
     struct Source {
         vars: HashMap<OsString, OsString>,
@@ -253,6 +273,29 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn reads_preopened_config_not_replacement() {
+        let fixture = Fixture::new("[default]\nregion=first\n");
+        let selection = fixture.paths();
+        let opened = crate::config::file::open(
+            selection.config.as_ref().unwrap(),
+            crate::config::Slot::Config,
+        )
+        .unwrap();
+        let replacement = fixture.0.join("replacement");
+        std::fs::write(&replacement, "[default]\nregion=second\n").unwrap();
+        std::fs::rename(replacement, fixture.0.join("config")).unwrap();
+        let result = super::resolve(
+            &selection,
+            Some(opened),
+            &Options::default(),
+            &Source::default(),
+            Policy::Read,
+        )
+        .unwrap();
+        assert_eq!(result.region.as_deref(), Some("first"));
     }
 
     #[test]

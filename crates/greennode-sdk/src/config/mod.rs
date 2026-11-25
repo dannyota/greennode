@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod credentials;
 mod file;
 mod ini;
 mod mode;
