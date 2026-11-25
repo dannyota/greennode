@@ -1,4 +1,4 @@
-.PHONY: help check fmt lint test deny lengths comments pins parity parity-list docs crate-age tools-outdated hooks-install reference
+.PHONY: help check fmt lint test deny lengths comments pins parity parity-list release-checks docs crate-age tools-outdated hooks-install reference
 
 SHELL := bash
 .SHELLFLAGS := -Eeuo pipefail -c
@@ -15,7 +15,7 @@ BASELINE_COMMIT := f99c71490b1006a95a6dac7b0eac7f182b34e917
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed -E 's/^([a-z-]+):.*## /\1\t/'
 
-check: lengths comments pins parity docs fmt lint test ## Run every check that works offline
+check: lengths comments pins parity release-checks docs fmt lint test ## Run every check that works offline
 
 fmt: ## Check Rust formatting; fix with cargo fmt --all
 	cargo fmt --all -- --check
@@ -53,6 +53,11 @@ parity: ## Test the parity list generator
 
 parity-list: ## Regenerate the parity list from the baseline clone
 	python3 -I scripts/parity-list.py "$(if $(wildcard .reference/vngcloud),.reference/vngcloud,../../.reference/vngcloud)" --tag "$(BASELINE_TAG)" --commit "$(BASELINE_COMMIT)"
+
+release-checks: ## Test the release checker, credential helper, and release notes script
+	python3 -I scripts/test/check-crate-release-test.py
+	python3 -I scripts/test/check-crate-publish-credential-test.py
+	python3 -I scripts/test/release-notes-test.py
 
 docs: ## Check Markdown with Prettier and markdownlint; needs npm ci --ignore-scripts
 	@test -x $(BIN)/prettier -a -x $(BIN)/markdownlint-cli2 || { echo "run npm ci --ignore-scripts first" >&2; exit 1; }

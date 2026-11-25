@@ -37,6 +37,8 @@ jobs:
         run: make pins
       - name: Parity list gate
         run: make parity
+      - name: Release tooling tests
+        run: make release-checks
       - name: Action pins match their tags
         env:
           GH_TOKEN: ${{ github.token }}
