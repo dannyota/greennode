@@ -6,6 +6,7 @@ use crate::cli::render::Value;
 
 use super::{
     CompiledQuery,
+    lexer::Kind,
     parser::{Node, NodeKind, NodeValue},
 };
 
@@ -79,8 +80,51 @@ fn source(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     }
 }
 
+fn is_false(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => true,
+        Value::String(value) => value.is_empty(),
+        Value::Array(value) => value.is_empty(),
+        Value::Object(value) => value.is_empty(),
+        _ => false,
+    }
+}
+
 fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match node.kind {
+        NodeKind::Comparator => {
+            let left = execute(child(node, 0)?, input)?;
+            let right = execute(child(node, 1)?, input)?;
+            let NodeValue::Comparator(kind) = node.value else {
+                return Err(EvaluationError::InvalidNode);
+            };
+            match kind {
+                Kind::Eq => Ok(Value::Bool(left == right)),
+                Kind::Ne => Ok(Value::Bool(left != right)),
+                Kind::Lt | Kind::Lte | Kind::Gt | Kind::Gte => {
+                    let (Value::Number(left), Value::Number(right)) = (left, right) else {
+                        return Ok(Value::Null);
+                    };
+                    Ok(Value::Bool(match kind {
+                        Kind::Lt => left < right,
+                        Kind::Lte => left <= right,
+                        Kind::Gt => left > right,
+                        Kind::Gte => left >= right,
+                        _ => return Err(EvaluationError::InvalidNode),
+                    }))
+                }
+                _ => Err(EvaluationError::InvalidNode),
+            }
+        }
+        NodeKind::OrExpression | NodeKind::AndExpression => {
+            let left = execute(child(node, 0)?, input)?;
+            if is_false(&left) == (node.kind == NodeKind::OrExpression) {
+                execute(child(node, 1)?, input)
+            } else {
+                Ok(left)
+            }
+        }
+        NodeKind::NotExpression => Ok(Value::Bool(is_false(&execute(child(node, 0)?, input)?))),
         NodeKind::Identity | NodeKind::CurrentNode => copy(input),
         NodeKind::Literal => match &node.value {
             NodeValue::Literal(value) => copy(value),
@@ -119,6 +163,21 @@ fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
             (NodeValue::Slice(_), _) => Ok(Value::Null),
             _ => Err(EvaluationError::InvalidNode),
         },
+        NodeKind::FilterProjection => {
+            let Value::Array(items) = source(child(node, 0)?, input)? else {
+                return Ok(Value::Null);
+            };
+            let mut result = Vec::new();
+            for item in &items {
+                if !is_false(&execute(child(node, 2)?, item)?) {
+                    let value = execute(child(node, 1)?, item)?;
+                    if value != Value::Null {
+                        push(&mut result, value)?;
+                    }
+                }
+            }
+            Ok(Value::Array(result))
+        }
         NodeKind::Flatten => {
             let source = source(child(node, 0)?, input)?;
             let Value::Array(items) = source else {
@@ -236,6 +295,88 @@ fn slice(items: &[Value], parts: [Option<i64>; 3]) -> Result<Value, EvaluationEr
 mod tests {
     use super::*;
     #[test]
+    fn filter_suppresses_source_error_but_propagates_predicate_error() {
+        let numbers = Value::Array(vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::Number(3.0),
+        ]);
+        let nested = Value::Array(vec![
+            Value::Array(vec![Value::Number(0.0)]),
+            Value::Array(vec![Value::Number(1.0)]),
+        ]);
+        assert_eq!(
+            evaluate(&super::super::compile("(@[::0])[?@]").unwrap(), &numbers),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            evaluate(&super::super::compile("[?@[::0]]").unwrap(), &nested),
+            Err(EvaluationError::InvalidSlice)
+        );
+    }
+    #[test]
+    fn filter_checks_result_depth_before_comparison() {
+        let nested = |count| (0..count).fold(Value::Null, |value, _| Value::Array(vec![value]));
+        let query = super::super::compile("([?`true`].[@]) == `[]`").unwrap();
+        assert_eq!(evaluate(&query, &nested(127)), Ok(Value::Bool(false)));
+        assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
+    }
+    #[test]
+    fn filter_drops_null_results_and_false_predicates() {
+        let input = crate::cli::render::project(&serde_json::json!([
+            {"keep": true, "name": "yes"}, {"keep": true}, {"keep": false, "name": "no"}
+        ]))
+        .unwrap()
+        .for_query()
+        .unwrap();
+        assert_eq!(
+            evaluate(&super::super::compile("[?keep].name").unwrap(), &input),
+            Ok(Value::Array(vec![Value::String("yes".into())]))
+        );
+        assert_eq!(
+            evaluate(
+                &super::super::compile("[?keep].name").unwrap(),
+                &Value::Null
+            ),
+            Ok(Value::Null)
+        );
+    }
+    #[test]
+    fn comparator_uses_exact_numbers_and_numeric_ordering() {
+        for (expression, expected) in [
+            ("`1` == `1.0`", Value::Bool(true)),
+            ("`1` == `1.000000000000001`", Value::Bool(false)),
+            (
+                "`9007199254740992` == `9007199254740993`",
+                Value::Bool(true),
+            ),
+            ("`[1,{\"a\":2}]` == `[1.0,{\"a\":2.0}]`", Value::Bool(true)),
+            ("'a' < 'b'", Value::Null),
+            ("`1` < '2'", Value::Null),
+            ("`1` < `2`", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                evaluate(&super::super::compile(expression).unwrap(), &Value::Null),
+                Ok(expected)
+            );
+        }
+    }
+    #[test]
+    fn boolean_short_circuit_preserves_values() {
+        for (expression, expected) in [
+            ("`false` && unknown(@)", Value::Bool(false)),
+            ("`0` || unknown(@)", Value::Number(0.0)),
+            ("`[]` || `7`", Value::Number(7.0)),
+            ("!`{}`", Value::Bool(true)),
+            ("!`0`", Value::Bool(false)),
+        ] {
+            assert_eq!(
+                evaluate(&super::super::compile(expression).unwrap(), &Value::Null),
+                Ok(expected)
+            );
+        }
+    }
+    #[test]
     fn current_node_returns_input() {
         let query = super::super::compile("@").unwrap();
         assert_eq!(evaluate(&query, &Value::Bool(true)), Ok(Value::Bool(true)));
@@ -243,20 +384,15 @@ mod tests {
     fn supported(node: &Node) -> bool {
         !matches!(
             node.kind,
-            NodeKind::Comparator
-                | NodeKind::ExpRef
-                | NodeKind::FunctionExpression
-                | NodeKind::FilterProjection
-                | NodeKind::OrExpression
-                | NodeKind::AndExpression
-                | NodeKind::NotExpression
-                | NodeKind::Empty
+            NodeKind::ExpRef | NodeKind::FunctionExpression | NodeKind::Empty
         ) && node.children.iter().all(supported)
     }
     #[test]
     fn selected_compliance() {
         let files = [
             "basic",
+            "boolean",
+            "filters",
             "current",
             "escape",
             "identifiers",
@@ -328,15 +464,9 @@ mod tests {
             skipped.len(),
             mismatches.len()
         );
-        assert_eq!(passed + syntax_rejections + skipped.len(), 430);
-        assert_eq!(
-            skipped,
-            vec![
-                "multiselect:8:0:foo.[baz[*].not_there || baz[*].bar, qux[0]]",
-                "pipe:1:8:foo.bam || foo.bar | baz",
-                "pipe:1:9:foo | not_there || bar",
-            ]
-        );
+        assert_eq!(passed, 552);
+        assert_eq!(syntax_rejections, 4);
+        assert!(skipped.is_empty(), "{}", skipped.join("\n"));
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
     #[test]
