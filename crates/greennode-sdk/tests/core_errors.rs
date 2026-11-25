@@ -44,6 +44,18 @@ fn diagnostics_are_sanitized_before_access() {
 
 #[test]
 fn fallback_handles_absent_status_and_preserves_explicit_codes() {
+    let empty = ApiError::new("test", Some(404), safe(""), safe(""), false);
+    assert_eq!(empty.code(), "NotFound");
+    let null = ApiError::new("test", Some(404), safe("null"), safe(""), false);
+    assert_eq!(null.code(), "NotFound");
+    assert_eq!(
+        ApiError::new("test", None, safe(""), safe(""), false).code(),
+        ""
+    );
+    assert_eq!(
+        ApiError::new("test", None, safe("null"), safe(""), false).code(),
+        ""
+    );
     let absent = ApiError::new("test", None, safe("0"), safe(""), false);
     assert_eq!(absent.code(), "");
     let status = ApiError::new("test", Some(404), safe("404"), safe(""), false);

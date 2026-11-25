@@ -1,11 +1,23 @@
 use std::{
     future::Future,
-    task::{Context, Waker},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context, Wake, Waker},
     time::Duration,
 };
 
 use greennode_sdk::{Clock, ContextEnd, RequestContext, TestClock};
 use time::OffsetDateTime;
+
+struct WakeFlag(AtomicBool);
+
+impl Wake for WakeFlag {
+    fn wake(self: Arc<Self>) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
 
 #[tokio::test]
 async fn cancellation_reaches_clones_and_children() {
@@ -16,9 +28,13 @@ async fn cancellation_reaches_clones_and_children() {
     assert_eq!(ctx.check(&clock), None);
     let waiter = child.wait(&clock);
     tokio::pin!(waiter);
-    let mut cx = Context::from_waker(Waker::noop());
+    let flag = Arc::new(WakeFlag(AtomicBool::new(false)));
+    let waker = Waker::from(flag.clone());
+    let mut cx = Context::from_waker(&waker);
     assert!(waiter.as_mut().poll(&mut cx).is_pending());
+    assert!(!flag.0.load(Ordering::SeqCst));
     cancel.cancel();
+    assert!(flag.0.load(Ordering::SeqCst));
     assert_eq!(clone.check(&clock), Some(ContextEnd::Cancelled));
     assert_eq!(
         waiter.as_mut().poll(&mut cx),
