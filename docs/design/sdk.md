@@ -127,13 +127,15 @@ the [configuration design](config.md) specifies. Never reuse a settings-only
 result to construct a management config.
 
 `resolve_profile` returns an opaque `ResolvedProfile` with `name()`,
-`profile_setting(key)` (the same rules as on `Config`), and `config_source()`
-and `credentials_source()`, each the fixed value-free label of the selected file
-or `None`, without requiring a region or credentials. The CLI reads the profile
-latch as `profile_setting("read_only")` and validates it; `load` does not. It
-never signs in, opens the credentials file for content, or reads credential
-values from the environment. `configure`, standalone discovery, and S3 object
-commands may use this result without loading management credentials.
+`profile_setting(key)` (the same rules as on `Config`), `section_present()`
+(whether the selected config file has the profile's section, even empty), and
+`config_source()` and `credentials_source()`, each the fixed value-free label of
+the selected file or `None`, without requiring a region or credentials. The CLI
+reads the profile latch as `profile_setting("read_only")` and validates it;
+`load` does not. It never signs in, opens the credentials file for content, or
+reads credential values from the environment. `configure`, standalone discovery,
+and S3 object commands may use this result without loading management
+credentials.
 
 For a management write, the CLI first checks the flag and environment read-only
 guards without reading a configuration, credentials, secret, or transfer file; a
