@@ -1,3 +1,9 @@
+#[cfg(unix)]
+mod entry;
+#[cfg(unix)]
+mod lock;
+#[cfg(unix)]
+mod marker;
 pub(crate) mod store;
 
 use std::path::{Component, Path, PathBuf};

@@ -1,0 +1,183 @@
+use super::*;
+use std::{env, path::PathBuf};
+
+struct Dir(PathBuf);
+impl Dir {
+    fn new() -> Self {
+        let path = env::temp_dir().join(format!(
+            "greennode-entry-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Dir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+fn oversize_store() -> (Dir, Store) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Dir::new();
+    let path = dir.0.join("large.json");
+    std::fs::write(&path, vec![b'x'; 65_537]).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let store = Store::open(&dir.0).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn oversized_iam_entry_is_error() {
+    let (_dir, store) = oversize_store();
+    assert!(
+        matches!(read(&store, "large.json", Kind::Iam, OffsetDateTime::UNIX_EPOCH, None), Err(error) if error.class() == crate::ErrorClass::TokenCache),
+        "cache.go:101,115"
+    );
+}
+
+#[test]
+fn oversized_service_account_entry_is_miss() {
+    let (_dir, store) = oversize_store();
+    assert!(
+        matches!(
+            read(
+                &store,
+                "large.json",
+                Kind::ServiceAccount,
+                OffsetDateTime::UNIX_EPOCH,
+                None
+            ),
+            Ok(None)
+        ),
+        "service_account.go:73, service_account_test.go:149-167"
+    );
+}
+
+#[test]
+fn invalid_utf8_entry_is_miss() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Dir::new();
+    let path = dir.0.join("invalid.json");
+    std::fs::write(&path, [0xff]).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let store = Store::open(&dir.0).unwrap();
+    assert!(matches!(
+        read(
+            &store,
+            "invalid.json",
+            Kind::Iam,
+            OffsetDateTime::UNIX_EPOCH,
+            None
+        ),
+        Ok(None)
+    ));
+    assert!(matches!(
+        read(
+            &store,
+            "missing.json",
+            Kind::Iam,
+            OffsetDateTime::UNIX_EPOCH,
+            None
+        ),
+        Ok(None)
+    ));
+}
+
+fn rejected(value: &str) {
+    assert!(decode(&crate::Secret::new(value), OffsetDateTime::UNIX_EPOCH, None).is_none());
+    let valid = crate::Secret::new(r#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z"}"#);
+    assert!(decode(&valid, OffsetDateTime::UNIX_EPOCH, None).is_some());
+}
+
+#[test]
+fn invalid_json_is_miss() {
+    rejected("{");
+}
+#[test]
+fn wrong_type_is_miss() {
+    rejected(r#"{"accessToken":17}"#);
+}
+#[test]
+fn nested_duplicate_is_miss() {
+    rejected(r#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","extra":{"x":1,"x":2}}"#);
+}
+#[test]
+fn duplicate_field_is_miss() {
+    rejected(r#"{"accessToken":"one","accessToken":"two"}"#);
+}
+#[test]
+fn duplicate_folded_field_is_miss() {
+    rejected(r#"{"accessToken":"one","ACCESSTOKEN":"two"}"#);
+}
+#[test]
+fn escaped_token_is_miss() {
+    rejected(&format!(
+        r#"{{"accessToken":"tok{}u0065n","expiresAt":"2100-01-01T00:00:00Z","obtainedAt":"2020-01-01T00:00:00Z"}}"#,
+        char::from(92)
+    ));
+}
+#[test]
+fn invalid_expiry_is_miss() {
+    rejected(r#"{"accessToken":"toy","expiresAt":"invalid"}"#);
+}
+#[test]
+fn empty_token_is_miss() {
+    rejected(r#"{"accessToken":"","expiresAt":"2100-01-01T00:00:00Z"}"#);
+}
+#[test]
+fn expired_token_is_miss() {
+    rejected(r#"{"accessToken":"toy","expiresAt":"1970-01-01T00:00:30Z"}"#);
+}
+
+#[test]
+fn unknown_fields_are_allowed() {
+    let raw = crate::Secret::new(
+        r#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","unknown":{"array":[1,true,null,"text"]}}"#,
+    );
+    assert!(decode(&raw, OffsetDateTime::UNIX_EPOCH, None).is_some());
+}
+
+#[test]
+fn round_trip_and_redaction() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let entry = Entry {
+        token: crate::Secret::new("toy-canary"),
+        expires: now + time::Duration::seconds(120),
+        obtained: now,
+    };
+    write(&store, "entry.json", &entry).unwrap();
+    let data = store.read("entry.json").unwrap().unwrap();
+    let shape: serde_json::Value = serde_json::from_str(data.expose_secret()).unwrap();
+    assert!(shape.get("accessToken").is_some());
+    assert!(shape.get("expiresAt").is_some());
+    assert!(shape.get("obtainedAt").is_some());
+    let recovered = decode(&data, now, None).unwrap();
+    assert!(recovered.token.expose_secret() == "toy-canary");
+    assert_eq!(recovered.expires, entry.expires);
+    assert_eq!(recovered.obtained, entry.obtained);
+    assert!(!format!("{recovered:?}").contains("toy-canary"));
+    let unsafe_entry = Entry {
+        token: crate::Secret::new("toy-canary\""),
+        expires: entry.expires,
+        obtained: entry.obtained,
+    };
+    let error = write(&store, "invalid.json", &unsafe_entry).unwrap_err();
+    assert!(!format!("{error:?} {error}").contains("toy-canary"));
+}
+
+#[test]
+fn rejected_token_uses_age_boundary() {
+    let raw = crate::Secret::new(
+        r#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","obtainedAt":"1970-01-01T00:00:00Z"}"#,
+    );
+    let token = crate::Secret::new("toy");
+    let now = OffsetDateTime::UNIX_EPOCH;
+    assert!(decode(&raw, now + time::Duration::seconds(29), Some(&token)).is_some());
+    assert!(decode(&raw, now + time::Duration::seconds(30), Some(&token)).is_none());
+    assert!(decode(&raw, now - time::Duration::seconds(1), Some(&token)).is_none());
+}

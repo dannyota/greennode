@@ -15,6 +15,14 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 const LIMIT: usize = 64 * 1024;
 
+#[cfg(unix)]
+pub(super) enum ReadOutcome {
+    Missing,
+    Oversize,
+    InvalidUtf8,
+    Data(crate::Secret),
+}
+
 #[allow(dead_code)]
 pub(crate) struct Store {
     #[cfg(unix)]
@@ -54,7 +62,43 @@ impl Store {
     }
 
     #[cfg(unix)]
-    pub(crate) fn read(&self, name: &str) -> Result<Option<crate::Secret>, Box<crate::Error>> {
+    pub(super) fn open_lock(&self, name: &str) -> Result<File, Box<crate::Error>> {
+        validate_name(name)?;
+        let fd = rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .map_err(|_| unavailable())?;
+        let file = File::from(fd);
+        validate_owner_file(&file)?;
+        Ok(file)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn verify_identity(&self, name: &str, file: &File) -> Result<(), Box<crate::Error>> {
+        validate_owner_file(file)?;
+        let fd = rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| unavailable())?;
+        let named = File::from(fd);
+        validate_owner_file(&named)?;
+        let first = same_file::Handle::from_file(file.try_clone().map_err(|_| unavailable())?)
+            .map_err(|_| unavailable())?;
+        let second = same_file::Handle::from_file(named).map_err(|_| unavailable())?;
+        if first != second {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(super) fn read_marker(&self, name: &str) -> Result<Option<Vec<u8>>, Box<crate::Error>> {
         validate_name(name)?;
         let fd = match rustix::fs::openat(
             &self.directory,
@@ -67,16 +111,53 @@ impl Store {
             Err(_) => return Err(unavailable()),
         };
         let file = File::from(fd);
-        validate_file(&file)?;
-        let mut data = Zeroizing::new(Vec::with_capacity(LIMIT + 2));
-        file.take((LIMIT + 1) as u64)
+        validate_owner_file(&file)?;
+        let mut data = Vec::with_capacity(32);
+        (&file)
+            .take(32)
             .read_to_end(&mut data)
             .map_err(|_| unavailable())?;
-        if data.len() > LIMIT {
-            return Err(unavailable());
+        self.verify_identity(name, &file)?;
+        Ok(Some(data))
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn read(&self, name: &str) -> Result<Option<crate::Secret>, Box<crate::Error>> {
+        match self.read_entry(name)? {
+            ReadOutcome::Missing => Ok(None),
+            ReadOutcome::Oversize | ReadOutcome::InvalidUtf8 => Err(unavailable()),
+            ReadOutcome::Data(data) => Ok(Some(data)),
         }
-        let token = std::str::from_utf8(&data).map_err(|_| unavailable())?;
-        Ok(Some(crate::Secret::new(token)))
+    }
+
+    #[cfg(unix)]
+    pub(super) fn read_entry(&self, name: &str) -> Result<ReadOutcome, Box<crate::Error>> {
+        validate_name(name)?;
+        let fd = match rustix::fs::openat(
+            &self.directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(ReadOutcome::Missing),
+            Err(_) => return Err(unavailable()),
+        };
+        let file = File::from(fd);
+        validate_owner_file(&file)?;
+        let mut data = Zeroizing::new(Vec::with_capacity(LIMIT + 2));
+        (&file)
+            .take((LIMIT + 1) as u64)
+            .read_to_end(&mut data)
+            .map_err(|_| unavailable())?;
+        self.verify_identity(name, &file)?;
+        if data.len() > LIMIT {
+            return Ok(ReadOutcome::Oversize);
+        }
+        let Ok(token) = std::str::from_utf8(&data) else {
+            return Ok(ReadOutcome::InvalidUtf8);
+        };
+        Ok(ReadOutcome::Data(crate::Secret::new(token)))
     }
 
     #[cfg(not(unix))]
@@ -86,6 +167,17 @@ impl Store {
 
     #[cfg(unix)]
     pub(crate) fn write(&self, name: &str, data: &crate::Secret) -> Result<(), Box<crate::Error>> {
+        self.write_guarded(name, data, || Ok(()))
+    }
+
+    #[cfg(unix)]
+    pub(super) fn write_guarded(
+        &self,
+        name: &str,
+        data: &crate::Secret,
+        guard: impl Fn() -> Result<(), Box<crate::Error>>,
+    ) -> Result<(), Box<crate::Error>> {
+        guard()?;
         validate_name(name)?;
         if data.expose_secret().len() > LIMIT {
             return Err(unavailable());
@@ -123,6 +215,7 @@ impl Store {
         file.write_all(data.expose_secret().as_bytes())
             .map_err(|_| unavailable())?;
         file.sync_all().map_err(|_| unavailable())?;
+        guard()?;
         rustix::fs::renameat(&self.directory, temporary.as_str(), &self.directory, name)
             .map_err(|_| unavailable())?;
         cleanup.committed = true;
@@ -172,11 +265,19 @@ fn validate_name(name: &str) -> Result<(), Box<crate::Error>> {
 
 #[cfg(unix)]
 fn validate_file(file: &File) -> Result<(), Box<crate::Error>> {
+    validate_owner_file(file)?;
+    if file.metadata().map_err(|_| unavailable())?.len() > LIMIT as u64 {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_owner_file(file: &File) -> Result<(), Box<crate::Error>> {
     let metadata = file.metadata().map_err(|_| unavailable())?;
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || metadata.permissions().mode() & 0o077 != 0
-        || metadata.len() > LIMIT as u64
     {
         return Err(unavailable());
     }
