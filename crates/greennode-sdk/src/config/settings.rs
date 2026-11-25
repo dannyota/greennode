@@ -88,6 +88,37 @@ pub(super) fn preflight(
     Ok(enabled)
 }
 
+pub(super) fn select_profile(
+    options: &Options,
+    source: &dyn ConfigSource,
+) -> Result<String, SettingsError> {
+    let explicit = options
+        .profile
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .cloned();
+    let mut profile = explicit;
+    for name in ["GREENNODE_PROFILE", "VNGCLOUD_PROFILE"] {
+        if profile.is_some() {
+            break;
+        }
+        profile = source
+            .var_os(std::ffi::OsStr::new(name))
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value
+                    .into_string()
+                    .map_err(|_| SettingsError::InvalidConfig)
+            })
+            .transpose()?;
+    }
+    let profile = profile.unwrap_or_else(|| "default".into());
+    if profile.trim() != profile || profile.contains(['\r', '\n', '[', ']']) {
+        return Err(SettingsError::InvalidConfig);
+    }
+    Ok(profile)
+}
+
 pub(super) fn resolve(
     paths: &Selection,
     config_file: Option<std::fs::File>,
@@ -138,13 +169,7 @@ pub(super) fn resolve_checked(
     };
     let nonempty = |value: &Option<String>| value.as_ref().filter(|s| !s.is_empty()).cloned();
     let explicit = nonempty(&options.profile);
-    let profile = match explicit.clone() {
-        Some(value) => value,
-        None => pair("GREENNODE_PROFILE", "VNGCLOUD_PROFILE")?.unwrap_or_else(|| "default".into()),
-    };
-    if profile.trim() != profile || profile.contains(['\r', '\n', '[', ']']) {
-        return Err(SettingsError::InvalidConfig);
-    }
+    let profile = select_profile(options, source)?;
     let ini = match &paths.config {
         None if matches!(policy, Policy::S3Read | Policy::S3Write) => {
             return Err(SettingsError::InvalidConfig);
@@ -224,7 +249,7 @@ pub(super) fn resolve_checked(
         profile_settings: section
             .into_iter()
             .flat_map(|values| values.iter())
-            .filter(|(key, _)| !matches!(key.as_str(), "client_id" | "client_secret"))
+            .filter(|(key, _)| !ini::credential_key(key))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     })

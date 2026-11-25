@@ -82,6 +82,78 @@ fn files(dir: &Dir, contents: &str) -> ConfigOptions {
 }
 
 #[tokio::test]
+async fn invalid_profile_wins_over_unsafe_credentials_file() {
+    let dir = Dir::new();
+    let options = files(&dir, "[default]\n").with_profile("bad]name".into());
+    let path = dir.0.join("credentials");
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let result = Config::load(&ctx, options, &Source::default()).await;
+    assert!(matches!(result, Err(error) if error.class() == ErrorClass::InvalidConfig));
+}
+
+#[tokio::test]
+async fn provider_does_not_consult_management_environment() {
+    let dir = Dir::new();
+    let options =
+        files(&dir, "[default]\n").with_credentials_provider(std::sync::Arc::new(Provider));
+    let source = Source::default()
+        .with("GREENNODE_CLIENT_SECRET", "toy-secret")
+        .with("GREENNODE_VCDN_API_KEY", "toy-cdn");
+    let (ctx, _) = RequestContext::new();
+    assert!(Config::load(&ctx, options, &source).await.is_ok());
+    let reads = source.reads.lock().unwrap();
+    for prefix in ["GREENNODE", "VNGCLOUD"] {
+        for suffix in [
+            "ACCESS_TOKEN",
+            "CLIENT_ID",
+            "CLIENT_SECRET",
+            "ROOT_EMAIL",
+            "USERNAME",
+            "PASSWORD",
+            "TOTP_SECRET",
+        ] {
+            assert!(!reads.contains(&OsString::from(format!("{prefix}_{suffix}"))));
+        }
+    }
+    assert!(reads.contains(&OsString::from("GREENNODE_VCDN_API_KEY")));
+}
+
+#[tokio::test]
+async fn credentials_never_appear_as_profile_settings() {
+    let dir = Dir::new();
+    let options =
+        files(&dir, "[default]\n").with_credentials_provider(std::sync::Arc::new(Provider));
+    let keys = [
+        "client_id",
+        "client_secret",
+        "root_email",
+        "username",
+        "password",
+        "totp_secret",
+        "vcdn_api_key",
+    ];
+    for key in keys {
+        let value = if matches!(key, "client_id" | "client_secret") {
+            ""
+        } else {
+            "toy-secret"
+        };
+        std::fs::write(
+            dir.0.join("config"),
+            format!("[default]\nregion=hcm-3\n{key}={value}\n"),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        let config = Config::load(&ctx, options.clone(), &Source::default())
+            .await
+            .unwrap();
+        assert!(config.profile_setting(key).is_none(), "{key}");
+    }
+}
+
+#[tokio::test]
 async fn environment_credentials_override_incomplete_file_and_are_read_once() {
     let dir = Dir::new();
     let options = files(&dir, "[default]\nclient_id=toy-id\n");

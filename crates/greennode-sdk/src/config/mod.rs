@@ -239,12 +239,37 @@ const SETTINGS_VARIABLES: [&str; 12] = [
 
 struct SourceSnapshot {
     values: std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+    secrets: std::collections::HashMap<std::ffi::OsString, zeroize::Zeroizing<Vec<u8>>>,
     home: Option<std::path::PathBuf>,
+}
+
+#[cfg(unix)]
+fn invalid_os_string() -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(vec![0xff])
+}
+
+#[cfg(windows)]
+fn invalid_os_string() -> std::ffi::OsString {
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&[0xd800])
+}
+
+#[cfg(not(any(unix, windows)))]
+fn invalid_os_string() -> std::ffi::OsString {
+    std::ffi::OsString::from("\0")
 }
 
 impl crate::ConfigSource for SourceSnapshot {
     fn var_os(&self, name: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
-        self.values.get(name).cloned()
+        self.values.get(name).cloned().or_else(|| {
+            self.secrets
+                .get(name)
+                .map(|value| match std::str::from_utf8(value) {
+                    Ok(value) => std::ffi::OsString::from(value),
+                    Err(_) => invalid_os_string(),
+                })
+        })
     }
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         self.home.clone()
@@ -280,6 +305,7 @@ impl SourceSnapshot {
         }
         Self {
             values,
+            secrets: Default::default(),
             home: source.home_dir(),
         }
     }

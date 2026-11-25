@@ -110,6 +110,19 @@ pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
     Ok(result)
 }
 
+pub(super) fn credential_key(key: &str) -> bool {
+    matches!(
+        key,
+        "client_id"
+            | "client_secret"
+            | "root_email"
+            | "username"
+            | "password"
+            | "totp_secret"
+            | "vcdn_api_key"
+    )
+}
+
 pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
     let config = matches!(slot, Slot::Config);
     let (bytes, used) = read_limited(input, slot)?;
@@ -158,7 +171,7 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
             if key.is_empty() {
                 return Err(error("empty key"));
             }
-            let value = if config && matches!(key.as_str(), "client_id" | "client_secret") {
+            let value = if config && credential_key(&key) {
                 if value.trim().is_empty() {
                     String::new()
                 } else {
@@ -216,6 +229,26 @@ mod tests {
             },
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_masks_all_credential_fields() {
+        for key in [
+            "client_id",
+            "client_secret",
+            "root_email",
+            "username",
+            "password",
+            "totp_secret",
+            "vcdn_api_key",
+        ] {
+            let input = format!("[default]\n{key}=toy-secret\n");
+            let parsed = parse(Slot::Config, input.as_bytes()).unwrap();
+            assert!(parsed["default"][key] == "1", "{key}");
+            let input = format!("[default]\n{key}=\n");
+            let parsed = parse(Slot::Config, input.as_bytes()).unwrap();
+            assert_eq!(parsed["default"][key], "", "{key}");
+        }
     }
 
     #[test]
