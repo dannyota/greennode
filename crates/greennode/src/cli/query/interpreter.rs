@@ -19,7 +19,9 @@ pub(in crate::cli) enum EvaluationError {
     InvalidNode,
     NonFinite,
     FunctionArity,
+    FunctionVariadicArity,
     FunctionType,
+    UnknownFunction,
 }
 
 fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
@@ -94,38 +96,16 @@ fn is_false(value: &Value) -> bool {
 
 fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match node.kind {
-        NodeKind::FunctionExpression if matches!(&node.value, NodeValue::Text(name) if name == "abs") =>
-        {
+        NodeKind::FunctionExpression => {
+            let NodeValue::Text(name) = &node.value else {
+                return Err(EvaluationError::InvalidNode);
+            };
             let arguments = node
                 .children
                 .iter()
                 .map(|child| execute(child, input))
                 .collect::<Result<Vec<_>, _>>()?;
-            let [argument] = arguments.as_slice() else {
-                return Err(EvaluationError::FunctionArity);
-            };
-            let Value::Number(value) = argument else {
-                return Err(EvaluationError::FunctionType);
-            };
-            Ok(Value::Number(value.abs()))
-        }
-        NodeKind::FunctionExpression if matches!(&node.value, NodeValue::Text(name) if name == "length") =>
-        {
-            let arguments = node
-                .children
-                .iter()
-                .map(|child| execute(child, input))
-                .collect::<Result<Vec<_>, _>>()?;
-            let [argument] = arguments.as_slice() else {
-                return Err(EvaluationError::FunctionArity);
-            };
-            let length = match argument {
-                Value::String(value) => value.chars().count(),
-                Value::Array(value) => value.len(),
-                Value::Object(value) => value.len(),
-                _ => return Err(EvaluationError::FunctionType),
-            };
-            Ok(Value::Number(length as f64))
+            super::functions::call(name, &arguments)
         }
         NodeKind::Comparator => {
             let left = execute(child(node, 0)?, input)?;
@@ -364,6 +344,20 @@ mod tests {
         assert_eq!(run("length(`true`)"), Err(EvaluationError::FunctionType));
     }
     #[test]
+    fn function_dispatch_checks_signatures() {
+        let run = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
+        for (expression, expected) in [
+            ("ceil(`1`, `2`)", "FunctionArity"),
+            ("ceil('1')", "FunctionType"),
+            ("merge()", "FunctionVariadicArity"),
+            ("merge(`false`)", "Unsupported"),
+            ("not_null(`1`, `2`)", "Unsupported"),
+            ("unknown(`1`)", "UnknownFunction"),
+        ] {
+            assert_eq!(format!("{:?}", run(expression).unwrap_err()), expected);
+        }
+    }
+    #[test]
     fn abs_checks_arity_and_numeric_type() {
         let eval = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
         assert_eq!(eval("abs(`-2`)"), Ok(Value::Number(2.0)));
@@ -558,7 +552,7 @@ mod tests {
         }
         assert_eq!(
             evaluate(&super::super::compile("(foo(@)).*").unwrap(), &input),
-            Err(EvaluationError::Unsupported)
+            Err(EvaluationError::UnknownFunction)
         );
     }
 
