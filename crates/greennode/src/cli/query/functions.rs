@@ -346,6 +346,60 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             None => Ok(Value::Null),
         },
         ("to_number", [_]) => Ok(Value::Null),
+        ("sum", [Value::Array(values)]) => {
+            let mut sum = 0.0;
+            for value in values {
+                let Value::Number(number) = value else {
+                    return Err(EvaluationError::FunctionType);
+                };
+                sum += number;
+            }
+            if sum.is_finite() {
+                Ok(Value::Number(sum))
+            } else {
+                Err(EvaluationError::NonFinite)
+            }
+        }
+        ("max" | "min", [Value::Array(values)]) => {
+            let Some(first) = values.first() else {
+                return Ok(Value::Null);
+            };
+            let mut best = first;
+            for value in &values[1..] {
+                let ordering = match (value, best) {
+                    (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
+                    (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+                    _ => return Err(EvaluationError::FunctionType),
+                };
+                if (name == "max" && ordering == Some(std::cmp::Ordering::Greater))
+                    || (name == "min" && ordering == Some(std::cmp::Ordering::Less))
+                {
+                    best = value;
+                }
+            }
+            Ok(best.clone())
+        }
+        ("sort", [Value::Array(values)]) => {
+            let mut sorted = values.clone();
+            sorted.sort_by(|a, b| match (a, b) {
+                (Value::Number(a), Value::Number(b)) => {
+                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                }
+                (Value::String(a), Value::String(b)) => a.cmp(b),
+                _ => std::cmp::Ordering::Equal,
+            });
+            Ok(Value::Array(sorted))
+        }
+        ("merge", values) => {
+            let mut merged = std::collections::BTreeMap::new();
+            for value in values {
+                let Value::Object(map) = value else {
+                    return Err(EvaluationError::FunctionType);
+                };
+                merged.extend(map.clone());
+            }
+            Ok(Value::Object(merged))
+        }
         ("abs", [Value::Number(value)]) => Ok(Value::Number(value.abs())),
         ("ceil", [Value::Number(value)]) => Ok(Value::Number(value.ceil())),
         ("floor", [Value::Number(value)]) => Ok(Value::Number(value.floor())),
@@ -401,6 +455,57 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn aggregate_functions_follow_go() {
+        let arr = |v: Vec<Value>| Value::Array(v);
+        let n = Value::Number;
+        assert_eq!(
+            call("sum", &[arr(vec![n(1e16), n(1.0), n(-1e16)])]),
+            Ok(n(0.0))
+        );
+        assert_eq!(call("sum", &[arr(vec![n(1.0), n(2.0)])]), Ok(n(3.0)));
+        assert_eq!(call("sum", &[arr(vec![])]), Ok(n(0.0)));
+        assert_eq!(
+            call("sum", &[arr(vec![n(1.0), Value::String("a".into())])]),
+            Err(EvaluationError::FunctionType)
+        );
+        assert_eq!(call("max", &[arr(vec![])]), Ok(Value::Null));
+        assert_eq!(call("min", &[arr(vec![n(3.0), n(1.0)])]), Ok(n(1.0)));
+        assert_eq!(
+            call(
+                "max",
+                &[arr(vec![
+                    Value::String("é".into()),
+                    Value::String("z".into())
+                ])]
+            ),
+            Ok(Value::String("é".into()))
+        );
+        assert_eq!(
+            call(
+                "sort",
+                &[arr(vec![
+                    Value::String("é".into()),
+                    Value::String("z".into()),
+                    Value::String("中".into())
+                ])]
+            ),
+            Ok(arr(vec![
+                Value::String("z".into()),
+                Value::String("é".into()),
+                Value::String("中".into())
+            ]))
+        );
+        assert_eq!(
+            call("sort", &[arr(vec![n(1.0), Value::String("a".into())])]),
+            Err(EvaluationError::FunctionType)
+        );
+        let a = Value::Object(BTreeMap::from([("x".into(), n(1.0))]));
+        let b = Value::Object(BTreeMap::from([("x".into(), n(2.0))]));
+        assert_eq!(call("merge", &[a, b.clone()]), Ok(b));
+        assert_eq!(call("merge", &[n(1.0)]), Err(EvaluationError::FunctionType));
+    }
 
     #[test]
     fn to_number_matches_go_float_cases() {
