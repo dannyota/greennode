@@ -9,3 +9,13 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["greennode", "vngcloud", "cloud", "api", "sdk"]
 categories = ["api-bindings"]
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+time = "0.3.55"
+zeroize = "1.9.2"
+tokio = { version = "1.54", features = ["time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1.54", features = ["time", "sync", "rt", "macros", "test-util"] }
+serde_json = "1.0.154"

@@ -8,7 +8,7 @@ The primary is the integration owner of the workspace `Cargo.toml`, `Cargo.lock`
 
 ## Order
 
-Task 1 gates the tasks that depend on its two answers: the doc comment exception gates task 3 and every SDK task after it, and the baseline tag gates task 14. Task 2 started before it and is reworked if the review changes the projection rules. After 1: task 3, and task 4 once task 2 has landed. After 3: tasks 5, 6, and 7 in parallel. After 3, 4, and 7: task 8. After 5 and 6: task 9. After 8 and 9: task 10. After 10: task 11, then 12. Task 13 starts after 1 and lands before the first release. Task 14 starts when 11 lands.
+Task 1 does not block code: SDK tasks write no doc comments until the owner approves the exception, and a later pass adds them; the baseline tag gates task 14. Task 2 started before it and is reworked if the review changes the projection rules. After 1: task 3, and task 4 once task 2 has landed. After 3: tasks 5, 6, and 7 in parallel. After 3, 4, and 7: task 8. After 5 and 6: task 9. After 8 and 9: task 10. After 10: task 11, then 12. Task 13 starts after 1 and lands before the first release. Task 14 starts when 11 lands.
 
 ## Tasks
 
