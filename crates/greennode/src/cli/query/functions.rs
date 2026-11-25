@@ -128,6 +128,155 @@ fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), 
     Ok(())
 }
 
+fn parse_go_float(value: &str) -> Option<f64> {
+    let lower = value.to_ascii_lowercase();
+    match lower.as_str() {
+        "nan" => return Some(f64::NAN),
+        "inf" | "+inf" | "infinity" | "+infinity" => return Some(f64::INFINITY),
+        "-inf" | "-infinity" => return Some(f64::NEG_INFINITY),
+        _ => {}
+    }
+    let bytes = value.as_bytes();
+    let mut index = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+    let negative = bytes.first() == Some(&b'-');
+    let hex = bytes
+        .get(index..index + 2)
+        .is_some_and(|s| s.eq_ignore_ascii_case(b"0x"));
+    if hex {
+        index += 2;
+    }
+    let mut last_digit = hex;
+    let mut pending_underscore = false;
+    let mut digits = false;
+    let mut dot = false;
+    let mut count = 0i64;
+    let mut point = 0i64;
+    let mut kept = 0i64;
+    let mut mantissa = 0u64;
+    let mut truncated = false;
+    while let Some(&byte) = bytes.get(index) {
+        if byte == b'_' {
+            if !last_digit {
+                return None;
+            }
+            last_digit = false;
+            pending_underscore = true;
+        } else if byte == b'.' {
+            if dot || pending_underscore {
+                return None;
+            }
+            dot = true;
+            point = count;
+            last_digit = false;
+        } else if let Some(digit) = (byte as char).to_digit(if hex { 16 } else { 10 }) {
+            digits = true;
+            last_digit = true;
+            pending_underscore = false;
+            if digit == 0 && count == 0 {
+                point = point.saturating_sub(1);
+            } else {
+                count = count.saturating_add(1);
+                if hex && kept < 16 {
+                    mantissa = mantissa * 16 + u64::from(digit);
+                    kept += 1;
+                } else if hex && digit != 0 {
+                    truncated = true;
+                }
+            }
+        } else {
+            break;
+        }
+        index += 1;
+    }
+    if !digits || pending_underscore {
+        return None;
+    }
+    if !dot {
+        point = count;
+    }
+    let mut exponent = 0i64;
+    if bytes
+        .get(index)
+        .is_some_and(|b| b.eq_ignore_ascii_case(&if hex { b'p' } else { b'e' }))
+    {
+        index += 1;
+        let exponent_negative = bytes.get(index) == Some(&b'-');
+        if matches!(bytes.get(index), Some(b'+' | b'-')) {
+            index += 1;
+        }
+        let mut exponent_digits = false;
+        let mut previous_digit = false;
+        while let Some(&byte) = bytes.get(index) {
+            if byte.is_ascii_digit() {
+                exponent_digits = true;
+                previous_digit = true;
+                exponent = (exponent * 10 + i64::from(byte - b'0')).min(100_000);
+            } else if byte == b'_' && previous_digit {
+                previous_digit = false;
+            } else {
+                return None;
+            }
+            index += 1;
+        }
+        if !exponent_digits || !previous_digit {
+            return None;
+        }
+        if exponent_negative {
+            exponent = -exponent;
+        }
+    } else if hex {
+        return None;
+    }
+    if index != bytes.len() {
+        return None;
+    }
+    if !hex {
+        let clean = value.replace('_', "");
+        let parsed = clean.parse::<f64>().ok()?;
+        return parsed.is_finite().then_some(parsed);
+    }
+    let mut exp = point
+        .saturating_mul(4)
+        .saturating_add(exponent)
+        .saturating_sub(kept * 4)
+        .saturating_add(52);
+    while mantissa != 0 && mantissa >> 54 == 0 {
+        mantissa <<= 1;
+        exp -= 1;
+    }
+    if truncated {
+        mantissa |= 1;
+    }
+    while mantissa >> 55 != 0 {
+        mantissa = (mantissa >> 1) | (mantissa & 1);
+        exp += 1;
+    }
+    while mantissa > 1 && exp < -1024 {
+        mantissa = (mantissa >> 1) | (mantissa & 1);
+        exp += 1;
+    }
+    let mut round = mantissa & 3;
+    mantissa >>= 2;
+    round |= mantissa & 1;
+    exp += 2;
+    if round == 3 {
+        mantissa += 1;
+        if mantissa == (1 << 53) {
+            mantissa >>= 1;
+            exp += 1;
+        }
+    }
+    if mantissa >> 52 == 0 {
+        exp = -1023;
+    }
+    if exp > 1023 {
+        return None;
+    }
+    let bits =
+        (mantissa & ((1 << 52) - 1)) | (((exp + 1023) as u64) << 52) | (u64::from(negative) << 63);
+    Some(f64::from_bits(bits))
+}
+
 pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
     let signature = signature(name).ok_or(EvaluationError::UnknownFunction)?;
     if signature.variadic {
@@ -190,6 +339,13 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             compact_json(value, &mut output, 0)?;
             Ok(Value::String(output))
         }
+        ("to_number", [Value::Number(value)]) => Ok(Value::Number(*value)),
+        ("to_number", [Value::String(value)]) => match parse_go_float(value) {
+            Some(value) if value.is_finite() => Ok(Value::Number(value)),
+            Some(_) => Err(EvaluationError::NonFinite),
+            None => Ok(Value::Null),
+        },
+        ("to_number", [_]) => Ok(Value::Null),
         ("abs", [Value::Number(value)]) => Ok(Value::Number(value.abs())),
         ("ceil", [Value::Number(value)]) => Ok(Value::Number(value.ceil())),
         ("floor", [Value::Number(value)]) => Ok(Value::Number(value.floor())),
@@ -245,6 +401,43 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn to_number_matches_go_float_cases() {
+        for (text, expected) in [
+            ("1_2", Some(12.0)),
+            ("_12", None),
+            ("12_", None),
+            ("1__2", None),
+            ("1_.2", None),
+            ("true", None),
+            ("0x1.8p+1", Some(3.0)),
+            ("0x1.00000000000008p0", Some(1.0)),
+            (
+                "0x1.0000000000000801p0",
+                Some(f64::from_bits(1.0f64.to_bits() + 1)),
+            ),
+            ("0x1.fffffffffffffp1023", Some(f64::MAX)),
+            ("0x1p1024", None),
+            ("0x1p-1074", Some(f64::from_bits(1))),
+            ("0x1p-1075", Some(0.0)),
+            ("-NaN", None),
+            ("1e999", None),
+        ] {
+            let actual = call("to_number", &[Value::String(text.into())]);
+            assert_eq!(
+                actual,
+                Ok(expected.map_or(Value::Null, Value::Number)),
+                "{text}"
+            );
+        }
+        for text in ["NaN", "+Inf", "-infinity"] {
+            assert_eq!(
+                call("to_number", &[Value::String(text.into())]),
+                Err(EvaluationError::NonFinite)
+            );
+        }
+    }
 
     #[test]
     fn to_string_uses_compact_go_json() {
