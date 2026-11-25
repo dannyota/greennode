@@ -6,6 +6,7 @@ import http.client
 import json
 import queue
 import re
+import ssl
 import sys
 import tarfile
 import threading
@@ -172,7 +173,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, status_seen=None):
+def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, status_seen=None, ssl_context=None):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" and not (allow_loopback and parsed.scheme == "http" and parsed.hostname == "127.0.0.1"):
         raise ValueError("HTTPS required")
@@ -187,6 +188,8 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, 
             try:
                 result = super()._read_status()
             except TimeoutError as error:
+                if status_seen.is_set():
+                    raise GateError("greennode: response timed out") from error
                 raise TransientError() from error
             status_seen.set()
             return result
@@ -210,13 +213,15 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, 
         def http_open(self, req):
             return self.do_open(HTTPConnection, req)
 
+    context = ssl_context if ssl_context is not None else (ssl.create_default_context() if parsed.scheme == "https" else None)
+
     class HTTPSHandler(urllib.request.HTTPSHandler):
         def https_open(self, req):
-            return self.do_open(HTTPSConnection, req, context=self._context, check_hostname=self._check_hostname)
+            return self.do_open(HTTPSConnection, req, context=context)
 
     request = urllib.request.Request(url, headers={"User-Agent": "release-checker", "Cache-Control": "no-cache"})
     try:
-        response = urllib.request.build_opener(NoRedirect(), HTTPHandler(), HTTPSHandler()).open(request, timeout=timeout)
+        response = urllib.request.build_opener(NoRedirect(), HTTPHandler(), HTTPSHandler(context=context)).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
     except urllib.error.URLError as error:

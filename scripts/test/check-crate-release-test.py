@@ -6,6 +6,7 @@ import threading
 import importlib.util
 import io
 import json
+import ssl
 import tarfile
 import sys
 import tempfile
@@ -866,6 +867,47 @@ class State(unittest.TestCase):
 
 
 class Transport(unittest.TestCase):
+    def test_https_loopback_not_found(self):
+        fixture = Path(__file__).resolve().parent / "fixtures"
+        cert = fixture / "localhost-cert.pem"
+        key = fixture / "localhost-key.pem"
+        body = b'{"errors":[{"detail":"crate `greennode` does not exist"}]}'
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.load_cert_chain(certfile=cert, keyfile=key)
+        server.socket = server_context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        context = ssl.create_default_context(cafile=str(cert))
+        try:
+            status, payload = check.fetch_url(f"https://127.0.0.1:{server.server_port}/", ssl_context=context)
+        except Exception as error:
+            self.fail(f"trusted loopback TLS fetch failed: {type(error).__name__}")
+        self.assertEqual(status, 404)
+        self.assertTrue(check.api_not_found(payload, "greennode", "0.1.0"))
+        def fetch(url):
+            if "index.crates.io" in url:
+                return 404, b"<Error><Code>NoSuchKey</Code><Key>gr/ee/greennode</Key></Error>"
+            return check.fetch_url(f"https://127.0.0.1:{server.server_port}/", ssl_context=context)
+        record = {"name": "greennode", "version": "0.1.0", "sha256": "a" * 64}
+        self.assertEqual(check.registry_state(record, fetch), "absent")
+        with self.assertRaises(ValueError):
+            check.fetch_url(f"https://127.0.0.1:{server.server_port}/", ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+
     def test_timeout_before_status_and_during_body(self):
         release = threading.Event()
         started = threading.Event()
@@ -879,6 +921,9 @@ class Transport(unittest.TestCase):
                 elif self.path == "/headers":
                     self.send_response_only(200)
                     self.flush_headers()
+                elif self.path == "/continue":
+                    self.wfile.write(b"HTTP/1.1 100 Continue\r\n\r\n")
+                    self.wfile.flush()
                 started.set()
                 release.wait(1)
 
@@ -894,15 +939,17 @@ class Transport(unittest.TestCase):
         self.addCleanup(release.set)
         url = f"http://127.0.0.1:{server.server_port}"
         for path, expected in (("/body", check.GateError), ("/headers", check.GateError),
-                               ("/status", check.TransientError)):
+                               ("/continue", check.GateError), ("/status", check.TransientError)):
             with self.subTest(path=path):
+                marker = threading.Event()
                 try:
-                    check.fetch_url(url + path, timeout=0.05, allow_loopback=True)
+                    check.fetch_url(url + path, timeout=0.05, allow_loopback=True, status_seen=marker)
                 except Exception as error:
                     self.assertIsInstance(error, expected)
                 else:
                     self.fail("expected timeout")
                 self.assertTrue(started.is_set())
+                self.assertEqual(marker.is_set(), path != "/status")
 
     def test_hard_deadline_after_status_is_terminal(self):
         release = threading.Event()
