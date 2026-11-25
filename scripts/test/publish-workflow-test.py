@@ -52,7 +52,48 @@ def validate(w):
             assert re.search(r'\bgh\s', step.get('run', '')), 'token scope'
 
 
+def validate_publish(job):
+    assert job.get('needs') == ['verify', 'package'], 'publish needs'
+    assert job.get('if') == '${{ inputs.publish }}', 'publish condition'
+    assert job.get('permissions') == {'contents': 'read', 'actions': 'read', 'id-token': 'write'}, 'publish permissions'
+    assert job.get('environment') == 'crates-io', 'publish environment'
+    assert 'CARGO_REGISTRY_TOKEN' not in job.get('env', {}), 'registry token scope'
+    auth = [s for s in job.get('steps', []) if s.get('uses', '').startswith('rust-lang/crates-io-auth-action@')]
+    assert len(auth) == 1 and auth[0]['uses'] == 'rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9', 'auth pin'
+    for step in job.get('steps', []):
+        if 'CARGO_REGISTRY_TOKEN' in step.get('env', {}):
+            assert re.search(r'\bcargo\s+(?:\+\S+\s+)?publish\b', step.get('run', '')), 'registry token scope'
+
+
 class PublishWorkflowTest(unittest.TestCase):
+    def test_publish_policy_mutations(self):
+        job = {
+            'needs': ['verify', 'package'],
+            'if': '${{ inputs.publish }}',
+            'permissions': {'contents': 'read', 'actions': 'read', 'id-token': 'write'},
+            'environment': 'crates-io',
+            'steps': [
+                {'uses': 'rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9'},
+                {'run': 'cargo +1.100.0 publish', 'env': {'CARGO_REGISTRY_TOKEN': 'toy'}},
+            ],
+        }
+        validate_publish(job)
+        mutations = [
+            ('publish needs', lambda j: j.update(needs=['verify'])),
+            ('publish condition', lambda j: j.update({'if': 'true'})),
+            ('publish permissions', lambda j: j['permissions'].update(actions='write')),
+            ('publish environment', lambda j: j.update(environment='other')),
+            ('auth pin', lambda j: j['steps'][0].update(uses='rust-lang/crates-io-auth-action@v1')),
+            ('registry token scope', lambda j: j.update(env={'CARGO_REGISTRY_TOKEN': 'toy'})),
+            ('registry token scope', lambda j: j['steps'][1].update(run='cargo package')),
+        ]
+        for expected, mutate in mutations:
+            with self.subTest(rule=expected):
+                changed = copy.deepcopy(job)
+                mutate(changed)
+                with self.assertRaisesRegex(AssertionError, expected):
+                    validate_publish(changed)
+
     def test_workflow(self):
         validate(parse())
 
