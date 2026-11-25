@@ -15,6 +15,355 @@ fn normalize<T: ?Sized + Serialize>(value: &T) -> Result<render::Value, render::
     render::project(value)?.for_query()
 }
 
+#[derive(Clone, Copy)]
+enum Coverage {
+    Compared,
+    Excluded(&'static str),
+    Absent,
+}
+
+struct Golden {
+    case: &'static str,
+    separator: char,
+    json: Coverage,
+    table: Coverage,
+    text: Coverage,
+}
+
+use Coverage::{Absent as A, Compared as C, Excluded as E};
+
+const fn golden(
+    case: &'static str,
+    separator: char,
+    json: Coverage,
+    table: Coverage,
+    text: Coverage,
+) -> Golden {
+    Golden {
+        case,
+        separator,
+        json,
+        table,
+        text,
+    }
+}
+
+const FLAVOR_DISCOVERY: Coverage =
+    E("internal/cli/discovery_test.go:148-151: custom discovery view");
+const NETWORK_DISCOVERY: Coverage =
+    E("internal/cli/discovery_test.go:203-206: custom discovery view");
+const DISCOVERY: Coverage = E("internal/cli/discovery_test.go:62-83: custom discovery view");
+const ESTIMATE: Coverage = E("internal/cli/estimate_test.go:103-107: custom estimate view");
+const CDN_QUERY: Coverage =
+    E("internal/cli/svc_cdn_vcdn_test.go:99-101: table/text query differs from JSON");
+const QUOTA_COVERAGE: Coverage =
+    E("internal/cli/svc_monitor_quota_coverage_test.go:139-146: custom quota view");
+const QUOTA_READ: Coverage = E("internal/cli/svc_monitor_test.go:1719-1758: custom quota view");
+const QUOTA_WRITE: Coverage = E("internal/cli/svc_monitor_test.go:2215-2236: custom quota view");
+const QUOTA_RENEW: Coverage = E("internal/cli/svc_monitor_test.go:2687-2706: custom quota view");
+const QUOTA_SMS: Coverage = E("internal/cli/svc_monitor_test.go:2903-2982: custom quota view");
+const NO_PRODUCER: Coverage = E("no producer at v1.0.1");
+
+const INVENTORY: &[Golden] = &[
+    golden("any-fields", '.', C, C, C),
+    golden("billing-list-payments", '.', C, NO_PRODUCER, NO_PRODUCER),
+    golden(
+        "billing-list-transactions",
+        '.',
+        C,
+        NO_PRODUCER,
+        NO_PRODUCER,
+    ),
+    golden("cdn-get-web-accelerator", '.', C, CDN_QUERY, CDN_QUERY),
+    golden("cdn-list-ip-ranges", '.', C, C, C),
+    golden("compute-create-server", '.', C, C, A),
+    golden("compute-create-server-floating-ip", '.', C, C, C),
+    golden(
+        "compute-create-server-floating-ip-conservative",
+        '.',
+        C,
+        C,
+        C,
+    ),
+    golden("compute-create-server-floating-ip-query", '.', A, A, C),
+    golden("compute-delete-server", '.', C, C, A),
+    golden(
+        "compute-list-flavor-prices",
+        '.',
+        C,
+        FLAVOR_DISCOVERY,
+        FLAVOR_DISCOVERY,
+    ),
+    golden("compute-list-flavor-zones", '.', C, C, A),
+    golden("compute-list-flavors", '.', C, C, A),
+    golden("compute-quote-create-server", '.', C, C, A),
+    golden("compute-quote-create-server-floating-ip", '.', C, C, C),
+    golden(
+        "compute-quote-create-server-floating-ip-conservative",
+        '.',
+        C,
+        C,
+        C,
+    ),
+    golden("compute-reboot-server", '.', C, C, A),
+    golden("compute-rename-server", '.', C, C, A),
+    golden("compute-resize-credit", '.', C, C, C),
+    golden("compute-resize-server", '.', C, C, A),
+    golden("compute-resize-server-credit", '.', C, C, C),
+    golden("compute-start-server", '.', C, C, A),
+    golden("compute-stop-server", '.', C, C, A),
+    golden("containerregistry-create-repository", '.', C, C, A),
+    golden("containerregistry-create-user", '.', C, C, A),
+    golden("containerregistry-delete-repository", '.', C, C, A),
+    golden("containerregistry-delete-user", '.', C, C, A),
+    golden("containerregistry-get-repository", '.', C, C, A),
+    golden("containerregistry-list-permissions", '.', C, C, A),
+    golden("containerregistry-list-repositories", '.', C, C, A),
+    golden("containerregistry-list-repository-users", '.', C, C, A),
+    golden("containerregistry-list-users", '.', C, C, A),
+    golden("control-chars", '.', C, C, C),
+    golden("discovery-partial", '.', C, DISCOVERY, DISCOVERY),
+    golden("dns-create-hosted-zone", '.', C, C, C),
+    golden("dns-create-record", '.', C, C, C),
+    golden("dns-delete-hosted-zone", '.', C, C, C),
+    golden("dns-delete-record", '.', C, C, C),
+    golden("dns-update-hosted-zone", '.', C, C, C),
+    golden("dns-update-record", '.', C, C, C),
+    golden("embedded-struct", '.', C, C, C),
+    golden("get", '.', C, C, C),
+    golden("globalloadbalancer-get-load-balancer", '.', C, C, A),
+    golden("globalloadbalancer-list-load-balancers", '.', C, C, A),
+    golden("iam-create-user", '-', C, C, C),
+    golden("iam-delete-user", '-', C, A, A),
+    golden("iam-disable-user-mfa", '-', C, C, C),
+    golden("iam-enable-user-mfa", '-', C, C, C),
+    golden("iam-get-user", '-', C, C, C),
+    golden("iam-reset-user-password-generated", '-', C, C, C),
+    golden("iam-reset-user-password-supplied", '-', C, C, C),
+    golden("loadbalancer-add-pool-member", '.', C, C, A),
+    golden("loadbalancer-create-listener", '.', C, C, A),
+    golden("loadbalancer-create-load-balancer", '.', C, C, A),
+    golden("loadbalancer-create-policy", '.', C, C, A),
+    golden("loadbalancer-create-pool", '.', C, C, A),
+    golden("loadbalancer-delete-listener", '.', C, C, A),
+    golden("loadbalancer-delete-load-balancer", '.', C, C, A),
+    golden("loadbalancer-delete-policy", '.', C, C, A),
+    golden("loadbalancer-delete-pool", '.', C, C, A),
+    golden("loadbalancer-get-load-balancer", '.', C, C, A),
+    golden("loadbalancer-list-load-balancers", '.', C, C, A),
+    golden("loadbalancer-quote-create-load-balancer", '.', C, C, A),
+    golden("loadbalancer-quote-resize-load-balancer", '.', C, C, A),
+    golden("loadbalancer-remove-pool-member", '.', C, C, A),
+    golden("loadbalancer-resize-credit-synthetic", '.', C, C, C),
+    golden("loadbalancer-resize-load-balancer", '.', C, C, A),
+    golden("loadbalancer-update-listener", '.', C, C, A),
+    golden("loadbalancer-update-policy", '.', C, C, A),
+    golden("loadbalancer-update-pool", '.', C, C, A),
+    golden("loadbalancer-update-pool-member", '.', C, C, A),
+    golden("monitor-create-channel", '.', C, C, C),
+    golden("monitor-create-check", '.', C, C, C),
+    golden("monitor-create-log-alarm", '.', C, C, C),
+    golden("monitor-create-log-project", '.', C, C, C),
+    golden(
+        "monitor-create-notification-quota",
+        '.',
+        C,
+        QUOTA_WRITE,
+        QUOTA_WRITE,
+    ),
+    golden(
+        "monitor-create-notification-quota-sms",
+        '.',
+        C,
+        QUOTA_SMS,
+        QUOTA_SMS,
+    ),
+    golden("monitor-create-synthetic-quota", '.', C, C, C),
+    golden("monitor-create-synthetic-quota-preflight", '.', C, C, C),
+    golden("monitor-delete-check", '.', C, C, C),
+    golden("monitor-delete-log-alarm", '.', C, C, C),
+    golden("monitor-delete-log-project", '.', C, C, C),
+    golden(
+        "monitor-delete-notification-quota-email",
+        '.',
+        C,
+        QUOTA_RENEW,
+        QUOTA_RENEW,
+    ),
+    golden(
+        "monitor-delete-notification-quota-sms",
+        '.',
+        C,
+        QUOTA_RENEW,
+        QUOTA_RENEW,
+    ),
+    golden("monitor-delete-synthetic-quota", '.', C, C, C),
+    golden("monitor-delete-synthetic-quota-preflight", '.', C, C, C),
+    golden("monitor-ensure-synthetic-quota", '.', C, C, C),
+    golden("monitor-get-alarm", '.', C, C, C),
+    golden("monitor-get-channel", '.', C, C, C),
+    golden("monitor-get-check", '.', C, C, C),
+    golden("monitor-get-check-alarm", '.', C, C, C),
+    golden("monitor-get-log-project", '.', C, C, C),
+    golden(
+        "monitor-get-notification-quota",
+        '.',
+        C,
+        QUOTA_WRITE,
+        QUOTA_WRITE,
+    ),
+    golden(
+        "monitor-get-notification-quota-sms",
+        '.',
+        C,
+        QUOTA_SMS,
+        QUOTA_SMS,
+    ),
+    golden("monitor-get-notification-quota-usage", '.', C, C, C),
+    golden("monitor-get-quota-usage", '.', C, C, C),
+    golden(
+        "monitor-get-synthetic-quota",
+        '.',
+        C,
+        QUOTA_READ,
+        QUOTA_READ,
+    ),
+    golden("monitor-get-synthetic-quota-usage", '.', C, C, C),
+    golden("monitor-list-alarms", '.', C, C, C),
+    golden("monitor-list-channel-types", '.', C, C, C),
+    golden("monitor-list-channels", '.', C, C, C),
+    golden("monitor-list-check-alarm-history", '.', C, C, C),
+    golden("monitor-list-checks", '.', C, C, C),
+    golden("monitor-list-locations", '.', C, C, C),
+    golden("monitor-list-log-project-classes", '.', C, C, C),
+    golden("monitor-list-log-projects", '.', C, C, C),
+    golden(
+        "monitor-list-notification-packages",
+        '.',
+        C,
+        QUOTA_READ,
+        QUOTA_READ,
+    ),
+    golden(
+        "monitor-list-synthetic-packages",
+        '.',
+        C,
+        QUOTA_COVERAGE,
+        QUOTA_COVERAGE,
+    ),
+    golden("monitor-list-synthetic-packages-query", '.', C, C, C),
+    golden("monitor-pause-check", '.', C, C, C),
+    golden(
+        "monitor-quota-status",
+        '.',
+        C,
+        QUOTA_COVERAGE,
+        QUOTA_COVERAGE,
+    ),
+    golden("monitor-quota-status-query", '.', C, C, C),
+    golden("monitor-quote-create-log-project", '.', C, C, C),
+    golden("monitor-quote-create-notification-quota", '.', C, C, C),
+    golden("monitor-quote-create-notification-quota-sms", '.', C, C, C),
+    golden("monitor-quote-create-synthetic-quota", '.', C, C, C),
+    golden("monitor-quote-renew-synthetic-quota", '.', C, C, C),
+    golden("monitor-recover-synthetic-quota", '.', C, C, C),
+    golden("monitor-renew-synthetic-quota", '.', C, C, C),
+    golden("monitor-send-channel-otp", '.', C, C, C),
+    golden(
+        "monitor-set-notification-quota-auto-renew-email",
+        '.',
+        C,
+        QUOTA_RENEW,
+        QUOTA_RENEW,
+    ),
+    golden(
+        "monitor-set-notification-quota-auto-renew-sms",
+        '.',
+        C,
+        QUOTA_RENEW,
+        QUOTA_RENEW,
+    ),
+    golden(
+        "monitor-set-synthetic-quota-auto-renew-partial",
+        '.',
+        C,
+        C,
+        C,
+    ),
+    golden("monitor-update-channel", '.', C, C, C),
+    golden("monitor-update-check", '.', C, C, C),
+    golden("monitor-update-log-alarm", '.', C, C, C),
+    golden("nested-object", '.', C, C, C),
+    golden("network-list-nat-instances", '.', A, C, A),
+    golden(
+        "network-list-network-prices",
+        '.',
+        C,
+        NETWORK_DISCOVERY,
+        NETWORK_DISCOVERY,
+    ),
+    golden("network-list-vpn-connections", '.', A, C, A),
+    golden("nulls", '.', C, C, C),
+    golden("numeric-filter", '.', C, C, C),
+    golden("paged-list", '.', C, C, C),
+    golden("portal-get-quota", '.', C, C, A),
+    golden("portal-list-zones", '.', C, C, C),
+    golden("pricing-estimate", '.', C, ESTIMATE, ESTIMATE),
+    golden("pricing-estimate-partial", '.', C, ESTIMATE, ESTIMATE),
+    golden("pricing-estimate-unknown", '.', C, ESTIMATE, ESTIMATE),
+    golden("pricing-resize-credit", '.', C, C, C),
+    golden("project-list-projects", '.', C, C, C),
+    golden("projection", '.', C, C, C),
+    golden("storage-get-bucket", '.', C, C, A),
+    golden("storage-list-buckets", '.', C, C, A),
+    golden("storage-list-storage-prices", '.', C, DISCOVERY, DISCOVERY),
+    golden("volume-attach-volume", '.', C, C, A),
+    golden("volume-create-volume", '.', C, C, A),
+    golden("volume-delete-volume", '.', C, C, A),
+    golden("volume-detach-volume", '.', C, C, A),
+    golden("volume-get-default-volume-type", '.', C, C, A),
+    golden("volume-get-volume", '.', C, C, A),
+    golden("volume-list-volume-prices", '.', C, DISCOVERY, DISCOVERY),
+    golden("volume-list-volumes", '.', C, C, A),
+    golden("volume-list-volumes-by-server", '.', C, C, A),
+    golden("volume-quote-create-volume", '.', C, C, A),
+    golden("volume-resize-credit-synthetic", '.', C, C, C),
+    golden("volume-resize-volume", '.', C, C, A),
+];
+
+#[test]
+fn inventory_matches_all_golden_files() {
+    use std::collections::BTreeSet;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render/golden");
+    let actual: BTreeSet<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".golden"))
+        .collect();
+    let mut declared = BTreeSet::new();
+    for item in INVENTORY {
+        for (format, coverage) in [
+            ("json", item.json),
+            ("table", item.table),
+            ("text", item.text),
+        ] {
+            if let Coverage::Excluded(reason) = coverage {
+                assert!(!reason.is_empty());
+            }
+            if !matches!(coverage, Coverage::Absent) {
+                let name = format!("{}{}{}.golden", item.case, item.separator, format);
+                assert!(declared.insert(name));
+            }
+        }
+    }
+    if let Some(missing) = actual.difference(&declared).next() {
+        panic!("unlisted: {missing}");
+    }
+    if let Some(missing) = declared.difference(&actual).next() {
+        panic!("missing: {missing}");
+    }
+}
+
 struct Ordered(&'static serde_json::Value);
 
 impl Serialize for Ordered {
@@ -42,21 +391,180 @@ impl Serialize for Ordered {
     }
 }
 
+fn typed_golden<T: Serialize>(name: &str, value: &T) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/render/golden")
+        .join(name);
+    let expected = std::fs::read(path).unwrap();
+    let mut actual = Vec::new();
+    write_json(&mut actual, value).unwrap();
+    oracle_equal(name, &actual, &expected);
+}
+
+#[test]
+fn typed_embedded_golden() {
+    struct Base {
+        uuid: &'static str,
+        name: &'static str,
+    }
+    struct Embedded {
+        base: Base,
+        status: &'static str,
+    }
+    impl Serialize for Embedded {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+            let mut object = s.serialize_struct("Embedded", 3)?;
+            object.serialize_field("UUID", &self.base.uuid)?;
+            object.serialize_field("Name", &self.base.name)?;
+            object.serialize_field("Status", &self.status)?;
+            object.end()
+        }
+    }
+    typed_golden(
+        "embedded-struct.json.golden",
+        &Embedded {
+            base: Base {
+                uuid: "e-1",
+                name: "widget",
+            },
+            status: "ACTIVE",
+        },
+    );
+}
+
+#[test]
+fn typed_paged_list_golden() {
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Budget {
+        #[serde(rename = "UUID")]
+        uuid: &'static str,
+        name: &'static str,
+        limit_amount: i64,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Paged {
+        items: Vec<Budget>,
+        page: i64,
+        page_size: i64,
+        total_page: i64,
+        total_item: i64,
+    }
+    let value = Paged {
+        items: vec![
+            Budget {
+                uuid: "b-1",
+                name: "monthly",
+                limit_amount: 50,
+            },
+            Budget {
+                uuid: "b-2",
+                name: "quarterly",
+                limit_amount: 150,
+            },
+        ],
+        page: 1,
+        page_size: 10,
+        total_page: 1,
+        total_item: 2,
+    };
+    typed_golden("paged-list.json.golden", &value);
+}
+
+#[test]
+fn typed_sorted_map_golden() {
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum Scalar {
+        Number(i64),
+        Text(&'static str),
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Output {
+        quota: std::collections::HashMap<&'static str, Scalar>,
+    }
+    let quota = std::collections::HashMap::from([
+        ("used", Scalar::Number(1)),
+        ("quotaName", Scalar::Text("vcpu")),
+        ("limit", Scalar::Number(10)),
+    ]);
+    typed_golden("portal-get-quota.json.golden", &Output { quota });
+}
+
+#[test]
+fn typed_float_golden() {
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Summary {
+        current_cost: f64,
+        forecast_cost: f64,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Point {
+        date: &'static str,
+        cost: f64,
+    }
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Output {
+        summary: Summary,
+        series: Vec<Point>,
+        start_date: &'static str,
+        end_date: &'static str,
+    }
+    let value = Output {
+        summary: Summary {
+            current_cost: 120.5,
+            forecast_cost: 200.0,
+        },
+        series: vec![
+            Point {
+                date: "2026-01-01",
+                cost: 10.25,
+            },
+            Point {
+                date: "2026-01-02",
+                cost: 20.0,
+            },
+        ],
+        start_date: "2026-01-01",
+        end_date: "2026-01-31",
+    };
+    typed_golden("nested-object.json.golden", &value);
+}
+
+#[test]
+fn typed_control_characters_golden() {
+    #[derive(Serialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Output {
+        name: &'static str,
+    }
+    typed_golden(
+        "control-chars.json.golden",
+        &Output {
+            name: "a\tb\nc\rd\u{001b}E",
+        },
+    );
+}
+
 #[test]
 fn json_goldens_round_trip() {
     static GOLDENS: std::sync::OnceLock<Vec<(String, Vec<u8>, serde_json::Value)>> =
         std::sync::OnceLock::new();
     let goldens = GOLDENS.get_or_init(|| {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render/golden");
-        std::fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|entry| {
-                let path = entry.unwrap().path();
-                let name = path.file_name()?.to_str()?.to_owned();
-                if !name.ends_with(".json.golden") {
+        INVENTORY
+            .iter()
+            .filter_map(|item| {
+                if !matches!(item.json, Coverage::Compared) {
                     return None;
                 }
-                let bytes = std::fs::read(path).unwrap();
+                let name = format!("{}{}json.golden", item.case, item.separator);
+                let bytes = std::fs::read(dir.join(&name)).unwrap();
                 let value = serde_json::from_slice(&bytes).unwrap();
                 Some((name, bytes, value))
             })
@@ -74,7 +582,7 @@ fn json_goldens_round_trip() {
             panic!("{name}: byte {offset}");
         }
     }
-    assert_eq!(goldens.len(), 146);
+    assert_eq!(goldens.len(), 153);
 }
 
 fn nested_json(depth: usize) -> serde_json::Value {
@@ -375,115 +883,60 @@ fn float_notation_boundaries() {
     }
 }
 
-fn custom_case(case: &str) -> bool {
-    matches!(
-        case,
-        "billing-list-payments"
-            | "billing-list-transactions"
-            | "numeric-filter"
-            | "projection"
-            | "cdn-get-web-accelerator"
-            | "compute-list-flavor-prices"
-            | "volume-list-volume-prices"
-            | "storage-list-storage-prices"
-            | "network-list-network-prices"
-            | "discovery-partial"
-            | "pricing-estimate"
-            | "pricing-estimate-partial"
-            | "pricing-estimate-unknown"
-            | "monitor-quota-status"
-            | "monitor-list-synthetic-packages"
-            | "monitor-get-synthetic-quota"
-            | "monitor-list-notification-packages"
-            | "monitor-create-notification-quota"
-            | "monitor-create-notification-quota-sms"
-            | "monitor-get-notification-quota"
-            | "monitor-get-notification-quota-sms"
-            | "monitor-delete-notification-quota-email"
-            | "monitor-delete-notification-quota-sms"
-            | "monitor-set-notification-quota-auto-renew-email"
-            | "monitor-set-notification-quota-auto-renew-sms"
-    )
+fn source_for_case(item: &Golden, dir: &Path) -> serde_json::Value {
+    if matches!(item.json, Coverage::Compared) {
+        let path = dir.join(format!("{}{}json.golden", item.case, item.separator));
+        return serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    }
+    match item.case {
+        "compute-create-server-floating-ip-query" => serde_json::json!("192.0.2.1"),
+        "network-list-nat-instances" => {
+            serde_json::json!([{"ID":"nat-1", "Name":"edge", "Status":"ACTIVE"}])
+        }
+        "network-list-vpn-connections" => serde_json::json!([
+            {"ID":"vpn-1", "Name":"edge", "Sites":2, "Status":"ACTIVE", "Tunnels":3},
+            {"ID":"vpn-2", "Name":"pending", "Sites":0, "Status":"PROVISIONING", "Tunnels":0}
+        ]),
+        _ => panic!("missing source for {}", item.case),
+    }
+}
+
+fn compare_format(format: &str) -> usize {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render/golden");
+    let mut count = 0;
+    for item in INVENTORY {
+        let coverage = if format == "table" {
+            item.table
+        } else {
+            item.text
+        };
+        if !matches!(coverage, Coverage::Compared) {
+            continue;
+        }
+        let source = source_for_case(item, &dir);
+        let tree = normalize(&source).unwrap();
+        let name = format!("{}{}{}.golden", item.case, item.separator, format);
+        let expected = std::fs::read(dir.join(&name)).unwrap();
+        let mut actual = Vec::new();
+        if format == "table" {
+            render::write_table(&mut actual, &tree).unwrap();
+        } else {
+            render::write_text(&mut actual, &tree).unwrap();
+        }
+        oracle_equal(&name, &actual, &expected);
+        count += 1;
+    }
+    count
 }
 
 #[test]
 fn text_goldens() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render/golden");
-    let mut count = 0;
-    let mut failures = Vec::new();
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let Some(case) = name.strip_suffix(".json.golden") else {
-            continue;
-        };
-        if custom_case(case) {
-            continue;
-        }
-        let text_path = dir.join(format!("{case}.text.golden"));
-        if !text_path.exists() {
-            continue;
-        }
-        let bytes = std::fs::read(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let tree = normalize(&value).unwrap();
-        let expected = std::fs::read(text_path).unwrap();
-        let mut actual = Vec::new();
-        render::write_text(&mut actual, &tree).unwrap();
-        if actual != expected {
-            let offset = actual
-                .iter()
-                .zip(&expected)
-                .position(|(a, b)| a != b)
-                .unwrap_or(actual.len().min(expected.len()));
-            failures.push(format!("{case}: byte {offset}"));
-        }
-        count += 1;
-    }
-    assert!(failures.is_empty(), "{}", failures.join(", "));
-    assert!(count > 0);
+    assert_eq!(compare_format("text"), 77);
 }
 
 #[test]
 fn table_goldens() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/render/golden");
-    let mut count = 0;
-    let mut failures = Vec::new();
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        let Some(case) = name.strip_suffix(".json.golden") else {
-            continue;
-        };
-        if custom_case(case) {
-            continue;
-        }
-        let table_path = dir.join(format!("{case}.table.golden"));
-        if !table_path.exists() {
-            continue;
-        }
-        let bytes = std::fs::read(&path).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let tree = normalize(&value).unwrap();
-        let expected = std::fs::read(table_path).unwrap();
-        let mut actual = Vec::new();
-        render::write_table(&mut actual, &tree).unwrap();
-        if actual != expected {
-            let offset = actual
-                .iter()
-                .zip(&expected)
-                .position(|(a, b)| a != b)
-                .unwrap_or(actual.len().min(expected.len()));
-            failures.push(format!("{case}: byte {offset}"));
-        }
-        count += 1;
-    }
-    assert!(failures.is_empty(), "{}", failures.join(", "));
-    assert!(count > 0);
+    assert_eq!(compare_format("table"), 131);
 }
 
 #[test]
