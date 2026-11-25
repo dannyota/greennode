@@ -305,8 +305,12 @@ creating a directory or lock, reading a token or marker, or writing anything.
 Resolve the existing ancestors even if the cache does not exist yet. Compare
 filesystem ancestry, not string prefixes, and anchor disk operations to the
 checked directory. If separation cannot be established safely, refuse cache use.
-Do not follow a retargeted ancestor after the check. This supplements, not
-replaces, the baseline's checks on the cache directory and entries.
+Open the checked directory once without following its final component, require
+it owned by the user and not group- or world-writable, and do every later step
+relative to that handle. An ancestor changed between the check and that open is
+an accepted limit: it needs write access to the owner's own directories. This
+supplements, not replaces, the baseline's checks on the cache directory and
+entries.
 
 Without a home, the tool has no default disk cache. `Config::load` with no home
 and `Config::new` have no legacy path to compare with; they use an explicit
