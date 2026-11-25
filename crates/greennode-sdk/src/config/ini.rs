@@ -2,7 +2,28 @@ use super::Slot;
 use std::collections::BTreeMap;
 use std::io::Read;
 
-type Ini = BTreeMap<String, BTreeMap<String, String>>;
+#[derive(Default)]
+pub(super) struct Ini(BTreeMap<String, BTreeMap<String, String>>);
+
+impl std::fmt::Debug for Ini {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Ini([REDACTED])")
+    }
+}
+
+impl std::ops::Deref for Ini {
+    type Target = BTreeMap<String, BTreeMap<String, String>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Ini {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
     let slot = slot.label();
@@ -14,7 +35,7 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
     if bytes.len() > 1_048_576 {
         return Err(format!("{slot}:1: file too large"));
     }
-    let mut result = Ini::new();
+    let mut result = Ini::default();
     let mut section: Option<String> = None;
     for (index, raw) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
         let number = index + 1;
@@ -87,6 +108,13 @@ mod tests {
     }
 
     #[test]
+    fn debug_redacts_parsed_values() {
+        let parsed = parse(Slot::Credentials, b"[default]\nkey=canary\n".as_slice()).unwrap();
+        assert!(!format!("{parsed:?}").contains("canary"));
+        assert_eq!(parsed["default"]["key"], "canary");
+    }
+
+    #[test]
     fn rejects_malformed_lines_without_disclosing_content() {
         for (line, input) in [
             (1, "key = canary\n"),
@@ -95,7 +123,7 @@ mod tests {
             (1, "[canary\n"),
             (3, "[default]\nx=y\ncanary\n"),
         ] {
-            let err = parse(Slot::Credentials, input.as_bytes()).unwrap_err();
+            let err = parse(Slot::Credentials, input.as_bytes()).err().unwrap();
             assert!(err.starts_with(&format!("credentials:{line}:")));
             assert!(!err.contains("canary"));
         }
@@ -103,7 +131,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_utf8_without_disclosing_content() {
-        let err = parse(Slot::Config, &b"[default]\nkey=\xffcanary\n"[..]).unwrap_err();
+        let err = parse(Slot::Config, &b"[default]\nkey=\xffcanary\n"[..])
+            .err()
+            .unwrap();
         assert!(err.starts_with("config:2:"));
         assert!(!err.contains("canary"));
         assert!(parse(Slot::Config, &b"[default]\nkey=ok\n"[..]).is_ok());
@@ -115,6 +145,8 @@ mod tests {
         let invalid = format!("[x]\nk={}\n", "a".repeat(65534));
         assert!(parse(Slot::Config, valid.as_bytes()).is_ok());
         assert!(parse(Slot::Config, invalid.as_bytes()).is_err());
+        let valid_final_line = format!("[x]\nk={}", "a".repeat(65533));
+        assert!(parse(Slot::Config, valid_final_line.as_bytes()).is_ok());
         let final_line = format!("[x]\nk={}", "a".repeat(65534));
         assert!(parse(Slot::Config, final_line.as_bytes()).is_err());
     }

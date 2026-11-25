@@ -21,6 +21,9 @@ tokio = { version = "1.54", features = ["time", "sync"] }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.6", features = ["fs"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tokio = { version = "1.54", features = ["time", "sync", "rt", "macros", "test-util"] }
 serde_json = "1.0.154"

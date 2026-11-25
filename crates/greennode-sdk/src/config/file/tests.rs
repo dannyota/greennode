@@ -21,6 +21,20 @@ impl Drop for Dir {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_open_uses_identification_security_qos() {
+    use windows_sys::Win32::Storage::FileSystem::{SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT};
+    assert_eq!(
+        security_qos_flags(),
+        SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT
+    );
+    let dir = Dir::new();
+    let path = dir.0.join("regular");
+    std::fs::write(&path, b"ok").unwrap();
+    assert!(open(&path, Slot::Config).is_ok());
+}
+
 #[test]
 fn rejects_non_regular_files() {
     let dir = Dir::new();
@@ -57,6 +71,22 @@ fn detects_file_identity_from_open_handles() {
     assert!(!same(&first, &other).unwrap());
 }
 
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "espidf",
+        target_os = "horizon",
+        target_os = "l4re",
+        target_os = "redox",
+        target_os = "vita"
+    ))
+))]
+#[test]
+fn unix_open_flags_prevent_controlling_terminal_acquisition() {
+    assert!(open_flags().contains(rustix::fs::OFlags::NOCTTY));
+    assert!(open_flags().contains(rustix::fs::OFlags::NONBLOCK));
+}
+
 #[cfg(unix)]
 #[test]
 fn checks_credentials_permissions_on_target() {
@@ -65,6 +95,8 @@ fn checks_credentials_permissions_on_target() {
     let path = dir.0.join("file");
     std::fs::write(&path, b"ok").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(open(&path, Slot::Credentials).is_ok());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
     assert!(open(&path, Slot::Credentials).is_ok());
     for mode in [0o620, 0o601] {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
