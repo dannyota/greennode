@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Length gate
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: make lengths
+      - name: Comment gate
+        run: make comments
+      - name: Workflow and tool pin gate
+        run: make pins
+      - name: Action pins match their tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I scripts/check-workflow-pins.py --tags
+      - name: Read the Node pin
+        run: echo "NODE_VERSION=$(tr -d '\r' < .tool-versions | awk '$1 == "node" { print $2 }')" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Markdown tools
+        run: |
+          test "$(node --version)" = "v$NODE_VERSION"
+          npm ci --ignore-scripts --no-fund
+      - name: Markdown checks
+        run: make docs
+
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: |
+          version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
+          test -n "$version"
+          rustup toolchain install "$version" --profile minimal --component rustfmt,clippy
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Read the cargo-nextest pin
+        run: echo "CARGO_NEXTEST=$(tr -d '\r' < .tool-versions | awk '$1 == "cargo-nextest" { print $2 }')" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST }}
+          fallback: none
+      - run: cargo nextest run --locked --no-run
+      - name: Test with an empty home
+        run: |
+          home="$RUNNER_TEMP/test-home"
+          mkdir "$home"
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
+          CARGO_HOME="$cargo_home" RUSTUP_HOME="$rustup_home" \
+            HOME="$home" XDG_CONFIG_HOME="$home" XDG_STATE_HOME="$home" XDG_DATA_HOME="$home" \
+            cargo nextest run --locked
+      - name: Check the test home stayed empty
+        if: ${{ !cancelled() }}
+        run: |
+          home="$RUNNER_TEMP/test-home"
+          if [ -n "$(ls -A "$home")" ]; then
+            find "$home"
+            exit 1
+          fi
+
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: |
+          version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
+          test -n "$version"
+          rustup toolchain install "$version" --profile minimal --component rustfmt,clippy
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
+      - name: Read the cargo-deny pin
+        run: echo "CARGO_DENY=$(tr -d '\r' < .tool-versions | awk '$1 == "cargo-deny" { print $2 }')" >> "$GITHUB_ENV"
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-deny@${{ env.CARGO_DENY }}
+          fallback: none
+      - run: cargo deny --locked check
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned gitleaks
+        env:
+          GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          version="$(tr -d '\r' < .tool-versions | awk '$1 == "gitleaks" { print $2 }')"
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          curl -fsSL --proto '=https' -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}"
+          echo "$GITLEAKS_LINUX_X64_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: gitleaks git --redact --no-banner --log-opts="--full-history"
+
+  crate-age:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: python3 -I scripts/test/check-crate-age-test.py
+      - name: Crate cool-down
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CRATE_AGE_EXEMPT: ${{ vars.CRATE_AGE_EXEMPT }}
+        run: python3 -I scripts/check-crate-age.py "$BASE_SHA"
+
+  ci:
+    if: ${{ always() }}
+    needs: [gates, rust, deny, gitleaks, crate-age]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every needed job to succeed
+        env:
+          EVENT: ${{ github.event_name }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I - <<'PYTHON'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS"])
+          expected = {"gates", "rust", "deny", "gitleaks", "crate-age"}
+          if set(needs) != expected:
+              sys.exit(f"needed jobs {sorted(needs)} differ from {sorted(expected)}")
+          failed = []
+          for name, job in sorted(needs.items()):
+              result = job["result"]
+              optional = name == "crate-age" and os.environ["EVENT"] != "pull_request"
+              if result != "success" and not (optional and result == "skipped"):
+                  failed.append(f"{name}: {result}")
+          if failed:
+              sys.exit("required jobs did not succeed: " + ", ".join(failed))
+          print("every required job succeeded")
+          PYTHON

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Usage: make hooks-install
+set -Eeuo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks is not installed; install the version in .tool-versions" >&2
+  exit 1
+fi
+
+gitleaks git --pre-commit --staged --redact --no-banner
+bash scripts/check-lengths.sh
+python3 -I scripts/check-comments.py
