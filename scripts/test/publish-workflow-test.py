@@ -21,9 +21,13 @@ def validate(w):
     assert inputs['tag']['type'] == 'string' and inputs['tag']['required'] is True, 'tag input'
     assert inputs['publish']['type'] == 'boolean' and inputs['publish']['default'] is False, 'publish input'
     assert w['permissions'] == {}, 'default permissions'
-    assert set(w['jobs']) == {'verify'}, 'jobs'
+    assert set(w['jobs']) == {'verify', 'package'}, 'jobs'
     job = w['jobs']['verify']
     assert job['permissions'] == {'contents': 'read', 'actions': 'read'}, 'job permissions'
+    package = w['jobs']['package']
+    assert package.get('needs') == 'verify', 'package needs'
+    assert package.get('permissions') == {'contents': 'read'}, 'package permissions'
+    assert 'GH_TOKEN' not in json.dumps(package) and 'github.token' not in json.dumps(package), 'package token'
     def forbidden(value):
         if isinstance(value, dict):
             assert 'id-token' not in value and 'environment' not in value, 'forbidden key'
@@ -34,7 +38,7 @@ def validate(w):
                 forbidden(child)
     forbidden(w)
     assert 'GH_TOKEN' not in w.get('env', {}) and 'GH_TOKEN' not in job.get('env', {}), 'token scope'
-    for step in job['steps']:
+    for step in job['steps'] + package['steps']:
         uses = step.get('uses', '')
         if uses:
             assert re.fullmatch(r'[^@]+@[0-9a-f]{40}', uses), 'action pin'
@@ -55,6 +59,12 @@ class PublishWorkflowTest(unittest.TestCase):
     def test_mutations(self):
         original = parse()
         mutations = [
+            ('package needs', lambda w: w['jobs']['package'].update(needs='other')),
+            ('package permissions', lambda w: w['jobs']['package']['permissions'].update(actions='read')),
+            ('package token', lambda w: w['jobs']['package'].update(env={'GH_TOKEN': 'secret'})),
+            ('package token', lambda w: w['jobs']['package'].update(env={'OTHER': '${{ github.token }}'})),
+            ('checkout ref', lambda w: next(s for s in w['jobs']['package']['steps'] if s.get('uses', '').startswith('actions/checkout@'))['with'].update(ref='${{ needs.verify.outputs.commit }}')),
+            ('checkout credentials', lambda w: next(s for s in w['jobs']['package']['steps'] if s.get('uses', '').startswith('actions/checkout@'))['with'].update({'persist-credentials': True})),
             ('trigger', lambda w: w['on'].update(push={})),
             ('tag input', lambda w: w['on']['workflow_dispatch']['inputs']['tag'].update(type='number')),
             ('publish input', lambda w: w['on']['workflow_dispatch']['inputs']['publish'].update(default=True)),

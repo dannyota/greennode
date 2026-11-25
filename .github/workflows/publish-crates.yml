@@ -30,6 +30,8 @@ jobs:
       toolchain: ${{ steps.verify.outputs.toolchain }}
       release_run: ${{ steps.verify.outputs.release_run }}
       receipt_sha256: ${{ steps.verify.outputs.receipt_sha256 }}
+      sdk_sha256: ${{ steps.verify.outputs.sdk_sha256 }}
+      tool_sha256: ${{ steps.verify.outputs.tool_sha256 }}
     steps:
       - name: Guard dispatch
         shell: bash
@@ -115,9 +117,73 @@ jobs:
           toolchain=$(jq -er '.toolchain' "$receipt")
           run=$(jq -er '.[0].databaseId' "$evidence/runs.json")
           digest=$(sha256sum "$receipt" | cut -d ' ' -f 1)
-          printf 'tag=%s\ncommit=%s\ntoolchain=%s\nrelease_run=%s\nreceipt_sha256=%s\n' "$TAG" "$commit" "$toolchain" "$run" "$digest" >> "$GITHUB_OUTPUT"
+          sdk_sha256=$(jq -er '.crates[] | select(.name == "greennode-sdk") | .sha256' "$receipt")
+          tool_sha256=$(jq -er '.crates[] | select(.name == "greennode") | .sha256' "$receipt")
+          printf 'tag=%s\ncommit=%s\ntoolchain=%s\nrelease_run=%s\nreceipt_sha256=%s\nsdk_sha256=%s\ntool_sha256=%s\n' "$TAG" "$commit" "$toolchain" "$run" "$digest" "$sdk_sha256" "$tool_sha256" >> "$GITHUB_OUTPUT"
           {
             printf '## Release preflight\n\nReceipt SHA-256: %s\n\n' "$digest"
             jq -r '.crates[] | "- \(.name): \(.sha256)"' "$receipt"
             printf '\n%s\n' "$states"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare tagged checkout
+        shell: bash
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+          TOOLCHAIN: ${{ needs.verify.outputs.toolchain }}
+        run: |
+          git clone --no-local --no-checkout "$GITHUB_WORKSPACE" "$RUNNER_TEMP/tagged"
+          git -C "$RUNNER_TEMP/tagged" checkout --detach "refs/tags/$TAG"
+          test "$(git -C "$RUNNER_TEMP/tagged" rev-parse HEAD)" = "$COMMIT"
+          version=$(tr -d '\r' < "$RUNNER_TEMP/tagged/rust-toolchain.toml" | sed -n 's/^channel = "\(.*\)"$/\1/p')
+          test "$version" = "$TOOLCHAIN"
+          test "$version" = 1.100.0
+          rustup toolchain install "$version" --profile minimal
+          test "$(rustc +"$version" --version | cut -d ' ' -f 2)" = "$version"
+      - name: Package workspace and compare
+        shell: bash
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          TOOLCHAIN: ${{ needs.verify.outputs.toolchain }}
+          SDK_SHA256: ${{ needs.verify.outputs.sdk_sha256 }}
+          TOOL_SHA256: ${{ needs.verify.outputs.tool_sha256 }}
+        run: |
+          cd "$RUNNER_TEMP/tagged"
+          root=$(mktemp -d)
+          stage="$root/staged-crates"
+          mkdir "$stage"
+          test -z "$(git ls-files --stage | grep '^120000 ' || true)"
+          if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
+            exit 1
+          fi
+          export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
+          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode-sdk
+          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode
+          cargo +"$TOOLCHAIN" publish --workspace --dry-run --no-verify --locked --registry crates-io
+          python3 -I - "$root/build/package/tmp-crate" "$stage" "$TAG" <<'PYTHON'
+          import pathlib, shutil, sys
+          source, stage, tag = map(pathlib.Path, sys.argv[1:])
+          version = str(tag)[1:]
+          expected = {f'{name}-{version}.crate' for name in ('greennode-sdk', 'greennode')}
+          entries = list(source.iterdir())
+          assert {p.name for p in entries if p.name.endswith('.crate')} == expected
+          for name in expected:
+              path = source / name
+              assert path.is_file() and not path.is_symlink()
+              shutil.copyfile(path, stage / name)
+          PYTHON
+          test "$(sha256sum "$stage/greennode-sdk-${TAG#v}.crate" | cut -d ' ' -f 1)" = "$SDK_SHA256"
+          test "$(sha256sum "$stage/greennode-${TAG#v}.crate" | cut -d ' ' -f 1)" = "$TOOL_SHA256"
