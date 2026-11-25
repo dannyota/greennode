@@ -12,6 +12,7 @@ mod model;
 mod secret;
 mod source;
 mod token;
+mod wire;
 
 pub use clock::*;
 pub use context::*;
