@@ -1,0 +1,9 @@
+{
+  "CreatedAt": 0,
+  "Enabled": false,
+  "From": "iam",
+  "ID": "user-2",
+  "LastUse": 0,
+  "MFA": null,
+  "Username": "new-user"
+}

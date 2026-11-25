@@ -1,3 +1,4 @@
+pub mod render;
 use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;

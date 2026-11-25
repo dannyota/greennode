@@ -1,0 +1,16 @@
+{
+  "User": {
+    "ID": "",
+    "Name": "",
+    "BackendName": "",
+    "Description": "",
+    "Disabled": false,
+    "ExpiredAt": "",
+    "CreatedAt": "",
+    "NumberOfRepositories": 0,
+    "UserID": "",
+    "Repositories": []
+  },
+  "SecretKey": "[redacted]",
+  "SecretFile": "/home/agent/vcr-secret"
+}
