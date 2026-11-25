@@ -1,0 +1,9 @@
+[
+  "greennode",
+  "greennode --help",
+  "greennode --version",
+  "greennode -h",
+  "greennode -v",
+  "greennode help",
+  "greennode version"
+]
