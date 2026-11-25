@@ -17,7 +17,7 @@ macro_rules! run {
     };
 }
 use crate::wire::{
-    connection::{self, HeadLimit, Trust},
+    connection::{HeadLimit, OneSendClient, PooledClient, Trust},
     test_server::{Response, Server},
 };
 use crate::{Clock, TestClock};
@@ -26,6 +26,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::OffsetDateTime;
+mod pooling;
 
 #[derive(Default)]
 struct Provider {
@@ -101,8 +102,11 @@ fn request(uri: &str) -> Request {
         body: Bytes::new(),
     }
 }
-fn client(server: &Server) -> Client {
-    connection::client(false, HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap()
+fn client(server: &Server) -> Clients {
+    Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+    }
 }
 fn ctx() -> (RequestContext, TestClock, Instant) {
     let (ctx, _) = RequestContext::new();
@@ -575,7 +579,10 @@ async fn failed_dial_retries_nonidempotent() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
-    let client = connection::client(false, HeadLimit::Api, Trust::webpki()).unwrap();
+    let client = Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+    };
     let (ctx, clock, deadline) = ctx();
     let sleeper = Immediate::default();
     let result = run!(

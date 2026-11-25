@@ -1,5 +1,8 @@
 use super::{redirect, retry, unauthorized};
-use crate::wire::{connection::Client, send};
+use crate::wire::{
+    connection::{OneSendClient, PooledClient},
+    send,
+};
 use crate::{Clock, CredentialsProvider, RequestContext, Secret, Token};
 use bytes::Bytes;
 use http::{HeaderMap, Method};
@@ -159,8 +162,13 @@ fn unauthorized_decision<'a>(
     )
 }
 
+pub(crate) struct Clients {
+    pub(crate) pooled: PooledClient,
+    pub(crate) one_send: OneSendClient,
+}
+
 pub(crate) struct Runtime<'a> {
-    pub(crate) client: &'a Client,
+    pub(crate) client: &'a Clients,
     pub(crate) ctx: &'a RequestContext,
     pub(crate) clock: &'a dyn Clock,
     pub(crate) deadline: Instant,
@@ -190,6 +198,13 @@ pub(crate) async fn run(
     {
         return Err(Error::InvalidRequest);
     }
+    let client = if matches!(op.class, redirect::Classification::Read)
+        && matches!(op.retry, redirect::Retry::Repeatable)
+    {
+        client.pooled.as_client()
+    } else {
+        client.one_send.as_client()
+    };
     let ctx = ctx.child_with_deadline(deadline);
     let deadline = ctx.deadline().ok_or(Error::InvalidRequest)?;
     let mut bearer = match auth {
