@@ -100,6 +100,45 @@ class Manifest(unittest.TestCase):
         path.write_text(base + '\n[target.\'cfg(unix)\'.build-dependencies]\ngreennode-sdk = { path = "../greennode-sdk", version = "=0.1.0" }\n', encoding="utf-8")
         self.assertIsNone(check.manifest(self.root))
 
+    def test_manifest_path_guard(self):
+        path = self.root / "crates/greennode/Cargo.toml"
+        base = path.read_text(encoding="utf-8")
+        dependency = '\n[dependencies]\ngreennode-sdk = { path = "%s", version = "=0.1.0" }\n'
+        path.write_text(base + dependency % "../wrong", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check.manifest(self.root)
+        path.write_text(base + dependency % "../greennode-sdk", encoding="utf-8")
+        self.assertIsNone(check.manifest(self.root, release=True))
+
+    def test_member_sdk_workspace_inheritance_refused(self):
+        path = self.root / "crates/greennode/Cargo.toml"
+        base = path.read_text(encoding="utf-8")
+        entry = '\n[dependencies]\ngreennode-sdk = { path = "../greennode-sdk", version = "=0.1.0"%s }\n'
+        path.write_text(base + entry % ', workspace = true', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check.manifest(self.root)
+        path.write_text(base + entry % '', encoding="utf-8")
+        self.assertIsNone(check.manifest(self.root, release=True))
+
+    def test_workspace_sdk_declaration_refused(self):
+        path = self.root / "Cargo.toml"
+        base = path.read_text(encoding="utf-8")
+        path.write_text(base + '\n[workspace.dependencies]\nclient = { package = "greennode-sdk", path = "crates/greennode-sdk", version = "=0.1.0" }\n', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check.manifest(self.root)
+        path.write_text(base, encoding="utf-8")
+        self.assertIsNone(check.manifest(self.root))
+
+    def test_release_requires_normal_dependency(self):
+        path = self.root / "crates/greennode/Cargo.toml"
+        base = path.read_text(encoding="utf-8")
+        entry = '\ngreennode-sdk = { path = "../greennode-sdk", version = "=0.1.0" }\n'
+        path.write_text(base + '\n[dev-dependencies]' + entry, encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check.manifest(self.root, release=True)
+        path.write_text(base + '\n[dependencies]' + entry, encoding="utf-8")
+        self.assertIsNone(check.manifest(self.root, release=True))
+
     def test_tag_matches_workspace(self):
         self.assertIsNone(check.manifest(self.root, tag="v0.1.0"))
         with self.assertRaises(ValueError):
@@ -129,12 +168,20 @@ class Manifest(unittest.TestCase):
         path.write_text(json.dumps(BUILTINS), encoding="utf-8")
         self.assertIsNone(check.shipped(path, path, first=True))
 
+    def test_operation_requires_service_parent(self):
+        path = self.root / "shipped.json"
+        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute list"])), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            check.shipped(path, path, first=True)
+        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute", "greennode compute list"])), encoding="utf-8")
+        self.assertIsNone(check.shipped(path, path, first=True))
+
     def test_shipped_rejects_hidden_command_path(self):
         path = self.root / "shipped.json"
         path.write_text(json.dumps(sorted(BUILTINS + ["greennode gen-docs output"])), encoding="utf-8")
         with self.assertRaises(ValueError):
             check.shipped(path, path, first=True)
-        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute list"])), encoding="utf-8")
+        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute", "greennode compute list"])), encoding="utf-8")
         self.assertIsNone(check.shipped(path, path, first=True))
 
     def test_shipped_rejects_invalid_path_shape(self):
@@ -142,7 +189,7 @@ class Manifest(unittest.TestCase):
         path.write_text(json.dumps(sorted(BUILTINS + ["greennode gen-docs"])), encoding="utf-8")
         with self.assertRaises(ValueError):
             check.shipped(path, path, first=True)
-        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute list"])), encoding="utf-8")
+        path.write_text(json.dumps(sorted(BUILTINS + ["greennode compute", "greennode compute list"])), encoding="utf-8")
         self.assertIsNone(check.shipped(path, path, first=True))
 
     def test_shipped_rejects_duplicate_and_unsorted(self):
@@ -178,7 +225,7 @@ class Manifest(unittest.TestCase):
         candidate.write_text(json.dumps(BUILTINS), encoding="utf-8")
         committed.write_text(json.dumps(BUILTINS), encoding="utf-8")
         self.assertIsNone(check.shipped(candidate, committed, first=True))
-        candidate.write_text(json.dumps(sorted(BUILTINS + ["greennode test read"])), encoding="utf-8")
+        candidate.write_text(json.dumps(sorted(BUILTINS + ["greennode test", "greennode test read"])), encoding="utf-8")
         with self.assertRaises(ValueError):
             check.shipped(candidate, committed, first=True)
 
@@ -196,11 +243,11 @@ class Manifest(unittest.TestCase):
         candidate = self.root / "candidate.json"
         committed = self.root / "committed.json"
         previous = self.root / "previous.json"
-        candidate.write_text(json.dumps(sorted(BUILTINS + ["greennode test read"])), encoding="utf-8")
-        committed.write_text(json.dumps(sorted(BUILTINS + ["greennode test read"])), encoding="utf-8")
+        candidate.write_text(json.dumps(sorted(BUILTINS + ["greennode test", "greennode test read"])), encoding="utf-8")
+        committed.write_text(json.dumps(sorted(BUILTINS + ["greennode test", "greennode test read"])), encoding="utf-8")
         previous.write_text(json.dumps(BUILTINS), encoding="utf-8")
         self.assertIsNone(check.shipped(candidate, committed, previous))
-        previous.write_text(json.dumps(sorted(BUILTINS + ["greennode test write"])), encoding="utf-8")
+        previous.write_text(json.dumps(sorted(BUILTINS + ["greennode test", "greennode test write"])), encoding="utf-8")
         with self.assertRaises(ValueError):
             check.shipped(candidate, committed, previous)
 
@@ -338,6 +385,27 @@ class Receipt(unittest.TestCase):
         self.generate()
         self.assertTrue(self.target.exists())
 
+    def test_packaged_target_alias_refused(self):
+        sdk = hashlib.sha256((self.stage / "greennode-sdk-0.1.0.crate").read_bytes()).hexdigest()
+        base = ('[package]\nname="greennode"\nversion="0.1.0"\n'
+                '[dependencies]\ngreennode-sdk = { version = "=0.1.0" }\n')
+        lock = (f'[[package]]\nname="greennode-sdk"\nversion="0.1.0"\nchecksum="{sdk}"\n'
+                'source="registry+https://github.com/rust-lang/crates.io-index"\n')
+        hostile = base + '[target.\'cfg(unix)\'.dev-dependencies]\nalias = { package = "greennode-sdk", version = "0.1.0" }\n'
+        self.archive("greennode", hostile, lock)
+        self.check_hostile()
+
+    def test_file_ancestor_conflict(self):
+        data = (self.stage / "greennode-sdk-0.1.0.crate").read_bytes()
+        raw = gzip.decompress(data)
+        file = tarfile.TarInfo("greennode-sdk-0.1.0/node")
+        child = tarfile.TarInfo("greennode-sdk-0.1.0/node/child")
+        for additions in (file.tobuf() + child.tobuf(), child.tobuf() + file.tobuf()):
+            with self.subTest(order=additions[:100]):
+                with self.assertRaises(ValueError):
+                    check.archive_data("greennode-sdk", "0.1.0", gzip.compress(additions + raw))
+        self.assertIsNotNone(check.archive_data("greennode-sdk", "0.1.0", data))
+
     def test_wrong_version(self):
         self.make_pair(version="0.2.0")
         self.check_hostile()
@@ -445,6 +513,19 @@ class State(unittest.TestCase):
         self.absent()
         self.assertEqual(self.run_state()[0], 0)
 
+    def test_index_404_requires_real_xml(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        self.responses[key] = (404, b'<Error><!--<Code>NoSuchKey</Code><Key>gr/ee/greennode</Key>--></Error>')
+        self.check_stop()
+
+    def test_index_404_rejects_doctype(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        self.responses[key] = (404, b'<!DOCTYPE Error><Error><Code>NoSuchKey</Code><Key>gr/ee/greennode</Key></Error>')
+        self.check_stop()
+
+    def test_api_exact_version_guard(self):
+        self.check_api_guard("num", "0.2.0")
+
     def test_generic_api_404_stops(self):
         self.responses["https://crates.io/api/v1/crates/greennode/0.1.0"] = (404, b"not found")
         self.check_stop()
@@ -517,7 +598,7 @@ class State(unittest.TestCase):
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "present-and-approved")
 
     def test_index_status_guard(self):
-        self.responses["https://index.crates.io/gr/ee/greennode"] = (503, b"")
+        self.responses["https://index.crates.io/gr/ee/greennode"] = (403, b"")
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
         self.absent()
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
@@ -561,6 +642,38 @@ class State(unittest.TestCase):
         self.responses["https://index.crates.io/gr/ee/greennode-sdk"] = (404, b"")
         self.assertNotEqual(self.run_state()[0], 0)
 
+    def test_bad_index_remains_terminal_with_api_5xx(self):
+        self.approved("greennode")
+        self.responses["https://crates.io/api/v1/crates/greennode/0.1.0"] = (503, b"")
+        key = "https://index.crates.io/gr/ee/greennode"
+        good = self.responses[key]
+        row = json.loads(good[1]); row["yanked"] = True
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        self.responses[key] = good
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "transient")
+
+    def test_yank_cannot_be_cleared_by_retry(self):
+        self.approved("greennode-sdk")
+        key = "https://index.crates.io/gr/ee/greennode-sdk"
+        good = self.responses[key]
+        row = json.loads(good[1]); row["yanked"] = True
+        bad = (200, json.dumps(row).encode() + b"\n")
+        calls = []
+        def fetch(url):
+            if url == key:
+                calls.append(url)
+                return bad if len(calls) == 1 else good
+            return self.fetch(url)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = check.state(self.receipt, wait="greennode-sdk", fetch=fetch, sleep=self.sleeps.append)
+        self.assertNotEqual(result, 0)
+        self.assertIn("greennode-sdk: unknown", output.getvalue())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.sleeps, [])
+        self.assertEqual(self.run_state(wait="greennode-sdk")[0], 0)
+
     def test_wait_yanked_unknown(self):
         self.approved("greennode-sdk")
         key = "https://index.crates.io/gr/ee/greennode-sdk"
@@ -569,7 +682,7 @@ class State(unittest.TestCase):
         result, output = self.run_state(wait="greennode-sdk")
         self.assertNotEqual(result, 0)
         self.assertIn("greennode-sdk: unknown", output)
-        self.assertEqual(len(self.sleeps), 4)
+        self.assertEqual(len(self.sleeps), 0)
         self.approved("greennode-sdk")
         self.assertEqual(self.run_state(wait="greennode-sdk")[0], 0)
 
@@ -597,7 +710,16 @@ class State(unittest.TestCase):
         self.assertIn("greennode-sdk: unknown", output.getvalue())
         self.assertLessEqual(len([url for url in calls if "greennode-sdk" in url]), 2)
 
+    def test_wait_absent_is_terminal(self):
+        result, output = self.run_state(wait="greennode-sdk")
+        self.assertNotEqual(result, 0)
+        self.assertIn("greennode-sdk: unknown", output)
+        self.assertEqual(self.sleeps, [])
+        self.approved("greennode-sdk")
+        self.assertEqual(self.run_state(wait="greennode-sdk")[0], 0)
+
     def test_wait_bound(self):
+        self.responses["https://crates.io/api/v1/crates/greennode-sdk/0.1.0"] = (503, b"")
         result, output = self.run_state(wait="greennode-sdk")
         self.assertNotEqual(result, 0)
         self.assertIn("greennode-sdk: unknown version=0.1.0 sha256=" + "a" * 64, output)
@@ -615,6 +737,21 @@ class State(unittest.TestCase):
 
 
 class Transport(unittest.TestCase):
+    def test_fetch_hard_deadline(self):
+        release = threading.Event()
+        finished = threading.Event()
+        def stalled():
+            release.wait(0.2)
+            finished.set()
+            return 200, b"ok"
+        try:
+            with self.assertRaises(TimeoutError):
+                check.deadline_fetch(stalled, 0.01)
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(1))
+        self.assertEqual(check.deadline_fetch(lambda: (200, b"ok"), 1), (200, b"ok"))
+
     def test_trickling_body_expires_deadline(self):
         ticks = [0]
 

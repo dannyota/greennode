@@ -147,6 +147,37 @@ class CredentialProvider(unittest.TestCase):
         with patch("pwd.getpwuid", return_value=types.SimpleNamespace(pw_dir=str(home))):
             self.rejected(self.request)
 
+    def test_directory_swap_keeps_approved_credentials(self):
+        del self.env["CARGO_REGISTRY_TOKEN"]
+        home = self.root / "approved"
+        other = self.root / "other"
+        home.mkdir()
+        other.mkdir()
+        for directory, value in ((home, "toy-canary"), (other, "different-toy")):
+            file = directory / "credentials.toml"
+            file.write_text('[registry]\ntoken = "' + value + '"\n')
+            file.chmod(0o600)
+        self.env.update({"CARGO_HOME": str(home), "GREENNODE_RELEASE_CARGO_HOME": str(home),
+                         "HOME": str(self.root / "user")})
+        self.accepted()
+        saved = self.root / "saved"
+        real_open = os.open
+
+        def swap(path, flags, *args, **kwargs):
+            if str(path) == str(home):
+                fd = real_open(path, flags, *args, **kwargs)
+                home.rename(saved)
+                home.symlink_to(other)
+                return fd
+            if str(path) == str(home / "credentials.toml"):
+                home.rename(saved)
+                home.symlink_to(other)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("os.open", side_effect=swap):
+            self.accepted()
+        self.assertTrue(home.is_symlink())
+
     def test_credentials_symlink_refused(self):
         credentials = self.file_token()
         self.accepted()

@@ -65,9 +65,21 @@ def token(env):
         if not home or home != env.get("GREENNODE_RELEASE_CARGO_HOME") or not env.get("HOME"):
             raise ValueError("invalid cargo home")
         ordinary_homes = {Path(env["HOME"]) / ".cargo", Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cargo"}
-        if Path(home).resolve() in {path.resolve() for path in ordinary_homes}:
-            raise ValueError("invalid cargo home")
-        fd = os.open(Path(home) / "credentials.toml", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        ordinary_ids = set()
+        for path in ordinary_homes:
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            ordinary_ids.add((info.st_dev, info.st_ino))
+        directory = os.open(home, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            info = os.fstat(directory)
+            if (info.st_dev, info.st_ino) in ordinary_ids:
+                raise ValueError("invalid cargo home")
+            fd = os.open("credentials.toml", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        finally:
+            os.close(directory)
         with os.fdopen(fd, "rb") as stream:
             info = os.fstat(stream.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
