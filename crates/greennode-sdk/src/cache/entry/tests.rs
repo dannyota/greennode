@@ -10,6 +10,8 @@ impl Dir {
             std::thread::current().id()
         ));
         std::fs::create_dir(&path).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
 }
@@ -54,6 +56,26 @@ fn oversized_service_account_entry_is_miss() {
         ),
         "service_account.go:73, service_account_test.go:149-167"
     );
+}
+
+#[test]
+fn oversized_service_account_entry_can_be_replaced() {
+    let (_dir, store) = oversize_store();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    assert!(matches!(
+        read(&store, "large.json", Kind::ServiceAccount, now, None),
+        Ok(None)
+    ));
+    let entry = Entry {
+        token: crate::Secret::new("toy"),
+        expires: now + time::Duration::seconds(120),
+        obtained: now,
+    };
+    assert!(write(&store, "large.json", &entry).is_ok());
+    assert!(matches!(
+        read(&store, "large.json", Kind::ServiceAccount, now, None),
+        Ok(Some(_))
+    ));
 }
 
 #[test]

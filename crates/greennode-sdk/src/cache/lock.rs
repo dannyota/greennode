@@ -100,6 +100,8 @@ mod tests {
                 std::thread::current().id()
             ));
             std::fs::create_dir(&path).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             Self(path)
         }
     }

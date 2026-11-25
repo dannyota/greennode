@@ -65,8 +65,12 @@ pub(crate) fn checked_directory(
         return Ok(path.to_path_buf());
     };
     let unavailable = || Box::new(crate::Error::new(crate::ErrorClass::TokenCache));
-    let legacy = resolve(&home.join(".vngcloud")).map_err(|()| unavailable())?;
-    let directory = resolve(path).map_err(|()| unavailable())?;
+    let legacy = resolve(&home.join(".vngcloud"), false).map_err(|()| unavailable())?;
+    let directory = resolve(path, true).map_err(|()| unavailable())?;
+    #[cfg(unix)]
+    if inside_legacy_identity(&legacy, &directory).map_err(|()| unavailable())? {
+        return Err(unavailable());
+    }
     let mut components = directory.components();
     if legacy.components().all(|legacy_component| {
         components.next().is_some_and(|component| {
@@ -80,12 +84,35 @@ pub(crate) fn checked_directory(
     Ok(directory)
 }
 
-fn resolve(path: &Path) -> Result<PathBuf, ()> {
+#[cfg(unix)]
+fn inside_legacy_identity(legacy: &Path, directory: &Path) -> Result<bool, ()> {
+    use std::os::unix::fs::MetadataExt;
+    let legacy = match std::fs::metadata(legacy) {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => return Err(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(()),
+    };
+    for ancestor in directory.ancestors() {
+        match std::fs::metadata(ancestor) {
+            Ok(metadata) if metadata.dev() == legacy.dev() && metadata.ino() == legacy.ino() => {
+                return Ok(true);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(false)
+}
+
+fn resolve(path: &Path, preserve_final_symlink: bool) -> Result<PathBuf, ()> {
     if !path.is_absolute() {
         return Err(());
     }
     let mut resolved = PathBuf::new();
-    for component in path.components() {
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
         match component {
             Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
             Component::RootDir => resolved.push(component.as_os_str()),
@@ -98,7 +125,13 @@ fn resolve(path: &Path) -> Result<PathBuf, ()> {
             Component::Normal(name) => {
                 resolved.push(name);
                 match std::fs::symlink_metadata(&resolved) {
-                    Ok(_) => {
+                    Ok(metadata) => {
+                        if preserve_final_symlink
+                            && components.peek().is_none()
+                            && metadata.file_type().is_symlink()
+                        {
+                            continue;
+                        }
                         resolved = std::fs::canonicalize(&resolved).map_err(|_| ())?;
                         if !std::fs::metadata(&resolved).map_err(|_| ())?.is_dir() {
                             return Err(());

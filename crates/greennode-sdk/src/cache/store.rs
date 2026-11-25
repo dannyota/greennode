@@ -49,7 +49,7 @@ impl Store {
         let metadata = directory.metadata().map_err(|_| unavailable())?;
         if !metadata.is_dir()
             || metadata.uid() != rustix::process::geteuid().as_raw()
-            || metadata.permissions().mode() & 0o022 != 0
+            || metadata.permissions().mode() & 0o077 != 0
         {
             return Err(unavailable());
         }
@@ -182,16 +182,6 @@ impl Store {
         if data.expose_secret().len() > LIMIT {
             return Err(unavailable());
         }
-        match rustix::fs::openat(
-            &self.directory,
-            name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(fd) => validate_file(&File::from(fd))?,
-            Err(rustix::io::Errno::NOENT) => {}
-            Err(_) => return Err(unavailable()),
-        }
         let mut random = [0u8; 16];
         rustls::crypto::ring::default_provider()
             .secure_random
@@ -258,15 +248,6 @@ fn validate_name(name: &str) -> Result<(), Box<crate::Error>> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
     {
-        return Err(unavailable());
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn validate_file(file: &File) -> Result<(), Box<crate::Error>> {
-    validate_owner_file(file)?;
-    if file.metadata().map_err(|_| unavailable())?.len() > LIMIT as u64 {
         return Err(unavailable());
     }
     Ok(())

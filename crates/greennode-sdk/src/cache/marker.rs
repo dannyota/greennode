@@ -44,6 +44,8 @@ mod tests {
                 std::thread::current().id()
             ));
             std::fs::create_dir(&path).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             Self(path)
         }
     }
@@ -98,6 +100,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(read(&store, "entry.totp", 42), Some(0));
+    }
+
+    #[test]
+    fn symlink_marker_is_replaced_without_touching_target() {
+        use std::os::unix::fs::symlink;
+        let dir = Dir::new();
+        let store = Store::open(&dir.0).unwrap();
+        let target = dir.0.join("target");
+        std::fs::write(&target, "42").unwrap();
+        symlink(&target, dir.0.join("entry.totp")).unwrap();
+        let (context, _) = crate::RequestContext::new();
+        assert!(write(&store, "entry.totp", 123, &context, &crate::SystemClock).is_ok());
+        assert_eq!(read(&store, "entry.totp", 0), Some(123));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "42");
+        assert!(
+            !std::fs::symlink_metadata(dir.0.join("entry.totp"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

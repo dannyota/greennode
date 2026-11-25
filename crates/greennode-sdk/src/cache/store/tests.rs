@@ -12,6 +12,11 @@ impl Dir {
             std::thread::current().id()
         ));
         std::fs::create_dir(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         Self(path)
     }
 }
@@ -80,6 +85,8 @@ fn replacement_directory_does_not_redirect_write() {
     let target = dir.0.join("target");
     std::fs::create_dir(&original).unwrap();
     std::fs::create_dir(&target).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o700)).unwrap();
     let store = Store::open(&original).unwrap();
     std::fs::rename(&original, &moved).unwrap();
     std::os::unix::fs::symlink(&target, &original).unwrap();
@@ -134,6 +141,8 @@ fn debug_and_error_do_not_disclose_canary() {
     let dir = Dir::new();
     let path = dir.0.join("toy-canary-token");
     std::fs::create_dir(&path).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     let store = Store::open(&path).unwrap();
     assert!(!format!("{store:?}").contains("toy-canary-token"));
     store
