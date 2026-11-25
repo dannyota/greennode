@@ -27,38 +27,7 @@ pub(crate) fn classify(
     let secrets: Vec<_> = credentials.values().iter().collect();
     let safe = |text: &str| {
         let sanitized = crate::error::SafeText::new(text, &secrets);
-        let decoded = Zeroizing::new(percent_decode(sanitized.as_str().as_bytes()));
-        let normalized: String = text
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect();
-        let escaped = credentials.values().iter().any(|secret| {
-            let json =
-                Zeroizing::new(serde_json::to_string(secret.expose_secret()).unwrap_or_default());
-            let inner = json.get(1..json.len().saturating_sub(1)).unwrap_or("");
-            let html = Zeroizing::new(
-                inner
-                    .replace('<', "\\u003c")
-                    .replace('>', "\\u003e")
-                    .replace('&', "\\u0026")
-                    .replace('\u{2028}', "\\u2028")
-                    .replace('\u{2029}', "\\u2029"),
-            );
-            (!inner.is_empty() && (text.contains(inner) || text.contains(html.as_str())))
-                || secret
-                    .expose_secret()
-                    .lines()
-                    .map(str::trim)
-                    .any(|line| line.len() >= 8 && text.contains(line))
-        });
-        if normalized.contains("clientsecret")
-            || escaped
-            || credentials.reflects(&decoded)
-            || (!secrets.is_empty()
-                && (unsafe_message(text, credentials)
-                    || unsafe_message(sanitized.as_str(), credentials)))
-        {
+        if unsafe_message(text, credentials) || unsafe_message(sanitized.as_str(), credentials) {
             crate::error::SafeText::new("", &secrets)
         } else {
             sanitized
@@ -94,7 +63,7 @@ pub(crate) fn classify(
 }
 
 fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
-    if !text.is_ascii() {
+    if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
     let lower = Zeroizing::new(text.to_ascii_lowercase());
@@ -117,7 +86,9 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
             inner
                 .replace('<', "\\u003c")
                 .replace('>', "\\u003e")
-                .replace('&', "\\u0026"),
+                .replace('&', "\\u0026")
+                .replace('\u{2028}', "\\u2028")
+                .replace('\u{2029}', "\\u2029"),
         );
         lower.contains(value.as_str())
             || (!inner.is_empty() && (lower.contains(inner) || lower.contains(html.as_str())))
@@ -513,6 +484,19 @@ mod tests {
         let e = error(
             403,
             br#"{"message":"TOY\u0000-KEY"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn sanitized_unicode_escape_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("toy\u{2028}secret")]);
+        let e = error(
+            403,
+            br#"{"message":"toy\\u20\u000028secret"}"#,
             true,
             false,
             &credentials,
