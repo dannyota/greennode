@@ -45,15 +45,19 @@ input JSON and expression literals. Compare numbers exactly in equality and
 within recursive array/object equality; ordering comparisons are numeric only.
 Preserve Go's false values, short-circuit return values, expression references,
 projection null handling, pipes, Unicode strings and slices. The unqueried JSON
-path never passes through the query value tree.
+path never passes through the query value tree. An expression reference is a
+value only as a direct function argument; anywhere else Go would store or return
+one (a multiselect, an index, a pipe, a projection or the result) is an
+evaluation error instead.
 
 Port the functions as Go implements them, not as a newer specification might.
-`to_number('true')` returns null, and string parsing follows Go's `ParseFloat`,
-not JSON parsing. For arrays, `contains` uses the Go scalar equality rule, not
-approximate equality or deep comparison. `to_string` passes through strings and
-otherwise uses compact Go JSON with sorted keys, Go float spelling and HTML
-escaping; it does not insert terminal escapes inside the returned string. The
-renderer escapes that string on output.
+`to_number('true')` returns null, and string parsing follows Go's `ParseFloat`
+grammar, not JSON parsing. Values round exactly; Go truncates a decimal past 800
+significant digits, so a few such inputs differ. For arrays, `contains` uses the
+Go scalar equality rule, not approximate equality or deep comparison.
+`to_string` passes through strings and otherwise uses compact Go JSON with
+sorted keys, Go float spelling and HTML escaping; it does not insert terminal
+escapes inside the returned string. The renderer escapes that string on output.
 
 Go's lexer and parser have no expression size or syntax-tree depth policy.
 Accept up to 16 KiB of expression bytes and 64 levels of parser nesting, AST
@@ -128,7 +132,13 @@ every release archive include. Each translated source file starts with one line,
 `// Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.`,
 which the [engineering standard](../standards/engineering.md#code-comments)
 allows as a license notice. Copied fixtures carry a `PROVENANCE.md` naming the
-same source and license.
+same source and license. Behavior go-jmespath takes from the Go standard library
+(`strconv` float parsing, `sort.Stable`) is reimplemented from its documented
+results and differential tests, never translated, so no Go BSD notice is needed.
+`sort_by` returns a sorted copy; Go sorts its input in place, which a later
+reference to the same array in one query can observe. `map`, `sort_by`, `max_by`
+and `min_by` keep evaluating after an ordinary error so a later safety error is
+reported; Go stops at the first error.
 
 [go-jmespath]: https://github.com/jmespath/go-jmespath/tree/v0.4.0
 [go-license]: https://github.com/jmespath/go-jmespath/blob/v0.4.0/LICENSE

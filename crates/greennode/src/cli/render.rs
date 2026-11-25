@@ -520,6 +520,10 @@ impl Projected {
     }
 }
 
+pub(crate) fn query_json_float(value: f64) -> Result<String, Error> {
+    float::f64(value, float::Style::Json)
+}
+
 pub fn write_json<W: Write>(w: &mut W, value: &Projected) -> Result<(), Error> {
     emit(w, &value.0, 0)?;
     writeln!(w)?;

@@ -1,4 +1,6 @@
 # Format: see "Code comments" in docs/standards/engineering.md.
+crates/greennode/src/cli/query/functions.rs:1: // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
+crates/greennode/src/cli/query/functions_expr.rs:1: // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 crates/greennode/src/cli/query/interpreter.rs:1: // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 crates/greennode/src/cli/query/lexer.rs:1: // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 crates/greennode/src/cli/query/parser.rs:1: // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.

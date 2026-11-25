@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+mod functions;
+mod functions_expr;
 mod interpreter;
 mod lexer;
 mod literal;
