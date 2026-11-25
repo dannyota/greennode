@@ -3,14 +3,17 @@ use std::fmt;
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
 
+/// A string that is zeroized on drop and redacted in debug and serialized output.
 #[derive(Clone)]
 pub struct Secret(Zeroizing<String>);
 
 impl Secret {
+    /// Takes ownership of the supplied string.
     pub fn new(value: impl Into<String>) -> Self {
         Self(Zeroizing::new(value.into()))
     }
 
+    /// Returns the plaintext; callers must protect it from logs and disclosure.
     pub fn expose_secret(&self) -> &str {
         &self.0
     }
