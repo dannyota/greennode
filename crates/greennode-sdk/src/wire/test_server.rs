@@ -20,6 +20,7 @@ pub enum Response {
     },
     Raw(Vec<u8>),
     Close,
+    Stall(oneshot::Sender<()>, usize),
 }
 
 pub struct Server {
@@ -101,6 +102,12 @@ impl Server {
                                     let Some(response) = response else { return; };
                                     let bytes = match response {
                                         Response::Close => return,
+                                        Response::Stall(started, length) => {
+                                            if stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n").as_bytes()).await.is_err() || stream.flush().await.is_err() { return; }
+                                            let _ = started.send(());
+                                            std::future::pending::<()>().await;
+                                            return;
+                                        }
                                         Response::Raw(bytes) => bytes,
                                         Response::Http { status, headers, body } => {
                                             let mut bytes = format!("HTTP/1.1 {status}\r\n").into_bytes();
