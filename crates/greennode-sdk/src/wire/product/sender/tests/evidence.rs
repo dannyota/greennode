@@ -7,7 +7,7 @@ fn write(method: Method, retry: redirect::Retry) -> Operation {
     op.class = redirect::Classification::Write;
     op
 }
-fn failure(result: Result<send::Reply, Failure>) -> Failure {
+fn failure(result: Result<super::super::Response, Failure>) -> Failure {
     match result {
         Err(error) => error,
         Ok(_) => panic!("expected failure"),
@@ -16,8 +16,19 @@ fn failure(result: Result<send::Reply, Failure>) -> Failure {
 #[test]
 fn provider_error_text_is_not_exposed() {
     use crate::error::{ApiError, SafeText};
-    let raw = SdkError::from_api(ApiError::new("toy-provider", Some(401), SafeText::new("", &[]), SafeText::new("toy-provider-canary", &[]), false));
-    let failure = Failure { error: Error::Provider, status: Some(StatusCode::UNAUTHORIZED), dispatch: WriteDispatch::MayHaveBeenSent };
+    let raw = SdkError::from_api(ApiError::new(
+        "toy-provider",
+        Some(401),
+        SafeText::new("", &[]),
+        SafeText::new("toy-provider-canary", &[]),
+        false,
+    ));
+    let failure = Failure {
+        error: Error::Provider,
+        status: Some(StatusCode::UNAUTHORIZED),
+        dispatch: WriteDispatch::MayHaveBeenSent,
+        credentials: SentCredentials::default(),
+    };
     let sdk: crate::Failure<()> = failure.into_failure(raw);
     assert!(sdk.error().api_error().is_none());
     assert!(!format!("{:?}", sdk.error()).contains("toy-provider-canary"));
@@ -44,6 +55,7 @@ fn status_detail_preserves_identity_and_api_error() {
         error: Error::InvalidRequest,
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::NotSent,
+        credentials: SentCredentials::default(),
     };
     let sdk: crate::Failure<()> = failure.into_failure(mapped);
     assert!(!sdk.error().has_identity(crate::ErrorClass::Auth));
@@ -331,7 +343,13 @@ impl CredentialsProvider for FailInvalidation {
     ) -> Pin<Box<dyn Future<Output = Result<(), SdkError>> + Send + 'a>> {
         Box::pin(async {
             use crate::error::{ApiError, SafeText};
-            Err(SdkError::from_api(ApiError::new("toy-provider", Some(401), SafeText::new("", &[]), SafeText::new("toy-provider-canary", &[]), false)))
+            Err(SdkError::from_api(ApiError::new(
+                "toy-provider",
+                Some(401),
+                SafeText::new("", &[]),
+                SafeText::new("toy-provider-canary", &[]),
+                false,
+            )))
         })
     }
 }
