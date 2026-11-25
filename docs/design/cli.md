@@ -361,11 +361,16 @@ leaf, implicit flag presence/absence, empty input, real parser types, defaults
 `gen-docs` twice and compare bytes to committed generated pages. Run dedicated
 `configure` syntax and behavior tests, including all key positions and masking.
 Generate `crates/greennode/tests/parity/shipped-commands.json` with the built
-candidate's hidden `gen-docs <dir> --command-inventory <path>` option. Commit
-its JSON array of sorted command paths, including built-ins and version/help
-aliases. The Rust `shipped_commands_match_registry` test compares a fresh export
-byte for byte and fails on a stale file. The [release gate](release.md) also
-checks the preceding published tag's inventory is a subset of the candidate.
+candidate's hidden `__command-inventory` command. It prints a JSON array of
+command lines as typed, each starting with `greennode`, sorted by UTF-8 bytes,
+with hidden commands excluded. The built-ins are exactly `greennode`,
+`greennode --help`, `greennode --version`, `greennode -h`, `greennode -v`,
+`greennode help`, and `greennode version`; each visible service adds
+`greennode <service>`, and each operation adds
+`greennode <service> <operation>`. The Rust `shipped_commands_match_registry`
+test compares a fresh export byte for byte and fails on a stale file. The
+[release gate](release.md) also checks the preceding published tag's inventory
+is a subset of the candidate.
 
 Use injected streams, sources, terminal and clock in frame tests. Use temp homes
 and loopback HTTP in service tests. Assert exact stdout, stderr and exit

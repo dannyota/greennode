@@ -1,2 +1,7 @@
 [extend]
 useDefault = true
+
+[[allowlists]]
+description = "Self-signed localhost key used only by the release checker's loopback HTTPS test"
+targetRules = ["private-key"]
+paths = ['''^scripts/test/fixtures/localhost-key\.pem$''']
