@@ -35,6 +35,8 @@ jobs:
         run: make comments
       - name: Workflow and tool pin gate
         run: make pins
+      - name: Parity list gate
+        run: make parity
       - name: Action pins match their tags
         env:
           GH_TOKEN: ${{ github.token }}
