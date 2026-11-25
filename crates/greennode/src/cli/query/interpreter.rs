@@ -18,6 +18,8 @@ pub(in crate::cli) enum EvaluationError {
     SliceOverflow,
     InvalidNode,
     NonFinite,
+    FunctionArity,
+    FunctionType,
 }
 
 fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
@@ -92,6 +94,39 @@ fn is_false(value: &Value) -> bool {
 
 fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match node.kind {
+        NodeKind::FunctionExpression if matches!(&node.value, NodeValue::Text(name) if name == "abs") =>
+        {
+            let arguments = node
+                .children
+                .iter()
+                .map(|child| execute(child, input))
+                .collect::<Result<Vec<_>, _>>()?;
+            let [argument] = arguments.as_slice() else {
+                return Err(EvaluationError::FunctionArity);
+            };
+            let Value::Number(value) = argument else {
+                return Err(EvaluationError::FunctionType);
+            };
+            Ok(Value::Number(value.abs()))
+        }
+        NodeKind::FunctionExpression if matches!(&node.value, NodeValue::Text(name) if name == "length") =>
+        {
+            let arguments = node
+                .children
+                .iter()
+                .map(|child| execute(child, input))
+                .collect::<Result<Vec<_>, _>>()?;
+            let [argument] = arguments.as_slice() else {
+                return Err(EvaluationError::FunctionArity);
+            };
+            let length = match argument {
+                Value::String(value) => value.chars().count(),
+                Value::Array(value) => value.len(),
+                Value::Object(value) => value.len(),
+                _ => return Err(EvaluationError::FunctionType),
+            };
+            Ok(Value::Number(length as f64))
+        }
         NodeKind::Comparator => {
             let left = execute(child(node, 0)?, input)?;
             let right = execute(child(node, 1)?, input)?;
@@ -320,6 +355,20 @@ mod tests {
         let query = super::super::compile("([?`true`].[@]) == `[]`").unwrap();
         assert_eq!(evaluate(&query, &nested(127)), Ok(Value::Bool(false)));
         assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
+    }
+    #[test]
+    fn length_counts_unicode_code_points_and_checks_type() {
+        let run = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
+        assert_eq!(run("length('é🌿')"), Ok(Value::Number(2.0)));
+        assert_eq!(run("length(`[1,2,3]`)"), Ok(Value::Number(3.0)));
+        assert_eq!(run("length(`true`)"), Err(EvaluationError::FunctionType));
+    }
+    #[test]
+    fn abs_checks_arity_and_numeric_type() {
+        let eval = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
+        assert_eq!(eval("abs(`-2`)"), Ok(Value::Number(2.0)));
+        assert_eq!(eval("abs('2')"), Err(EvaluationError::FunctionType));
+        assert_eq!(eval("abs(`1`, `2`)"), Err(EvaluationError::FunctionArity));
     }
     #[test]
     fn filter_drops_null_results_and_false_predicates() {
