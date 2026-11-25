@@ -1,6 +1,6 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
-use std::collections::BTreeMap;
+use std::{cell::Cell, cmp::Ordering, collections::BTreeMap};
 
 use crate::cli::render::Value;
 
@@ -167,6 +167,25 @@ impl WorkBudget {
         )
     }
 
+    pub(super) fn charge_merge_key(
+        &mut self,
+        key: &str,
+        entries: usize,
+    ) -> Result<(), EvaluationError> {
+        let size = entries.checked_add(1).ok_or(EvaluationError::WorkBudget)?;
+        let log = if size <= 1 {
+            0
+        } else {
+            usize::BITS - (size - 1).leading_zeros()
+        };
+        let bytes = u64::try_from(key.len()).map_err(|_| EvaluationError::WorkBudget)?;
+        self.charge(
+            bytes
+                .checked_mul(u64::from(log))
+                .ok_or(EvaluationError::WorkBudget)?,
+        )
+    }
+
     pub(super) fn charge_bytes(&mut self, value: &str) -> Result<(), EvaluationError> {
         self.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)
     }
@@ -184,36 +203,72 @@ impl WorkBudget {
     }
 }
 
-fn sort_units(length: usize) -> Result<u64, EvaluationError> {
-    let count = u64::try_from(length).map_err(|_| EvaluationError::WorkBudget)?;
-    let log = if length <= 1 {
-        0
-    } else {
-        usize::BITS - (length - 1).leading_zeros()
-    };
-    count
-        .checked_mul(u64::from(log) + 32)
-        .ok_or(EvaluationError::WorkBudget)
+pub(super) struct SortMeter {
+    initial: u64,
+    remaining: Cell<u64>,
+    exhausted: Cell<bool>,
 }
 
-pub(super) fn charge_sort(length: usize, budget: &mut WorkBudget) -> Result<(), EvaluationError> {
-    budget.charge(sort_units(length)?)
-}
-
-pub(super) fn charge_sort_bytes(
-    length: usize,
-    max_bytes: usize,
-    budget: &mut WorkBudget,
-) -> Result<(), EvaluationError> {
-    if length <= 1 {
-        return Ok(());
+impl SortMeter {
+    pub(super) fn new(budget: &WorkBudget) -> Self {
+        let remaining = 10_000_000 - budget.used;
+        Self {
+            initial: remaining,
+            remaining: Cell::new(remaining),
+            exhausted: Cell::new(false),
+        }
     }
-    let bytes = u64::try_from(max_bytes).map_err(|_| EvaluationError::WorkBudget)?;
-    budget.charge(
-        sort_units(length)?
-            .checked_mul(bytes)
-            .ok_or(EvaluationError::WorkBudget)?,
-    )
+
+    fn charge(&self) -> bool {
+        if self.exhausted.get() {
+            return false;
+        }
+        if let Some(remaining) = self.remaining.get().checked_sub(1) {
+            self.remaining.set(remaining);
+            true
+        } else {
+            self.exhausted.set(true);
+            false
+        }
+    }
+
+    pub(super) fn numbers(&self, left: &f64, right: &f64) -> Ordering {
+        if !self.charge() {
+            return Ordering::Equal;
+        }
+        if left == right {
+            Ordering::Equal
+        } else {
+            left.total_cmp(right)
+        }
+    }
+
+    pub(super) fn strings(&self, left: &str, right: &str) -> Ordering {
+        if !self.charge() {
+            return Ordering::Equal;
+        }
+        let left = left.as_bytes();
+        let right = right.as_bytes();
+        for index in 0..left.len().min(right.len()) {
+            if !self.charge() {
+                return Ordering::Equal;
+            }
+            let order = left[index].cmp(&right[index]);
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+        left.len().cmp(&right.len())
+    }
+
+    pub(super) fn finish(self, budget: &mut WorkBudget) -> Result<(), EvaluationError> {
+        budget.charge(self.initial - self.remaining.get())?;
+        if self.exhausted.get() {
+            Err(EvaluationError::WorkBudget)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub(super) fn check(
@@ -686,7 +741,7 @@ mod tests {
         let numbers = vec!["0"; 4_000].join(",");
         let expression = format!("[?contains(`[{numbers}]`, @)]");
         let query = super::super::compile(&expression).unwrap();
-        let input = Value::Array(vec![Value::Number(1.0); 1_000]);
+        let input = Value::Array(vec![Value::Number(1.0); 700]);
         assert_eq!(evaluate(&query, &input), Err(EvaluationError::WorkBudget));
     }
     #[test]

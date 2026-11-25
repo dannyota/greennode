@@ -84,15 +84,11 @@ pub(super) fn call(
     }
     let mut ordinary = None;
     let mut numeric = None;
-    let mut max_bytes = 0;
     let mut keys = Vec::new();
     for (index, value) in values.iter().enumerate() {
         budget.charge(1)?;
         match execute(reference, value, budget) {
             Ok(key) => {
-                if let Value::String(value) = &key {
-                    max_bytes = max_bytes.max(value.len());
-                }
                 if index == 0 {
                     numeric = match key {
                         Value::Number(_) => Some(true),
@@ -148,8 +144,6 @@ pub(super) fn call(
         return Ok(values[best].clone());
     }
     budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
-    super::interpreter::charge_sort(keys.len(), budget)?;
-    super::interpreter::charge_sort_bytes(keys.len(), max_bytes, budget)?;
     if numeric {
         let mut indexed = keys
             .into_iter()
@@ -160,13 +154,9 @@ pub(super) fn call(
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        indexed.sort_by(|(a, _), (b, _)| {
-            if a == b {
-                std::cmp::Ordering::Equal
-            } else {
-                a.total_cmp(b)
-            }
-        });
+        let meter = super::interpreter::SortMeter::new(budget);
+        indexed.sort_by(|(a, _), (b, _)| meter.numbers(a, b));
+        meter.finish(budget)?;
         budget.charge(1)?;
         let mut output = Vec::new();
         for (_, value) in indexed {
@@ -183,7 +173,9 @@ pub(super) fn call(
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let meter = super::interpreter::SortMeter::new(budget);
+        indexed.sort_by(|(a, _), (b, _)| meter.strings(a, b));
+        meter.finish(budget)?;
         budget.charge(1)?;
         let mut output = Vec::new();
         for (_, value) in indexed {
@@ -312,6 +304,19 @@ mod tests {
     use crate::cli::render::Value;
 
     #[test]
+    fn sorted_by_strings_stay_within_budget() {
+        let prefix = "x".repeat(256);
+        let input = Value::Array(
+            (0..999)
+                .map(|n| Value::String(format!("{prefix}{n:04}")))
+                .collect(),
+        );
+        assert!(
+            matches!(evaluate(&compile("sort_by(@, &@)").unwrap(), &input), Ok(Value::Array(values)) if values.len() == 999)
+        );
+    }
+
+    #[test]
     fn by_functions_charge_string_key_comparisons() {
         let prefix = "x".repeat(1_024);
         let input = Value::Array(vec![
@@ -321,7 +326,7 @@ mod tests {
         for (name, used) in [
             ("max_by", 9_994_500),
             ("min_by", 9_994_500),
-            ("sort_by", 9_992_000),
+            ("sort_by", 9_993_300),
         ] {
             let query = compile(&format!("{name}(@, &@)")).unwrap();
             let mut budget = super::WorkBudget::new();
@@ -366,7 +371,7 @@ mod tests {
         let query = compile("sort_by(@, &@)").unwrap();
         let input = Value::Array((0..1_000).rev().map(|n| Value::Number(n as f64)).collect());
         let mut budget = super::WorkBudget::new();
-        budget.charge(9_993_000).unwrap();
+        budget.charge(9_991_500).unwrap();
         assert_eq!(
             super::call("sort_by", &query.0.children, &input, &mut budget),
             Err(super::EvaluationError::WorkBudget)
