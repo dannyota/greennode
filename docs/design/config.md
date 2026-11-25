@@ -308,7 +308,9 @@ checked directory. If separation cannot be established safely, refuse cache use.
 Open the checked directory once without following its final component, require
 it owned by the user and not group- or world-writable, and do every later step
 relative to that handle. An ancestor changed between the check and that open is
-an accepted limit: it needs write access to the owner's own directories. This
+an accepted limit: it needs write access to the owner's own directories. On
+Windows the standard library offers no handle-relative create or rename, so the
+disk cache is off there for now and tokens stay in memory for the process. This
 supplements, not replaces, the baseline's checks on the cache directory and
 entries.
 
