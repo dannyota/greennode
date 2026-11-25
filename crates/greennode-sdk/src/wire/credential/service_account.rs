@@ -208,14 +208,23 @@ async fn exchange_at(
         }
     };
     let Some(result) = result else {
-        return Err(failed(evidence.status.map(|status| status.as_u16())));
+        let status = evidence.status.map(|status| status.as_u16());
+        return Err(if status == Some(200) {
+            failure("invalid token response", status)
+        } else {
+            failed(status)
+        });
     };
     let status = match &result {
         Ok(reply) => Some(reply.status.as_u16()),
         Err(error) => error.observed().map(|head| head.status.as_u16()),
     };
     if context.check(clock).is_some() {
-        return Err(failed(status));
+        return Err(if status == Some(200) && result.is_err() {
+            failure("invalid token response", status)
+        } else {
+            failed(status)
+        });
     }
     if let Some(status) = status {
         if (300..400).contains(&status) {

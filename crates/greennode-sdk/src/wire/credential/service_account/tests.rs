@@ -172,7 +172,7 @@ async fn cancellation_during_body_keeps_identity_and_status() {
     let error = finished.unwrap().err().unwrap();
     assert!(error.has_identity(ErrorClass::Cancelled));
     let detail = error.service_account_login_error().unwrap();
-    assert_eq!(detail.reason(), "token request failed");
+    assert_eq!(detail.reason(), "invalid token response");
     assert_eq!(detail.status(), Some(200));
     assert_eq!(server.requests(), 1);
 }
