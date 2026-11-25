@@ -1,0 +1,123 @@
+name: Publish crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      publish:
+        description: Publish crates
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      commit: ${{ steps.verify.outputs.commit }}
+      toolchain: ${{ steps.verify.outputs.toolchain }}
+      release_run: ${{ steps.verify.outputs.release_run }}
+      receipt_sha256: ${{ steps.verify.outputs.receipt_sha256 }}
+    steps:
+      - name: Guard dispatch
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          TAG: ${{ inputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          test "$REPOSITORY" = dannyota/greennode
+          test "$REF" = refs/heads/master
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$PUBLISH" = true ]; then test "$ATTEMPT" = 1; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/evidence"
+          commit=$(git rev-parse "refs/tags/$TAG^{commit}")
+          git merge-base --is-ancestor "$commit" "$DISPATCH_SHA"
+          printf '%s\n' "$commit" > "$RUNNER_TEMP/evidence/commit"
+          git ls-tree -r -z --full-tree "$commit" > "$RUNNER_TEMP/evidence/tree"
+      - name: Gather release evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set +x
+          unset GH_DEBUG
+          evidence="$RUNNER_TEMP/evidence"
+          commit=$(< "$evidence/commit")
+          gh release view "$TAG" --repo dannyota/greennode --json tagName,isDraft,publishedAt,isImmutable,assets > "$evidence/release.json"
+          gh api --paginate --slurp "repos/dannyota/greennode/actions/workflows/release.yml/runs?event=push&head_sha=$commit" |
+            jq --arg tag "$TAG" '[.[].workflow_runs[] | select(.head_branch == $tag) | {databaseId: .id, headBranch: .head_branch, headSha: .head_sha, path, conclusion, event}]' > "$evidence/runs.json"
+          run=$(jq -er 'if length == 1 then .[0].databaseId else error("runs") end' "$evidence/runs.json")
+          for name in darwin-arm64 linux-amd64 linux-arm64 windows-amd64 crate-checksums; do
+            gh run download "$run" --repo dannyota/greennode --name "$name" --dir "$evidence/artifacts/$name"
+          done
+      - name: Gather owners
+        shell: bash
+        run: |
+          umask 077
+          evidence="$RUNNER_TEMP/evidence"
+          for pair in greennode-sdk:sdk greennode:tool; do
+            crate=${pair%%:*}
+            out="$evidence/${pair##*:}-owners.json"
+            code=$(curl -sS -A greennode-release -o "$out.body" -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/owners")
+            case "$code" in
+              200) jq -e '.users | type == "array"' "$out.body" > /dev/null; mv "$out.body" "$out" ;;
+              404) jq -e --arg d "crate \`$crate\` does not exist" '. == {errors: [{detail: $d}]}' "$out.body" > /dev/null; printf 'null\n' > "$out" ;;
+              *) exit 1 ;;
+            esac
+          done
+      - name: Verify evidence and registry
+        id: verify
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          evidence="$RUNNER_TEMP/evidence"
+          commit=$(< "$evidence/commit")
+          args=()
+          if [ "$PUBLISH" = true ]; then args+=(--publish); fi
+          python3 -I scripts/check-crate-release.py evidence "$TAG" "$commit" "$evidence/release.json" "$evidence/runs.json" "$evidence/sdk-owners.json" "$evidence/tool-owners.json" "$evidence/artifacts" "$evidence/tree" "${args[@]}"
+          mkdir -p "$evidence/manifests/crates/greennode-sdk" "$evidence/manifests/crates/greennode"
+          for file in Cargo.toml crates/greennode-sdk/Cargo.toml crates/greennode/Cargo.toml; do
+            git show "$commit:$file" > "$evidence/manifests/$file"
+          done
+          (cd "$evidence/manifests" && python3 -I "$GITHUB_WORKSPACE/scripts/check-crate-release.py" manifest --tag "$TAG" --release)
+          receipt="$evidence/artifacts/crate-checksums/crate-checksums.json"
+          states=$(python3 -I scripts/check-crate-release.py state "$receipt")
+          toolchain=$(jq -er '.toolchain' "$receipt")
+          run=$(jq -er '.[0].databaseId' "$evidence/runs.json")
+          digest=$(sha256sum "$receipt" | cut -d ' ' -f 1)
+          printf 'tag=%s\ncommit=%s\ntoolchain=%s\nrelease_run=%s\nreceipt_sha256=%s\n' "$TAG" "$commit" "$toolchain" "$run" "$digest" >> "$GITHUB_OUTPUT"
+          {
+            printf '## Release preflight\n\nReceipt SHA-256: %s\n\n' "$digest"
+            jq -r '.crates[] | "- \(.name): \(.sha256)"' "$receipt"
+            printf '\n%s\n' "$states"
+          } >> "$GITHUB_STEP_SUMMARY"
