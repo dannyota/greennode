@@ -198,8 +198,13 @@ fn copy(value: &Value, budget: &mut WorkBudget) -> Result<Value, EvaluationError
     Ok(value.clone())
 }
 
-fn push(items: &mut Vec<Value>, value: Value) -> Result<(), EvaluationError> {
+fn push(
+    items: &mut Vec<Value>,
+    value: Value,
+    budget: &mut WorkBudget,
+) -> Result<(), EvaluationError> {
     check(&value, 1)?;
+    budget.charge(1)?;
     items.push(value);
     Ok(())
 }
@@ -313,12 +318,13 @@ pub(super) fn execute(
             let Value::Array(items) = source(child(node, 0)?, input, budget)? else {
                 return Ok(Value::Null);
             };
+            budget.charge(1)?;
             let mut result = Vec::new();
             for item in &items {
                 if !is_false(&execute(child(node, 2)?, item, budget)?) {
                     let value = execute(child(node, 1)?, item, budget)?;
                     if value != Value::Null {
-                        push(&mut result, value)?;
+                        push(&mut result, value, budget)?;
                     }
                 }
             }
@@ -329,15 +335,16 @@ pub(super) fn execute(
             let Value::Array(items) = source else {
                 return Ok(Value::Null);
             };
+            budget.charge(1)?;
             let mut result = Vec::new();
             for value in items {
                 match value {
                     Value::Array(nested) => {
                         for item in nested {
-                            push(&mut result, item)?;
+                            push(&mut result, item, budget)?;
                         }
                     }
-                    item => push(&mut result, item)?,
+                    item => push(&mut result, item, budget)?,
                 }
             }
             Ok(Value::Array(result))
@@ -351,18 +358,20 @@ pub(super) fn execute(
             let mut result = Vec::new();
             match (node.kind, source) {
                 (NodeKind::Projection, Value::Array(items)) => {
+                    budget.charge(1)?;
                     for item in &items {
                         let value = execute(child(node, 1)?, item, budget)?;
                         if value != Value::Null {
-                            push(&mut result, value)?;
+                            push(&mut result, value, budget)?;
                         }
                     }
                 }
                 (NodeKind::ValueProjection, Value::Object(items)) => {
+                    budget.charge(1)?;
                     for item in items.values() {
                         let value = execute(child(node, 1)?, item, budget)?;
                         if value != Value::Null {
-                            push(&mut result, value)?;
+                            push(&mut result, value, budget)?;
                         }
                     }
                 }
@@ -374,9 +383,10 @@ pub(super) fn execute(
             if *input == Value::Null {
                 return Ok(Value::Null);
             }
+            budget.charge(1)?;
             let mut result = Vec::new();
             for child in &node.children {
-                push(&mut result, execute(child, input, budget)?)?;
+                push(&mut result, execute(child, input, budget)?, budget)?;
             }
             Ok(Value::Array(result))
         }
@@ -384,6 +394,7 @@ pub(super) fn execute(
             if *input == Value::Null {
                 return Ok(Value::Null);
             }
+            budget.charge(1)?;
             let mut result = BTreeMap::new();
             for child in &node.children {
                 let NodeValue::Text(key) = &child.value else {
@@ -391,6 +402,7 @@ pub(super) fn execute(
                 };
                 let value = execute(child, input, budget)?;
                 check(&value, 1)?;
+                budget.charge(1)?;
                 result.insert(key.clone(), value);
             }
             Ok(Value::Object(result))
@@ -426,6 +438,7 @@ fn slice(
     let stop = parts[1]
         .map(cap)
         .unwrap_or(if step < 0 { -1 } else { length });
+    budget.charge(1)?;
     let mut result = Vec::new();
     while if step < 0 { index > stop } else { index < stop } {
         let position = usize::try_from(index).map_err(|_| EvaluationError::InvalidSlice)?;
@@ -446,17 +459,45 @@ fn slice(
 mod tests {
     use super::*;
     #[test]
+    fn empty_filter_charges_produced_container() {
+        let query = super::super::compile("[?@]").unwrap();
+        let mut budget = WorkBudget { used: 9_999_997 };
+        assert_eq!(
+            execute(&query.0, &Value::Array(vec![]), &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+    #[test]
+    fn multiselect_charges_produced_elements() {
+        let query = super::super::compile("[@,@]").unwrap();
+        let mut budget = WorkBudget { used: 9_999_994 };
+        assert_eq!(
+            execute(&query.0, &Value::Bool(true), &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+    #[test]
+    fn function_argument_clone_is_metered() {
+        let query = super::super::compile("length(@)").unwrap();
+        let input = Value::Array(vec![Value::Null, Value::Null]);
+        let mut budget = WorkBudget { used: 9_999_994 };
+        assert_eq!(
+            execute(&query.0, &input, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+    #[test]
     fn filter_contains_scan_hits_work_budget() {
         let numbers = vec!["0"; 4_000].join(",");
         let expression = format!("[?contains(`[{numbers}]`, @)]");
         let query = super::super::compile(&expression).unwrap();
-        let input = Value::Array(vec![Value::Number(1.0); 1_800]);
+        let input = Value::Array(vec![Value::Number(1.0); 1_000]);
         assert_eq!(evaluate(&query, &input), Err(EvaluationError::WorkBudget));
     }
     #[test]
     fn doubling_copy_is_metered() {
         let query = super::super::compile("[@,@] | [@,@]").unwrap();
-        let mut budget = WorkBudget { used: 9_999_990 };
+        let mut budget = WorkBudget { used: 9_999_986 };
         assert_eq!(
             execute(&query.0, &Value::Number(1.0), &mut budget),
             Err(EvaluationError::WorkBudget)
