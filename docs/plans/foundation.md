@@ -8,11 +8,11 @@ The primary is the integration owner of the workspace `Cargo.toml`, `Cargo.lock`
 
 ## Order
 
-Task 1 does not block code: SDK tasks write no doc comments until the owner approves the exception, and a later pass adds them; the baseline tag gates task 14. Task 2 started before it and is reworked if the review changes the projection rules. After 1: task 3, and task 4 once task 2 has landed. After 3: tasks 5, 6, and 7 in parallel. After 3, 4, and 7: task 8. After 5 and 6: task 9. After 8 and 9: task 10. After 10: task 11, then 12. Task 13 starts after 1 and lands before the first release. Task 14 starts when 11 lands.
+Task 1 can run at any time; from then on every SDK task writes its doc comments with its code. Task 2 started before it and is reworked if the review changes the projection rules. After 1: task 3, and task 4 once task 2 has landed. After 3: tasks 5, 6, and 7 in parallel. After 3, 4, and 7: task 8. After 5 and 6: task 9. After 8 and 9: task 10. After 10: task 11, then 12. Task 13 starts after 1 and lands before the first release. Task 14 starts when 11 lands.
 
 ## Tasks
 
-- [ ] **1. Owner decisions.** The designs passed independent review. Two decisions remain the owner's: the baseline tag (`v1.0.1` or `v1.2.0`; a move updates the architecture's baseline section, the `Makefile` values, and the parity list, and adds a task to port the difference), and the exception that lets public SDK items carry `///` doc comments. Tasks that touch either wait for the answer.
+- [ ] **1. SDK doc comments.** The owner approved `///` doc comments on public SDK items. Implementer: add them to every public item that exists, as the [engineering standard](../standards/engineering.md#code-comments) and the [SDK design](../design/sdk.md#public-docs-and-checks) describe, and repeat for each later SDK task in the same change. Review (Sol).
 - [ ] **2. Output formatter and goldens.** In progress. The Go-compatible JSON writer, the f64 value tree, the table and text renderers, escaping, and dynamic-map redaction, as [CLI output](../design/cli-output.md) specifies, tested against the baseline's 407 golden files. Owns `crates/greennode/src/cli/render.rs`, `src/cli/render/`, `tests/render.rs`, `tests/fixtures/render/`. Review (Sol). Rework after task 1 if the review changes the projection rules. Golden cases that need the query engine or a service-specific renderer are excluded with their reason, not forced through the generic formatter.
 - [ ] **3. Shared contracts.** Implementer. The SDK's public shapes with no I/O behind them: the request context and cancellation, the clock, `Secret`, `Token`, the error class, error, failure, and write-dispatch types, the list and paged-list models, the configuration source trait, and the debug event types, as the [SDK design](../design/sdk.md) specifies. Owns `crates/greennode-sdk/src/context.rs`, `secret.rs`, `error.rs`, `model/`, `tests/core_contracts.rs`. Review (Sol) with canary tests for `Secret`.
 - [ ] **4. Query engine.** Implementer. The port of go-jmespath v0.4.0 as [CLI query](../design/cli-query.md) specifies, over the value tree from task 2, with the library's compliance suite and committed differential fixtures. Owns `crates/greennode/src/cli/query.rs`, `src/cli/query/`, `tests/query.rs`, `tests/fixtures/query/`, `crates/greennode/licenses/go-jmespath-LICENSE`, and the license-notice lines in `scripts/comments-allowlist.txt`. Review (Sol).
@@ -33,7 +33,7 @@ Smallest first, so the pattern settles on cheap services. Lines are the baseline
 
 |Wave|Services|Operations|Go lines|Needs first|
 |-|-|-|-|-|
-|1|`project`, `backup`, `portal`, `tagging`, `vks`|16|1,718|Task 11|
+|1|`project`, `backup`, `portal`, `tagging`, `vks`|17|1,718|Task 11|
 |2|`database`, `containerregistry`, `dns`, the rest of `billing`|32|5,000|Wave 1|
 |3|`pricing`, `volume`, `globalloadbalancer`, `cdn`|55|8,995|Shared quote and discovery code; the vCDN key path|
 |4|`compute`, `iam`, `loadbalancer`|102|14,047|The shared server model|

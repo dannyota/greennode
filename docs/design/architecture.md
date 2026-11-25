@@ -26,14 +26,14 @@ part has its own design:
 ## Baseline
 
 The baseline is [vngcloud](https://github.com/dannyota/vngcloud) at tag
-`v1.0.1`, commit `d784efc9241adcc4ed31bcab21e80dfd4552aab5`. Its
+`v1.2.0`, commit `f99c71490b1006a95a6dac7b0eac7f182b34e917`. Its
 `docs/design/cli.md` and `docs/design/sdk-and-cli.md` define the contract this
 port keeps, and its per-domain designs define each operation. Only the owner
 moves the baseline to a newer tag. A move updates this section, the baseline
 values in the `Makefile`, and the parity list, and the plan gains a task to port
 what changed between the two tags.
 
-The baseline has 372 operations in 19 services:
+The baseline has 373 operations in 19 services:
 
 | Service              | Operations | Service             | Operations |
 | -------------------- | ---------- | ------------------- | ---------- |
@@ -43,7 +43,7 @@ The baseline has 372 operations in 19 services:
 | `storage`            | 35         | `portal`            | 5          |
 | `loadbalancer`       | 33         | `vks`               | 5          |
 | `compute`            | 31         | `tagging`           | 3          |
-| `volume`             | 21         | `backup`            | 2          |
+| `volume`             | 21         | `backup`            | 3          |
 | `billing`            | 17         | `pricing`           | 2          |
 | `cdn`                | 16         | `project`           | 1          |
 | `globalloadbalancer` | 16         |                     |            |

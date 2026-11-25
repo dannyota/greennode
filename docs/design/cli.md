@@ -342,7 +342,7 @@ blocked read. Do not use a Tokio blocking task or console FFI. Use standard
 that same registry. No edits to the root for new operations.
 
 `crates/greennode/tests/parity/commands.json` is an independent committed
-extraction of all 372 operation headings in the 19 baseline service wiki pages.
+extraction of all 373 operation headings in the 19 baseline service wiki pages.
 Use a `services` array of named services with `operations` arrays. Each op has
 `name`, `kind` (the exact page text, excluding the terminal period), `flags`
 (`name` without `--`, exact Go `type`, boolean `required`) and `json_fields`
@@ -378,15 +378,15 @@ cancellation, Unix echo restoration, Windows prompt refusal and pipe input, lock
 contention, permission checks and atomic replacement. Test projections against
 the [baseline goldens][goldens].
 
-[baseline]: https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/cli.md
+[baseline]: https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli.md
 [reads]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/cli-reads.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli-reads.md
 [usability]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/cli-usability.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli-usability.md
 [writes]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0002-write-api-conventions.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0002-write-api-conventions.md
 [toggles]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0003-toggle-writes.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0003-toggle-writes.md
 [password]: https://docs.rs/rpassword/7.5.5/rpassword/
 [file-lock]: https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock
 [goldens]: cli-output.md#goldens

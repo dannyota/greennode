@@ -43,10 +43,11 @@ drift from the code and mislead agents (owner, 2026-11-18).
   service that no design document owns, naming its source; and the one-line
   license notice a third-party license requires in a file translated from its
   source, in the form the owning design states.
-- A public item of the SDK crate has a `///` doc comment that tells a caller
-  what the signature does not: units, limits, errors, and what a write changes.
-  The SDK's crate root and public modules have a `//!` summary. These comments
-  are the SDK's reference on docs.rs. Never restate the name.
+- A public item of the SDK crate has a `///` doc comment (owner, 2026-11-25)
+  that tells a caller what the signature does not: units, limits, errors, and
+  what a write changes. The SDK's crate root and public modules have a `//!`
+  summary. These comments are the SDK's reference on docs.rs. Never restate the
+  name.
 - Write no other doc comments. Private items and the command-line crate have
   none.
 - A rule the code must keep belongs in the design that owns it, or in a test
