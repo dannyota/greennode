@@ -11,11 +11,15 @@ keywords = ["greennode", "vngcloud", "cloud", "api", "sdk"]
 categories = ["api-bindings"]
 
 [dependencies]
+same-file = "1.0.6"
 serde = { version = "1.0.229", features = ["derive"] }
 time = "0.3.55"
 zeroize = "1.9.2"
 url = "2.5.9"
 tokio = { version = "1.54", features = ["time", "sync"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.6", features = ["fs"] }
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["time", "sync", "rt", "macros", "test-util"] }

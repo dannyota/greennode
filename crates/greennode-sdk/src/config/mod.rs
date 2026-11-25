@@ -1,0 +1,19 @@
+#![allow(dead_code)]
+
+mod file;
+mod ini;
+
+#[derive(Clone, Copy)]
+enum Slot {
+    Config,
+    Credentials,
+}
+
+impl Slot {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Credentials => "credentials",
+        }
+    }
+}
