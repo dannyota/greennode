@@ -35,11 +35,13 @@ The owner publishes the first pair by hand, as the
 
 ## Release workflow
 
-`.github/workflows/release.yml` runs on `v*` tag pushes, one run at a time. Its
-first job fails unless the tag's commit is in protected `master`'s history;
-later jobs check out that SHA, and no step that runs tagged code holds a token.
-Validate the tag, manifests, lockfile, dependency policy and tests with pinned
-tools. Build only the tool with
+Before pushing a tag, the owner checks its commit against freshly fetched
+protected `master`, because a tag push runs the workflow file from the tagged
+commit. `.github/workflows/release.yml` runs on `v*` tag pushes, one run at a
+time. As defense in depth, its first job fails unless the tag's commit is in
+protected `master`'s history; later jobs check out that SHA, and no step that
+runs tagged code holds a token. Validate the tag, manifests, lockfile,
+dependency policy and tests with pinned tools. Build only the tool with
 `cargo build --locked --release --package greennode --target TARGET`, check its
 version against the tag, and smoke-test the extracted Windows archive.
 
@@ -64,13 +66,15 @@ against the tag and the executable against its build artifact. Upload the
 archives, their `greennode-PLATFORM.sha256` files, and the
 `crate-checksums.json` an unprivileged Ubuntu 24.04 job builds from the staged
 packages, each with `retention-days: 90`. Stage all nine assets on a draft.
-Publish it to lock them and the tag ([GitHub immutable releases]) only while the
-live tag names the verified commit and the preceding published tag is unchanged.
-Only the Release job has `contents: write`. It runs no script from the tag: it
-writes the notes with inline `gh api` calls to the [generate notes] and compare
-endpoints, listing non-merge commit subjects. No release job has OIDC or
-registry write credentials. The receipt is written on a fresh runner that never
-built the tag, from the staged archives the packaging job uploads.
+Immediately before publishing it to lock them and the tag ([GitHub immutable
+releases]), check that the live tag names the verified commit and the preceding
+published tag is unchanged. This workflow is the only Release writer; nobody
+creates or edits a Release by hand. Only the Release job has `contents: write`.
+It runs no script from the tag: it writes the notes with inline `gh api` calls
+to the [generate notes] and compare endpoints, listing non-merge commit
+subjects. No release job has OIDC or registry write credentials. The receipt is
+written on a fresh runner that never built the tag, from the staged archives the
+packaging job uploads.
 
 ### Release evidence
 

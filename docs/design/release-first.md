@@ -9,42 +9,61 @@ and recovery.
    Python 3.11 or later, `jq`, and `gh` as `dannyota`. Start in a clean,
    reviewed checkout of protected `master` used only for release helpers, never
    to compile the tag. Gather the
-   [release evidence](release.md#release-evidence) into files and check it:
+   [release evidence](release.md#release-evidence) into a new owner-only
+   directory and check it in a subshell that stops on the first failure. `gh`
+   gets the owner's token per command, with debug output off. An owners file is
+   `null` only for a 404 whose body says the crate does not exist.
 
    ```bash
    TAG=v0.1.0
    REPO=dannyota/greennode
+   TRUSTED_SCRIPTS="$PWD/scripts"
+   EVIDENCE="$HOME/.local/state/greennode/evidence/$TAG"
+   (
+   set -euo pipefail
+   umask 077
+   unset GH_DEBUG
+   gh() { GH_TOKEN=$(command gh auth token -u dannyota) command gh "$@"; }
+   mkdir -p "$(dirname "$EVIDENCE")"
+   mkdir "$EVIDENCE"
    git fetch origin master --tags
    COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
    git merge-base --is-ancestor "$COMMIT" origin/master
-   TRUSTED_SCRIPTS="$PWD/scripts"
-   EVIDENCE=$(mktemp -d)
    gh release view "$TAG" --repo "$REPO" \
      --json tagName,isDraft,publishedAt,isImmutable,assets > "$EVIDENCE/release.json"
-   gh api "repos/$REPO/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" \
-     --jq '[.workflow_runs[] | {databaseId: .id, headBranch: .head_branch,
-       headSha: .head_sha, path, conclusion, event}]' > "$EVIDENCE/runs.json"
+   gh api "repos/$REPO/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" |
+     jq --arg tag "$TAG" '[.workflow_runs[] | select(.head_branch == $tag) |
+       {databaseId: .id, headBranch: .head_branch, headSha: .head_sha, path,
+        conclusion, event}]' > "$EVIDENCE/runs.json"
    RUN=$(jq -er 'if length == 1 then .[0].databaseId else error("runs") end' \
      "$EVIDENCE/runs.json")
    for NAME in darwin-arm64 linux-amd64 linux-arm64 windows-amd64 crate-checksums; do
      gh run download "$RUN" --repo "$REPO" --name "$NAME" --dir "$EVIDENCE/artifacts/$NAME"
    done
    git ls-tree -r -z --full-tree "$COMMIT" > "$EVIDENCE/tree"
-   ```
-
-   Write each crate's owners JSON to `$EVIDENCE/sdk-owners.json` and
-   `$EVIDENCE/tool-owners.json`; for this first release write `null` only after
-   crates.io answers 404 for that name. Then run:
-
-   ```bash
+   for PAIR in greennode-sdk:sdk greennode:tool; do
+     OUT="$EVIDENCE/${PAIR##*:}-owners.json"
+     CODE=$(curl -sS -A greennode-release -o "$OUT.body" -w '%{http_code}' \
+       "https://crates.io/api/v1/crates/${PAIR%%:*}/owners")
+     case "$CODE" in
+       200) jq -e '.users | type == "array"' "$OUT.body" > /dev/null
+            mv "$OUT.body" "$OUT" ;;
+       404) jq -e '.errors[0].detail | test("does not exist")' "$OUT.body" > /dev/null
+            printf 'null\n' > "$OUT" ;;
+       *) exit 1 ;;
+     esac
+   done
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" evidence "$TAG" "$COMMIT" \
      "$EVIDENCE/release.json" "$EVIDENCE/runs.json" "$EVIDENCE/sdk-owners.json" \
      "$EVIDENCE/tool-owners.json" "$EVIDENCE/artifacts" "$EVIDENCE/tree"
+   printf '%s\n' "$COMMIT" > "$EVIDENCE/commit"
+   ) && COMMIT=$(< "$EVIDENCE/commit")
    ```
 
    An agent may check the evidence, but only the owner authorizes the tag and
-   Release. Run commands one at a time and stop on a failed check. After login
-   always clean up in step 7.
+   Release. Later steps run commands one at a time without abort-on-error, so
+   the wait checks and step 7 cleanup always run. After login always clean up in
+   step 7.
 
 2. In a disposable macOS checkout of `$COMMIT`, with no credentials or write
    access to the owner's trusted checkout or receipt directory, run
@@ -55,8 +74,10 @@ and recovery.
    cargo +1.100.0 package --list --locked --registry crates-io -p greennode
    ```
 
-   Back on the owner's Mac, pass only the staged archives as data. In a fresh
-   checkout of `$COMMIT` that never built the tag, with no Cargo config or
+   In a second disposable checkout, run the same dry run without `--no-verify`.
+   Back on the owner's Mac, pass only both archive pairs as data and stop unless
+   each pair hashes the same; the `--no-verify` pair is the staged one. In a
+   fresh checkout of `$COMMIT` that never built the tag, with no Cargo config or
    overrides, use the helpers at `$TRUSTED_SCRIPTS`. Check LICENSE, README,
    sources, and no private or untracked files. Record the approved Mac hashes
    and archives before creating a token. `STAGE` is the transferred directory.
@@ -113,9 +134,12 @@ and recovery.
    ```
 
 6. **Owner only.** With the SDK approved and the tool absent, publish the tool.
-   Run the wait check even on a Cargo error. Confirm both versions and owners.
+   First fetch the SDK's owners again and require user `dannyota`. Run the wait
+   check even on a Cargo error. Confirm both versions, then both crates' owners.
 
    ```bash
+   curl -fsS -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners |
+     jq -e '.users | any(.login == "dannyota")'
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT"
    cargo +1.100.0 publish --no-verify --locked --registry crates-io \
      --package greennode --config "$PROVIDER" --config net.retry=0
