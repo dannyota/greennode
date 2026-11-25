@@ -190,7 +190,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           gh api --paginate "repos/$REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft == false) | [.published_at, .tag_name] | @tsv' > "$RUNNER_TEMP/releases"
-          previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | head -n 1)"
+          previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | awk 'NR == 1 { print }')"
           if [ -n "$previous" ]; then
             [[ "$previous" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           fi
@@ -497,7 +497,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           gh api --paginate "repos/$REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft == false) | [.published_at, .tag_name] | @tsv' > "$RUNNER_TEMP/releases"
-          previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | head -n 1)"
+          previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | awk 'NR == 1 { print }')"
           test "$previous" = "$EXPECTED_PREVIOUS"
           object="$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq '.object | [.type, .sha] | @tsv')"
           for _ in {1..8}; do

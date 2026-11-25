@@ -140,6 +140,20 @@ class WorkflowTest(unittest.TestCase):
             (root / 'verified-crates/extra').write_bytes(b'extra')
             self.assertNotEqual(run(), 0)
 
+    def test_predecessor_selector_consumes_long_input(self):
+        workflow = parse_workflow(WORKFLOW.read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for records, expected in [('', ''), (''.join(f'{index:08d}\tv{index}.0.0\n' for index in range(100000)), 'v99999.0.0')]:
+                (root / 'releases').write_text(records)
+                for job, step_name in [('inventory', 'Find preceding release'), ('release', 'Publish draft')]:
+                    with self.subTest(job=job, empty=not records):
+                        step = next(s for s in workflow['jobs'][job]['steps'] if s.get('name') == step_name)
+                        selector = next(line for line in step['run'].splitlines() if line.strip().startswith('previous='))
+                        result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', selector + '\nprintf "%s" "$previous"'], env={'PATH': '/usr/bin:/bin', 'RUNNER_TEMP': directory, 'LC_ALL': 'C'}, capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout, expected)
+
     def test_ci_installs_before_release_checks(self):
         ci = WORKFLOW.parent / 'ci.yml'
         steps = parse_workflow(ci.read_text())['jobs']['gates']['steps']
