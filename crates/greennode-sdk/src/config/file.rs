@@ -165,5 +165,135 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
     })
 }
 
+#[cfg(unix)]
+fn credentials_identity(path: &Path, config: Option<&File>) -> Result<bool, &'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "not found"
+        } else {
+            "metadata failed"
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err("not a regular file");
+    }
+    let Some(config) = config else {
+        return Ok(false);
+    };
+    let config = config.metadata().map_err(|_| "metadata failed")?;
+    Ok((metadata.dev(), metadata.ino()) == (config.dev(), config.ino()))
+}
+
+#[cfg(windows)]
+fn credentials_identity(path: &Path, config: Option<&File>) -> Result<bool, &'static str> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .security_qos_flags(SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT);
+    let file = options.open(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "not found"
+        } else {
+            "metadata failed"
+        }
+    })?;
+    if !winapi_util::file::typ(&file)
+        .map_err(|_| "metadata failed")?
+        .is_disk()
+        || !file.metadata().map_err(|_| "metadata failed")?.is_file()
+    {
+        return Err("not a regular file");
+    }
+    config
+        .map(|config| same(config, &file).map_err(|_| "metadata failed"))
+        .unwrap_or(Ok(false))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn credentials_identity(_path: &Path, _config: Option<&File>) -> Result<bool, &'static str> {
+    Err("metadata failed")
+}
+
+pub(super) fn open_settings(
+    selection: &super::mode::Selection,
+) -> Result<Option<File>, Box<crate::Error>> {
+    let file_error = |slot, source, reason| {
+        let class = if slot == crate::FileSlot::Config {
+            crate::ErrorClass::InvalidConfig
+        } else {
+            crate::ErrorClass::CredentialsFile
+        };
+        Box::new(
+            crate::Error::new(class).with_detail(crate::FileDiagnostic::from_text(
+                slot,
+                source,
+                &format!("file: {reason}"),
+            )),
+        )
+    };
+    let config = if selection.config_present {
+        let path = selection.config.as_ref().ok_or_else(|| {
+            file_error(
+                crate::FileSlot::Config,
+                selection.config_source,
+                "not found",
+            )
+        })?;
+        Some(open(path, Slot::Config).map_err(|diagnostic| {
+            Box::new(
+                crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                    crate::FileDiagnostic::from_text(
+                        crate::FileSlot::Config,
+                        selection.config_source,
+                        &diagnostic,
+                    ),
+                ),
+            )
+        })?)
+    } else if selection.config_named {
+        return Err(file_error(
+            crate::FileSlot::Config,
+            selection.config_source,
+            "not found",
+        ));
+    } else {
+        None
+    };
+    if selection.credentials_present {
+        let path = selection.credentials.as_ref().ok_or_else(|| {
+            file_error(
+                crate::FileSlot::Credentials,
+                selection.credentials_source,
+                "not found",
+            )
+        })?;
+        let alias = credentials_identity(path, config.as_ref()).map_err(|reason| {
+            file_error(
+                crate::FileSlot::Credentials,
+                selection.credentials_source,
+                reason,
+            )
+        })?;
+        if alias {
+            return Err(Box::new(crate::Error::new(
+                crate::ErrorClass::InvalidConfig,
+            )));
+        }
+    } else if selection.credentials_named {
+        return Err(file_error(
+            crate::FileSlot::Credentials,
+            selection.credentials_source,
+            "not found",
+        ));
+    }
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests;

@@ -295,3 +295,57 @@ fn follows_symlink_and_refuses_fifo() {
     );
     assert!(open(&fifo, Slot::Config).is_err());
 }
+
+#[test]
+fn settings_only_validates_credentials_without_content_open() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\n").unwrap();
+    std::fs::write(&credentials, "toy-value").unwrap();
+    let mut selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(std::fs::File::open(&credentials).is_err());
+    }
+    assert!(matches!(open_settings(&selection), Ok(Some(_))));
+    std::fs::remove_file(&credentials).unwrap();
+    std::fs::hard_link(&config, &credentials).unwrap();
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::InvalidConfig)
+    );
+    std::fs::remove_file(&credentials).unwrap();
+    selection.credentials_present = false;
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::CredentialsFile)
+    );
+    let error = open_settings(&selection).err().unwrap();
+    let detail = error.detail::<crate::FileDiagnostic>().unwrap();
+    assert_eq!(detail.source(), "option");
+    assert_eq!(detail.reason(), "not found");
+    std::fs::create_dir(&credentials).unwrap();
+    selection.credentials_present = true;
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::CredentialsFile)
+    );
+    let error = open_settings(&selection).err().unwrap();
+    assert_eq!(
+        error.detail::<crate::FileDiagnostic>().unwrap().reason(),
+        "not a regular file"
+    );
+}
