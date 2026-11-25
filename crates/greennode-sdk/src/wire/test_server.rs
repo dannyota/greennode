@@ -19,14 +19,16 @@ pub enum Response {
         body: Vec<u8>,
     },
     Raw(Vec<u8>),
+    Close,
 }
 
 pub struct Server {
-    pub root_pem: String,
+    pub root_der: rustls::pki_types::CertificateDer<'static>,
     pub origin: String,
     pub address: SocketAddr,
     requests: Arc<AtomicUsize>,
     connections: Arc<AtomicUsize>,
+    protocol: Arc<AtomicUsize>,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -35,14 +37,15 @@ impl Server {
     pub fn start(responses: Vec<Response>) -> Self {
         let rcgen::CertifiedKey { cert, signing_key } =
             rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-        let config = ServerConfig::builder()
+        let mut config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
                 vec![cert.der().clone()],
                 PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
             )
             .unwrap();
-        let root_pem = cert.pem();
+        config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let root_der = cert.der().clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -50,6 +53,8 @@ impl Server {
         let connections = Arc::new(AtomicUsize::new(0));
         let request_count = Arc::clone(&requests);
         let connection_count = Arc::clone(&connections);
+        let protocol = Arc::new(AtomicUsize::new(0));
+        let protocol_count = Arc::clone(&protocol);
         let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
         let (shutdown, mut stop) = oneshot::channel();
         let thread = thread::spawn(move || {
@@ -70,8 +75,12 @@ impl Server {
                             let acceptor = acceptor.clone();
                             let responses = Arc::clone(&responses);
                             let requests = Arc::clone(&request_count);
+                            let protocol = Arc::clone(&protocol_count);
                             tasks.spawn(async move {
+                                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
                                 let Ok(mut stream) = acceptor.accept(stream).await else { return };
+                                let negotiated = match stream.get_ref().1.alpn_protocol() { Some(b"h2") => 3, Some(b"http/1.1") => 2, _ => 1 };
+                                protocol.store(negotiated, Ordering::SeqCst);
                                 loop {
                                     let mut head = Vec::new();
                                     while !head.ends_with(b"\r\n\r\n") {
@@ -91,6 +100,7 @@ impl Server {
                                     let response = responses.lock().unwrap().pop_front();
                                     let Some(response) = response else { return; };
                                     let bytes = match response {
+                                        Response::Close => return,
                                         Response::Raw(bytes) => bytes,
                                         Response::Http { status, headers, body } => {
                                             let mut bytes = format!("HTTP/1.1 {status}\r\n").into_bytes();
@@ -100,8 +110,9 @@ impl Server {
                                             bytes
                                         }
                                     };
-                                    if stream.write_all(&bytes).await.is_err() { return; }
+                                    if stream.write_all(&bytes).await.is_err() || stream.flush().await.is_err() { return; }
                                 }
+                                }).await;
                             });
                         }
                     }
@@ -110,14 +121,18 @@ impl Server {
             });
         });
         Self {
-            root_pem,
+            root_der,
             origin: format!("https://localhost:{}", address.port()),
             address,
             requests,
             connections,
+            protocol,
             shutdown: Some(shutdown),
             thread: Some(thread),
         }
+    }
+    pub fn protocol(&self) -> usize {
+        self.protocol.load(Ordering::SeqCst)
     }
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
