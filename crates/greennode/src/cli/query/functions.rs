@@ -82,6 +82,43 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
     }
     match (name, arguments) {
         ("abs", [Value::Number(value)]) => Ok(Value::Number(value.abs())),
+        ("ceil", [Value::Number(value)]) => Ok(Value::Number(value.ceil())),
+        ("floor", [Value::Number(value)]) => Ok(Value::Number(value.floor())),
+        ("avg", [Value::Array(values)]) => {
+            let mut sum = 0.0;
+            for value in values {
+                let Value::Number(value) = value else {
+                    return Err(EvaluationError::FunctionType);
+                };
+                sum += value;
+            }
+            let average = sum / values.len() as f64;
+            if average.is_finite() {
+                Ok(Value::Number(average))
+            } else {
+                Err(EvaluationError::NonFinite)
+            }
+        }
+        ("type", [value]) => Ok(Value::String(
+            match value {
+                Value::Null => "null",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+            }
+            .into(),
+        )),
+        ("not_null", values) => Ok(values
+            .iter()
+            .find(|value| **value != Value::Null)
+            .cloned()
+            .unwrap_or(Value::Null)),
+        ("reverse", [Value::String(value)]) => Ok(Value::String(value.chars().rev().collect())),
+        ("reverse", [Value::Array(values)]) => {
+            Ok(Value::Array(values.iter().rev().cloned().collect()))
+        }
         ("length", [value]) => {
             let length = match value {
                 Value::String(value) => value.chars().count(),

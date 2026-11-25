@@ -337,6 +337,25 @@ mod tests {
         assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
     }
     #[test]
+    fn basic_functions_match_go_results() {
+        let run = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
+        for (expression, expected) in [
+            ("avg(`[1,2,3]`)", Value::Number(2.0)),
+            ("ceil(`-1.2`)", Value::Number(-1.0)),
+            ("floor(`-1.2`)", Value::Number(-2.0)),
+            ("type(`false`)", Value::String("boolean".into())),
+            ("not_null(`null`, `false`, `1`)", Value::Bool(false)),
+            ("reverse('é🌿a')", Value::String("a🌿é".into())),
+            (
+                "reverse(`[1,2]`)",
+                Value::Array(vec![Value::Number(2.0), Value::Number(1.0)]),
+            ),
+        ] {
+            assert_eq!(run(expression), Ok(expected));
+        }
+        assert_eq!(run("avg(`[]`)"), Err(EvaluationError::NonFinite));
+    }
+    #[test]
     fn length_counts_unicode_code_points_and_checks_type() {
         let run = |expression| evaluate(&super::super::compile(expression).unwrap(), &Value::Null);
         assert_eq!(run("length('é🌿')"), Ok(Value::Number(2.0)));
@@ -351,7 +370,7 @@ mod tests {
             ("ceil('1')", "FunctionType"),
             ("merge()", "FunctionVariadicArity"),
             ("merge(`false`)", "Unsupported"),
-            ("not_null(`1`, `2`)", "Unsupported"),
+            ("not_null()", "FunctionVariadicArity"),
             ("unknown(`1`)", "UnknownFunction"),
         ] {
             assert_eq!(format!("{:?}", run(expression).unwrap_err()), expected);
@@ -430,6 +449,89 @@ mod tests {
             NodeKind::ExpRef | NodeKind::FunctionExpression | NodeKind::Empty
         ) && node.children.iter().all(supported)
     }
+    fn functions_supported(node: &Node) -> bool {
+        match (&node.kind, &node.value) {
+            (NodeKind::FunctionExpression, NodeValue::Text(name))
+                if !matches!(
+                    name.as_str(),
+                    "abs" | "length" | "avg" | "ceil" | "floor" | "type" | "not_null" | "reverse"
+                ) =>
+            {
+                return false;
+            }
+            (NodeKind::ExpRef | NodeKind::Empty, _) => return false,
+            _ => {}
+        }
+        node.children.iter().all(functions_supported)
+    }
+
+    #[test]
+    fn functions_compliance() {
+        let path = format!(
+            "{}/tests/fixtures/query/compliance/functions.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut skipped = Vec::new();
+        let mut passed = 0;
+        let mut mismatches = Vec::new();
+        for (group_index, group) in data.as_array().unwrap().iter().enumerate() {
+            let input = crate::cli::render::project(&group["given"])
+                .unwrap()
+                .for_query()
+                .unwrap();
+            for (case_index, case) in group["cases"].as_array().unwrap().iter().enumerate() {
+                let id = format!("{group_index}:{case_index}");
+                let expression = case["expression"].as_str().unwrap();
+                let query = match super::super::compile(expression) {
+                    Ok(query) => query,
+                    Err(_) if case["error"].is_string() => {
+                        passed += 1;
+                        continue;
+                    }
+                    Err(_) => {
+                        mismatches.push(format!("{id}: compile {expression}"));
+                        continue;
+                    }
+                };
+                if !functions_supported(&query.0) {
+                    skipped.push(id);
+                    continue;
+                }
+                let actual = evaluate(&query, &input);
+                let matched = if case["error"].is_string() {
+                    actual.is_err()
+                } else {
+                    let expected = crate::cli::render::project(&case["result"])
+                        .unwrap()
+                        .for_query()
+                        .unwrap();
+                    actual.as_ref().is_ok_and(|value| *value == expected)
+                };
+                if matched {
+                    passed += 1;
+                } else {
+                    mismatches.push(format!(
+                        "{id}: {expression}: {actual:?} expected {}",
+                        case["result"]
+                    ));
+                }
+            }
+        }
+        eprintln!("functions: {passed} passed, {} skipped", skipped.len());
+        let mut expected = vec!["0:10".to_owned()];
+        for range in [22..34, 50..69, 78..95, 100..126, 127..134, 139..141] {
+            expected.extend(range.map(|index| format!("0:{index}")));
+        }
+        for (group, count) in [(2, 20), (3, 1), (4, 4), (5, 3), (6, 1)] {
+            expected.extend((0..count).map(|index| format!("{group}:{index}")));
+        }
+        assert_eq!(passed, 58);
+        assert_eq!(skipped, expected);
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
     #[test]
     fn selected_compliance() {
         let files = [
