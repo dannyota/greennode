@@ -66,40 +66,103 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
-    let needles: Vec<_> = credentials
-        .values()
-        .iter()
-        .filter_map(|secret| {
-            let value = secret.expose_secret();
-            (!value.is_empty()).then(|| Zeroizing::new(value.as_bytes().to_ascii_lowercase()))
-        })
-        .collect();
-    matches_forms(text.as_bytes(), &needles, [0; 3])
+    let mut needles = Vec::new();
+    for secret in credentials.values() {
+        let value = secret.expose_secret();
+        for part in std::iter::once(value)
+            .chain(value.lines().map(str::trim).filter(|line| line.len() >= 8))
+        {
+            if part.is_empty() {
+                continue;
+            }
+            let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
+            if !needles
+                .iter()
+                .any(|existing: &Zeroizing<Vec<u8>>| existing.as_slice() == needle.as_slice())
+            {
+                needles.push(needle);
+            }
+        }
+    }
+    let mut state = MatchState {
+        work: 8 << 20,
+        forms: Vec::new(),
+        visited: Vec::new(),
+    };
+    matches_forms(text.as_bytes(), &needles, [0; 3], &mut state)
 }
 
-fn matches_forms(input: &[u8], needles: &[Zeroizing<Vec<u8>>], counts: [u8; 3]) -> bool {
-    let lower = Zeroizing::new(input.to_ascii_lowercase());
-    let normalized = Zeroizing::new(
-        lower
-            .iter()
-            .copied()
-            .filter(u8::is_ascii_alphanumeric)
-            .collect::<Vec<_>>(),
-    );
-    if normalized
-        .windows(b"clientsecret".len())
-        .any(|part| part == b"clientsecret")
-        || needles.iter().any(|needle| {
-            lower
-                .windows(needle.len())
-                .any(|part| part == needle.as_slice())
-        })
-    {
-        return true;
+struct MatchState {
+    work: usize,
+    forms: Vec<Zeroizing<Vec<u8>>>,
+    visited: Vec<(usize, [u8; 3])>,
+}
+
+impl MatchState {
+    fn charge(&mut self, work: usize) -> bool {
+        if work >= self.work {
+            return false;
+        }
+        self.work -= work;
+        true
     }
+}
+
+fn matches_forms(
+    input: &[u8],
+    needles: &[Zeroizing<Vec<u8>>],
+    counts: [u8; 3],
+    state: &mut MatchState,
+) -> bool {
+    let mut found = None;
+    for index in 0..state.forms.len() {
+        if !state.charge(input.len()) {
+            return true;
+        }
+        if state.forms[index].as_slice() == input {
+            found = Some(index);
+            break;
+        }
+    }
+    let index = if let Some(index) = found {
+        index
+    } else {
+        let work = input.len().saturating_mul(needles.len().saturating_add(1));
+        if !state.charge(work) {
+            return true;
+        }
+        let lower = Zeroizing::new(input.to_ascii_lowercase());
+        let normalized = Zeroizing::new(
+            lower
+                .iter()
+                .copied()
+                .filter(u8::is_ascii_alphanumeric)
+                .collect::<Vec<_>>(),
+        );
+        if normalized
+            .windows(b"clientsecret".len())
+            .any(|part| part == b"clientsecret")
+            || needles.iter().any(|needle| {
+                lower
+                    .windows(needle.len())
+                    .any(|part| part == needle.as_slice())
+            })
+        {
+            return true;
+        }
+        state.forms.push(Zeroizing::new(input.to_vec()));
+        state.forms.len() - 1
+    };
+    if state.visited.contains(&(index, counts)) {
+        return false;
+    }
+    state.visited.push((index, counts));
     for step in 0..3 {
         if counts[step] == 2 {
             continue;
+        }
+        if !state.charge(input.len()) {
+            return true;
         }
         let next = match step {
             0 => Zeroizing::new(
@@ -115,7 +178,7 @@ fn matches_forms(input: &[u8], needles: &[Zeroizing<Vec<u8>>], counts: [u8; 3]) 
         if next.as_slice() != input {
             let mut next_counts = counts;
             next_counts[step] += 1;
-            if matches_forms(&next, needles, next_counts) {
+            if matches_forms(&next, needles, next_counts, state) {
                 return true;
             }
         }
@@ -618,6 +681,39 @@ mod tests {
             false,
             &credentials,
         );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn credential_trimmed_line_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("  toy-key-value  ")]);
+        let e = error(
+            403,
+            br#"{"message":"toy-key-value"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn matching_budget_exhaustion_withholds_message() {
+        let credentials = SentCredentials::for_test(
+            (0..20)
+                .map(|i| crate::Secret::new(format!("credential-{i:02}")))
+                .collect(),
+        );
+        let body = format!("{{\"message\":\"{}\"}}", "ordinary%2520".repeat(40_000));
+        let e = classify(
+            "test",
+            StatusCode::FORBIDDEN,
+            Bytes::from(body),
+            &[StatusCode::OK],
+            (true, false, Retry::Repeatable),
+            &credentials,
+        )
+        .unwrap_err();
         assert_eq!(e.api_error().unwrap().message(), "Forbidden");
     }
 
