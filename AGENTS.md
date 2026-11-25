@@ -4,7 +4,7 @@ Shared rules live here and in `instructions/`. [CLAUDE.md](CLAUDE.md) adds Claud
 
 ## State
 
-`greennode` is Danny's personal, unofficial command-line tool for GreenNode, formerly VNG Cloud. It is the Rust port of the Go CLI in [vngcloud](https://github.com/dannyota/vngcloud), licensed under Apache-2.0, and not affiliated with GreenNode or VNG. The repository and CI logs are public.
+`greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. It is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud), licensed under Apache-2.0, and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
 
 The crate builds one command, `greennode version`. Remaining work is in the [foundation plan](docs/plans/foundation.md).
 
@@ -90,3 +90,4 @@ Each name is a model family that resolves to its newest model, so plans, briefs,
 - The length gate fails when a capped file shrinks. Lower its cap in `scripts/lengths-baseline.txt`.
 - Never print request bodies, tokens, or credential values in test assertion messages. CodeQL flags them as cleartext logging.
 - `.reference/` is a git-ignored clone of another repository. Never edit it, and never copy from its `examples/` output or any `.env`.
+- A new worktree has no `node_modules`. Run `npm ci --ignore-scripts` in it before `make check`.

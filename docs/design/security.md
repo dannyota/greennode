@@ -11,6 +11,7 @@ destroy resources. Security comes before features and convenience.
 | -------------------------------------------------- | ------------------------------------------------ |
 | The user at the terminal or the calling script     | Choosing the profile, the command, and its flags |
 | Files under `~/.greennode/` with owner-only access | Credentials, settings, and cached tokens         |
+| Files under `~/.vngcloud/` with owner-only access  | Credentials and settings, read as a fallback     |
 | The GreenNode endpoints for the selected region    | Receiving that profile's credentials and token   |
 | Everything else                                    | Nothing                                          |
 
@@ -36,7 +37,10 @@ These match the baseline and have no switch to weaken them.
 - Each operation keeps the baseline's retry rule. A write whose outcome is
   unknown is reported as unconfirmed and is never resent silently.
 - A credential source is used whole. A partial set or a failed sign-in never
-  falls back to another source.
+  falls back to another source, and credentials never mix `GREENNODE_` and
+  `VNGCLOUD_` variables or files from two directories, as the
+  [fallback rules](architecture.md#fallback-to-vngcloud-settings) define.
+- greennode never writes under `~/.vngcloud` and never shares its token cache.
 
 ## Threats
 
