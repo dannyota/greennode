@@ -1,11 +1,13 @@
 #!/usr/bin/env -S python3 -I
 # Usage: python3 -I scripts/test/parity-list-test.py
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent.parent / "parity-list.py"
 sys.dont_write_bytecode = True
@@ -40,7 +42,9 @@ class Parity(unittest.TestCase):
 
     def test_write_required(self):
         service = self.parse(page("Write", "| `--id` | `string` | yes |", "create-thing"))
-        self.assertTrue(service["operations"][0]["flags"][0]["required"])
+        operation = service["operations"][0]
+        self.assertEqual(operation["kind"], "Write")
+        self.assertTrue(operation["flags"][0]["required"])
 
     def test_no_fields(self):
         service = self.parse(page(fields=""))
@@ -58,9 +62,80 @@ class Parity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"CLI-Things.md:5:"):
             self.parse(page().replace("## list-things", "### list-things"))
 
+    def test_indented_heading(self):
+        with self.assertRaisesRegex(ValueError, r"CLI-Things.md:5:"):
+            self.parse(page().replace("## list-things", " ## list-things"))
+
+    def test_duplicate_operation(self):
+        operation = page().split("## list-things", 1)[1]
+        with self.assertRaisesRegex(ValueError, "duplicate operation"):
+            self.parse(page() + "\n## list-things" + operation)
+
+    def test_service_title_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "invalid operation example"):
+            self.parse(page().replace("vngcloud things", "vngcloud other"))
+
+    def test_json_only_field(self):
+        operation = self.parse(page(fields="| `Config` (via `--cli-input-json` only) | `string` | yes |"))["operations"][0]
+        self.assertEqual(operation["flags"], [])
+        self.assertEqual(operation["json_fields"], [{"name": "Config", "type": "string", "required": True}])
+
     def test_unknown_section(self):
         with self.assertRaisesRegex(ValueError, r"CLI-Things.md:17:"):
             self.parse(page() + "\n```json\n{}\n```\n")
+
+
+class GitSource(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("-c", "init.templateDir=", "init", "-q")
+        self.wiki = self.repo / "docs/wiki"
+        self.wiki.mkdir(parents=True)
+        (self.wiki / "CLI-Things.md").write_text(page(), encoding="utf-8")
+        (self.wiki / "CLI-Other.md").write_text(page().replace("Things", "Other").replace("things", "other"), encoding="utf-8")
+        self.git("add", "docs/wiki")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
+        self.commit = self.git("rev-parse", "HEAD").strip()
+        spec = importlib.util.spec_from_file_location("parity_list", SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.output = self.root / "commands.json"
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True)
+
+    def run_list(self, *args, commit=None):
+        argv = [str(SCRIPT), str(self.repo), "--tag", "test", "--commit", commit or self.commit, *args]
+        with patch.object(sys, "argv", argv), patch.object(self.module, "OUTPUT", self.output):
+            return self.module.main()
+
+    def test_commit_mismatch(self):
+        self.assertEqual(self.run_list(commit="0" * 40), 1)
+        self.assertFalse(self.output.exists())
+
+    def test_stale_output(self):
+        self.assertEqual(self.run_list(), 0)
+        self.output.write_bytes(b"stale\n")
+        self.assertEqual(self.run_list("--check"), 1)
+        self.assertEqual(self.output.read_bytes(), b"stale\n")
+
+    def test_crlf_output(self):
+        self.assertEqual(self.run_list(), 0)
+        canonical = self.output.read_bytes()
+        self.output.write_bytes(canonical.replace(b"\n", b"\r\n"))
+        self.assertEqual(self.run_list("--check"), 1)
+
+    def test_ignores_working_tree_changes(self):
+        self.assertEqual(self.run_list(), 0)
+        canonical = self.output.read_bytes()
+        (self.wiki / "CLI-Things.md").unlink()
+        self.assertEqual(self.run_list("--check"), 0)
+        self.assertEqual(self.output.read_bytes(), canonical)
+        self.assertEqual([service["name"] for service in json.loads(canonical)["services"]], ["other", "things"])
 
 
 if __name__ == "__main__":

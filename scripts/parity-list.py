@@ -13,8 +13,8 @@ NAME = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 ROW = re.compile(r"\| (`--(" + NAME + r")`|`([A-Za-z][A-Za-z0-9]*)` \(via `--cli-input-json` only\)) \| `([^`|]+)` \| (yes)? \|")
 
 
-def parse_page(path):
-    lines = path.read_text(encoding="utf-8").splitlines()
+def parse_page(path, text=None):
+    lines = (path.read_text(encoding="utf-8") if text is None else text).splitlines()
 
     def fail(index, message):
         raise ValueError(f"{path}:{index + 1}: {message}")
@@ -23,13 +23,23 @@ def parse_page(path):
         fail(0, "missing generated marker")
     if len(lines) < 3 or not re.fullmatch(r"# CLI: [A-Za-z]+", lines[2]):
         fail(2, "invalid page title")
+    title = lines[2][7:]
+    if path.name != f"CLI-{title}.md":
+        fail(2, "page title does not match filename")
+    expected_service = title.lower()
     headings = []
+    seen = set()
     for i, line in enumerate(lines[3:], 3):
-        if line.startswith("#"):
+        if line.lstrip().startswith("#"):
             match = re.fullmatch(r"## (" + NAME + r")", line)
             if not match:
                 fail(i, "unrecognized heading")
+            if match.group(1) in seen:
+                fail(i, "duplicate operation")
+            seen.add(match.group(1))
             headings.append((i, match.group(1)))
+        elif not headings and line.lstrip().startswith(("|", "Kind:", "```")):
+            fail(i, "unrecognized preamble")
     if not headings:
         fail(len(lines), "no operations")
     service = None
@@ -95,7 +105,7 @@ def parse_page(path):
                         fail(opening, "unrecognized section after fields")
                     matches = [re.match(r"vngcloud (" + NAME + r") (" + NAME + r")(?:\s|$)", x) for x in block]
                     matches = [m.group(1) for m in matches if m]
-                    if not matches or len(set(matches)) != 1 or (service is not None and service != matches[0]):
+                    if not matches or len(set(matches)) != 1 or matches[0] != expected_service or (service is not None and service != matches[0]):
                         fail(opening, "invalid operation example")
                     service = matches[0]
                     found_example = True
@@ -124,19 +134,23 @@ def main():
         commit = subprocess.check_output(["git", "-C", str(args.baseline), "rev-parse", "HEAD"], text=True).strip()
         if commit != args.commit:
             raise ValueError(f"baseline HEAD is {commit}, expected {args.commit}")
-        paths = sorted((args.baseline / "docs/wiki").glob("CLI-*.md"))
+        git = ["git", "-C", str(args.baseline)]
+        entries = subprocess.check_output(git + ["ls-tree", "-rz", "--name-only", commit, "--", "docs/wiki"])
+        paths = sorted(path for path in entries.decode("utf-8").split("\0")
+                       if re.fullmatch(r"docs/wiki/CLI-[^/]+\.md", path))
         if not paths:
             raise ValueError("no baseline service pages")
-        services = sorted((parse_page(path) for path in paths), key=lambda service: service["name"])
+        services = sorted((parse_page(Path(path), subprocess.check_output(git + ["show", f"{commit}:{path}"]).decode("utf-8"))
+                           for path in paths), key=lambda service: service["name"])
         if len({service["name"] for service in services}) != len(services):
             raise ValueError("duplicate service name")
-        data = json.dumps({"tag": args.tag, "commit": args.commit, "services": services}, indent=2) + "\n"
+        data = (json.dumps({"tag": args.tag, "commit": args.commit, "services": services}, indent=2) + "\n").encode("utf-8")
         if args.check:
-            if not OUTPUT.exists() or OUTPUT.read_text() != data:
+            if not OUTPUT.exists() or OUTPUT.read_bytes() != data:
                 raise ValueError(f"{OUTPUT}: differs from baseline")
         else:
             OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-            OUTPUT.write_text(data)
+            OUTPUT.write_bytes(data)
     except (OSError, subprocess.CalledProcessError, ValueError) as exc:
         print(f"parity-list: {exc}", file=sys.stderr)
         return 1
