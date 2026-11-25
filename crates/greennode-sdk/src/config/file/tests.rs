@@ -349,3 +349,31 @@ fn settings_only_validates_credentials_without_content_open() {
         "not a regular file"
     );
 }
+
+#[test]
+fn settings_only_refuses_credentials_swapped_after_snapshot() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\nsecret=toy\n").unwrap();
+    std::fs::write(&credentials, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    let result = open_settings_with(&selection, || {
+        std::fs::remove_file(&credentials).unwrap();
+        std::fs::hard_link(&config, &credentials).unwrap();
+    });
+    assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig));
+}

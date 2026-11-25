@@ -5,7 +5,10 @@ use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
     path::PathBuf,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -27,16 +30,43 @@ impl Drop for Dir {
     }
 }
 #[derive(Default)]
-struct Source(HashMap<OsString, OsString>);
+struct Source {
+    values: HashMap<OsString, OsString>,
+    reads: Mutex<Vec<OsString>>,
+}
 impl ConfigSource for Source {
     fn var_os(&self, name: &OsStr) -> Option<OsString> {
-        self.0.get(name).cloned()
+        self.reads.lock().unwrap().push(name.to_owned());
+        self.values.get(name).cloned()
     }
 }
 impl Source {
     fn with(mut self, name: &str, value: impl Into<OsString>) -> Self {
-        self.0.insert(name.into(), value.into());
+        self.values.insert(name.into(), value.into());
         self
+    }
+    fn assert_no_credential_reads(&self) {
+        for name in self.reads.lock().unwrap().iter() {
+            assert!(matches!(
+                name.to_str(),
+                Some(
+                    "HOME"
+                        | "USERPROFILE"
+                        | "GREENNODE_CONFIG_FILE"
+                        | "GREENNODE_SHARED_CREDENTIALS_FILE"
+                        | "VNGCLOUD_CONFIG_FILE"
+                        | "VNGCLOUD_SHARED_CREDENTIALS_FILE"
+                        | "GREENNODE_PROFILE"
+                        | "VNGCLOUD_PROFILE"
+                        | "GREENNODE_REGION"
+                        | "VNGCLOUD_REGION"
+                        | "GREENNODE_PROJECT_ID"
+                        | "VNGCLOUD_PROJECT_ID"
+                        | "GREENNODE_READ_ONLY"
+                        | "VNGCLOUD_READ_ONLY"
+                )
+            ));
+        }
     }
 }
 
@@ -65,6 +95,7 @@ async fn resolves_each_file_mode_and_source_labels() {
         assert_eq!(result.config_source(), Some(label));
         assert_eq!(result.credentials_source(), Some(label));
         assert!(!format!("{result:?}").contains("RegionValue"));
+        source.assert_no_credential_reads();
     }
 }
 
@@ -116,4 +147,23 @@ async fn respects_metadata_only_and_redacts_settings_and_errors() {
     assert_eq!(detail.source(), "option");
     assert_eq!(detail.reason(), "not found");
     assert!(!format!("{error} {error:?} {detail:?}").contains("toy"));
+    source.assert_no_credential_reads();
+}
+
+#[tokio::test]
+async fn refuses_config_credentials_alias() {
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\nregion=toy\n").unwrap();
+    std::fs::hard_link(&config, &credentials).unwrap();
+    let options = ConfigOptions::default()
+        .with_config_file(config)
+        .with_shared_credentials_file(credentials);
+    let (ctx, _) = RequestContext::new();
+    let source = Source::default();
+    assert!(
+        matches!(Config::resolve_profile(&ctx, &options, &source).await, Err(error) if error.class() == ErrorClass::InvalidConfig)
+    );
+    source.assert_no_credential_reads();
 }
