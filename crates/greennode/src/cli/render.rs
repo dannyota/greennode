@@ -1,4 +1,5 @@
 mod float;
+mod number;
 mod raw;
 mod redaction;
 pub use raw::RawJson;
@@ -393,6 +394,13 @@ impl SerializeStruct for Map {
         key: &'static str,
         v: &T,
     ) -> Result<(), Error> {
+        if self.number {
+            if key != "$serde_json::private::Number" || !self.fields.is_empty() {
+                return Err(Error::Invalid("invalid number token".into()));
+            }
+            self.fields.push((key.into(), v.serialize(number::Token)?));
+            return Ok(());
+        }
         let key = ObjectKey::new(key.into(), self.dynamic);
         self.fields
             .push(key.finish(|| v.serialize(Encoder(self.depth, self.dynamic)))?);
@@ -515,4 +523,55 @@ pub fn write_json<W: Write>(w: &mut W, value: &Projected) -> Result<(), Error> {
     emit(w, &value.0, 0)?;
     writeln!(w)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn nested_number_markers_stop_before_recursive_callbacks() {
+        struct Nested<'a> {
+            remaining: usize,
+            calls: &'a Cell<usize>,
+        }
+        impl Serialize for Nested<'_> {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.calls.set(self.calls.get() + 1);
+                if self.remaining == 0 {
+                    return serializer.serialize_str("1");
+                }
+                let mut number = serializer.serialize_struct("$serde_json::private::Number", 1)?;
+                number.serialize_field(
+                    "$serde_json::private::Number",
+                    &Nested {
+                        remaining: self.remaining - 1,
+                        calls: self.calls,
+                    },
+                )?;
+                number.end()
+            }
+        }
+        let calls = Cell::new(0);
+        assert!(matches!(
+            project(&Nested {
+                remaining: 129,
+                calls: &calls
+            }),
+            Err(Error::Invalid(_))
+        ));
+        assert!(calls.get() <= 2);
+    }
+
+    #[test]
+    fn ordinary_number_at_maximum_depth() {
+        let mut value = serde_json::Value::Number(serde_json::Number::from(123));
+        for _ in 0..128 {
+            value = serde_json::Value::Array(vec![value]);
+        }
+        let projected = project(&value).unwrap();
+        assert!(write_json(&mut Vec::new(), &projected).is_ok());
+        assert!(projected.for_query().is_ok());
+    }
 }
