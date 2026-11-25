@@ -192,14 +192,14 @@ async fn exchange_at(
     let started = clock.monotonic_now();
     let mut evidence = send::Evidence::default();
     let result = {
-        let send = send::once_with_evidence(
+        let send = send::once_with_expected(
             client.as_client(),
             request,
             64 * 1024,
             Encoding::Gzip,
             clock,
             bounded.deadline().ok_or_else(|| failed(None))?,
-            &mut evidence,
+            (&mut evidence, &[http::StatusCode::OK]),
         );
         tokio::select! {
             biased;

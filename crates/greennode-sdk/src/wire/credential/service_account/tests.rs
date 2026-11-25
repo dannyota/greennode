@@ -33,6 +33,40 @@ async fn attempt(
 }
 
 #[tokio::test]
+async fn unauthorized_stalled_body_returns_at_head() {
+    let (sent, ready) = tokio::sync::oneshot::channel();
+    let (eof, closed) = tokio::sync::oneshot::channel();
+    let head = b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 1\r\n\r\n".to_vec();
+    let server = Server::start(vec![Response::ObserveStall { head, sent, eof }]);
+    let clock = TestClock::new(OffsetDateTime::UNIX_EPOCH);
+    let (context, _) = RequestContext::new();
+    let secret = Secret::new("toy");
+    let future = exchange_at(
+        "client",
+        &secret,
+        &server.origin,
+        Trust::test(server.root_der.clone()),
+        &context,
+        &clock,
+        Duration::ZERO,
+    );
+    let result = tokio::time::timeout(Duration::from_secs(1), future).await;
+    assert!(result.is_ok());
+    assert!(ready.await.is_ok());
+    let error = result.unwrap().err().unwrap();
+    let detail = error.service_account_login_error().unwrap();
+    assert_eq!(detail.reason(), "token endpoint rejected request");
+    assert_eq!(detail.status(), Some(401));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), closed)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
 async fn caller_cancellation_identity() {
     let server = Server::start(vec![]);
     let clock = TestClock::new(OffsetDateTime::UNIX_EPOCH);
