@@ -721,6 +721,48 @@ mod tests {
     }
 
     #[test]
+    fn unselected_reserved_key_does_not_refuse_settings() {
+        let fixture = Fixture::new("[other]\nclient_secret=toy\n[default]\nregion=one\n");
+        assert!(
+            resolve(
+                &fixture.paths(),
+                &Options::default(),
+                &Source::default(),
+                Policy::Read
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn selected_reserved_key_overwritten_empty_does_not_refuse() {
+        let fixture = Fixture::new("[default]\nclient_secret=toy\nclient_secret=\n");
+        assert!(
+            resolve(
+                &fixture.paths(),
+                &Options::default(),
+                &Source::default(),
+                Policy::Read
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn selected_reserved_key_overwritten_nonempty_refuses() {
+        let fixture = Fixture::new("[default]\nclient_secret=\nclient_secret=toy\n");
+        assert!(
+            resolve(
+                &fixture.paths(),
+                &Options::default(),
+                &Source::default(),
+                Policy::Read
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn reserved_config_credentials_are_refused() {
         let fixture = Fixture::new("[default]\nclient_id=\nregion=one\n");
         let source = Source::default();
@@ -734,7 +776,7 @@ mod tests {
             .is_ok()
         );
         std::fs::write(fixture.0.join("config"), "[default]\nclient_secret=toy\n").unwrap();
-        assert_eq!(
+        assert!(matches!(
             resolve(
                 &fixture.paths(),
                 &Options::default(),
@@ -742,7 +784,7 @@ mod tests {
                 Policy::S3Read
             ),
             Err(SettingsError::InvalidConfig)
-        );
+        ));
     }
 
     #[test]

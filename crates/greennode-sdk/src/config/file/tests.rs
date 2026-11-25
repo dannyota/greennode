@@ -77,7 +77,7 @@ fn opened_pair_rejects_hard_link_alias() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
     std::fs::hard_link(&config, &credentials).unwrap();
     let selection = Selection {
@@ -93,7 +93,8 @@ fn opened_pair_rejects_hard_link_alias() {
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
-    assert!(open_pair(&selection).is_err());
+    let alias_error = open_pair(&selection).err().unwrap();
+    assert_eq!(alias_error.class(), crate::ErrorClass::InvalidConfig);
     std::fs::remove_file(&credentials).unwrap();
     std::fs::write(&credentials, b"[default]\n").unwrap();
     #[cfg(unix)]
@@ -105,6 +106,44 @@ fn opened_pair_rejects_hard_link_alias() {
     assert!(result.is_ok());
     let pair = result.ok().unwrap();
     assert!(pair.config.is_some() && pair.credentials.is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_credentials_report_source_and_permission_guidance() {
+    use crate::config::credentials::FileDiagnostic;
+    use crate::config::mode::{Mode, Paths, Selection};
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Dir::new();
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&credentials, b"[default]\n").unwrap();
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Legacy,
+            config: None,
+            credentials: Some(credentials.clone()),
+            config_named: false,
+            credentials_named: true,
+        },
+        config_present: false,
+        credentials_present: true,
+        config_source: None,
+        credentials_source: Some("VNGCLOUD_SHARED_CREDENTIALS_FILE"),
+    };
+    let error = open_pair(&selection).err().unwrap();
+    assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
+    assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.source, Some("VNGCLOUD_SHARED_CREDENTIALS_FILE"));
+    assert!(detail.diagnostic.contains("chmod 600"));
+    assert!(
+        !detail
+            .diagnostic
+            .contains(&credentials.to_string_lossy().to_string())
+    );
+    std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(open_pair(&selection).is_ok());
 }
 
 #[cfg(unix)]
@@ -133,7 +172,8 @@ fn opened_pair_rejects_distinct_symlink_aliases() {
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
-    assert!(open_pair(&selection).is_err());
+    let alias_error = open_pair(&selection).err().unwrap();
+    assert_eq!(alias_error.class(), crate::ErrorClass::InvalidConfig);
 }
 
 #[test]

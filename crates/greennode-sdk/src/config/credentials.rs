@@ -193,7 +193,7 @@ pub(super) fn select(
         let file = file.ok_or_else(|| failure(crate::ErrorClass::NoCredentials))?;
         super::ini::parse_secrets(file).map_err(|diagnostic| {
             Box::new(
-                Error::new(crate::ErrorClass::NoCredentials).with_detail(FileDiagnostic {
+                Error::new(crate::ErrorClass::CredentialsFile).with_detail(FileDiagnostic {
                     source: selection.credentials_source,
                     diagnostic,
                 }),

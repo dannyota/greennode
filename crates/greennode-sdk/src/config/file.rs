@@ -32,6 +32,30 @@ fn open_windows(
 }
 
 pub(super) fn open(path: &Path, slot: Slot) -> Result<File, String> {
+    let file = open_without_permissions(path, slot)?;
+    if matches!(slot, Slot::Credentials) {
+        check_credentials_permissions(&file)?;
+    }
+    Ok(file)
+}
+
+fn check_credentials_permissions(file: &File) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = file
+            .metadata()
+            .map_err(|_| "credentials: metadata failed".to_owned())?;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("credentials: unsafe permissions; use chmod 600".to_owned());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
+}
+
+fn open_without_permissions(path: &Path, slot: Slot) -> Result<File, String> {
     let error = |reason| format!("{}: {reason}", slot.label());
     #[cfg(unix)]
     let file = File::from(
@@ -57,13 +81,6 @@ pub(super) fn open(path: &Path, slot: Slot) -> Result<File, String> {
     if metadata.len() > 1_048_576 {
         return Err(error("file too large"));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if matches!(slot, Slot::Credentials) && metadata.permissions().mode() & 0o077 != 0 {
-            return Err(error("unsafe permissions; use chmod 600"));
-        }
-    }
     Ok(file)
 }
 
@@ -88,6 +105,16 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
         };
         Box::new(crate::Error::new(class).with_detail(slot))
     };
+    let file_error = |diagnostic| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
+                super::credentials::FileDiagnostic {
+                    source: selection.credentials_source,
+                    diagnostic,
+                },
+            ),
+        )
+    };
     let config = if selection.config_present {
         let path = selection
             .config
@@ -105,7 +132,7 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
             .credentials
             .as_ref()
             .ok_or_else(|| error(ConfigSlot::Credentials))?;
-        Some(open(path, Slot::Credentials).map_err(|_| error(ConfigSlot::Credentials))?)
+        Some(open_without_permissions(path, Slot::Credentials).map_err(&file_error)?)
     } else {
         if selection.credentials_named {
             return Err(error(ConfigSlot::Credentials));
@@ -116,6 +143,9 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
         && same(config, credentials).map_err(|_| error(ConfigSlot::Config))?
     {
         return Err(error(ConfigSlot::Config));
+    }
+    if let Some(credentials) = &credentials {
+        check_credentials_permissions(credentials).map_err(&file_error)?;
     }
     Ok(Pair {
         config,

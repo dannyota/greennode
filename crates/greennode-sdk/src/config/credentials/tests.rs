@@ -302,6 +302,55 @@ fn explicit_profile_skips_legacy_management_in_both_modes() {
 }
 
 #[test]
+fn empty_file_values_fall_through_but_environment_whitespace_is_preserved() {
+    let fixture = Fixture::new(
+        "[default]\nclient_id=   \nclient_secret= \nroot_email=toy\nusername=toy\npassword=toy\n",
+    );
+    let file = select(
+        &fixture.selection(Mode::Greennode),
+        &settings("default"),
+        &SettingsOptions::default(),
+        &Options::default(),
+        &Map::default(),
+        Some(fixture.file()),
+    );
+    assert!(file.is_ok());
+    let file = file.unwrap();
+    assert!(matches!(file.kind, Kind::IamUser(_)));
+    let env = Map::default().with("GREENNODE_ACCESS_TOKEN", "  ");
+    let selected = select(
+        &fixture.selection(Mode::Greennode),
+        &settings("default"),
+        &SettingsOptions::default(),
+        &Options::default(),
+        &env,
+        Some(fixture.file()),
+    )
+    .unwrap();
+    assert_eq!(selected.source, Source::GreennodeEnvironment);
+    match selected.kind {
+        Kind::StaticToken(token) => assert!(token.expose_secret() == "  "),
+        _ => panic!("expected static token"),
+    }
+    let invalid = Map::default()
+        .with("GREENNODE_CLIENT_ID", " ")
+        .with("GREENNODE_CLIENT_SECRET", "toy");
+    let selected = select(
+        &fixture.selection(Mode::Greennode),
+        &settings("default"),
+        &SettingsOptions::default(),
+        &Options::default(),
+        &invalid,
+        Some(fixture.file()),
+    );
+    assert!(selected.is_err());
+    assert_eq!(
+        selected.err().unwrap().class(),
+        crate::ErrorClass::InvalidConfig
+    );
+}
+
+#[test]
 fn option_service_account_precedes_option_iam() {
     let fixture = Fixture::new("[default]\n");
     let options = Options {
@@ -576,7 +625,8 @@ fn malformed_file_and_debug_do_not_disclose_values() {
     )
     .err()
     .unwrap();
-    assert_eq!(error.class(), crate::ErrorClass::NoCredentials);
+    assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
+    assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
     let detail = error.detail::<FileDiagnostic>().unwrap();
     assert_eq!(detail.source, Some("~/.greennode"));
     assert!(detail.diagnostic.starts_with("credentials:3:"));
