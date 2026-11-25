@@ -21,6 +21,7 @@ pub enum Response {
     Raw(Vec<u8>),
     RawClose(Vec<u8>),
     Close,
+    ResetMidBody(oneshot::Sender<()>),
     Stall(oneshot::Sender<()>, usize),
     ObserveStall {
         head: Vec<u8>,
@@ -106,12 +107,23 @@ impl Server {
                                         if key.eq_ignore_ascii_case("content-length") { value.trim().parse::<usize>().ok() } else { None }
                                     }).unwrap_or(0);
                                     if length > 8 * 1024 * 1024 { return; }
+                                    let response = responses.lock().unwrap().pop_front();
+                                    let Some(response) = response else { return; };
+                                    let response = match response {
+                                        Response::ResetMidBody(notify) => {
+                                            let mut byte = [0];
+                                            if stream.read_exact(&mut byte).await.is_err() { return; }
+                                            if stream.get_ref().0.set_zero_linger().is_err() { return; }
+                                            let _ = notify.send(());
+                                            return;
+                                        }
+                                        response => response,
+                                    };
                                     let mut body = vec![0; length];
                                     if stream.read_exact(&mut body).await.is_err() { return; }
                                     requests.fetch_add(1, Ordering::SeqCst);
-                                    let response = responses.lock().unwrap().pop_front();
-                                    let Some(response) = response else { return; };
                                     let bytes = match response {
+                                        Response::ResetMidBody(_) => unreachable!(),
                                         Response::Fragment { first, proceed, last } => {
                                             if stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\nTrailer: X-Trailer\r\n\r\n3\r\nabc\r\n").await.is_err() || stream.flush().await.is_err() { return; }
                                             let _ = first.send(());
