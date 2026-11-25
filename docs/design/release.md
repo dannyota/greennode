@@ -247,6 +247,8 @@ the approved bytes. A version with different bytes needs a new shared tag.
   the packaged lockfile, so byte equality is not guaranteed. A mismatch blocks
   release; do not weaken the gate.
 - Environment and Trusted Publishers stay untested until the first CI publish.
+  The environment and run-approval reads rely on GitHub's documented repository
+  read access, as duolane's do; the first dispatch confirms them.
 - The `gh` field names the [first release](release-first.md) gathers are checked
   against live output before that release.
 
