@@ -2,6 +2,7 @@
 
 #![warn(missing_docs)]
 
+mod cache;
 mod clock;
 mod config;
 mod context;
