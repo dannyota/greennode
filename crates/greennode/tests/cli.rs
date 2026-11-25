@@ -71,6 +71,25 @@ fn unknown_command_exits_2_and_keeps_stdout_empty() {
 }
 
 #[test]
+fn clustered_exporter_help_stays_hidden() {
+    let output = greennode(&["__command-inventory", "-hh"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("__command-inventory"));
+}
+
+#[test]
+fn clustered_help_does_not_bypass_validation_or_reveal_exporter() {
+    for args in [&["-vh", "--nope"][..], &["__command-inventory", "-hh"]] {
+        let output = greennode(args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("__command-inventory"));
+    }
+    assert!(greennode(&["-h"]).status.success());
+}
+
+#[test]
 fn hidden_inventory_has_no_public_help() {
     for args in [
         &["help", "__command-inventory"][..],

@@ -202,13 +202,32 @@ fn compare_tree(
                 .collect();
             let mut actual = std::collections::BTreeSet::new();
             for arg in child.get_arguments() {
-                if let Some(flag) = arg.get_long() {
-                    if flag == "help" || greennode::services::GLOBAL_FLAGS.contains(&flag) {
+                let flag = arg
+                    .get_long()
+                    .ok_or_else(|| format!("unnamed or short-only argument {name} {op_name}"))?;
+                if flag == "help" || greennode::services::GLOBAL_FLAGS.contains(&flag) {
+                    let inherited = arg.is_global_set()
+                        && tree.get_arguments().any(|root_arg| {
+                            root_arg.get_long() == Some(flag)
+                                && root_arg.is_global_set()
+                                && root_arg.get_id() == arg.get_id()
+                        });
+                    let implicit_help = flag == "help"
+                        && matches!(
+                            arg.get_action(),
+                            clap::ArgAction::Help
+                                | clap::ArgAction::HelpLong
+                                | clap::ArgAction::HelpShort
+                        );
+                    if inherited || implicit_help {
                         continue;
                     }
-                    if !actual.insert(flag) {
-                        return Err(format!("duplicate flag {name} {op_name}"));
-                    }
+                    return Err(format!(
+                        "non-inherited global or help flag {name} {op_name}"
+                    ));
+                }
+                if !actual.insert(flag) {
+                    return Err(format!("duplicate flag {name} {op_name}"));
                 }
             }
             if actual != expected {
@@ -231,6 +250,52 @@ fn compare_tree(
         return Err("missing service".into());
     }
     Ok(())
+}
+
+fn toy_tree_with(arg: clap::Arg) -> clap::Command {
+    clap::Command::new("greennode").subcommand(
+        clap::Command::new("toy").subcommand(
+            clap::Command::new("inspect")
+                .arg(clap::Arg::new("name").long("name"))
+                .arg(arg),
+        ),
+    )
+}
+
+#[test]
+fn comparison_rejects_undeclared_positional() {
+    assert!(
+        compare_tree(
+            &toy(),
+            &baseline(),
+            &toy_tree_with(clap::Arg::new("surprise"))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn comparison_rejects_short_only_flag() {
+    assert!(
+        compare_tree(
+            &toy(),
+            &baseline(),
+            &toy_tree_with(clap::Arg::new("surprise").short('x'))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn comparison_rejects_local_global_copy() {
+    assert!(
+        compare_tree(
+            &toy(),
+            &baseline(),
+            &toy_tree_with(clap::Arg::new("profile").long("profile"))
+        )
+        .is_err()
+    );
 }
 
 #[test]

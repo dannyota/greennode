@@ -8,15 +8,38 @@ fn command() -> Command {
     let mut root = Command::new("greennode")
         .about("Command-line access to GreenNode")
         .disable_version_flag(true)
+        .disable_help_flag(true)
+        .disable_help_subcommand(true)
         .args_override_self(true)
+        .arg(
+            Arg::new("help-flag")
+                .long("help")
+                .short('h')
+                .global(true)
+                .action(ArgAction::Count),
+        )
         .arg(
             Arg::new("version-flag")
                 .long("version")
                 .short('v')
                 .action(ArgAction::SetTrue),
         )
-        .subcommand(Command::new("version").about("Print the greennode version"))
-        .subcommand(Command::new("__command-inventory").hide(true));
+        .subcommand(
+            Command::new("version")
+                .disable_help_flag(true)
+                .about("Print the greennode version"),
+        )
+        .subcommand(
+            Command::new("help")
+                .disable_help_flag(true)
+                .about("Print this message or the help of the given subcommand(s)")
+                .arg(Arg::new("path").num_args(0..).action(ArgAction::Append)),
+        )
+        .subcommand(
+            Command::new("__command-inventory")
+                .disable_help_flag(true)
+                .hide(true),
+        );
     for &name in crate::services::GLOBAL_FLAGS {
         let arg = Arg::new(name).long(name).global(true);
         let arg = if matches!(name, "yes" | "read-only" | "debug") {
@@ -36,9 +59,13 @@ fn command() -> Command {
 pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
     let mut root = command();
     for service in registry.services() {
-        let mut service_command = Command::new(service.name);
+        let mut service_command = Command::new(service.name)
+            .disable_help_flag(true)
+            .disable_help_subcommand(true);
         for operation in service.operations {
-            let mut operation_command = Command::new(operation.name).about(operation.short_help);
+            let mut operation_command = Command::new(operation.name)
+                .disable_help_flag(true)
+                .about(operation.short_help);
             for flag in operation.flags.iter().chain(operation.extra_flags) {
                 operation_command = operation_command.arg(Arg::new(flag.name).long(flag.name));
             }
@@ -72,7 +99,7 @@ fn inventory(registry: &crate::services::Registry) -> String {
     let root = command_with_registry(registry);
     for service in root
         .get_subcommands()
-        .filter(|c| !c.is_hide_set() && c.get_name() != "version")
+        .filter(|c| !c.is_hide_set() && !["version", "help"].contains(&c.get_name()))
     {
         collect_command_paths(service, "greennode", &mut paths);
     }
@@ -129,6 +156,26 @@ where
     run_with_registry(args, stdout, stderr, &registry)
 }
 
+fn render_help_path(registry: &crate::services::Registry, path: &[&str]) -> Option<String> {
+    let mut root = command_with_registry(registry);
+    let mut selected = &mut root;
+    for name in path {
+        selected = selected.find_subcommand_mut(name)?;
+        if selected.is_hide_set() {
+            return None;
+        }
+    }
+    Some(selected.render_help().to_string())
+}
+
+fn invalid_command(stderr: &mut dyn Write) -> ExitCode {
+    let _ = writeln!(
+        stderr,
+        "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"unknown command\"}}}}"
+    );
+    ExitCode::from(2)
+}
+
 fn run_with_registry<I, T>(
     args: I,
     stdout: &mut dyn Write,
@@ -139,40 +186,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    if args.iter().any(|arg| arg == "__command-inventory")
-        && args
-            .iter()
-            .skip(1)
-            .any(|arg| arg == "help" || arg == "--help" || arg == "-h")
-    {
-        let _ = writeln!(
-            stderr,
-            "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"unknown command\"}}}}"
-        );
-        return ExitCode::from(2);
-    }
-    let mut after_separator = false;
-    let mut without_help = Vec::new();
-    let mut has_help = false;
-    for arg in &args {
-        if !after_separator && (arg == "--help" || arg == "-h") {
-            has_help = true;
-        } else {
-            if arg == "--" {
-                after_separator = true;
-            }
-            without_help.push(arg.clone());
-        }
-    }
-    let parsed = if has_help {
-        match command_with_registry(registry).try_get_matches_from(&without_help) {
-            Err(error) if error.use_stderr() => Err(error),
-            _ => command_with_registry(registry).try_get_matches_from(&args),
-        }
-    } else {
-        command_with_registry(registry).try_get_matches_from(&args)
-    };
+    let parsed = command_with_registry(registry).try_get_matches_from(args);
     let matches = match parsed {
         Ok(matches) => matches,
         Err(error) => {
@@ -193,6 +207,36 @@ where
             return ExitCode::from(2);
         }
     };
+    if let Some(help) = matches.subcommand_matches("help") {
+        let path: Vec<&str> = help
+            .get_many::<String>("path")
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        return match render_help_path(registry, &path) {
+            Some(text) => {
+                let _ = write!(stdout, "{text}");
+                ExitCode::SUCCESS
+            }
+            None => invalid_command(stderr),
+        };
+    }
+    if matches.get_count("help-flag") > 0 {
+        let mut path = Vec::new();
+        let mut current = &matches;
+        while let Some((name, submatches)) = current.subcommand() {
+            path.push(name);
+            current = submatches;
+        }
+        return match render_help_path(registry, &path) {
+            Some(text) => {
+                let _ = write!(stdout, "{text}");
+                ExitCode::SUCCESS
+            }
+            None => invalid_command(stderr),
+        };
+    }
     if matches.get_flag("version-flag") || matches.subcommand_name() == Some("version") {
         let _ = writeln!(stdout, "{}", version());
     } else if matches.subcommand_name() == Some("__command-inventory") {
@@ -214,6 +258,42 @@ mod tests {
     use super::{command, command_with_registry};
     use crate::cli::op::{Kind, Operation, Service};
     use crate::services::Registry;
+
+    #[test]
+    fn clustered_service_help_validates_all_arguments() {
+        const OP: Operation = Operation {
+            name: "inspect",
+            sdk_operation: "Inspect",
+            short_help: "Inspect",
+            example: None,
+            presence_required_fields: &[],
+            inherited_bindings: &[],
+            kind: Kind::Read,
+            flags: &[],
+            json_fields: &[],
+            extra_flags: &[],
+            notes: &[],
+        };
+        let registry = Registry::new(&[Service {
+            name: "toy",
+            operations: &[OP],
+        }])
+        .unwrap();
+        for args in [
+            ["greennode", "toy", "-hh", "--nope"],
+            ["greennode", "toy", "inspect", "-hh"],
+        ] {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = super::run_with_registry(args, &mut out, &mut err, &registry);
+            if args[2] == "-hh" {
+                assert_eq!(code, std::process::ExitCode::from(2));
+                assert!(out.is_empty());
+            } else {
+                assert_eq!(code, std::process::ExitCode::SUCCESS);
+                assert!(!out.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn service_without_operation_prints_help() {
