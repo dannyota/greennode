@@ -79,6 +79,9 @@ while IFS= read -r -d '' file; do
   exclude=0
   case "$file" in
     *.rs | *.inc)
+      if [[ "$file" =~ ^crates/[^/]+/tests/(support/.*|[^/]+)$ ]]; then
+        continue
+      fi
       case "$file" in
         tests/support/*) continue ;;
         tests/*/*) ;;

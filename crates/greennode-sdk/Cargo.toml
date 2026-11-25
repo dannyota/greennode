@@ -1,0 +1,11 @@
+[package]
+name = "greennode-sdk"
+version.workspace = true
+description = "Unofficial Rust SDK for the GreenNode API"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["greennode", "vngcloud", "cloud", "api", "sdk"]
+categories = ["api-bindings"]

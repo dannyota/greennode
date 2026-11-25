@@ -100,6 +100,11 @@ def findings(path, text):
     lines = text.split("\n")
     found = []
     for start, end in comments:
+        fragment = text[start:end]
+        sdk_source = path.startswith("crates/greennode-sdk/src/")
+        if sdk_source and (fragment.startswith("//!") or
+                           (fragment.startswith("///") and not fragment.startswith("////"))):
+            continue
         line = text.count("\n", 0, start) + 1
         for offset, fragment in enumerate(text[start:end].split("\n")):
             fragment = fragment.strip()

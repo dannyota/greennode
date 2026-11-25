@@ -98,6 +98,20 @@ class Gate(unittest.TestCase):
         return result.returncode, result.stdout.strip()
 
 
+    def test_sdk_doc_comments_pass(self):
+        self.track("crates/greennode-sdk/src/lib.rs", "//! crate\n/// item\nfn a() {}\n")
+        self.assertEqual(self.run_gate(), (0, "check-comments: ok"))
+
+    def test_sdk_other_comments_and_tool_docs_fail(self):
+        self.track("crates/greennode-sdk/src/lib.rs", "// no\n/* no */\n#[doc = \"no\"]\nfn a() {}\n")
+        self.track("crates/greennode/src/lib.rs", "/// no\nfn a() {}\n")
+        self.assertEqual(self.run_gate(), (1, "\n".join([
+            "crates/greennode-sdk/src/lib.rs:1: // no",
+            "crates/greennode-sdk/src/lib.rs:2: /* no */",
+            'crates/greennode-sdk/src/lib.rs:3: #[doc = "no"]',
+            "crates/greennode/src/lib.rs:1: /// no",
+        ])))
+
     def test_comment_fails(self):
         self.track("src/lib.rs", "fn a() {}\n// why\n")
         self.assertEqual(self.run_gate(), (1, "src/lib.rs:2: // why"))
