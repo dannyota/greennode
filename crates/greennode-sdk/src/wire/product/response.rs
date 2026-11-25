@@ -127,8 +127,7 @@ fn matches_forms(
     let index = if let Some(index) = found {
         index
     } else {
-        let work = input.len().saturating_mul(needles.len().saturating_add(1));
-        if !state.charge(work) {
+        if !state.charge(input.len()) {
             return true;
         }
         let lower = Zeroizing::new(input.to_ascii_lowercase());
@@ -139,16 +138,27 @@ fn matches_forms(
                 .filter(u8::is_ascii_alphanumeric)
                 .collect::<Vec<_>>(),
         );
-        if normalized
-            .windows(b"clientsecret".len())
-            .any(|part| part == b"clientsecret")
-            || needles.iter().any(|needle| {
-                lower
-                    .windows(needle.len())
-                    .any(|part| part == needle.as_slice())
-            })
-        {
+        let Ok(marker_text) = std::str::from_utf8(&normalized) else {
             return true;
+        };
+        if marker_text.contains("clientsecret") {
+            return true;
+        }
+        if !needles.is_empty() {
+            let Ok(haystack) = std::str::from_utf8(&lower) else {
+                return true;
+            };
+            for needle in needles {
+                if !state.charge(haystack.len().saturating_add(needle.len())) {
+                    return true;
+                }
+                let Ok(needle) = std::str::from_utf8(needle) else {
+                    return true;
+                };
+                if haystack.contains(needle) {
+                    return true;
+                }
+            }
         }
         state.forms.push(Zeroizing::new(input.to_vec()));
         state.forms.len() - 1
@@ -715,6 +725,25 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn long_prefix_search_is_charged_within_budget() {
+        let input = vec![b'a'; 1 << 20];
+        let mut needle = vec![b'a'; 8192];
+        needle[8191] = b'b';
+        let mut state = MatchState {
+            work: 8 << 20,
+            forms: Vec::new(),
+            visited: Vec::new(),
+        };
+        assert!(!matches_forms(
+            &input,
+            &[Zeroizing::new(needle)],
+            [0; 3],
+            &mut state
+        ));
+        assert_eq!(state.work, (8 << 20) - 5 * (1 << 20) - 8192);
     }
 
     #[test]
