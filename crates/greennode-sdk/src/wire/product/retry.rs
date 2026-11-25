@@ -62,24 +62,45 @@ pub(crate) fn decide(
 }
 
 fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
-    if let Ok(seconds) = value.parse::<i64>() {
-        return (seconds > 0).then(|| Duration::from_secs(seconds as u64));
+    let digits = value.strip_prefix('+').unwrap_or(value);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        let seconds = digits.bytes().fold(0u64, |n, b| {
+            n.saturating_mul(10).saturating_add(u64::from(b - b'0'))
+        });
+        return (seconds > 0).then(|| Duration::from_secs(seconds));
     }
     let date = parse_http_date(value)?;
-    let now = time::OffsetDateTime::from(now);
-    let seconds = date
-        .unix_timestamp_nanos()
-        .checked_sub(now.unix_timestamp_nanos())?;
-    (seconds > 0).then(|| Duration::from_nanos(u64::try_from(seconds).unwrap_or(u64::MAX)))
+    let timestamp = date.unix_timestamp_nanos();
+    let absolute = timestamp.unsigned_abs();
+    let duration = Duration::new(
+        u64::try_from(absolute / 1_000_000_000).ok()?,
+        (absolute % 1_000_000_000) as u32,
+    );
+    let date = if timestamp >= 0 {
+        SystemTime::UNIX_EPOCH.checked_add(duration)?
+    } else {
+        SystemTime::UNIX_EPOCH.checked_sub(duration)?
+    };
+    date.duration_since(now)
+        .ok()
+        .filter(|duration| !duration.is_zero())
 }
 
 fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
-    let fields: Vec<_> = value.split_whitespace().take(7).collect();
-    let (weekday, day, month, year, clock, zone) = match fields.as_slice() {
-        [weekday, day, month, year, clock, zone] => {
-            (*weekday, *day, *month, *year, *clock, Some(*zone))
-        }
-        [weekday, date, clock, zone] => {
+    if value.starts_with(' ')
+        || value.ends_with(' ')
+        || value.bytes().any(|b| b.is_ascii_whitespace() && b != b' ')
+    {
+        return None;
+    }
+    let fields: Vec<_> = value
+        .split(' ')
+        .filter(|part| !part.is_empty())
+        .take(7)
+        .collect();
+    let (weekday, day, month, year, clock, layout) = match fields.as_slice() {
+        [weekday, day, month, year, clock, "GMT"] => (*weekday, *day, *month, *year, *clock, 0),
+        [weekday, date, clock, "GMT"] => {
             let mut parts = date.split('-');
             let day = parts.next()?;
             let month = parts.next()?;
@@ -87,67 +108,95 @@ fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
             if parts.next().is_some() {
                 return None;
             }
-            (*weekday, day, month, year, *clock, Some(*zone))
+            (*weekday, day, month, year, *clock, 1)
         }
-        [weekday, month, day, clock, year] => (*weekday, *day, *month, *year, *clock, None),
+        [weekday, month, day, clock, year] => (*weekday, *day, *month, *year, *clock, 2),
         _ => return None,
     };
-    let weekday = weekday.trim_end_matches(',');
-    if !matches!(
-        weekday,
-        "Mon"
-            | "Tue"
-            | "Wed"
-            | "Thu"
-            | "Fri"
-            | "Sat"
-            | "Sun"
-            | "Monday"
-            | "Tuesday"
-            | "Wednesday"
-            | "Thursday"
-            | "Friday"
-            | "Saturday"
-            | "Sunday"
-    ) || zone.is_some_and(|s| s != "GMT")
+    let weekday = if layout == 2 {
+        weekday
+    } else {
+        weekday.strip_suffix(',')?
+    };
+    let valid_weekday = if layout == 1 {
+        [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+        ]
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(weekday))
+    } else {
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(weekday))
+    };
+    if !valid_weekday
+        || (layout != 2 && day.len() != 2)
+        || (layout == 2 && !(1..=2).contains(&day.len()))
+        || year.len() != if layout == 1 { 2 } else { 4 }
     {
         return None;
     }
-    let month = match month {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
-        _ => return None,
-    };
-    let mut year_num: i32 = year.parse().ok()?;
-    if year.len() == 2 {
-        year_num += if year_num >= 69 { 1900 } else { 2000 };
-    } else if year.len() != 4 {
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|name| name.eq_ignore_ascii_case(month))?
+        + 1;
+    if !year.bytes().all(|b| b.is_ascii_digit()) || !day.bytes().all(|b| b.is_ascii_digit()) {
         return None;
+    }
+    let mut year_num: i32 = year.parse().ok()?;
+    if layout == 1 {
+        year_num += if year_num >= 69 { 1900 } else { 2000 };
     }
     let mut parts = clock.split(':');
-    let hour = parts.next()?.parse().ok()?;
-    let minute = parts.next()?.parse().ok()?;
-    let second = parts.next()?.parse().ok()?;
-    if parts.next().is_some() {
+    let hour = parts.next()?;
+    let minute = parts.next()?;
+    let seconds = parts.next()?;
+    if parts.next().is_some()
+        || !(1..=2).contains(&hour.len())
+        || minute.len() != 2
+        || !hour.bytes().all(|b| b.is_ascii_digit())
+        || !minute.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
+    let (second, fraction) = match seconds.split_once(['.', ',']) {
+        Some((second, fraction)) => (second, Some(fraction)),
+        None => (seconds, None),
+    };
+    if second.len() != 2 || !second.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let nanos = if let Some(fraction) = fraction {
+        if fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let digits = fraction.len().min(9);
+        let n: u32 = fraction.get(..digits)?.parse().ok()?;
+        n * 10u32.pow(9 - u32::try_from(digits).ok()?)
+    } else {
+        0
+    };
     let date = time::Date::from_calendar_date(
         year_num,
-        time::Month::try_from(month).ok()?,
+        time::Month::try_from(u8::try_from(month).ok()?).ok()?,
         day.parse().ok()?,
     )
     .ok()?;
-    let clock = time::Time::from_hms(hour, minute, second).ok()?;
+    let clock = time::Time::from_hms_nano(
+        hour.parse().ok()?,
+        minute.parse().ok()?,
+        second.parse().ok()?,
+        nanos,
+    )
+    .ok()?;
     Some(time::PrimitiveDateTime::new(date, clock).assume_utc())
 }
 
@@ -274,6 +323,17 @@ mod tests {
         );
     }
     #[test]
+    fn huge_hint() {
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("999999999999999999999999999999"))
+            ),
+            Some(Duration::from_secs(30))
+        );
+    }
+    #[test]
     fn hint_cap() {
         assert_eq!(
             check(Retry::Repeatable, 0, Outcome::Status(429, Some("31"))),
@@ -313,6 +373,81 @@ mod tests {
                 Some(Duration::from_secs(8))
             );
         }
+    }
+    #[test]
+    fn date_requires_comma() {
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thu 01 Jan 1970 00:00:08 GMT"))
+            ),
+            Some(Duration::from_millis(500))
+        );
+    }
+    #[test]
+    fn rfc850_fraction() {
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thursday, 01-Jan-70 00:00:08.250 GMT"))
+            ),
+            Some(Duration::from_millis(8250))
+        );
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thursday 01-Jan-70 00:00:08 GMT"))
+            ),
+            Some(Duration::from_millis(500))
+        );
+    }
+    #[test]
+    fn asctime_fraction() {
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thu Jan  1 00:00:08.250 1970"))
+            ),
+            Some(Duration::from_millis(8250))
+        );
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thu, Jan  1 00:00:08 1970"))
+            ),
+            Some(Duration::from_millis(500))
+        );
+    }
+    #[test]
+    fn date_fraction() {
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thu, 01 Jan 1970 00:00:08.250 GMT"))
+            ),
+            Some(Duration::from_millis(8250))
+        );
+    }
+    #[test]
+    fn outside_date_range() {
+        let now = UNIX_EPOCH + Duration::from_secs(253402300800);
+        assert_eq!(
+            decide(
+                Retry::Repeatable,
+                0,
+                &Config::default(),
+                Outcome::Status(429, Some("Thu, 01 Jan 1970 00:00:08 GMT")),
+                now,
+                0
+            ),
+            Some(Duration::from_millis(500))
+        );
     }
     #[test]
     fn hint_date() {

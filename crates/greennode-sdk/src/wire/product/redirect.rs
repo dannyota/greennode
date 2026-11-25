@@ -81,22 +81,43 @@ pub(crate) fn decide(
         return Err(Refusal::Userinfo);
     }
     let raw = location.split('?').next().ok_or(Refusal::Invalid)?;
-    if raw.starts_with("//") || raw.contains("://") {
-        let absolute = if raw.starts_with("//") {
-            format!("https:{raw}")
-        } else {
-            raw.to_owned()
-        };
-        crate::endpoint::Base::parse(&absolute).map_err(|_| Refusal::Invalid)?;
+    let first = raw.split('/').next().ok_or(Refusal::Invalid)?;
+    let reference = if let Some((scheme, rest)) = first.split_once(':') {
+        if !scheme
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic())
+            || !scheme
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+            || !rest.is_empty()
+            || !raw.starts_with(&format!("{scheme}://"))
+        {
+            return Err(Refusal::Invalid);
+        }
+        &raw[scheme.len() + 1..]
     } else {
-        let path = raw
-            .split('/')
-            .filter(|segment| *segment != "." && *segment != "..")
-            .collect::<Vec<_>>()
-            .join("/");
-        crate::endpoint::Base::parse(&format!("https://example.test/{path}"))
+        raw
+    };
+    let path = if let Some(authority_path) = reference.strip_prefix("//") {
+        let end = authority_path.find('/').unwrap_or(authority_path.len());
+        let authority = &authority_path[..end];
+        if authority.contains('%') {
+            return Err(Refusal::Invalid);
+        }
+        crate::endpoint::Base::parse(&format!("https://{authority}"))
             .map_err(|_| Refusal::Invalid)?;
-    }
+        &authority_path[end..]
+    } else {
+        reference
+    };
+    let path = path
+        .split('/')
+        .filter(|segment| *segment != "." && *segment != "..")
+        .collect::<Vec<_>>()
+        .join("/");
+    crate::endpoint::Base::parse(&format!("https://example.test/{path}"))
+        .map_err(|_| Refusal::Invalid)?;
     let origin_and_path = &next[..url::Position::AfterPath];
     crate::endpoint::Base::parse(origin_and_path).map_err(|_| Refusal::Invalid)?;
     if visited.contains(&next) || next == *current {
@@ -140,6 +161,28 @@ mod tests {
             &[],
             location,
         )
+    }
+    #[test]
+    fn opaque_reference() {
+        assert!(read("https:next").is_err());
+    }
+    #[test]
+    fn colon_in_path() {
+        assert_eq!(
+            read("/mirror/https://example.test/next").unwrap().as_str(),
+            "https://example.test/mirror/https://example.test/next"
+        );
+    }
+    #[test]
+    fn network_path_dots() {
+        assert_eq!(
+            read("//example.test/a/../next").unwrap().as_str(),
+            "https://example.test/next"
+        );
+    }
+    #[test]
+    fn escaped_host() {
+        assert!(read("https://%65xample.test/next").is_err());
     }
     #[test]
     fn relative_and_absolute() {
