@@ -61,7 +61,6 @@ pub(crate) enum Error {
 #[derive(PartialEq, Eq)]
 pub(crate) struct Observed {
     pub(crate) status: StatusCode,
-    pub(crate) headers: HeaderMap,
 }
 
 impl fmt::Debug for Observed {
@@ -150,13 +149,40 @@ fn transport_failure(error: &hyper_util::client::legacy::Error) -> SendFailure {
     SendFailure::PossiblySent
 }
 
+#[derive(Default)]
+pub(crate) struct Evidence {
+    pub(crate) started: bool,
+    pub(crate) status: Option<StatusCode>,
+}
+
 pub(crate) async fn once(
+    client: &Client,
+    request: Request<Full<Bytes>>,
+    cap: usize,
+    encoding: Encoding,
+    clock: &dyn Clock,
+    deadline: Instant,
+) -> Result<Reply, Error> {
+    once_with_evidence(
+        client,
+        request,
+        cap,
+        encoding,
+        clock,
+        deadline,
+        &mut Evidence::default(),
+    )
+    .await
+}
+
+pub(crate) async fn once_with_evidence(
     client: &Client,
     mut request: Request<Full<Bytes>>,
     cap: usize,
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
+    evidence: &mut Evidence,
 ) -> Result<Reply, Error> {
     let method = request.method();
     if !matches!(
@@ -190,21 +216,27 @@ pub(crate) async fn once(
         complete: false,
     };
     let is_head = request.method() == Method::HEAD;
-    let response = timed(clock, deadline, client.request(request))
+    let mut request = Box::pin(client.request(request));
+    let send = poll_fn(|cx| {
+        evidence.started = true;
+        request.as_mut().poll(cx)
+    });
+    let response = timed(clock, deadline, send)
         .await?
         .map_err(|error| Error::Transport(transport_failure(&error)))?;
     let (parts, mut body) = response.into_parts();
+    evidence.status = Some(parts.status);
     let head = Observed {
         status: parts.status,
-        headers: parts.headers,
     };
+    let headers = parts.headers;
     if clock.monotonic_now() >= deadline {
         return Err(Error::Deadline.with_head(head));
     }
     if head.status == StatusCode::SWITCHING_PROTOCOLS {
         return Err(Error::SwitchingProtocols.with_head(head));
     }
-    let values = head.headers.get_all(header::CONTENT_ENCODING);
+    let values = headers.get_all(header::CONTENT_ENCODING);
     let mut values = values.iter();
     let first = values.next();
     let second = values.next();
@@ -315,7 +347,7 @@ pub(crate) async fn once(
     guard.complete = true;
     Ok(Reply {
         status: head.status,
-        headers: head.headers,
+        headers,
         body,
     })
 }

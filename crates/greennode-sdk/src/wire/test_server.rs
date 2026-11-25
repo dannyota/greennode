@@ -23,6 +23,7 @@ pub enum Response {
     Close,
     ResetMidBody(oneshot::Sender<()>),
     Stall(oneshot::Sender<()>, usize),
+    StallBeforeHead(oneshot::Sender<()>),
     ObserveStall {
         head: Vec<u8>,
         sent: oneshot::Sender<()>,
@@ -146,6 +147,11 @@ impl Server {
                                             return;
                                         }
                                         Response::Close => return,
+                                        Response::StallBeforeHead(started) => {
+                                            let _ = started.send(());
+                                            std::future::pending::<()>().await;
+                                            return;
+                                        }
                                         Response::Stall(started, length) => {
                                             if stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n").as_bytes()).await.is_err() || stream.flush().await.is_err() { return; }
                                             let _ = started.send(());

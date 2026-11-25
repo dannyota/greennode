@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn observed_error_does_not_store_response_headers() {
+    assert_eq!(
+        std::mem::size_of::<send::Observed>(),
+        std::mem::size_of::<http::StatusCode>()
+    );
+}
+
 #[tokio::test]
 async fn nonidempotent_retry_uses_fresh_connections() {
     let server = Server::start(vec![

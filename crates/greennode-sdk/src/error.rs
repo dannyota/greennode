@@ -290,6 +290,17 @@ impl Error {
         self.service_login = Some(detail);
         self
     }
+    pub(crate) fn with_outer_detail<T: Any + Send + Sync>(self, detail: T) -> Self {
+        Self {
+            class: self.class,
+            identity: false,
+            api: None,
+            login: None,
+            service_login: None,
+            detail: Some(Box::new(detail)),
+            cause: Some(Box::new(self)),
+        }
+    }
     pub(crate) fn with_detail<T: Any + Send + Sync>(mut self, detail: T) -> Self {
         self.detail = Some(Box::new(detail));
         self

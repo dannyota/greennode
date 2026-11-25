@@ -72,11 +72,28 @@ pub(crate) struct Request {
 #[derive(Debug)]
 pub(crate) enum Error {
     Context(crate::ContextEnd),
-    Provider(Box<crate::Error>),
+    Provider,
     Send(send::Error),
     Redirect(redirect::Refusal),
     InvalidRequest,
 }
+#[derive(Debug)]
+pub(crate) struct Failure {
+    pub(crate) error: Error,
+    pub(crate) status: Option<http::StatusCode>,
+    pub(crate) dispatch: crate::WriteDispatch,
+}
+impl Failure {
+    pub(crate) fn into_failure<T>(self, error: crate::Error) -> crate::Failure<T> {
+        let error = if matches!(self.error, Error::Provider) { crate::Error::provider_failed() } else { error };
+        let error = match self.status {
+            Some(status) => error.with_outer_detail(status),
+            None => error,
+        };
+        crate::Failure::new(error, None, self.dispatch)
+    }
+}
+
 pub(crate) trait Sleeper: Send + Sync {
     fn sleep(&self, duration: std::time::Duration)
     -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
@@ -180,6 +197,36 @@ pub(crate) async fn run(
     op: &Operation,
     auth: Auth<'_>,
     request: &Request,
+) -> Result<send::Reply, Failure> {
+    let dispatch = if matches!(op.class, redirect::Classification::Write) {
+        crate::WriteDispatch::NotSent
+    } else {
+        crate::WriteDispatch::NotAWrite
+    };
+    let mut evidence = Evidence {
+        status: None,
+        dispatch,
+    };
+    run_inner(runtime, op, auth, request, &mut evidence)
+        .await
+        .map_err(|error| Failure {
+            error,
+            status: evidence.status,
+            dispatch: evidence.dispatch,
+        })
+}
+
+struct Evidence {
+    status: Option<http::StatusCode>,
+    dispatch: crate::WriteDispatch,
+}
+
+async fn run_inner(
+    runtime: Runtime<'_>,
+    op: &Operation,
+    auth: Auth<'_>,
+    request: &Request,
+    evidence: &mut Evidence,
 ) -> Result<send::Reply, Error> {
     let Runtime {
         client,
@@ -211,7 +258,7 @@ pub(crate) async fn run(
         Auth::Bearer(source) => Some(
             bounded(&ctx, clock, || source.token(&ctx))
                 .await?
-                .map_err(|error| Error::Provider(Box::new(error)))?,
+                .map_err(|_| Error::Provider)?,
         ),
         _ => None,
     };
@@ -223,6 +270,7 @@ pub(crate) async fn run(
         visited.insert(url.clone());
         let mut hops = 0usize;
         loop {
+            evidence.status = None;
             let mut headers = request.headers.clone();
             if let Some(token) = &bearer {
                 let secret = token.token.access_token.expose_secret();
@@ -245,10 +293,32 @@ pub(crate) async fn run(
                 .body(http_body_util::Full::new(request.body.clone()))
                 .map_err(|_| Error::InvalidRequest)?;
             *outgoing.headers_mut() = headers;
+            let mut observed = send::Evidence::default();
             let result = bounded(&ctx, clock, || {
-                send::once(client, outgoing, op.cap, op.encoding, clock, deadline)
+                send::once_with_evidence(
+                    client,
+                    outgoing,
+                    op.cap,
+                    op.encoding,
+                    clock,
+                    deadline,
+                    &mut observed,
+                )
             })
-            .await?;
+            .await;
+            if let Some(status) = observed.status {
+                evidence.status = Some(status);
+            }
+            if evidence.dispatch == crate::WriteDispatch::NotSent
+                && observed.started
+                && !matches!(
+                    result,
+                    Ok(Err(send::Error::Transport(retry::SendFailure::FailedDial)))
+                )
+            {
+                evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
+            }
+            let result = result?;
             let is_401 = match &result {
                 Ok(reply) => reply.status == http::StatusCode::UNAUTHORIZED,
                 Err(error) => error
@@ -269,7 +339,7 @@ pub(crate) async fn run(
                         source.rejected(&ctx, sent, decision.invalidate.is_some())
                     })
                     .await?
-                    .map_err(|error| Error::Provider(Box::new(error)))?;
+                    .map_err(|_| Error::Provider)?;
                 }
                 if decision.resend
                     && let Auth::Bearer(source) = auth
@@ -277,7 +347,7 @@ pub(crate) async fn run(
                     bearer = Some(
                         bounded(&ctx, clock, || source.token(&ctx))
                             .await?
-                            .map_err(|error| Error::Provider(Box::new(error)))?,
+                            .map_err(|_| Error::Provider)?,
                     );
                     recovered = true;
                     attempt = 0;

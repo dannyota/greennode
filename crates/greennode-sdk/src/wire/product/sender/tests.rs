@@ -26,6 +26,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::OffsetDateTime;
+mod evidence;
 mod pooling;
 
 #[derive(Default)]
@@ -331,7 +332,13 @@ async fn cross_origin_redirect_never_sends_credentials() {
         &mut || 0
     )
     .await;
-    assert!(matches!(result, Err(Error::Redirect(_))));
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::Redirect(_),
+            ..
+        })
+    ));
     assert_eq!(server.requests(), 1);
     assert_eq!(other.requests(), 0);
 }
@@ -440,7 +447,10 @@ async fn post_head_401_invalidates_without_resend() {
     .await;
     assert!(matches!(
         result,
-        Err(Error::Send(send::Error::AfterHead { .. }))
+        Err(Failure {
+            error: Error::Send(send::Error::AfterHead { .. }),
+            ..
+        })
     ));
     assert_eq!(server.requests(), 1);
     assert!(source.rejected.lock().unwrap().as_slice() == ["toy-first"]);
@@ -502,7 +512,10 @@ async fn cancelled_context_never_invokes_source() {
     .await;
     assert!(matches!(
         result,
-        Err(Error::Context(crate::ContextEnd::Cancelled))
+        Err(Failure {
+            error: Error::Context(crate::ContextEnd::Cancelled),
+            ..
+        })
     ));
     assert_eq!(source.0.load(Ordering::SeqCst), 0);
     assert_eq!(server.requests(), 0);
@@ -526,7 +539,13 @@ async fn invalid_endpoint_is_refused_before_credentials() {
         &mut || 0
     )
     .await;
-    assert!(matches!(result, Err(Error::InvalidRequest)));
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::InvalidRequest,
+            ..
+        })
+    ));
     assert_eq!(source.count.load(Ordering::SeqCst), 0);
     assert_eq!(server.requests(), 0);
 }
@@ -548,7 +567,13 @@ async fn unsafe_bearer_is_never_sent() {
         &mut || 0
     )
     .await;
-    assert!(matches!(result, Err(Error::InvalidRequest)));
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::InvalidRequest,
+            ..
+        })
+    ));
     assert_eq!(server.requests(), 0);
 }
 #[tokio::test]
@@ -571,7 +596,13 @@ async fn post_redirect_refused() {
         &mut || 0
     )
     .await;
-    assert!(matches!(result, Err(Error::Redirect(_))));
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::Redirect(_),
+            ..
+        })
+    ));
     assert_eq!(server.requests(), 1);
 }
 #[tokio::test]
@@ -597,7 +628,13 @@ async fn failed_dial_retries_nonidempotent() {
         &mut || 0
     )
     .await;
-    assert!(matches!(result, Err(Error::Send(_))));
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::Send(_),
+            ..
+        })
+    ));
     assert_eq!(sleeper.0.load(Ordering::SeqCst), 1);
 }
 struct Blocking {
@@ -648,10 +685,16 @@ async fn deadline_stops_retry_sleep() {
     tokio::select! { _=&mut future => panic!("ended before sleep"), value=rx => assert!(value.is_ok()) }
     clock.advance(std::time::Duration::from_secs(5));
     sleeper.release.notify_one();
+    let failure = match future.await {
+        Err(error) => error,
+        Ok(_) => panic!("expected deadline"),
+    };
     assert!(matches!(
-        future.await,
-        Err(Error::Context(crate::ContextEnd::DeadlineExceeded))
+        failure.error,
+        Error::Context(crate::ContextEnd::DeadlineExceeded)
     ));
+    assert_eq!(failure.status, Some(http::StatusCode::TOO_MANY_REQUESTS));
+    assert_eq!(failure.dispatch, crate::WriteDispatch::NotAWrite);
     assert_eq!(server.requests(), 1);
     assert!(!sleeper.completed.load(Ordering::SeqCst));
 }

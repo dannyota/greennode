@@ -576,7 +576,6 @@ async fn oversized_body_error_retains_observed_head() {
     assert!(head.is_some());
     let head = head.unwrap();
     assert_eq!(head.status, http::StatusCode::UNAUTHORIZED);
-    assert_eq!(head.headers["X-Policy"], "value");
     assert_eq!(server.requests(), 1);
 }
 
@@ -594,7 +593,6 @@ async fn truncated_body_error_retains_observed_head() {
     assert!(error.observed().is_some());
     let head = error.observed().unwrap();
     assert_eq!(head.status, http::StatusCode::UNAUTHORIZED);
-    assert_eq!(head.headers["X-Policy"], "value");
     assert_eq!(server.requests(), 1);
 }
 
@@ -653,7 +651,6 @@ async fn deadline_covers_stalled_response_body() {
     assert!(error.observed().is_some());
     let head = error.observed().unwrap();
     assert_eq!(head.status, http::StatusCode::UNAUTHORIZED);
-    assert_eq!(head.headers["X-Policy"], "value");
     assert_eq!(server.requests(), 1);
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(3), eof_rx).await,
