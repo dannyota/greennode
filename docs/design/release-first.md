@@ -9,30 +9,31 @@ and recovery.
    Python 3.11 or later, `jq`, and `gh` as `dannyota`. Start in a clean,
    reviewed checkout of protected `master` used only for release helpers, never
    to compile the tag. Gather the
-   [release evidence](release.md#release-evidence) into a new owner-only
-   directory and check it in a subshell that stops on the first failure. `gh`
-   gets the owner's token per command, with debug output off. An owners file is
-   `null` only for a 404 whose body says the crate does not exist.
+   [release evidence](release.md#release-evidence) into a fresh owner-only
+   directory per attempt and check it in a separate `bash -euo pipefail`
+   process, so any failure stops it; `COMMIT` is set only when it succeeds.
+   Tracing and `gh` debug output are off, and `gh` gets the owner's token per
+   command. An owners file is `null` only for crates.io's exact not-found body.
 
    ```bash
-   TAG=v0.1.0
-   REPO=dannyota/greennode
-   TRUSTED_SCRIPTS="$PWD/scripts"
-   EVIDENCE="$HOME/.local/state/greennode/evidence/$TAG"
-   (
-   set -euo pipefail
+   set +x
+   export TAG=v0.1.0 REPO=dannyota/greennode TRUSTED_SCRIPTS="$PWD/scripts"
+   mkdir -p "$HOME/.local/state/greennode/evidence"
+   export EVIDENCE=$(mktemp -d "$HOME/.local/state/greennode/evidence/$TAG.XXXXXX")
+   unset COMMIT
+   if bash -euo pipefail <<'EOF'; then COMMIT=$(< "$EVIDENCE/commit"); fi
+   set +x
    umask 077
    unset GH_DEBUG
    gh() { GH_TOKEN=$(command gh auth token -u dannyota) command gh "$@"; }
-   mkdir -p "$(dirname "$EVIDENCE")"
-   mkdir "$EVIDENCE"
    git fetch origin master --tags
    COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
    git merge-base --is-ancestor "$COMMIT" origin/master
    gh release view "$TAG" --repo "$REPO" \
      --json tagName,isDraft,publishedAt,isImmutable,assets > "$EVIDENCE/release.json"
-   gh api "repos/$REPO/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" |
-     jq --arg tag "$TAG" '[.workflow_runs[] | select(.head_branch == $tag) |
+   gh api --paginate --slurp \
+     "repos/$REPO/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" |
+     jq --arg tag "$TAG" '[.[].workflow_runs[] | select(.head_branch == $tag) |
        {databaseId: .id, headBranch: .head_branch, headSha: .head_sha, path,
         conclusion, event}]' > "$EVIDENCE/runs.json"
    RUN=$(jq -er 'if length == 1 then .[0].databaseId else error("runs") end' \
@@ -42,13 +43,15 @@ and recovery.
    done
    git ls-tree -r -z --full-tree "$COMMIT" > "$EVIDENCE/tree"
    for PAIR in greennode-sdk:sdk greennode:tool; do
+     CRATE=${PAIR%%:*}
      OUT="$EVIDENCE/${PAIR##*:}-owners.json"
      CODE=$(curl -sS -A greennode-release -o "$OUT.body" -w '%{http_code}' \
-       "https://crates.io/api/v1/crates/${PAIR%%:*}/owners")
+       "https://crates.io/api/v1/crates/$CRATE/owners")
      case "$CODE" in
        200) jq -e '.users | type == "array"' "$OUT.body" > /dev/null
             mv "$OUT.body" "$OUT" ;;
-       404) jq -e '.errors[0].detail | test("does not exist")' "$OUT.body" > /dev/null
+       404) jq -e --arg d "crate \`$CRATE\` does not exist" \
+              '.errors == [{detail: $d}]' "$OUT.body" > /dev/null
             printf 'null\n' > "$OUT" ;;
        *) exit 1 ;;
      esac
@@ -57,7 +60,8 @@ and recovery.
      "$EVIDENCE/release.json" "$EVIDENCE/runs.json" "$EVIDENCE/sdk-owners.json" \
      "$EVIDENCE/tool-owners.json" "$EVIDENCE/artifacts" "$EVIDENCE/tree"
    printf '%s\n' "$COMMIT" > "$EVIDENCE/commit"
-   ) && COMMIT=$(< "$EVIDENCE/commit")
+   EOF
+   test -n "${COMMIT:-}"
    ```
 
    An agent may check the evidence, but only the owner authorizes the tag and
@@ -127,22 +131,23 @@ and recovery.
 
    ```bash
    PROVIDER="registry.credential-provider=['python3','-I','$TRUSTED_SCRIPTS/check-crate-publish-credential.py']"
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --first
-   cargo +1.100.0 publish --no-verify --locked --registry crates-io \
-     --package greennode-sdk --config "$PROVIDER" --config net.retry=0
+   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --first &&
+     cargo +1.100.0 publish --no-verify --locked --registry crates-io \
+       --package greennode-sdk --config "$PROVIDER" --config net.retry=0
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --wait greennode-sdk
    ```
 
 6. **Owner only.** With the SDK approved and the tool absent, publish the tool.
-   First fetch the SDK's owners again and require user `dannyota`. Run the wait
-   check even on a Cargo error. Confirm both versions, then both crates' owners.
+   Cargo starts only after a fresh SDK owners fetch lists user `dannyota` and
+   the state check passes. Run the wait check even on a Cargo error. Confirm
+   both versions, then both crates' owners.
 
    ```bash
-   curl -fsS -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners |
-     jq -e '.users | any(.login == "dannyota")'
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT"
-   cargo +1.100.0 publish --no-verify --locked --registry crates-io \
-     --package greennode --config "$PROVIDER" --config net.retry=0
+   OWNERS=$(curl -fsS -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners) &&
+     jq -e '.users | any(.kind == "user" and .login == "dannyota")' <<< "$OWNERS" &&
+     python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" &&
+     cargo +1.100.0 publish --no-verify --locked --registry crates-io \
+       --package greennode --config "$PROVIDER" --config net.retry=0
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --wait greennode
    ```
 
