@@ -3,6 +3,7 @@ mod number;
 mod raw;
 mod redaction;
 pub use raw::RawJson;
+pub(crate) use raw::decode_string;
 mod table;
 mod value;
 pub use redaction::DynamicMap;

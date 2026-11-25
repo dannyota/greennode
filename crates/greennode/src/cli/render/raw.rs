@@ -74,7 +74,7 @@ fn hex_quad<I: Iterator<Item = char>>(input: &mut I) -> Result<u16, Error> {
     u16::from_str_radix(&digits, 16).map_err(|_| Error::Invalid("invalid raw JSON escape".into()))
 }
 
-fn decode_string(input: &str) -> Result<String, Error> {
+pub(crate) fn decode_string(input: &str) -> Result<String, Error> {
     use std::fmt::Write;
     let mut chars = input.chars();
     let mut normalized = String::with_capacity(input.len());
