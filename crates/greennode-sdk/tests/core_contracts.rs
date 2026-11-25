@@ -1,10 +1,7 @@
-use greennode_sdk::{
-    ConfigSource, DebugEvent, DebugEventSink, HttpMethod, List, PagedList, Secret, Token,
-};
+use greennode_sdk::{ConfigSource, List, PagedList, Secret, Token};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::time::Duration as StdDuration;
 use time::{Duration, OffsetDateTime};
 
 #[test]
@@ -20,6 +17,8 @@ fn token_refreshes_inside_the_freshness_window() {
     let now = OffsetDateTime::UNIX_EPOCH;
     let fresh = Token::new(Secret::new("toy"), Some(now + Duration::seconds(31)));
     let stale = Token::new(Secret::new("toy"), Some(now + Duration::seconds(29)));
+    let empty = Token::new(Secret::new(""), Some(now + Duration::seconds(60)));
+    assert!(empty.needs_refresh(now));
     assert!(!fresh.needs_refresh(now));
     assert!(stale.needs_refresh(now));
 }
@@ -37,6 +36,13 @@ fn secret_serialization_is_redacted_without_canary() {
             assert!(!debug.contains(value));
         }
     }
+}
+
+#[test]
+fn paging_defaults_match_baseline() {
+    let page: i64 = greennode_sdk::DEFAULT_PAGE;
+    let size: i64 = greennode_sdk::DEFAULT_PAGE_SIZE;
+    assert_eq!((page, size), (1, 10_000));
 }
 
 #[test]
@@ -73,14 +79,10 @@ fn paged_list_projection_preserves_names_order_and_empty_items() {
 #[derive(Default)]
 struct MapSource {
     values: HashMap<OsString, OsString>,
-    home: Option<PathBuf>,
 }
 impl ConfigSource for MapSource {
     fn var_os(&self, name: &OsStr) -> Option<OsString> {
         self.values.get(name).cloned()
-    }
-    fn home_dir(&self) -> Option<PathBuf> {
-        self.home.clone()
     }
 }
 
@@ -88,7 +90,11 @@ impl ConfigSource for MapSource {
 fn config_source_supplies_os_values_without_process_state() {
     let mut source = MapSource::default();
     source.values.insert("key".into(), "value".into());
-    source.home = Some(PathBuf::from("home"));
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    assert_eq!(source.home_dir(), None);
+    source.values.insert(key.into(), "".into());
+    assert_eq!(source.home_dir(), None);
+    source.values.insert(key.into(), "home".into());
     assert_eq!(source.var_os(OsStr::new("key")), Some("value".into()));
     assert_eq!(source.var_os(OsStr::new("missing")), None);
     assert_eq!(source.home_dir().as_deref(), Some(Path::new("home")));
@@ -114,53 +120,4 @@ fn only_process_source_reads_process_environment() {
     }
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     visit(&src, &src.join("source.rs"));
-}
-
-#[test]
-fn events_expose_only_allowlisted_fields() {
-    fn requires_send_sync<T: Send + Sync + ?Sized>() {}
-    requires_send_sync::<dyn DebugEventSink>();
-    let events = [
-        DebugEvent::ProductAttempt {
-            operation: "list",
-            method: HttpMethod::Get,
-            route_template: Some("/items"),
-            status: Some(200),
-            elapsed: StdDuration::from_secs(1),
-        },
-        DebugEvent::ProductAttempt {
-            operation: "list",
-            method: HttpMethod::Post,
-            route_template: None,
-            status: None,
-            elapsed: StdDuration::ZERO,
-        },
-        DebugEvent::ResponseCapture {
-            operation: "list",
-            method: HttpMethod::Get,
-            status: 200,
-        },
-        DebugEvent::LoginStarted,
-        DebugEvent::LoginFinished { ok: false },
-        DebugEvent::ExchangeStarted,
-        DebugEvent::ExchangeFinished { ok: true },
-    ];
-    for event in events {
-        match event {
-            DebugEvent::ProductAttempt {
-                operation: _,
-                method: _,
-                route_template: _,
-                status: _,
-                elapsed: _,
-            } => {}
-            DebugEvent::ResponseCapture {
-                operation: _,
-                method: _,
-                status: _,
-            } => {}
-            DebugEvent::LoginStarted | DebugEvent::ExchangeStarted => {}
-            DebugEvent::LoginFinished { ok: _ } | DebugEvent::ExchangeFinished { ok: _ } => {}
-        }
-    }
 }

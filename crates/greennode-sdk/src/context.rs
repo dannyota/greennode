@@ -1,6 +1,5 @@
 use std::{
     future::{Future, poll_fn},
-    sync::Arc,
     task::Poll,
 };
 
@@ -16,7 +15,6 @@ pub enum ContextEnd {
 
 #[derive(Clone)]
 pub struct RequestContext {
-    clock: Arc<dyn Clock>,
     cancelled: watch::Receiver<bool>,
     sender: watch::Sender<bool>,
     deadline: Option<Instant>,
@@ -34,11 +32,10 @@ impl CancelHandle {
 }
 
 impl RequestContext {
-    pub fn new(clock: Arc<dyn Clock>) -> (Self, CancelHandle) {
+    pub fn new() -> (Self, CancelHandle) {
         let (cancelled, receiver) = watch::channel(false);
         (
             Self {
-                clock,
                 cancelled: receiver,
                 sender: cancelled.clone(),
                 deadline: None,
@@ -49,7 +46,6 @@ impl RequestContext {
 
     pub fn child_with_deadline(&self, deadline: Instant) -> Self {
         Self {
-            clock: self.clock.clone(),
             cancelled: self.cancelled.clone(),
             sender: self.sender.clone(),
             deadline: Some(
@@ -63,12 +59,12 @@ impl RequestContext {
         self.deadline
     }
 
-    pub fn check(&self) -> Option<ContextEnd> {
+    pub fn check(&self, clock: &dyn Clock) -> Option<ContextEnd> {
         if *self.cancelled.borrow() {
             Some(ContextEnd::Cancelled)
         } else if self
             .deadline
-            .is_some_and(|deadline| self.clock.monotonic_now() >= deadline)
+            .is_some_and(|deadline| clock.monotonic_now() >= deadline)
         {
             Some(ContextEnd::DeadlineExceeded)
         } else {
@@ -76,13 +72,11 @@ impl RequestContext {
         }
     }
 
-    pub async fn wait(&self) -> ContextEnd {
+    pub async fn wait(&self, clock: &dyn Clock) -> ContextEnd {
         let mut cancelled = self.cancelled.clone();
-        let mut sleep = self
-            .deadline
-            .map(|deadline| self.clock.sleep_until(deadline));
+        let mut sleep = self.deadline.map(|deadline| clock.sleep_until(deadline));
         loop {
-            if let Some(end) = self.check() {
+            if let Some(end) = self.check(clock) {
                 return end;
             }
             let changed = cancelled.changed();

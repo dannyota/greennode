@@ -26,6 +26,35 @@ pub enum ErrorClass {
     DeadlineExceeded,
 }
 
+pub(crate) struct SafeText(String);
+
+impl SafeText {
+    #[allow(dead_code)]
+    pub(crate) fn new(text: &str, credentials: &[&crate::Secret]) -> Self {
+        let cleaned: String = text.chars().filter(|c| {
+            !c.is_control() && !matches!(*c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')
+        }).collect();
+        if credentials.iter().any(|credential| {
+            text.contains(credential.expose_secret())
+                || cleaned.contains(credential.expose_secret())
+        }) {
+            return Self(String::new());
+        }
+        let end = cleaned
+            .char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .take_while(|end| *end <= 512)
+            .last()
+            .unwrap_or(0);
+        Self(cleaned[..end].to_owned())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 pub struct ApiError {
     operation: &'static str,
     status: Option<u16>,
@@ -39,12 +68,13 @@ impl ApiError {
     pub(crate) fn new(
         operation: &'static str,
         status: Option<u16>,
-        code: &str,
-        message: &str,
+        code: SafeText,
+        message: SafeText,
         retryable: bool,
     ) -> Self {
+        let value = code.as_str();
         let code =
-            if code.is_empty() || code == "null" || status.is_some_and(|s| code == s.to_string()) {
+            if value.is_empty() || value == "null" || value == status.unwrap_or(0).to_string() {
                 match status {
                     Some(400) => "BadRequest",
                     Some(401) => "Unauthorized",
@@ -57,13 +87,13 @@ impl ApiError {
                     _ => "",
                 }
             } else {
-                code
+                value
             };
         Self {
             operation,
             status,
             code: code.to_owned(),
-            message: message.to_owned(),
+            message: message.0,
             retryable,
         }
     }
@@ -163,6 +193,10 @@ pub struct Error {
 
 #[allow(dead_code)]
 impl Error {
+    pub fn provider_failed() -> Self {
+        Self::new(ErrorClass::Auth)
+    }
+
     pub(crate) fn new(class: ErrorClass) -> Self {
         Self {
             class,

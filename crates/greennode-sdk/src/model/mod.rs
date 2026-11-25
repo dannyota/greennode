@@ -1,5 +1,8 @@
 use serde::Serialize;
 
+pub const DEFAULT_PAGE: i64 = 1;
+pub const DEFAULT_PAGE_SIZE: i64 = 10_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct List<T> {
     #[serde(rename = "Items")]
