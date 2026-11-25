@@ -1,7 +1,5 @@
 # Configuration and credentials
 
-Status: proposed.
-
 greennode selects one file pair and one management credential source. A legacy
 file can supply settings but cannot be edited by greennode. The SDK and CLI
 share resolution, and a CLI write checks read-only before any request.

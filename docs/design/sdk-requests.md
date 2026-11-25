@@ -1,7 +1,5 @@
 # SDK request policies
 
-Status: proposed.
-
 The SDK has three senders: private credential exchange, product API, and signed
 S3. They share a private HTTP implementation, not request types, auth state,
 redirect handlers, or hooks. [SDK design](sdk.md) owns the public interface. The

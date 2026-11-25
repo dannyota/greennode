@@ -1,7 +1,5 @@
 # Security
 
-Status: proposed, with the [architecture](architecture.md).
-
 greennode holds cloud credentials and sends writes that can cost money or
 destroy resources. Security comes before features and convenience. This design
 states what must hold; the designs it links own the mechanisms.

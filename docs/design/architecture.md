@@ -1,8 +1,7 @@
 # Architecture
 
-Status: proposed. An independent design review comes before the core work in the
-plan starts. [ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md) holds the
-owner's decisions this design builds on.
+[ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md) holds the owner's
+decisions this design builds on.
 
 greennode is the Rust port of vngcloud. It has two parts: `greennode-sdk`, a
 library that calls the GreenNode API, and `greennode`, a command-line tool in

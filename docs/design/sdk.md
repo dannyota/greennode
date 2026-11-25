@@ -1,7 +1,5 @@
 # SDK design
 
-Status: proposed.
-
 `greennode-sdk` exposes an async Rust client per service. Clients built from one
 `Config` share a session. A failed operation can return a typed error and
 partial output without losing evidence that a write may have reached the API.

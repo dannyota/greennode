@@ -1,7 +1,5 @@
 # CLI output
 
-Status: proposed.
-
 Project SDK outputs into the baseline's safe JSON shape before a query or
 renderer can see them. The CLI owns the output bytes. The SDK owns wire decoding
 and the ordered, safe `Serialize` representation, not its exact JSON encoding.

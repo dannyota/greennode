@@ -1,7 +1,5 @@
 # Command-line design
 
-Status: proposed.
-
 One typed declaration drives each operation's parser, guards, help, generated
 reference and parity check. An operation in a registered service changes only
 that service's files. The CLI calls GreenNode only through `greennode-sdk`.

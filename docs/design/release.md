@@ -1,7 +1,5 @@
 # Release publishing
 
-Status: proposed.
-
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
 exactly `=VERSION` of the SDK. The owner publishes the first pair from the

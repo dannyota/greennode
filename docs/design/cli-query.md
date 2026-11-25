@@ -1,7 +1,5 @@
 # CLI query engine
 
-Status: proposed.
-
 Port [go-jmespath v0.4.0][go-jmespath], the baseline's query engine, into
 `crates/greennode/src/cli/query/`. Match what Go accepts before dispatch and
 what it evaluates after dispatch. No SDK dependency on the query engine and no
