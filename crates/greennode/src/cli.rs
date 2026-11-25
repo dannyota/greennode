@@ -1,4 +1,5 @@
 pub mod op;
+mod query;
 pub mod render;
 mod root;
 
