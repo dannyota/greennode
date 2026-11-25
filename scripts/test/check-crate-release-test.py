@@ -6,6 +6,7 @@ import threading
 import importlib.util
 import io
 import json
+import os
 import ssl
 import tarfile
 import sys
@@ -1083,6 +1084,430 @@ class Transport(unittest.TestCase):
             check.fetch_url(base + "/truncated", allow_loopback=True)
         self.assertEqual(check.fetch_url(base + "/redirect", allow_loopback=True)[0], 302)
         self.assertNotIn("/followed", requests)
+
+
+class Evidence(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.artifacts = self.root / "artifacts"
+        self.artifacts.mkdir()
+        self.tag = "v0.1.0"
+        self.commit = "a" * 40
+        self.receipt = {"tag": self.tag, "commit": self.commit, "toolchain": "1.100.0", "crates": [
+            {"name": name, "version": "0.1.0", "filename": f"{name}-0.1.0.crate", "sha256": "a" * 64}
+            for name in ("greennode-sdk", "greennode")]}
+        self.release = {"tagName": self.tag, "isDraft": False, "publishedAt": "2026-01-01T00:00:00Z",
+                        "isImmutable": True, "assets": []}
+        self.runs = [{"databaseId": 101, "headBranch": self.tag, "headSha": self.commit,
+                      "conclusion": "success", "event": "push", "path": ".github/workflows/release.yml"}]
+        self.owners = {name: {"users": [{"kind": "user", "login": "dannyota"}]}
+                       for name in ("greennode-sdk", "greennode")}
+        self.tree = b"100644 blob " + b"b" * 40 + b"\tCargo.toml\0"
+        for platform, extension in (("darwin-arm64", "tar.gz"), ("linux-amd64", "tar.gz"),
+                                    ("linux-arm64", "tar.gz"), ("windows-amd64", "zip")):
+            for suffix in (extension, "sha256"):
+                self.asset(platform, f"greennode-{platform}.{suffix}")
+        self.asset("crate-checksums", "crate-checksums.json")
+
+    def asset(self, directory, name):
+        path = self.artifacts / directory / name
+        path.parent.mkdir(exist_ok=True)
+        data = json.dumps(self.receipt).encode() if name == "crate-checksums.json" else name.encode()
+        path.write_bytes(data)
+        self.release["assets"].append({"name": name, "state": "uploaded",
+                                       "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()})
+
+    def validate(self, publish=True):
+        return check.evidence(self.tag, self.commit, self.release, self.runs,
+                              self.owners, self.artifacts, self.tree, publish=publish)
+
+    def save_receipt(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        path.write_text(json.dumps(self.receipt), encoding="utf-8")
+        self.release["assets"][-1]["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_receipt_schema_must_be_valid(self):
+        self.receipt["unexpected"] = True
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        del self.receipt["unexpected"]
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def test_receipt_tag_must_match_evidence(self):
+        self.receipt["tag"] = "v0.2.0"
+        for record in self.receipt["crates"]:
+            record["version"] = "0.2.0"
+            record["filename"] = f'{record["name"]}-0.2.0.crate'
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.receipt["tag"] = self.tag
+        for record in self.receipt["crates"]:
+            record["version"] = "0.1.0"
+            record["filename"] = f'{record["name"]}-0.1.0.crate'
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def test_receipt_commit_must_match_evidence(self):
+        self.receipt["commit"] = "b" * 40
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.receipt["commit"] = self.commit
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def command_args(self):
+        files = []
+        for name, data in (("release.json", self.release), ("runs.json", self.runs),
+                           ("sdk.json", self.owners["greennode-sdk"]), ("tool.json", self.owners["greennode"])):
+            path = self.root / name
+            path.write_text(json.dumps(data), encoding="utf-8")
+            files.append(str(path))
+        tree = self.root / "tree"
+        tree.write_bytes(self.tree)
+        return ["evidence", self.tag, self.commit, *files, str(self.artifacts), str(tree), "--publish"]
+
+    def test_evidence_json_files_have_size_limits(self):
+        args = self.command_args()
+        for position in (3, 4, 5, 6):
+            with self.subTest(position=position):
+                path = Path(args[position])
+                original = path.read_bytes()
+                path.write_bytes(original + b" " * (1024 * 1024 + 1))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertNotEqual(check.main(args), 0)
+                path.write_bytes(original)
+                self.assertEqual(check.main(args), 0)
+
+    def test_evidence_tree_has_size_limit(self):
+        args = self.command_args()
+        path = Path(args[8])
+        original = path.read_bytes()
+        entry = b"100644 blob " + b"a" * 40 + b"\tfile"
+        count = (8 * 1024 * 1024 // (len(entry) + 7)) + 1
+        path.write_bytes(b"".join(entry + f"{i:06x}".encode() + b"\0" for i in range(count)))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertNotEqual(check.main(args), 0)
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_evidence_archive_has_size_limit(self):
+        path = self.artifacts / "darwin-arm64" / "greennode-darwin-arm64.tar.gz"
+        original = path.read_bytes()
+        asset = self.release["assets"][0]
+        digest = asset["digest"]
+        with path.open("wb") as stream:
+            stream.truncate(128 * 1024 * 1024 + 1)
+        with path.open("rb") as stream:
+            asset["digest"] = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(original)
+        asset["digest"] = digest
+        self.assertIsNone(self.validate())
+
+    def test_json_rejects_nonfinite_constants(self):
+        for value in (b"NaN", b"Infinity", b"-Infinity"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    check.read_json(b'{"extra":' + value + b'}')
+        self.assertEqual(check.read_json(b'{"extra":1}'), {"extra": 1})
+
+    def test_deep_json_fails_safely(self):
+        args = self.command_args()
+        path = Path(args[3])
+        original = path.read_bytes()
+        path.write_bytes(b'{"x":' * 50000 + b"0" + b"}" * 50000)
+        errors = io.StringIO()
+        limit = sys.getrecursionlimit()
+        scanner = json.scanner.make_scanner
+        try:
+            sys.setrecursionlimit(100)
+            json.scanner.make_scanner = json.scanner.py_make_scanner
+            try:
+                with contextlib.redirect_stderr(errors):
+                    result = check.main(args)
+            except RecursionError:
+                self.fail("deep JSON escaped as an exception")
+        finally:
+            json.scanner.make_scanner = scanner
+            sys.setrecursionlimit(limit)
+        self.assertNotEqual(result, 0)
+        self.assertIn("invalid", errors.getvalue())
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_receipt_and_checksum_file_caps(self):
+        for directory, name in (("crate-checksums", "crate-checksums.json"),
+                                ("darwin-arm64", "greennode-darwin-arm64.sha256")):
+            with self.subTest(name=name):
+                path = self.artifacts / directory / name
+                original = path.read_bytes()
+                asset = next(item for item in self.release["assets"] if item["name"] == name)
+                old_digest = asset["digest"]
+                path.write_bytes(original + b" " * (1024 * 1024 + 1))
+                asset["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                with self.assertRaises(ValueError):
+                    self.validate()
+                path.write_bytes(original)
+                asset["digest"] = old_digest
+                self.assertIsNone(self.validate())
+
+    def test_json_depth_boundary(self):
+        with self.assertRaises(ValueError):
+            check.read_json(b"[" * 65 + b"0" + b"]" * 65)
+        result = check.read_json(b"[" * 64 + b"0" + b"]" * 64)
+        self.assertIsInstance(result, list)
+
+    def test_json_depth_limit_with_default_scanner(self):
+        args = self.command_args()
+        path = Path(args[3])
+        original = path.read_bytes()
+        path.write_bytes(original[:-1] + b',"ignored":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertNotEqual(check.main(args), 0)
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_directory_scan_stops_at_unexpected_entry(self):
+        visited = []
+        def entries():
+            yield Path("unexpected")
+            visited.append("past unexpected")
+            yield Path("expected")
+        self.assertFalse(check.artifact_entries_match(entries(), {"expected"}))
+        self.assertEqual(visited, [])
+        self.assertTrue(check.artifact_entries_match(iter([Path("expected")]), {"expected"}))
+
+    def test_evidence_command(self):
+        args = self.command_args()
+        self.assertEqual(check.main(args), 0)
+        self.assertNotEqual(check.main(args[:-1] + ["--bad"]), 0)
+
+    def test_release_must_be_published(self):
+        self.release["isDraft"] = True
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["isDraft"] = False
+        self.assertIsNone(self.validate())
+
+    def test_release_requires_published_timestamp(self):
+        self.release["publishedAt"] = None
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["publishedAt"] = "2026-01-01T00:00:00Z"
+        self.assertIsNone(self.validate())
+
+    def test_release_tag_matches(self):
+        self.release["tagName"] = "v0.2.0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["tagName"] = self.tag
+        self.assertIsNone(self.validate())
+
+    def test_immutable_required_in_all_modes(self):
+        self.release["isImmutable"] = False
+        for publish in (False, True):
+            with self.subTest(publish=publish):
+                with self.assertRaises(ValueError):
+                    self.validate(publish=publish)
+        self.release["isImmutable"] = True
+        self.assertIsNone(self.validate(publish=False))
+
+    def test_zero_runs_refused(self):
+        run = self.runs.pop()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.runs.append(run)
+        self.assertIsNone(self.validate())
+
+    def test_extra_release_asset_refused(self):
+        self.release["assets"].append({"name": "unexpected", "state": "uploaded", "digest": "sha256:" + "0" * 64})
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].pop()
+        self.assertIsNone(self.validate())
+
+    def test_not_uploaded_asset_refused(self):
+        asset = self.release["assets"][0]
+        asset["state"] = "new"
+        with self.assertRaises(ValueError):
+            self.validate()
+        asset["state"] = "uploaded"
+        self.assertIsNone(self.validate())
+
+    def test_other_digest_algorithm_refused(self):
+        asset = self.release["assets"][0]
+        original = asset["digest"]
+        asset["digest"] = "sha512:" + original.removeprefix("sha256:")
+        with self.assertRaises(ValueError):
+            self.validate()
+        asset["digest"] = original
+        self.assertIsNone(self.validate())
+
+    def test_missing_owner_login_refused(self):
+        users = self.owners["greennode"]["users"]
+        users[0]["login"] = "another-user"
+        with self.assertRaises(ValueError):
+            self.validate()
+        users[0]["login"] = "dannyota"
+        self.assertIsNone(self.validate())
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires FIFO support")
+    def test_special_artifact_refused(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        os.mkfifo(path)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_symlinked_artifact_directory_refused(self):
+        path = self.artifacts / "crate-checksums"
+        backup = self.root / "receipt-dir"
+        path.rename(backup)
+        path.symlink_to(backup, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        backup.rename(path)
+        self.assertIsNone(self.validate())
+
+    def test_submodule_refused(self):
+        old = self.tree
+        self.tree += b"160000 commit " + b"c" * 40 + b"\tmodule\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = old
+        self.assertIsNone(self.validate())
+
+    def test_bare_cargo_config_refused(self):
+        old = self.tree
+        self.tree += b"100644 blob " + b"c" * 40 + b"\t.cargo/config\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = old
+        self.assertIsNone(self.validate())
+
+    def test_run_exactly_one(self):
+        self.runs.append(self.runs[0].copy())
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.runs.pop()
+        self.assertIsNone(self.validate())
+
+    def test_run_exact_tag_commit_and_workflow(self):
+        for field, value in (("headBranch", "v0.2.0"), ("headSha", "b" * 40),
+                             ("path", ".github/workflows/other.yml"), ("event", "workflow_dispatch"),
+                             ("conclusion", "failure")):
+            with self.subTest(field=field):
+                original = self.runs[0][field]
+                self.runs[0][field] = value
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.runs[0][field] = original
+                self.assertIsNone(self.validate())
+
+    def test_asset_digest_including_receipt(self):
+        for asset in (self.release["assets"][0], self.release["assets"][1], self.release["assets"][-1]):
+            with self.subTest(name=asset["name"]):
+                original = asset["digest"]
+                asset["digest"] = "sha256:" + "0" * 64
+                with self.assertRaises(ValueError):
+                    self.validate()
+                asset["digest"] = original
+                self.assertIsNone(self.validate())
+
+    def test_duplicate_asset_names_refused(self):
+        self.release["assets"].append(self.release["assets"][0].copy())
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].pop()
+        self.assertIsNone(self.validate())
+
+    def test_symlinked_artifact_refused(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        replacement = self.root / "receipt-copy"
+        replacement.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(replacement)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        path.write_bytes(replacement.read_bytes())
+        self.assertIsNone(self.validate())
+
+    def test_missing_artifact_rejected(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_missing_asset_and_artifact(self):
+        asset = self.release["assets"].pop()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].append(asset)
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_owner_must_be_user_for_each_crate(self):
+        for name in self.owners:
+            with self.subTest(name=name):
+                self.owners[name]["users"][0]["kind"] = "team"
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.owners[name]["users"][0]["kind"] = "user"
+                self.assertIsNone(self.validate())
+
+    def test_unregistered_only_allowed_in_preflight(self):
+        self.owners["greennode"] = None
+        with self.assertRaises(ValueError):
+            self.validate()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertIsNone(self.validate(publish=False))
+        self.assertIn("greennode: unregistered", output.getvalue())
+
+    def test_artifact_root_has_only_expected_directories(self):
+        extra = self.artifacts / "darwin-arm64-binary"
+        extra.mkdir()
+        with self.assertRaises(ValueError):
+            self.validate()
+        extra.rmdir()
+        self.assertIsNone(self.validate())
+
+    def test_tree_refuses_tracked_symlink(self):
+        original = self.tree
+        self.tree += b"120000 blob " + b"c" * 40 + b"\tlink\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = original
+        self.assertIsNone(self.validate())
+
+    def test_tree_refuses_cargo_config(self):
+        original = self.tree
+        self.tree += b"100644 blob " + b"c" * 40 + b"\tcrates/tool/.cargo/config.toml\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = original
+        self.assertIsNone(self.validate())
 
 
 if __name__ == "__main__":
