@@ -21,6 +21,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
@@ -88,10 +89,24 @@ jobs:
           for pair in greennode-sdk:sdk greennode:tool; do
             crate=${pair%%:*}
             out="$evidence/${pair##*:}-owners.json"
-            code=$(curl -sS -A greennode-release -o "$out.body" -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/owners")
+            code=$(curl -sS --max-time 30 --max-filesize 1048576 -A greennode-release -o "$out.body" -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/owners")
             case "$code" in
               200) jq -e '.users | type == "array"' "$out.body" > /dev/null; mv "$out.body" "$out" ;;
-              404) jq -e --arg d "crate \`$crate\` does not exist" '. == {errors: [{detail: $d}]}' "$out.body" > /dev/null; printf 'null\n' > "$out" ;;
+              404) python3 -I - "$out.body" "$crate" <<'PYTHON'
+          import json, sys
+          def pairs(items):
+              result = {}
+              for key, value in items:
+                  if key in result:
+                      raise ValueError('duplicate key')
+                  result[key] = value
+              return result
+          with open(sys.argv[1], encoding='utf-8') as stream:
+              data = json.load(stream, object_pairs_hook=pairs)
+          if data != {'errors': [{'detail': f'crate `{sys.argv[2]}` does not exist'}]}:
+              raise ValueError('unexpected not-found body')
+          PYTHON
+                   printf 'null\n' > "$out" ;;
               *) exit 1 ;;
             esac
           done
@@ -165,13 +180,35 @@ jobs:
           root=$(mktemp -d)
           stage="$root/staged-crates"
           mkdir "$stage"
-          test -z "$(git ls-files --stage | grep '^120000 ' || true)"
+          git ls-files --stage -z > "$root/index"
+          python3 -I - "$root/index" <<'PYTHON'
+          import pathlib, sys
+          entries = pathlib.Path(sys.argv[1]).read_bytes().split(b'\0')
+          required = {b'README.md', b'LICENSE', b'crates/greennode-sdk/README.md'}
+          found = set()
+          for entry in filter(None, entries):
+              header, path = entry.split(b'\t', 1)
+              mode, _, stage = header.split(b' ')
+              if mode == b'120000':
+                  raise ValueError('tracked symlink')
+              if path in required:
+                  file = pathlib.Path(path.decode())
+                  if mode not in (b'100644', b'100755') or stage != b'0' or file.is_symlink() or not file.is_file():
+                      raise ValueError('invalid tracked release input')
+                  found.add(path)
+          if found != required:
+              raise ValueError('missing tracked release input')
+          PYTHON
           if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
             exit 1
           fi
           export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
-          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode-sdk
-          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode
+          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode-sdk > "$root/sdk-list"
+          cargo +"$TOOLCHAIN" package --list --locked --registry crates-io -p greennode > "$root/tool-list"
+          for list in "$root/sdk-list" "$root/tool-list"; do
+            grep -Fx 'README.md' "$list"
+            grep -Fx 'LICENSE' "$list"
+          done
           cargo +"$TOOLCHAIN" publish --workspace --dry-run --no-verify --locked --registry crates-io
           python3 -I - "$root/build/package/tmp-crate" "$stage" "$TAG" <<'PYTHON'
           import pathlib, shutil, sys
