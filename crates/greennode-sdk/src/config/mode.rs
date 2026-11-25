@@ -134,10 +134,11 @@ pub(super) fn select(
     let credentials_error = |source, reason: &'static str| {
         Box::new(
             crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
-                super::credentials::FileDiagnostic {
+                super::credentials::FileDiagnostic::from_text(
+                    crate::FileSlot::Credentials,
                     source,
-                    diagnostic: format!("credentials: {reason}"),
-                },
+                    &format!("credentials: {reason}"),
+                ),
             ),
         )
     };
@@ -460,11 +461,11 @@ mod tests {
         let detail = error
             .detail::<super::super::credentials::FileDiagnostic>()
             .unwrap();
-        assert_eq!(detail.source, Some("option"));
-        assert_eq!(detail.diagnostic, "credentials: lookup failed");
+        assert_eq!(detail.source(), "option");
+        assert_eq!(detail.reason(), "lookup failed");
         assert!(
             !detail
-                .diagnostic
+                .reason()
                 .contains(&absolute("/cred").to_string_lossy().to_string())
         );
         let result = select(
@@ -567,7 +568,7 @@ mod tests {
                 let detail = error
                     .detail::<super::super::credentials::FileDiagnostic>()
                     .unwrap();
-                assert_eq!(detail.source, Some(variable));
+                assert_eq!(detail.source(), variable);
                 assert!(!format!("{detail:?}").contains("credentials-canary"));
             }
         }
@@ -589,8 +590,8 @@ mod tests {
         let detail = missing
             .detail::<super::super::credentials::FileDiagnostic>()
             .unwrap();
-        assert_eq!(detail.source, Some("option"));
-        assert_eq!(detail.diagnostic, "credentials: not found");
+        assert_eq!(detail.source(), "option");
+        assert_eq!(detail.reason(), "not found");
         let present = select(
             None,
             Some(absolute("/present").as_path()),

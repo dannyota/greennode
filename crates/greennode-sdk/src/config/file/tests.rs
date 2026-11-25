@@ -92,14 +92,14 @@ fn config_open_error_keeps_safe_source_and_reason() {
     let detail = error.detail::<FileDiagnostic>();
     assert!(detail.is_some());
     let detail = detail.unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: file too large");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "file too large");
     assert!(!format!("{detail:?}").contains("config-canary"));
     std::fs::remove_file(&config).unwrap();
     let error = open_pair(&selection).err().unwrap();
     let detail = error.detail::<FileDiagnostic>().unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: open failed");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "open failed");
     assert!(!format!("{detail:?}").contains("config-canary"));
     std::fs::write(&config, "[default]\n").unwrap();
     assert!(open_pair(&selection).is_ok());
@@ -111,8 +111,8 @@ fn config_open_error_keeps_safe_source_and_reason() {
     let detail = error.detail::<FileDiagnostic>();
     assert!(detail.is_some());
     let detail = detail.unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: not found");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "not found");
     assert!(!format!("{detail:?}").contains("config-canary"));
 }
 
@@ -184,11 +184,11 @@ fn unsafe_credentials_report_source_and_permission_guidance() {
     assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
     assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
     let detail = error.detail::<FileDiagnostic>().unwrap();
-    assert_eq!(detail.source, Some("VNGCLOUD_SHARED_CREDENTIALS_FILE"));
-    assert!(detail.diagnostic.contains("chmod 600"));
+    assert_eq!(detail.source(), "VNGCLOUD_SHARED_CREDENTIALS_FILE");
+    assert!(detail.reason().contains("chmod 600"));
     assert!(
         !detail
-            .diagnostic
+            .reason()
             .contains(&credentials.to_string_lossy().to_string())
     );
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();

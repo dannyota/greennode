@@ -49,11 +49,7 @@ pub(super) struct Selected {
     pub cdn_key: Option<Secret>,
 }
 
-#[derive(Debug)]
-pub(super) struct FileDiagnostic {
-    pub source: Option<&'static str>,
-    pub diagnostic: String,
-}
+pub(super) use crate::FileDiagnostic;
 
 #[derive(Default)]
 struct Fields {
@@ -192,12 +188,13 @@ pub(super) fn select(
     let mut ini = if selection.credentials_present {
         let file = file.ok_or_else(|| failure(crate::ErrorClass::NoCredentials))?;
         super::ini::parse_secrets(file).map_err(|diagnostic| {
-            Box::new(
-                Error::new(crate::ErrorClass::CredentialsFile).with_detail(FileDiagnostic {
-                    source: selection.credentials_source,
-                    diagnostic,
-                }),
-            )
+            Box::new(Error::new(crate::ErrorClass::CredentialsFile).with_detail(
+                FileDiagnostic::from_text(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                    &diagnostic,
+                ),
+            ))
         })?
     } else {
         if selection.credentials_named || file.is_some() {

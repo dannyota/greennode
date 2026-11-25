@@ -105,23 +105,25 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
         };
         Box::new(crate::Error::new(class).with_detail(slot))
     };
-    let config_file_error = |diagnostic| {
+    let config_file_error = |diagnostic: String| {
         Box::new(
             crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
-                super::credentials::FileDiagnostic {
-                    source: selection.config_source,
-                    diagnostic,
-                },
+                super::credentials::FileDiagnostic::from_text(
+                    crate::FileSlot::Config,
+                    selection.config_source,
+                    &diagnostic,
+                ),
             ),
         )
     };
-    let file_error = |diagnostic| {
+    let file_error = |diagnostic: String| {
         Box::new(
             crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
-                super::credentials::FileDiagnostic {
-                    source: selection.credentials_source,
-                    diagnostic,
-                },
+                super::credentials::FileDiagnostic::from_text(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                    &diagnostic,
+                ),
             ),
         )
     };
