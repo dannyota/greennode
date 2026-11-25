@@ -41,7 +41,9 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |Path|Owns|
 |-|-|
 |`crates/greennode/src/main.rs`|Process entry: passes arguments and streams to `cli::run`|
-|`crates/greennode/src/cli.rs`|Root command and `version`|
+|`crates/greennode/src/cli.rs`, `src/cli/root.rs`|Root command, global flags, help, and `version`|
+|`crates/greennode/src/cli/op.rs`, `src/services/mod.rs`|Operation declarations and the service registry|
+|`crates/greennode/tests/parity.rs`, `tests/parity/`|Parity with the baseline's command list, and the shipped-command inventory|
 |`crates/greennode/tests/cli.rs`|Process tests of the built binary|
 |`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
