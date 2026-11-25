@@ -51,12 +51,13 @@ one (a multiselect, an index, a pipe, a projection or the result) is an
 evaluation error instead.
 
 Port the functions as Go implements them, not as a newer specification might.
-`to_number('true')` returns null, and string parsing follows Go's `ParseFloat`,
-not JSON parsing. For arrays, `contains` uses the Go scalar equality rule, not
-approximate equality or deep comparison. `to_string` passes through strings and
-otherwise uses compact Go JSON with sorted keys, Go float spelling and HTML
-escaping; it does not insert terminal escapes inside the returned string. The
-renderer escapes that string on output.
+`to_number('true')` returns null, and string parsing follows Go's `ParseFloat`
+grammar, not JSON parsing. Values round exactly; Go truncates a decimal past 800
+significant digits, so a few such inputs differ. For arrays, `contains` uses the
+Go scalar equality rule, not approximate equality or deep comparison.
+`to_string` passes through strings and otherwise uses compact Go JSON with
+sorted keys, Go float spelling and HTML escaping; it does not insert terminal
+escapes inside the returned string. The renderer escapes that string on output.
 
 Go's lexer and parser have no expression size or syntax-tree depth policy.
 Accept up to 16 KiB of expression bytes and 64 levels of parser nesting, AST
