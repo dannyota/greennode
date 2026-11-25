@@ -99,12 +99,15 @@ early refusal. For login and product allow identity or gzip; apply the decoded
 limit before JSON or other parsers, and limit encoded bytes too (decoded cap
 plus 64 KiB). S3 accepts no automatic decoding or request URL normalization. Do
 not use a JSON walker that rewrites exact integers to floats. The cap bounds the
-payload the SDK retains, not wire bytes: hyper buffers frames within
-`http1_max_buf_size` plus allocator rounding, handles chunk framing separately,
-and may drain a short body when a response is dropped. Refuse before reading
-when hyper's validated body size exceeds the cap; when `Transfer-Encoding` is
-present hyper ignores `Content-Length`. HEAD, 204 and 304 responses are bodyless
-whatever length they declare.
+payload the SDK retains, not wire bytes: hyper reads into spare buffer capacity
+that can grow beyond `http1_max_buf_size`, handles chunk framing separately, and
+may drain a short body when a response is dropped. Refuse before reading when
+hyper's validated body size exceeds the cap; when `Transfer-Encoding` is present
+hyper ignores `Content-Length`. HEAD, 204 and 304 responses are bodyless
+whatever length they declare. A refused connection is poisoned so the pool never
+checks it out again; one already idle stays open until eviction, and hyper may
+return a connection at a clean message boundary to the pool before the refusal
+runs.
 
 `hyper-util`'s `client-legacy` always emits `tracing` events with destinations
 and socket addresses, and logs a whole URI on requests without scheme or
