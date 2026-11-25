@@ -23,9 +23,10 @@ pub(in crate::cli) enum EvaluationError {
     FunctionType,
     UnknownFunction,
     Uncomparable,
+    FunctionComparison,
 }
 
-fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
+pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
     if depth > 128 {
         return Err(EvaluationError::Depth);
     }
@@ -95,12 +96,15 @@ fn is_false(value: &Value) -> bool {
     }
 }
 
-fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
+pub(super) fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match node.kind {
         NodeKind::FunctionExpression => {
             let NodeValue::Text(name) = &node.value else {
                 return Err(EvaluationError::InvalidNode);
             };
+            if matches!(name.as_str(), "map" | "sort_by" | "max_by" | "min_by") {
+                return super::functions_expr::call(name, &node.children, input);
+            }
             let arguments = node
                 .children
                 .iter()
@@ -450,42 +454,6 @@ mod tests {
             NodeKind::ExpRef | NodeKind::FunctionExpression | NodeKind::Empty
         ) && node.children.iter().all(supported)
     }
-    fn functions_supported(node: &Node) -> bool {
-        match (&node.kind, &node.value) {
-            (NodeKind::FunctionExpression, NodeValue::Text(name))
-                if !matches!(
-                    name.as_str(),
-                    "abs"
-                        | "length"
-                        | "avg"
-                        | "ceil"
-                        | "floor"
-                        | "type"
-                        | "not_null"
-                        | "reverse"
-                        | "keys"
-                        | "values"
-                        | "starts_with"
-                        | "ends_with"
-                        | "contains"
-                        | "join"
-                        | "to_array"
-                        | "to_string"
-                        | "to_number"
-                        | "sum"
-                        | "max"
-                        | "min"
-                        | "sort"
-                        | "merge"
-                ) =>
-            {
-                return false;
-            }
-            (NodeKind::ExpRef | NodeKind::Empty, _) => return false,
-            _ => {}
-        }
-        node.children.iter().all(functions_supported)
-    }
 
     #[test]
     fn functions_compliance() {
@@ -495,7 +463,6 @@ mod tests {
         );
         let data: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let mut skipped = Vec::new();
         let mut passed = 0;
         let mut mismatches = Vec::new();
         for (group_index, group) in data.as_array().unwrap().iter().enumerate() {
@@ -517,10 +484,6 @@ mod tests {
                         continue;
                     }
                 };
-                if !functions_supported(&query.0) {
-                    skipped.push(id);
-                    continue;
-                }
                 let actual = evaluate(&query, &input);
                 let matched = if case["error"].is_string() {
                     actual.is_err()
@@ -541,14 +504,12 @@ mod tests {
                 }
             }
         }
-        eprintln!("functions: {passed} passed, {} skipped", skipped.len());
-        let mut expected = vec!["0:10".to_owned()];
-        for (group, count) in [(2, 20), (3, 1), (4, 4), (5, 3), (6, 1)] {
-            expected.extend((0..count).map(|index| format!("{group}:{index}")));
-        }
-        assert_eq!(passed, 141);
-        assert_eq!(skipped, expected);
+        eprintln!(
+            "functions: {passed} passed, {} mismatches",
+            mismatches.len()
+        );
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+        assert_eq!(passed, 171);
     }
 
     #[test]
