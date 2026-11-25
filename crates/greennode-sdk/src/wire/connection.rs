@@ -54,6 +54,26 @@ impl Service<http::Uri> for DialConnector {
 
 pub(crate) type Client = HyperClient<HttpsConnector<DialConnector>, Full<Bytes>>;
 
+pub(crate) struct PooledClient(Client);
+pub(crate) struct OneSendClient(Client);
+
+impl PooledClient {
+    pub(crate) fn new(limit: HeadLimit, trust: Trust) -> Result<Self, rustls::Error> {
+        client(true, limit, trust).map(Self)
+    }
+    pub(crate) fn as_client(&self) -> &Client {
+        &self.0
+    }
+}
+impl OneSendClient {
+    pub(crate) fn new(limit: HeadLimit, trust: Trust) -> Result<Self, rustls::Error> {
+        client(false, limit, trust).map(Self)
+    }
+    pub(crate) fn as_client(&self) -> &Client {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum HeadLimit {
     Api,
