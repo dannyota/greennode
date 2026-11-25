@@ -2,7 +2,18 @@
 
 use url::Url;
 
-pub(crate) struct Base(Url);
+pub(crate) struct Base {
+    url: Url,
+    serialized: String,
+}
+
+impl std::ops::Deref for Base {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.serialized
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BaseError {
@@ -34,10 +45,30 @@ pub(crate) struct EndpointOverrides {
     pub(crate) database: Option<String>,
 }
 
-pub(crate) fn defaults(
-    region: &str,
-    overrides: EndpointOverrides,
-) -> Result<EndpointOverrides, ()> {
+pub(crate) struct EndpointSet {
+    pub(crate) vserver: Option<Base>,
+    pub(crate) vlb: Option<Base>,
+    pub(crate) vnetwork: Option<Base>,
+    pub(crate) global_load_balancer: Option<Base>,
+    pub(crate) dns: Option<Base>,
+    pub(crate) container_registry: Option<Base>,
+    pub(crate) portal: Option<Base>,
+    pub(crate) signin: Option<Base>,
+    pub(crate) dashboard: Option<Base>,
+    pub(crate) token: Option<Base>,
+    pub(crate) billing: Option<Base>,
+    pub(crate) cdn_docs: Option<Base>,
+    pub(crate) monitor: Option<Base>,
+    pub(crate) iam: Option<Base>,
+    pub(crate) storage: Option<Base>,
+    pub(crate) cdn: Option<Base>,
+    pub(crate) vks: Option<Base>,
+    pub(crate) vserver_backup: Option<Base>,
+    pub(crate) backup_center: Option<Base>,
+    pub(crate) database: Option<Base>,
+}
+
+pub(crate) fn defaults(region: &str, overrides: EndpointOverrides) -> Result<EndpointSet, ()> {
     if !valid_region(region) {
         return Err(());
     }
@@ -82,7 +113,6 @@ pub(crate) fn defaults(
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => { $(
             if let Some(value) = overrides.$field.filter(|value| !value.is_empty()) { set.$field = Some(value); }
-            if let Some(value) = &set.$field { Base::parse(value).map_err(|_| ())?; }
         )+ };
     }
     apply!(
@@ -136,7 +166,33 @@ pub(crate) fn defaults(
     if let Some(signin) = &mut set.signin {
         signin.truncate(signin.trim_end_matches('/').len());
     }
-    Ok(set)
+    macro_rules! resolve {
+        ($($field:ident),+ $(,)?) => {
+            Ok(EndpointSet { $($field: set.$field.as_deref().map(Base::parse).transpose().map_err(|_| ())?,)+ })
+        };
+    }
+    resolve!(
+        vserver,
+        vlb,
+        vnetwork,
+        global_load_balancer,
+        dns,
+        container_registry,
+        portal,
+        signin,
+        dashboard,
+        token,
+        billing,
+        cdn_docs,
+        monitor,
+        iam,
+        storage,
+        cdn,
+        vks,
+        vserver_backup,
+        backup_center,
+        database
+    )
 }
 
 fn valid_region(region: &str) -> bool {
@@ -149,9 +205,51 @@ fn valid_region(region: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-pub(crate) fn vnetwork_regional_gateway(region: &str) -> Option<String> {
-    valid_region(region)
-        .then(|| format!("https://{region}-vnetwork.console.greennode.ai/vnetwork-gateway/"))
+pub(crate) fn vnetwork_regional_gateway(region: &str) -> Option<Base> {
+    if !valid_region(region) {
+        return None;
+    }
+    Base::parse(&format!(
+        "https://{region}-vnetwork.console.greennode.ai/vnetwork-gateway/"
+    ))
+    .ok()
+}
+
+fn valid_path(path: &str) -> bool {
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            if !bytes.next().is_some_and(|b| b.is_ascii_hexdigit())
+                || !bytes.next().is_some_and(|b| b.is_ascii_hexdigit())
+            {
+                return false;
+            }
+        } else if !byte.is_ascii_alphanumeric()
+            && !matches!(
+                byte,
+                b'-' | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b';'
+                    | b'='
+                    | b':'
+                    | b'@'
+                    | b'/'
+            )
+        {
+            return false;
+        }
+    }
+    true
 }
 
 impl Base {
@@ -176,6 +274,16 @@ impl Base {
         if authority.ends_with(':') {
             return Err(BaseError::InvalidPort);
         }
+        let path = &rest[authority.len()..];
+        if !valid_path(path) {
+            return Err(BaseError::InvalidUrl);
+        }
+        if path.split('/').any(|segment| {
+            let dots = segment.to_ascii_lowercase().replace("%2e", ".");
+            dots == "." || dots == ".."
+        }) {
+            return Err(BaseError::InvalidUrl);
+        }
         let url = Url::parse(input).map_err(|error| match error {
             url::ParseError::InvalidPort => BaseError::InvalidPort,
             _ => BaseError::InvalidUrl,
@@ -195,16 +303,17 @@ impl Base {
         {
             return Err(BaseError::InvalidUrl);
         }
-        Ok(Self(url))
+        let serialized = format!("{}{path}", &url[..url::Position::BeforePath]);
+        Ok(Self { url, serialized })
     }
 
     pub(crate) fn same_origin(&self, other: &Self) -> bool {
-        self.0.host() == other.0.host()
-            && self.0.port_or_known_default() == other.0.port_or_known_default()
+        self.url.host() == other.url.host()
+            && self.url.port_or_known_default() == other.url.port_or_known_default()
     }
 
     pub(crate) fn route(&self, template: &str, segments: &[&str]) -> Result<String, ()> {
-        let mut route = self.0.as_str().to_owned();
+        let mut route = self.serialized.clone();
         if !route.ends_with('/') {
             route.push('/');
         }
@@ -230,6 +339,71 @@ impl Base {
 #[cfg(test)]
 mod tests {
     use super::{Base, BaseError, EndpointOverrides, defaults, vnetwork_regional_gateway};
+
+    #[test]
+    fn resolver_returns_punycode_host() {
+        let input = EndpointOverrides {
+            vserver: Some("https://bücher.example/path/".into()),
+            ..Default::default()
+        };
+        let resolved = defaults("hcm-3", input).unwrap();
+        assert_eq!(
+            resolved.vserver.as_deref(),
+            Some("https://xn--bcher-kva.example/path/")
+        );
+    }
+
+    #[test]
+    fn rejects_dot_segments_in_base_paths() {
+        for path in [
+            "/prefix/./",
+            "/prefix/../",
+            "/prefix/%2e/",
+            "/prefix/%2E%2e/",
+            "/prefix/.%2e/",
+            "/prefix/%2e./",
+        ] {
+            assert!(
+                Base::parse(&format!("https://example.test{path}")).is_err(),
+                "{path}"
+            );
+        }
+        assert!(Base::parse("https://example.test/prefix/a.b/%252e/").is_ok());
+    }
+
+    #[test]
+    fn rejects_non_ascii_base_path() {
+        assert!(Base::parse("https://example.test/caf%C3%A9/").is_ok());
+        assert!(Base::parse("https://example.test/café/").is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_path_escape() {
+        assert!(Base::parse("https://example.test/a%25b/").is_ok());
+        for path in ["/bad%/", "/bad%2/", "/bad%GG/"] {
+            assert!(Base::parse(&format!("https://example.test{path}")).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_illegal_path_characters() {
+        assert!(Base::parse("https://example.test/a-._~!$&'()*+,;=:@/b").is_ok());
+        for byte in [
+            b' ', 0x1f, b'\x7f', b'"', b'<', b'>', b'\\', b'^', b'`', b'{', b'|', b'}', b'[', b']',
+        ] {
+            let input = format!("https://example.test/a{}b", char::from(byte));
+            assert!(Base::parse(&input).is_err());
+        }
+    }
+
+    #[test]
+    fn preserves_raw_base_path() {
+        let base = Base::parse("https://example.test/prefix//caf%C3%A9/%7e/").unwrap();
+        assert_eq!(
+            base.route("items", &["id"]).unwrap(),
+            "https://example.test/prefix//caf%C3%A9/%7e/items/id"
+        );
+    }
 
     #[test]
     fn rejects_extra_authority_slash() {
