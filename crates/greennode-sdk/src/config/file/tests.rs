@@ -68,6 +68,44 @@ fn rejects_oversized_opened_file() {
 }
 
 #[test]
+fn config_open_error_keeps_safe_source_and_reason() {
+    use crate::config::credentials::FileDiagnostic;
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config-canary");
+    std::fs::create_dir(&config).unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: None,
+            config_named: true,
+            credentials_named: false,
+        },
+        config_present: true,
+        credentials_present: false,
+        config_source: Some("GREENNODE_CONFIG_FILE"),
+        credentials_source: None,
+    };
+    let error = open_pair(&selection).err().unwrap();
+    assert_eq!(error.class(), crate::ErrorClass::InvalidConfig);
+    let detail = error.detail::<FileDiagnostic>();
+    assert!(detail.is_some());
+    let detail = detail.unwrap();
+    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
+    assert_eq!(detail.diagnostic, "config: not a regular file");
+    assert!(!format!("{detail:?}").contains("config-canary"));
+    std::fs::remove_dir(&config).unwrap();
+    let error = open_pair(&selection).err().unwrap();
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
+    assert_eq!(detail.diagnostic, "config: open failed");
+    assert!(!format!("{detail:?}").contains("config-canary"));
+    std::fs::write(&config, "[default]\n").unwrap();
+    assert!(open_pair(&selection).is_ok());
+}
+
+#[test]
 fn opened_pair_rejects_hard_link_alias() {
     use crate::config::mode::{Mode, Paths, Selection};
     let dir = Dir::new();

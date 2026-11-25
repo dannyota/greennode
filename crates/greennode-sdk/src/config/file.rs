@@ -105,6 +105,16 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
         };
         Box::new(crate::Error::new(class).with_detail(slot))
     };
+    let config_file_error = |diagnostic| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                super::credentials::FileDiagnostic {
+                    source: selection.config_source,
+                    diagnostic,
+                },
+            ),
+        )
+    };
     let file_error = |diagnostic| {
         Box::new(
             crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
@@ -120,7 +130,7 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
             .config
             .as_ref()
             .ok_or_else(|| error(ConfigSlot::Config))?;
-        Some(open(path, Slot::Config).map_err(|_| error(ConfigSlot::Config))?)
+        Some(open(path, Slot::Config).map_err(&config_file_error)?)
     } else {
         if selection.config_named {
             return Err(error(ConfigSlot::Config));

@@ -131,10 +131,14 @@ pub(super) fn select(
     let invalid = |slot: ConfigSlot| {
         Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(slot))
     };
-    let credentials_missing = || {
+    let credentials_error = |source, reason: &'static str| {
         Box::new(
-            crate::Error::new(crate::ErrorClass::NoCredentials)
-                .with_detail(ConfigSlot::Credentials),
+            crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
+                super::credentials::FileDiagnostic {
+                    source,
+                    diagnostic: format!("credentials: {reason}"),
+                },
+            ),
         )
     };
     let value = |name: &str| {
@@ -266,7 +270,7 @@ pub(super) fn select(
     }
     if states[1] == Presence::Ambiguous {
         return Err(if named[1] {
-            credentials_missing()
+            credentials_error(labels[1], "lookup failed")
         } else {
             invalid(ConfigSlot::Credentials)
         });
@@ -283,7 +287,7 @@ pub(super) fn select(
         }));
     }
     if named[1] && states[1] == Presence::Absent {
-        return Err(credentials_missing());
+        return Err(credentials_error(labels[1], "not found"));
     }
     Ok(Selection {
         paths: Paths {
@@ -436,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_explicit_credentials_is_no_credentials() {
+    fn ambiguous_explicit_credentials_is_credentials_file_error() {
         let result = select(
             None,
             Some(absolute("/cred").as_path()),
@@ -451,8 +455,18 @@ mod tests {
             },
         );
         let error = result.err().unwrap();
-        assert_eq!(error.class(), crate::ErrorClass::NoCredentials);
-        assert_eq!(error.detail::<ConfigSlot>(), Some(&ConfigSlot::Credentials));
+        assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
+        assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
+        let detail = error
+            .detail::<super::super::credentials::FileDiagnostic>()
+            .unwrap();
+        assert_eq!(detail.source, Some("option"));
+        assert_eq!(detail.diagnostic, "credentials: lookup failed");
+        assert!(
+            !detail
+                .diagnostic
+                .contains(&absolute("/cred").to_string_lossy().to_string())
+        );
         let result = select(
             None,
             Some(absolute("/cred").as_path()),
@@ -524,6 +538,42 @@ mod tests {
     }
 
     #[test]
+    fn named_credential_errors_keep_variable_source_without_path() {
+        for variable in [
+            "GREENNODE_SHARED_CREDENTIALS_FILE",
+            "VNGCLOUD_SHARED_CREDENTIALS_FILE",
+        ] {
+            for state in [Presence::Absent, Presence::Ambiguous] {
+                let path = absolute("/private/credentials-canary");
+                let mut source = Source::default();
+                source
+                    .0
+                    .insert(variable.into(), path.clone().into_os_string());
+                let result = select(
+                    None,
+                    None,
+                    &source,
+                    Some(absolute("/work").as_path()),
+                    |candidate| {
+                        if candidate == path {
+                            state
+                        } else {
+                            Presence::Absent
+                        }
+                    },
+                );
+                let error = result.err().unwrap();
+                assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
+                let detail = error
+                    .detail::<super::super::credentials::FileDiagnostic>()
+                    .unwrap();
+                assert_eq!(detail.source, Some(variable));
+                assert!(!format!("{detail:?}").contains("credentials-canary"));
+            }
+        }
+    }
+
+    #[test]
     fn explicitly_named_missing_credentials_refuses() {
         let source = Source::default();
         let missing = select(
@@ -534,11 +584,13 @@ mod tests {
             |_| Presence::Absent,
         );
         let missing = missing.err().unwrap();
-        assert_eq!(missing.class(), crate::ErrorClass::NoCredentials);
-        assert_eq!(
-            missing.detail::<ConfigSlot>(),
-            Some(&ConfigSlot::Credentials)
-        );
+        assert_eq!(missing.class(), crate::ErrorClass::CredentialsFile);
+        assert!(missing.has_identity(crate::ErrorClass::InvalidConfig));
+        let detail = missing
+            .detail::<super::super::credentials::FileDiagnostic>()
+            .unwrap();
+        assert_eq!(detail.source, Some("option"));
+        assert_eq!(detail.diagnostic, "credentials: not found");
         let present = select(
             None,
             Some(absolute("/present").as_path()),
