@@ -1085,5 +1085,233 @@ class Transport(unittest.TestCase):
         self.assertNotIn("/followed", requests)
 
 
+class Evidence(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.artifacts = self.root / "artifacts"
+        self.artifacts.mkdir()
+        self.tag = "v0.1.0"
+        self.commit = "a" * 40
+        self.receipt = {"tag": self.tag, "commit": self.commit, "toolchain": "1.100.0", "crates": [
+            {"name": name, "version": "0.1.0", "filename": f"{name}-0.1.0.crate", "sha256": "a" * 64}
+            for name in ("greennode-sdk", "greennode")]}
+        self.release = {"tagName": self.tag, "isDraft": False, "publishedAt": "2026-01-01T00:00:00Z",
+                        "isImmutable": True, "assets": []}
+        self.runs = [{"databaseId": 101, "headBranch": self.tag, "headSha": self.commit,
+                      "conclusion": "success", "event": "push", "path": ".github/workflows/release.yml"}]
+        self.owners = {name: {"users": [{"kind": "user", "login": "dannyota"}]}
+                       for name in ("greennode-sdk", "greennode")}
+        self.tree = b"100644 blob " + b"b" * 40 + b"\tCargo.toml\0"
+        for platform, extension in (("darwin-arm64", "tar.gz"), ("linux-amd64", "tar.gz"),
+                                    ("linux-arm64", "tar.gz"), ("windows-amd64", "zip")):
+            for suffix in (extension, "sha256"):
+                self.asset(platform, f"greennode-{platform}.{suffix}")
+        self.asset("crate-checksums", "crate-checksums.json")
+
+    def asset(self, directory, name):
+        path = self.artifacts / directory / name
+        path.parent.mkdir(exist_ok=True)
+        data = json.dumps(self.receipt).encode() if name == "crate-checksums.json" else name.encode()
+        path.write_bytes(data)
+        self.release["assets"].append({"name": name, "state": "uploaded",
+                                       "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()})
+
+    def validate(self, publish=True):
+        return check.evidence(self.tag, self.commit, self.release, self.runs,
+                              self.owners, self.artifacts, self.tree, publish=publish)
+
+    def save_receipt(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        path.write_text(json.dumps(self.receipt), encoding="utf-8")
+        self.release["assets"][-1]["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_receipt_schema_must_be_valid(self):
+        self.receipt["unexpected"] = True
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        del self.receipt["unexpected"]
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def test_receipt_tag_must_match_evidence(self):
+        self.receipt["tag"] = "v0.2.0"
+        for record in self.receipt["crates"]:
+            record["version"] = "0.2.0"
+            record["filename"] = f'{record["name"]}-0.2.0.crate'
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.receipt["tag"] = self.tag
+        for record in self.receipt["crates"]:
+            record["version"] = "0.1.0"
+            record["filename"] = f'{record["name"]}-0.1.0.crate'
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def test_receipt_commit_must_match_evidence(self):
+        self.receipt["commit"] = "b" * 40
+        self.save_receipt()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.receipt["commit"] = self.commit
+        self.save_receipt()
+        self.assertIsNone(self.validate())
+
+    def test_evidence_command(self):
+        files = []
+        for name, data in (("release.json", self.release), ("runs.json", self.runs),
+                           ("sdk.json", self.owners["greennode-sdk"]), ("tool.json", self.owners["greennode"])):
+            path = self.root / name
+            path.write_text(json.dumps(data), encoding="utf-8")
+            files.append(str(path))
+        tree = self.root / "tree"
+        tree.write_bytes(self.tree)
+        args = ["evidence", self.tag, self.commit, *files, str(self.artifacts), str(tree), "--publish"]
+        self.assertEqual(check.main(args), 0)
+        self.assertNotEqual(check.main(args[:-1] + ["--bad"]), 0)
+
+    def test_release_must_be_published(self):
+        self.release["isDraft"] = True
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["isDraft"] = False
+        self.assertIsNone(self.validate())
+
+    def test_release_requires_published_timestamp(self):
+        self.release["publishedAt"] = None
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["publishedAt"] = "2026-01-01T00:00:00Z"
+        self.assertIsNone(self.validate())
+
+    def test_release_tag_matches(self):
+        self.release["tagName"] = "v0.2.0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["tagName"] = self.tag
+        self.assertIsNone(self.validate())
+
+    def test_immutable_only_required_to_publish(self):
+        self.release["isImmutable"] = False
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.assertIsNone(self.validate(publish=False))
+
+    def test_run_exactly_one(self):
+        self.runs.append(self.runs[0].copy())
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.runs.pop()
+        self.assertIsNone(self.validate())
+
+    def test_run_exact_tag_commit_and_workflow(self):
+        for field, value in (("headBranch", "v0.2.0"), ("headSha", "b" * 40),
+                             ("path", ".github/workflows/other.yml"), ("event", "workflow_dispatch"),
+                             ("conclusion", "failure")):
+            with self.subTest(field=field):
+                original = self.runs[0][field]
+                self.runs[0][field] = value
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.runs[0][field] = original
+                self.assertIsNone(self.validate())
+
+    def test_asset_digest_including_receipt(self):
+        for asset in (self.release["assets"][0], self.release["assets"][1], self.release["assets"][-1]):
+            with self.subTest(name=asset["name"]):
+                original = asset["digest"]
+                asset["digest"] = "sha256:" + "0" * 64
+                with self.assertRaises(ValueError):
+                    self.validate()
+                asset["digest"] = original
+                self.assertIsNone(self.validate())
+
+    def test_duplicate_asset_names_refused(self):
+        self.release["assets"].append(self.release["assets"][0].copy())
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].pop()
+        self.assertIsNone(self.validate())
+
+    def test_symlinked_artifact_refused(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        replacement = self.root / "receipt-copy"
+        replacement.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(replacement)
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.unlink()
+        path.write_bytes(replacement.read_bytes())
+        self.assertIsNone(self.validate())
+
+    def test_missing_artifact_rejected(self):
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_missing_asset_and_artifact(self):
+        asset = self.release["assets"].pop()
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.release["assets"].append(asset)
+        path = self.artifacts / "crate-checksums" / "crate-checksums.json"
+        data = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(ValueError):
+            self.validate()
+        path.write_bytes(data)
+        self.assertIsNone(self.validate())
+
+    def test_owner_must_be_user_for_each_crate(self):
+        for name in self.owners:
+            with self.subTest(name=name):
+                self.owners[name]["users"][0]["kind"] = "team"
+                with self.assertRaises(ValueError):
+                    self.validate()
+                self.owners[name]["users"][0]["kind"] = "user"
+                self.assertIsNone(self.validate())
+
+    def test_unregistered_only_allowed_in_preflight(self):
+        self.owners["greennode"] = None
+        with self.assertRaises(ValueError):
+            self.validate()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertIsNone(self.validate(publish=False))
+        self.assertIn("greennode: unregistered", output.getvalue())
+
+    def test_artifact_root_has_only_expected_directories(self):
+        extra = self.artifacts / "darwin-arm64-binary"
+        extra.mkdir()
+        with self.assertRaises(ValueError):
+            self.validate()
+        extra.rmdir()
+        self.assertIsNone(self.validate())
+
+    def test_tree_refuses_tracked_symlink(self):
+        original = self.tree
+        self.tree += b"120000 blob " + b"c" * 40 + b"\tlink\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = original
+        self.assertIsNone(self.validate())
+
+    def test_tree_refuses_cargo_config(self):
+        original = self.tree
+        self.tree += b"100644 blob " + b"c" * 40 + b"\tcrates/tool/.cargo/config.toml\0"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.tree = original
+        self.assertIsNone(self.validate())
+
+
 if __name__ == "__main__":
     unittest.main()

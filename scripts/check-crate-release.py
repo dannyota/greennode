@@ -1,6 +1,7 @@
 # Usage: python3 -I scripts/check-crate-release.py receipt TAG STAGED_DIR RECEIPT --commit SHA --toolchain VERSION
 
 
+import datetime
 import hashlib
 import http.client
 import json
@@ -268,8 +269,7 @@ def read_json(data):
     return json.loads(data, object_pairs_hook=unique_object)
 
 
-def validate_receipt(path):
-    data = read_json(Path(path).read_bytes())
+def validate_receipt_data(data):
     if not isinstance(data, dict) or set(data) != {"tag", "commit", "toolchain", "crates"}:
         raise ValueError("invalid receipt")
     tag, commit, toolchain, crates = (data[key] for key in ("tag", "commit", "toolchain", "crates"))
@@ -285,6 +285,10 @@ def validate_receipt(path):
                 or not re.fullmatch(r"[0-9a-f]{64}", record["sha256"])):
             raise ValueError("invalid receipt")
     return crates
+
+
+def validate_receipt(path):
+    return validate_receipt_data(read_json(Path(path).read_bytes()))
 
 
 def index_prefix(name):
@@ -480,6 +484,110 @@ def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
     return int(any(value in ("stop", "unknown") for value in results.values()))
 
 
+def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False):
+    if not isinstance(tag, str) or not TAG.fullmatch(tag):
+        raise GateError("greennode: invalid release tag")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise GateError("greennode: invalid release commit")
+    if (not isinstance(release, dict) or release.get("tagName") != tag or release.get("isDraft") is not False
+            or (publish and release.get("isImmutable") is not True)):
+        raise GateError("greennode: invalid release publication")
+    published_at = release.get("publishedAt")
+    try:
+        if not isinstance(published_at, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", published_at):
+            raise ValueError()
+        datetime.datetime.strptime(published_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise GateError("greennode: invalid release publication") from error
+    if not isinstance(runs, list) or len(runs) != 1 or not isinstance(runs[0], dict):
+        raise GateError("greennode: expected one release run")
+    run = runs[0]
+    if (type(run.get("databaseId")) is not int or run["databaseId"] <= 0 or run.get("headBranch") != tag
+            or run.get("headSha") != commit or run.get("path") != ".github/workflows/release.yml"
+            or run.get("conclusion") != "success" or run.get("event") != "push"):
+        raise GateError("greennode: release run identity mismatch")
+    if not isinstance(owners, dict) or set(owners) != set(NAMES):
+        raise GateError("greennode: invalid owner evidence")
+    unregistered = []
+    for name in NAMES:
+        owner = owners[name]
+        if owner is None:
+            if publish:
+                raise GateError(f"{name}: registered owner required")
+            unregistered.append(name)
+            continue
+        users = owner.get("users") if isinstance(owner, dict) else None
+        if (not isinstance(users, list) or not all(isinstance(user, dict) for user in users)
+                or not any(user.get("kind") == "user" and user.get("login") == "dannyota" for user in users)):
+            raise GateError(f"{name}: required owner missing")
+    if not isinstance(tree, bytes) or not tree or not tree.endswith(b"\0"):
+        raise GateError("greennode: invalid tagged tree")
+    paths = set()
+    for entry in tree[:-1].split(b"\0"):
+        try:
+            header, path = entry.split(b"\t", 1)
+            mode, kind, oid = header.split(b" ")
+        except ValueError as error:
+            raise GateError("greennode: invalid tagged tree") from error
+        parts = path.split(b"/")
+        if (mode not in (b"100644", b"100755") or kind != b"blob"
+                or not re.fullmatch(rb"[0-9a-f]{40}", oid) or not path or path in paths
+                or any(part in (b"", b".", b"..") for part in parts)):
+            raise GateError("greennode: unsafe tagged tree")
+        paths.add(path)
+        if len(parts) >= 2 and parts[-2].lower() == b".cargo" and parts[-1].lower() in (b"config", b"config.toml"):
+            raise GateError("greennode: Cargo config in tagged tree")
+    assets = release.get("assets")
+    if not isinstance(assets, list) or not all(isinstance(asset, dict) for asset in assets):
+        raise GateError("greennode: invalid release assets")
+    by_name = {}
+    for asset in assets:
+        name = asset.get("name")
+        if not isinstance(name, str) or name in by_name:
+            raise GateError("greennode: invalid release asset names")
+        by_name[name] = asset
+    layouts = {"darwin-arm64": "tar.gz", "linux-amd64": "tar.gz",
+               "linux-arm64": "tar.gz", "windows-amd64": "zip"}
+    expected = {platform: {f"greennode-{platform}.{extension}", f"greennode-{platform}.sha256"}
+                for platform, extension in layouts.items()}
+    expected["crate-checksums"] = {"crate-checksums.json"}
+    artifacts = Path(artifacts)
+    if artifacts.is_symlink() or not artifacts.is_dir() or {path.name for path in artifacts.iterdir()} != set(expected):
+        raise GateError("greennode: invalid artifact directories")
+    for directory, names in expected.items():
+        folder = artifacts / directory
+        if folder.is_symlink() or not folder.is_dir() or {path.name for path in folder.iterdir()} != names:
+            raise GateError("greennode: invalid release artifact")
+        for name in names:
+            path = folder / name
+            asset = by_name.get(name, {})
+            if path.is_symlink() or not path.is_file() or asset.get("state") != "uploaded":
+                raise GateError("greennode: missing release artifact")
+            try:
+                with path.open("rb") as stream:
+                    if name == "crate-checksums.json":
+                        receipt_bytes = stream.read(1024 * 1024 + 1)
+                        if len(receipt_bytes) > 1024 * 1024:
+                            raise GateError("greennode: invalid release receipt")
+                        digest = "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+                    else:
+                        digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+            except OSError as error:
+                raise GateError("greennode: unreadable release artifact") from error
+            if asset.get("digest") != digest:
+                raise GateError("greennode: release artifact digest mismatch")
+            if name == "crate-checksums.json":
+                try:
+                    receipt_data = read_json(receipt_bytes)
+                    validate_receipt_data(receipt_data)
+                    if receipt_data["tag"] != tag or receipt_data["commit"] != commit:
+                        raise ValueError()
+                except (ValueError, TypeError, KeyError) as error:
+                    raise GateError("greennode: invalid release receipt") from error
+    for name in unregistered:
+        print(f"{name}: unregistered")
+
+
 def main(args, root=None, fetch=None, sleep=None):
     if len(args) == 8 and args[0] == "receipt" and args[4] == "--commit" and args[6] == "--toolchain":
         try:
@@ -492,6 +600,16 @@ def main(args, root=None, fetch=None, sleep=None):
             print("greennode: receipt validation failed", file=sys.stderr)
             return 1
     try:
+        if args and args[0] == "evidence" and len(args) in (9, 10):
+            publish = len(args) == 10
+            if publish and args[9] != "--publish":
+                raise GateError("greennode: invalid evidence arguments")
+            release = read_json(Path(args[3]).read_bytes())
+            runs = read_json(Path(args[4]).read_bytes())
+            owners = {"greennode-sdk": read_json(Path(args[5]).read_bytes()),
+                      "greennode": read_json(Path(args[6]).read_bytes())}
+            evidence(args[1], args[2], release, runs, owners, Path(args[7]), Path(args[8]).read_bytes(), publish)
+            return 0
         if args and args[0] == "manifest":
             rest = args[1:]
             tag = None
