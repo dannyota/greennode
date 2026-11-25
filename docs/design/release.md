@@ -183,8 +183,10 @@ archives, their `greennode-PLATFORM.sha256` files, and the
 packages, each with `retention-days: 90`. Stage all nine assets on a draft.
 Publish it to lock them and the tag ([GitHub immutable releases]) only while the
 live tag names the verified commit and the preceding published tag is unchanged.
-Only the Release job has `contents: write`, and it runs no script from the tag;
-no release job has OIDC or registry write credentials.
+Only the Release job and a notes job calling the [generate notes] endpoint have
+`contents: write`; neither runs a script from the tag, and no release job has
+OIDC or registry write credentials. The receipt is written on a fresh runner
+that never built the tag, from the staged archives the packaging job uploads.
 
 ### Release evidence
 
@@ -355,8 +357,7 @@ the approved bytes. A version with different bytes needs a new shared tag.
   indexed, and no upload on mismatch. Test both secret sources. Cargo rebuilds
   the packaged lockfile, so byte equality is not guaranteed. A mismatch blocks
   release; do not weaken the gate.
-- The GitHub environment and Trusted Publishers are untested until the first
-  Actions publish.
+- Environment and Trusted Publishers stay untested until the first CI publish.
 
 [duolane]:
   https://github.com/dannyota/duolane/blob/master/docs/design/release.md
@@ -381,6 +382,8 @@ the approved bytes. A version with different bytes needs a new shared tag.
   https://doc.rust-lang.org/cargo/reference/registry-index.html
 [GitHub immutable releases]:
   https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases
+[generate notes]:
+  https://docs.github.com/en/rest/releases/releases#generate-release-notes-content-for-a-release
 [GitHub artifact retention]:
   https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts
 [RFC 3691]:

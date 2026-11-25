@@ -219,7 +219,7 @@ jobs:
             python3 -I scripts/check-crate-release.py shipped "$candidate" "$committed" --first
           fi
 
-  receipt:
+  packages:
     needs: [verify, checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -241,13 +241,13 @@ jobs:
           test -n "$version"
           rustup toolchain install "$version" --profile minimal
           test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
-      - name: Package workspace and create receipt
+      - name: Package workspace
         env:
           TAG: ${{ github.ref_name }}
-          COMMIT: ${{ needs.verify.outputs.commit }}
         run: |
           root="$(mktemp -d)"
-          stage="$(mktemp -d)"
+          stage="$RUNNER_TEMP/staged-crates"
+          mkdir "$stage"
           test -z "$(git ls-files --stage | grep '^120000 ' || true)"
           if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
             exit 1
@@ -268,8 +268,40 @@ jobs:
               assert path.is_file() and not path.is_symlink()
               shutil.copyfile(path, stage / name)
           PYTHON
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staged-crates
+          path: ${{ runner.temp }}/staged-crates/*.crate
+          if-no-files-found: error
+          retention-days: 90
+
+  receipt:
+    needs: [verify, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staged-crates
+          path: ${{ runner.temp }}/staged-crates
+      - name: Validate archives and create receipt
+        env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
           version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
-          python3 -I scripts/check-crate-release.py receipt "$TAG" "$stage" crate-checksums.json --commit "$COMMIT" --toolchain "$version"
+          python3 -I scripts/check-crate-release.py receipt "$TAG" "$RUNNER_TEMP/staged-crates" crate-checksums.json --commit "$COMMIT" --toolchain "$version"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: crate-checksums
@@ -304,8 +336,36 @@ jobs:
           $actual = & .\extracted\greennode.exe --version
           if ($actual -ne "greennode $($env:TAG.Substring(1)) windows/amd64") { exit 1 }
 
-  notes:
+  notes-data:
     needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch release note data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir "$RUNNER_TEMP/notes-data"
+          gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/notes-data/body.txt"
+          compare="$(grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" "$RUNNER_TEMP/notes-data/body.txt" || true)"
+          if [ -n "$compare" ]; then
+            gh api "repos/$REPOSITORY/compare/${compare##*/}" > "$RUNNER_TEMP/notes-data/compare.json"
+          else
+            printf '{}\n' > "$RUNNER_TEMP/notes-data/compare.json"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes-data
+          path: ${{ runner.temp }}/notes-data/
+          if-no-files-found: error
+          retention-days: 90
+
+  notes:
+    needs: [verify, notes-data]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -320,26 +380,12 @@ jobs:
         env:
           COMMIT: ${{ needs.verify.outputs.commit }}
         run: test "$(git rev-parse HEAD)" = "$COMMIT"
-      - name: Fetch release note data
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/notes-body"
-          compare="$(grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" "$RUNNER_TEMP/notes-body" || true)"
-          if [ -n "$compare" ]; then
-            gh api "repos/$REPOSITORY/compare/${compare##*/}" > "$RUNNER_TEMP/notes-compare"
-          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes-data
+          path: ${{ runner.temp }}/notes-data
       - name: Generate release notes without credentials
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          mkdir "$RUNNER_TEMP/notes-bin"
-          # shellcheck disable=SC2016
-          printf '%s\n' '#!/usr/bin/env bash' 'set -eu' 'if [[ "$2" == */releases/generate-notes ]]; then' '  /bin/cat "$RUNNER_TEMP/notes-body"' 'else' '  /bin/cat "$RUNNER_TEMP/notes-compare"' 'fi' > "$RUNNER_TEMP/notes-bin/gh"
-          chmod +x "$RUNNER_TEMP/notes-bin/gh"
-          PATH="$RUNNER_TEMP/notes-bin:$PATH" scripts/release-notes.sh "$TAG" > notes.md
+        run: scripts/release-notes.sh "$RUNNER_TEMP/notes-data/body.txt" "$RUNNER_TEMP/notes-data/compare.json" > notes.md
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-notes
