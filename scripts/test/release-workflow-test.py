@@ -31,13 +31,15 @@ def validate(text):
     assert next(iter(sections)) == "verify", "verify must be first"
     assert 'concurrency:\n  group: release\n  cancel-in-progress: false\n' in text, "release concurrency"
     verify = sections["verify"]
-    for required in ('fetch-depth: 0', 'persist-credentials: false', 'git merge-base --is-ancestor "$commit" origin/master', 'refs/tags/$TAG^{commit}', '$EVENT_SHA^{commit}', 'commit=$commit'):
+    for required in ('fetch-depth: 0', 'persist-credentials: false', 'git merge-base --is-ancestor "$EVENT_SHA" origin/master', 'refs/tags/$TAG^{commit}', 'test "$commit" = "$EVENT_SHA"'):
         assert required in verify, f"verify {required}"
     for name, job in parsed_jobs.items():
         permissions = job.get('permissions', workflow['permissions'])
         assert permissions == {'contents': 'write' if name == 'release' else 'read'}, f"{name} permissions"
         assert 'environment' not in job, f"{name} environment"
         for step in job.get('steps', []):
+            if step.get('uses', '').startswith('actions/checkout@'):
+                assert step.get('with', {}).get('ref') == '${{ github.sha }}', f"{name} checkout ref"
             command = step.get('run', '')
             assert isinstance(command, str), f"{name} run command"
             if re.search(r'\bcargo\b|\bmake\b|__command-inventory|scripts/|target/.*greennode|extracted.*greennode|(?:^|[\s;|])\./|\bgreennode(?:\.exe)?(?:\s|$)', command, re.I):
@@ -48,8 +50,9 @@ def validate(text):
         if name != "verify":
             needs = job.get('needs', [])
             assert 'verify' in ([needs] if isinstance(needs, str) else needs), f"{name} needs verify"
-            assert 'ref: ${{ needs.verify.outputs.commit }}' in section, f"{name} checkout ref"
-            assert 'test "$(git rev-parse HEAD)" = "$COMMIT"' in section, f"{name} checkout validation"
+            checks = [step for step in job['steps'] if step.get('name') == 'Verify checkout']
+            assert len(checks) == 1 and checks[0].get('env', {}).get('COMMIT') == '${{ github.sha }}', f"{name} checkout commit"
+            assert checks[0].get('run') == 'test "$(git rev-parse HEAD)" = "$COMMIT"', f"{name} checkout validation"
         if name == 'release':
             for step in job['steps']:
                 if 'run' in step:
@@ -72,6 +75,11 @@ def validate(text):
     assert 'name: verified-crates' in sections['verify-packages'] and 'name: verified-crates' in sections['receipt'], "verified archive artifact"
     assert 'actions/download-artifact@' not in sections['verify-packages'], "verify job must not compare artifacts"
     assert any(step.get('with', {}).get('path') == '${{ runner.temp }}/verified-crates/*.crate' for step in parsed_jobs['verify-packages']['steps']), "only verified archives uploaded"
+    verify_step = next(step for step in parsed_jobs['verify']['steps'] if step.get('name') == 'Verify release commit')
+    assert verify_step.get('env', {}).get('EVENT_SHA') == '${{ github.sha }}', "verify event SHA"
+    assert 'test "$(git rev-parse HEAD)" = "$EVENT_SHA"' in verify_step['run'], "verify checkout commit"
+    publish_step = next(step for step in parsed_jobs['release']['steps'] if step.get('name') == 'Publish draft')
+    assert publish_step.get('env', {}).get('COMMIT') == '${{ github.sha }}', "live tag event SHA"
     assert 'needs.inventory.outputs.previous' in sections['release'], "previous release identity"
     assert 'test "$previous" = "$EXPECTED_PREVIOUS"' in sections['release'], "previous release recheck"
     assert 'git/ref/tags/' in sections['release'] and 'test "$sha" = "$COMMIT"' in sections['release'], "live tag recheck"
@@ -161,6 +169,17 @@ class WorkflowTest(unittest.TestCase):
         checks = next(i for i, step in enumerate(steps) if step.get('run') == 'make release-checks')
         self.assertLess(install, checks)
 
+    def test_checkout_needs_ref_rejected(self):
+        text = WORKFLOW.read_text()
+        needle = 'ref: ${{ github.sha }}'
+        positions = [match.start() for match in re.finditer(re.escape(needle), text)]
+        self.assertEqual(len(positions), 9)
+        for index in positions:
+            with self.subTest(index=index):
+                broken = text[:index] + 'ref: ${{ needs.verify.outputs.commit }}' + text[index + len(needle):]
+                with self.assertRaisesRegex(AssertionError, 'checkout ref'):
+                    validate(broken)
+
     def test_job_token_rejected(self):
         text = WORKFLOW.read_text().replace('  packages:\n', '  packages:\n    env:\n      GH_TOKEN: ${{ github.token }}\n', 1)
         with self.assertRaisesRegex(AssertionError, 'token'):
@@ -206,12 +225,11 @@ class WorkflowTest(unittest.TestCase):
             ('    permissions:\n', '    environment: crates-io\n    permissions:\n'),
             ('  group: release\n', '  group: other\n'),
             ('git merge-base --is-ancestor', 'true #'),
-            ('git merge-base --is-ancestor "$commit" origin/master', 'git merge-base --is-ancestor "$commit" origin/other'),
-            ('commit=$commit', 'other=$commit'),
+            ('git merge-base --is-ancestor "$EVENT_SHA" origin/master', 'git merge-base --is-ancestor "$EVENT_SHA" origin/other'),
+            ('test "$commit" = "$EVENT_SHA"', 'test "$commit" = "$TAG"'),
             ('refs/tags/$TAG^{commit}', 'refs/heads/master^{commit}'),
-            ('$EVENT_SHA^{commit}', '$TAG^{commit}'),
             ('    needs: verify\n', '    needs: checks\n'),
-            ('ref: ${{ needs.verify.outputs.commit }}', 'ref: ${{ github.ref }}'),
+            ('ref: ${{ github.sha }}', 'ref: ${{ needs.verify.outputs.commit }}'),
             ('test "$(git rev-parse HEAD)" = "$COMMIT"', 'true'),
             ('      - name: Check shipped commands\n        env:\n', '      - name: Check shipped commands\n        env:\n          GH_TOKEN: ${{ github.token }}\n'),
             ('generate-notes', 'other-endpoint'),
