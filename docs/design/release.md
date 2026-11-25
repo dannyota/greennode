@@ -175,14 +175,14 @@ publication was incomplete. On the first release, check equality only.
 
 Each archive holds the executable, `LICENSE`, and
 `licenses/go-jmespath-LICENSE`; the release job extracts each archive and checks
-those three files are present and match the tagged sources. Upload the four
-archives and their `greennode-PLATFORM.sha256` files as build artifacts. An
-unprivileged packaging job on Ubuntu 24.04 produces `crate-checksums.json` from
-the staged workspace packages. Upload it as the ninth asset's build artifact.
-Set `retention-days: 90` on every release run artifact that backs those assets.
-Stage all nine assets on a draft, then publish it to lock them and the tag
-([GitHub immutable releases]). Only the Release job has `contents: write`; no
-release job has OIDC or registry write credentials.
+the two license files match the tagged sources and the executable matches its
+verified build artifact. Upload the archives, their `greennode-PLATFORM.sha256`
+files, and the `crate-checksums.json` an unprivileged Ubuntu 24.04 job builds
+from the staged packages as artifacts. Set `retention-days: 90` on every release
+run artifact that backs those assets. Stage all nine assets on a draft, then
+publish it to lock them and the tag ([GitHub immutable releases]). Only the
+Release job has `contents: write`; no release job has OIDC or registry write
+credentials.
 
 ### Release evidence
 
