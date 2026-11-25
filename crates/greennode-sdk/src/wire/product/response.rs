@@ -66,40 +66,106 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
-    let lower = Zeroizing::new(text.to_ascii_lowercase());
-    let decoded = Zeroizing::new(percent_decode(lower.as_bytes()));
-    let normalized: String = lower
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
-    if normalized.contains("clientsecret") {
+    let canonical = canonicalize(text);
+    let normalized = Zeroizing::new(
+        canonical
+            .iter()
+            .copied()
+            .filter(u8::is_ascii_alphanumeric)
+            .collect::<Vec<_>>(),
+    );
+    if normalized
+        .windows(b"clientsecret".len())
+        .any(|part| part == b"clientsecret")
+    {
         return true;
     }
     credentials.values().iter().any(|secret| {
-        let value = Zeroizing::new(secret.expose_secret().to_ascii_lowercase());
+        let value = secret.expose_secret();
         if value.is_empty() {
             return false;
         }
-        let json = Zeroizing::new(serde_json::to_string(value.as_str()).unwrap_or_default());
-        let inner = json.get(1..json.len().saturating_sub(1)).unwrap_or("");
-        let html = Zeroizing::new(
-            inner
-                .replace('<', "\\u003c")
-                .replace('>', "\\u003e")
-                .replace('&', "\\u0026")
-                .replace('\u{2028}', "\\u2028")
-                .replace('\u{2029}', "\\u2029"),
-        );
-        lower.contains(value.as_str())
-            || (!inner.is_empty() && (lower.contains(inner) || lower.contains(html.as_str())))
-            || decoded
-                .windows(value.len())
-                .any(|part| part == value.as_bytes())
-            || value
-                .lines()
-                .map(str::trim)
-                .any(|line| line.len() >= 8 && lower.contains(line))
+        let needle = canonicalize(value);
+        text.contains(value)
+            || (!needle.is_empty()
+                && canonical
+                    .windows(needle.len())
+                    .any(|part| part == needle.as_slice()))
+            || value.lines().map(str::trim).any(|line| {
+                if line.len() < 8 {
+                    return false;
+                }
+                let line = canonicalize(line);
+                !line.is_empty()
+                    && canonical
+                        .windows(line.len())
+                        .any(|part| part == line.as_slice())
+            })
     })
+}
+
+fn canonicalize(text: &str) -> Zeroizing<Vec<u8>> {
+    let input = Zeroizing::new(
+        text.bytes()
+            .filter(|byte| !byte.is_ascii_control())
+            .collect::<Vec<_>>(),
+    );
+    let mut unescaped = Zeroizing::new(Vec::with_capacity(input.len()));
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'\\'
+            && let Some(&next) = input.get(index + 1)
+        {
+            if next == b'u' && index + 6 <= input.len() {
+                let mut end = index + 6;
+                if end + 6 <= input.len() && &input[end..end + 2] == b"\\u" {
+                    end += 6;
+                }
+                let mut quoted = Zeroizing::new(Vec::with_capacity(end - index + 2));
+                quoted.push(b'"');
+                quoted.extend_from_slice(&input[index..end]);
+                quoted.push(b'"');
+                if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
+                    let value = Zeroizing::new(value);
+                    unescaped.extend_from_slice(value.as_bytes());
+                    index = end;
+                    continue;
+                }
+                if end != index + 6 {
+                    quoted.truncate(1);
+                    quoted.extend_from_slice(&input[index..index + 6]);
+                    quoted.push(b'"');
+                    if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
+                        let value = Zeroizing::new(value);
+                        unescaped.extend_from_slice(value.as_bytes());
+                        index += 6;
+                        continue;
+                    }
+                }
+            }
+            let decoded = match next {
+                b'"' => Some(b'"'),
+                b'\\' => Some(b'\\'),
+                b'/' => Some(b'/'),
+                b'b' => Some(8),
+                b'f' => Some(12),
+                b'n' => Some(b'\n'),
+                b'r' => Some(b'\r'),
+                b't' => Some(b'\t'),
+                _ => None,
+            };
+            if let Some(byte) = decoded {
+                unescaped.push(byte);
+                index += 2;
+                continue;
+            }
+        }
+        unescaped.push(input[index]);
+        index += 1;
+    }
+    let mut decoded = Zeroizing::new(percent_decode(&unescaped));
+    decoded.make_ascii_lowercase();
+    decoded
 }
 
 fn retryable(status: StatusCode, retry: Retry) -> bool {
@@ -497,6 +563,32 @@ mod tests {
         let e = error(
             403,
             br#"{"message":"toy\\u20\u000028secret"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn encoded_uppercase_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("Toy-key")]);
+        let e = error(
+            403,
+            br#"{"message":"%54oy-key"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn mixed_encoded_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("Toy-key")]);
+        let e = error(
+            403,
+            br#"{"message":"%54\\u006fy-key"}"#,
             true,
             false,
             &credentials,
