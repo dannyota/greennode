@@ -29,6 +29,9 @@ class TransientError(Exception):
 
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+                    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+                    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 NAMES = ("greennode-sdk", "greennode")
 
 
@@ -182,6 +185,12 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
         response = urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
+    except urllib.error.URLError as error:
+        if isinstance(error.reason, (TimeoutError, ConnectionRefusedError)):
+            raise error.reason from error
+        raise GateError("greennode: transport failed") from error
+    except ConnectionResetError as error:
+        raise GateError("greennode: transport failed") from error
     try:
         with response:
             chunks = []
@@ -203,7 +212,7 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
             if len(data) > 1024 * 1024 or (length is not None and (not length.isdecimal() or int(length) != len(data))):
                 raise ValueError("invalid response framing")
             return response.status, data
-    except http.client.HTTPException as error:
+    except (http.client.HTTPException, ConnectionResetError, ConnectionRefusedError) as error:
         raise ValueError("invalid response framing") from error
 
 
@@ -278,13 +287,62 @@ def index_not_found(data, name):
         return False
 
 
+def valid_semver(value):
+    if not isinstance(value, str):
+        return False
+    match = SEMVER.fullmatch(value)
+    if not match:
+        return False
+    if any(int(component) > 2**64 - 1 for component in match.group(1, 2, 3)):
+        return False
+    prerelease = match.group(4)
+    return not prerelease or all(not (part.isdigit() and len(part) > 1 and part[0] == "0")
+                                 for part in prerelease.split("."))
+
+
+def index_record_valid(row, name):
+    if (not isinstance(row, dict) or row.get("name") != name or not valid_semver(row.get("vers"))
+            or not isinstance(row.get("deps"), list) or not isinstance(row.get("cksum"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", row["cksum"]) or type(row.get("yanked")) is not bool):
+        return False
+    for dependency in row["deps"]:
+        if (not isinstance(dependency, dict) or not isinstance(dependency.get("name"), str)
+                or not dependency["name"] or not isinstance(dependency.get("req"), str) or not dependency["req"]):
+            return False
+        if any(type(dependency[key]) is not bool for key in ("optional", "default_features") if key in dependency):
+            return False
+        if "features" in dependency and (not isinstance(dependency["features"], list)
+                or not all(isinstance(value, str) for value in dependency["features"])):
+            return False
+        if any(dependency[key] is not None and not isinstance(dependency[key], str)
+               for key in ("target", "kind", "registry", "package") if key in dependency):
+            return False
+        if dependency.get("kind") not in (None, "normal", "build", "dev"):
+            return False
+    for key in ("features", "features2"):
+        if key in row and (not isinstance(row[key], dict)
+                or any(not isinstance(k, str) or not isinstance(v, list)
+                       or not all(isinstance(item, str) for item in v) for k, v in row[key].items())):
+            return False
+    if "v" in row and (type(row["v"]) is not int or row["v"] not in (1, 2)):
+        return False
+    if "features2" in row and row.get("v", 1) < 2:
+        return False
+    for key in ("links", "rust_version", "pubtime"):
+        if key in row and row[key] is not None and not isinstance(row[key], str):
+            return False
+    return True
+
+
 def registry_state(record, fetch, first=False):
     name, version, digest = (record[key] for key in ("name", "version", "sha256"))
     api_status, api_data = fetch(f"https://crates.io/api/v1/crates/{name}/{version}")
     index_status, index_data = fetch(f"https://index.crates.io/{index_prefix(name)}/{name}")
-    transient = 500 <= api_status <= 599 or 500 <= index_status <= 599
-    if (api_status not in (200, 404) and not 500 <= api_status <= 599
-            or index_status not in (200, 404) and not 500 <= index_status <= 599):
+    allowed_transient = (502, 503, 504)
+    transient = api_status in allowed_transient or index_status in allowed_transient
+    if (type(api_status) is not int or type(index_status) is not int
+            or api_status not in (200, 404, *allowed_transient)
+            or index_status not in (200, 404, *allowed_transient)):
         return "stop"
     if api_status == 404 and not api_not_found(api_data, name, version):
         return "stop"
@@ -298,10 +356,7 @@ def registry_state(record, fetch, first=False):
             return "stop"
         for line in index_data.splitlines():
             row = read_json(line)
-            if (not isinstance(row, dict) or row.get("name") != name or not isinstance(row.get("vers"), str)
-                    or not isinstance(row.get("cksum"), str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", row["cksum"])
-                    or type(row.get("yanked")) is not bool):
+            if not index_record_valid(row, name):
                 return "stop"
             if row["vers"] == version:
                 matches.append(row)
@@ -316,8 +371,8 @@ def registry_state(record, fetch, first=False):
         if not isinstance(api, dict) or not isinstance(api.get("version"), dict):
             return "stop"
         api = api["version"]
-        if (api.get("crate") != name or api.get("num") != version or api.get("checksum") != digest
-                or api.get("yanked") is not False):
+        if (api.get("crate") != name or not valid_semver(api.get("num")) or api.get("num") != version
+                or api.get("checksum") != digest or api.get("yanked") is not False):
             return "stop"
     if transient:
         return "transient"
@@ -359,7 +414,7 @@ def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
             result = deadline_fetch(
                 lambda: (fetch_url(url, timeout=min(30, remaining), deadline=deadline, clock=clock)
                          if fetch is None else network(url)), remaining)
-        except Exception as error:
+        except (TimeoutError, ConnectionRefusedError, ConnectionResetError) as error:
             raise TransientError() from error
         if clock() >= deadline:
             raise TimeoutError()
@@ -389,7 +444,7 @@ def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
                 result = "transient"
             except Exception:
                 result = "stop"
-            if name != wait or result != "transient":
+            if name != wait or result not in ("transient", "absent"):
                 break
             remaining = deadline - clock()
             if attempt + 1 < attempts and remaining > 0:

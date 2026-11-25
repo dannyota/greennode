@@ -473,7 +473,7 @@ class State(unittest.TestCase):
 
     def approved(self, name):
         api = {"version": {"crate": name, "num": "0.1.0", "checksum": "a" * 64, "yanked": False}}
-        index = {"name": name, "vers": "0.1.0", "cksum": "a" * 64, "yanked": False}
+        index = {"name": name, "vers": "0.1.0", "deps": [], "cksum": "a" * 64, "yanked": False}
         self.responses[f"https://crates.io/api/v1/crates/{name}/0.1.0"] = (200, json.dumps(api).encode())
         self.responses[f"https://index.crates.io/gr/ee/{name}"] = (200, json.dumps(index).encode() + b"\n")
 
@@ -503,6 +503,102 @@ class State(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(output.getvalue(), "greennode-sdk: absent\ngreennode: absent\n")
         self.assertNotEqual(check.main(["state", str(self.receipt), "--bad"], fetch=self.fetch), 0)
+
+    def test_framing_error_is_terminal_but_timeout_retries(self):
+        self.approved("greennode-sdk")
+        key = "https://crates.io/api/v1/crates/greennode-sdk/0.1.0"
+        for error, expected, expected_calls in ((ValueError("framing"), 1, 1), (TimeoutError(), 0, 2)):
+            with self.subTest(error=type(error).__name__):
+                calls = []
+                def fetch(url):
+                    if url == key:
+                        calls.append(url)
+                        if len(calls) == 1:
+                            raise error
+                    return self.fetch(url)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = check.state(self.receipt, wait="greennode-sdk", fetch=fetch, sleep=lambda _: None)
+                self.assertEqual(result, expected)
+                self.assertEqual(len(calls), expected_calls)
+
+    def test_pre_response_connection_refused_or_reset_retries(self):
+        self.approved("greennode-sdk")
+        key = "https://crates.io/api/v1/crates/greennode-sdk/0.1.0"
+        for error in (ConnectionRefusedError(), ConnectionResetError()):
+            with self.subTest(error=type(error).__name__):
+                calls = []
+                def fetch(url):
+                    if url == key:
+                        calls.append(url)
+                        if len(calls) == 1:
+                            raise error
+                    return self.fetch(url)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result = check.state(self.receipt, wait="greennode-sdk", fetch=fetch, sleep=lambda _: None)
+                self.assertEqual(result, 0)
+                self.assertEqual(len(calls), 2)
+
+    def test_only_allowed_http_errors_are_transient(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        self.responses[key] = (500, b"")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        self.responses[key] = (502, b"")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "transient")
+
+    def test_semver_pre_release_identifiers(self):
+        self.assertFalse(check.valid_semver("1.2.3-alpha.01"))
+        self.assertTrue(check.valid_semver("1.2.3-alpha.1+build.01"))
+
+    def test_index_dependency_shape(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        row = {"name": "greennode", "vers": "0.0.1", "deps": [{"name": "dep"}],
+               "cksum": "a" * 64, "yanked": False}
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        row["deps"][0]["req"] = "^1.0"
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
+
+    def test_index_rows_require_semver(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        row = {"name": "greennode", "vers": "invalid", "deps": [], "cksum": "a" * 64, "yanked": False}
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        row["vers"] = "0.0.1-alpha.1+build.7"
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
+
+    def test_index_rows_require_dependencies_field(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        row = {"name": "greennode", "vers": "0.0.1", "cksum": "a" * 64, "yanked": False}
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        row["deps"] = []
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
+
+    def test_wait_retries_absence_until_approved(self):
+        key = "https://index.crates.io/gr/ee/greennode-sdk"
+        self.approved("greennode-sdk")
+        good_api = self.responses["https://crates.io/api/v1/crates/greennode-sdk/0.1.0"]
+        good_index = self.responses[key]
+        self.absent()
+        calls = []
+        def fetch(url):
+            if url == key:
+                calls.append(url)
+                if len(calls) == 1:
+                    self.responses["https://crates.io/api/v1/crates/greennode-sdk/0.1.0"] = good_api
+                    self.responses[key] = good_index
+                    return (404, b"<Error><Code>NoSuchKey</Code><Key>gr/ee/greennode-sdk</Key></Error>")
+            return self.fetch(url)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = check.state(self.receipt, wait="greennode-sdk", fetch=fetch, sleep=self.sleeps.append)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.sleeps), 1)
 
     def test_transport_exception_is_redacted(self):
         self.responses["https://crates.io/api/v1/crates/greennode/0.1.0"] = RuntimeError("private-canary")
@@ -710,11 +806,11 @@ class State(unittest.TestCase):
         self.assertIn("greennode-sdk: unknown", output.getvalue())
         self.assertLessEqual(len([url for url in calls if "greennode-sdk" in url]), 2)
 
-    def test_wait_absent_is_terminal(self):
+    def test_wait_absent_reaches_bound(self):
         result, output = self.run_state(wait="greennode-sdk")
         self.assertNotEqual(result, 0)
         self.assertIn("greennode-sdk: unknown", output)
-        self.assertEqual(self.sleeps, [])
+        self.assertEqual(len(self.sleeps), 4)
         self.approved("greennode-sdk")
         self.assertEqual(self.run_state(wait="greennode-sdk")[0], 0)
 

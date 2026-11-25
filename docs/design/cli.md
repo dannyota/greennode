@@ -365,7 +365,8 @@ candidate's hidden `__command-inventory` command. It prints a JSON array of
 command lines as typed, each starting with `greennode`, sorted by UTF-8 bytes,
 with hidden commands excluded. The built-ins are exactly `greennode`,
 `greennode --help`, `greennode --version`, `greennode -h`, `greennode -v`,
-`greennode help`, and `greennode version`; each operation adds
+`greennode help`, and `greennode version`; each visible service adds
+`greennode <service>`, and each operation adds
 `greennode <service> <operation>`. The Rust `shipped_commands_match_registry`
 test compares a fresh export byte for byte and fails on a stale file. The
 [release gate](release.md) also checks the preceding published tag's inventory
