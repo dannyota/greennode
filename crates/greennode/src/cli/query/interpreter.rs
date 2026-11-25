@@ -1,6 +1,6 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
-use std::{cell::Cell, cmp::Ordering, collections::BTreeMap};
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use crate::cli::render::Value;
 
@@ -203,72 +203,79 @@ impl WorkBudget {
     }
 }
 
-pub(super) struct SortMeter {
-    initial: u64,
-    remaining: Cell<u64>,
-    exhausted: Cell<bool>,
+pub(super) fn compare_numbers(
+    left: &f64,
+    right: &f64,
+    budget: &mut WorkBudget,
+) -> Result<Ordering, EvaluationError> {
+    budget.charge(1)?;
+    Ok(if left == right {
+        Ordering::Equal
+    } else {
+        left.total_cmp(right)
+    })
 }
 
-impl SortMeter {
-    pub(super) fn new(budget: &WorkBudget) -> Self {
-        let remaining = 10_000_000 - budget.used;
-        Self {
-            initial: remaining,
-            remaining: Cell::new(remaining),
-            exhausted: Cell::new(false),
+pub(super) fn compare_strings(
+    left: &str,
+    right: &str,
+    budget: &mut WorkBudget,
+) -> Result<Ordering, EvaluationError> {
+    budget.charge(1)?;
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    for index in 0..left.len().min(right.len()) {
+        budget.charge(1)?;
+        let order = left[index].cmp(&right[index]);
+        if order != Ordering::Equal {
+            return Ok(order);
         }
     }
+    Ok(left.len().cmp(&right.len()))
+}
 
-    fn charge(&self) -> bool {
-        if self.exhausted.get() {
-            return false;
-        }
-        if let Some(remaining) = self.remaining.get().checked_sub(1) {
-            self.remaining.set(remaining);
-            true
-        } else {
-            self.exhausted.set(true);
-            false
-        }
-    }
-
-    pub(super) fn numbers(&self, left: &f64, right: &f64) -> Ordering {
-        if !self.charge() {
-            return Ordering::Equal;
-        }
-        if left == right {
-            Ordering::Equal
-        } else {
-            left.total_cmp(right)
-        }
-    }
-
-    pub(super) fn strings(&self, left: &str, right: &str) -> Ordering {
-        if !self.charge() {
-            return Ordering::Equal;
-        }
-        let left = left.as_bytes();
-        let right = right.as_bytes();
-        for index in 0..left.len().min(right.len()) {
-            if !self.charge() {
-                return Ordering::Equal;
+pub(super) fn stable_order<T>(
+    values: &[T],
+    budget: &mut WorkBudget,
+    mut compare: impl FnMut(&T, &T, &mut WorkBudget) -> Result<Ordering, EvaluationError>,
+) -> Result<Vec<usize>, EvaluationError> {
+    budget.charge(u64::try_from(values.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+    let mut order = (0..values.len()).collect::<Vec<_>>();
+    let mut scratch = Vec::new();
+    let mut width = 1usize;
+    while width < order.len() {
+        scratch.clear();
+        let mut start = 0usize;
+        while start < order.len() {
+            let middle = start.saturating_add(width).min(order.len());
+            let end = middle.saturating_add(width).min(order.len());
+            let mut left = start;
+            let mut right = middle;
+            while left < middle && right < end {
+                if compare(&values[order[left]], &values[order[right]], budget)?.is_le() {
+                    scratch.push(order[left]);
+                    left += 1;
+                } else {
+                    scratch.push(order[right]);
+                    right += 1;
+                }
             }
-            let order = left[index].cmp(&right[index]);
-            if order != Ordering::Equal {
-                return order;
+            while left < middle {
+                budget.charge(1)?;
+                scratch.push(order[left]);
+                left += 1;
             }
+            while right < end {
+                budget.charge(1)?;
+                scratch.push(order[right]);
+                right += 1;
+            }
+            start = end;
         }
-        left.len().cmp(&right.len())
+        std::mem::swap(&mut order, &mut scratch);
+        width = width.saturating_mul(2);
     }
-
-    pub(super) fn finish(self, budget: &mut WorkBudget) -> Result<(), EvaluationError> {
-        budget.charge(self.initial - self.remaining.get())?;
-        if self.exhausted.get() {
-            Err(EvaluationError::WorkBudget)
-        } else {
-            Ok(())
-        }
-    }
+    Ok(order)
 }
 
 pub(super) fn check(
@@ -590,6 +597,32 @@ fn slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stable_sort_stops_at_first_comparator_error() {
+        let mut budget = WorkBudget::new();
+        let mut comparisons = 0;
+        let result = stable_order(&[3, 2, 1], &mut budget, |_, _, _| {
+            comparisons += 1;
+            Err(EvaluationError::WorkBudget)
+        });
+        assert_eq!(result, Err(EvaluationError::WorkBudget));
+        assert_eq!(comparisons, 1);
+    }
+
+    #[test]
+    fn exhausted_stable_sort_returns_error_without_panic() {
+        let values = [
+            12, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        ];
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_973).unwrap();
+        let result = stable_order(&values, &mut budget, |a, b, budget| {
+            budget.charge(1)?;
+            Ok(a.cmp(b))
+        });
+        assert_eq!(result, Err(EvaluationError::WorkBudget));
+    }
+
     #[test]
     fn recursive_comparisons_charge_string_and_key_bytes() {
         let long = "x".repeat(1_024);

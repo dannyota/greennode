@@ -2,7 +2,9 @@
 
 use crate::cli::render::Value;
 
-use super::interpreter::{EvaluationError, SortMeter, WorkBudget, check};
+use super::interpreter::{
+    EvaluationError, WorkBudget, check, compare_numbers, compare_strings, stable_order,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum Type {
@@ -578,17 +580,16 @@ pub(super) fn call_budgeted(
                     return Err(EvaluationError::NonFinite);
                 }
             }
-            for value in values {
-                budget.charge_value(value)?;
+            let order = stable_order(values, budget, |a, b, budget| match (a, b) {
+                (Value::Number(a), Value::Number(b)) => compare_numbers(a, b, budget),
+                (Value::String(a), Value::String(b)) => compare_strings(a, b, budget),
+                _ => Err(EvaluationError::FunctionType),
+            })?;
+            let mut result = Vec::new();
+            for index in order {
+                budget.charge_value(&values[index])?;
+                result.push(values[index].clone());
             }
-            let mut result = values.clone();
-            let meter = SortMeter::new(budget);
-            result.sort_by(|a, b| match (a, b) {
-                (Value::Number(a), Value::Number(b)) => meter.numbers(a, b),
-                (Value::String(a), Value::String(b)) => meter.strings(a, b),
-                _ => std::cmp::Ordering::Equal,
-            });
-            meter.finish(budget)?;
             Ok(Value::Array(result))
         }
         ("merge", values) => {
@@ -807,23 +808,31 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_sort_meter_stops_comparisons() {
+    fn exhausted_sort_comparison_returns_error() {
         let mut budget = WorkBudget::new();
         budget.charge(9_999_999).unwrap();
-        let meter = SortMeter::new(&budget);
-        assert_eq!(meter.strings("a", "b"), std::cmp::Ordering::Equal);
-        assert_eq!(meter.numbers(&1.0, &2.0), std::cmp::Ordering::Equal);
-        assert_eq!(meter.finish(&mut budget), Err(EvaluationError::WorkBudget));
+        assert_eq!(
+            compare_strings("a", "b", &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+        assert_eq!(
+            compare_numbers(&1.0, &2.0, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
     }
 
     #[test]
-    fn sort_meter_counts_comparisons_and_bytes() {
+    fn sort_comparisons_count_comparisons_and_bytes() {
         let mut budget = WorkBudget::new();
         budget.charge(9_999_996).unwrap();
-        let meter = SortMeter::new(&budget);
-        assert_eq!(meter.numbers(&1.0, &2.0), std::cmp::Ordering::Less);
-        assert_eq!(meter.strings("ab", "ab"), std::cmp::Ordering::Equal);
-        assert_eq!(meter.finish(&mut budget), Ok(()));
+        assert_eq!(
+            compare_numbers(&1.0, &2.0, &mut budget),
+            Ok(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            compare_strings("ab", "ab", &mut budget),
+            Ok(std::cmp::Ordering::Equal)
+        );
         assert_eq!(budget.charge(1), Err(EvaluationError::WorkBudget));
     }
 

@@ -145,7 +145,7 @@ pub(super) fn call(
     }
     budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
     if numeric {
-        let mut indexed = keys
+        let indexed = keys
             .into_iter()
             .zip(values.iter())
             .map(|(key, value)| match key {
@@ -154,18 +154,20 @@ pub(super) fn call(
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let meter = super::interpreter::SortMeter::new(budget);
-        indexed.sort_by(|(a, _), (b, _)| meter.numbers(a, b));
-        meter.finish(budget)?;
+        let order =
+            super::interpreter::stable_order(&indexed, budget, |(a, _), (b, _), budget| {
+                super::interpreter::compare_numbers(a, b, budget)
+            })?;
         budget.charge(1)?;
         let mut output = Vec::new();
-        for (_, value) in indexed {
+        for index in order {
+            let value = indexed[index].1;
             budget.charge_value(value)?;
             output.push(value.clone());
         }
         Ok(Value::Array(output))
     } else {
-        let mut indexed = keys
+        let indexed = keys
             .into_iter()
             .zip(values.iter())
             .map(|(key, value)| match key {
@@ -173,12 +175,14 @@ pub(super) fn call(
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let meter = super::interpreter::SortMeter::new(budget);
-        indexed.sort_by(|(a, _), (b, _)| meter.strings(a, b));
-        meter.finish(budget)?;
+        let order =
+            super::interpreter::stable_order(&indexed, budget, |(a, _), (b, _), budget| {
+                super::interpreter::compare_strings(a, b, budget)
+            })?;
         budget.charge(1)?;
         let mut output = Vec::new();
-        for (_, value) in indexed {
+        for index in order {
+            let value = indexed[index].1;
             budget.charge_value(value)?;
             output.push(value.clone());
         }
