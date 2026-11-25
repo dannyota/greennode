@@ -1,3 +1,5 @@
+pub(crate) mod store;
+
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
