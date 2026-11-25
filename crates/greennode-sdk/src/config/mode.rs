@@ -61,7 +61,7 @@ pub(super) fn select(
     config: Option<&Path>,
     credentials: Option<&Path>,
     source: &dyn ConfigSource,
-    cwd: &Path,
+    cwd: Option<&Path>,
     probe: impl Fn(&Path) -> Presence,
 ) -> Result<Paths, ()> {
     let value = |name: &str| {
@@ -82,7 +82,7 @@ pub(super) fn select(
         value("VNGCLOUD_CONFIG_FILE"),
         value("VNGCLOUD_SHARED_CREDENTIALS_FILE"),
     ];
-    let home = source.home_dir();
+    let home = source.home_dir().filter(|path| path.is_absolute());
     let defaults = |directory: &str| {
         ["config", "credentials"].map(|name| home.as_ref().map(|h| h.join(directory).join(name)))
     };
@@ -127,9 +127,22 @@ pub(super) fn select(
             }
         });
         if let Some(path) = &mut chosen[i]
-            && path.is_relative()
+            && !path.is_absolute()
         {
-            *path = cwd.join(&*path);
+            #[cfg(windows)]
+            if path.has_root()
+                || matches!(
+                    path.components().next(),
+                    Some(std::path::Component::Prefix(_))
+                )
+            {
+                return Err(());
+            }
+            let base = cwd.filter(|p| p.is_absolute()).ok_or(())?;
+            *path = base.join(&*path);
+            if !path.is_absolute() {
+                return Err(());
+            }
         }
     }
     if mode == Mode::Greennode {
@@ -157,6 +170,7 @@ pub(super) fn select(
 mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
+    #[cfg(unix)]
     use std::env;
     use std::ffi::OsString;
 
@@ -211,7 +225,7 @@ mod tests {
                 if gmask != 0 {
                     present.extend(gd.iter().cloned());
                 }
-                let selected = select(None, None, &source, Path::new("/work"), |p| {
+                let selected = select(None, None, &source, Some(Path::new("/work")), |p| {
                     if present.contains(p) {
                         Presence::Present
                     } else {
@@ -263,7 +277,7 @@ mod tests {
         overrides.0.insert(gn[0].into(), "/new/config".into());
         overrides.0.insert(gn[1].into(), "/new/credentials".into());
         overrides.0.insert(vn[0].into(), "/old/config".into());
-        let selected = select(None, None, &overrides, Path::new("/work"), |p| {
+        let selected = select(None, None, &overrides, Some(Path::new("/work")), |p| {
             if p.starts_with("/new") {
                 Presence::Present
             } else {
@@ -289,7 +303,7 @@ mod tests {
                         present.insert(vd[old_slot].clone());
                     }
                     assert!(
-                        select(None, None, &source, Path::new("/work"), |p| {
+                        select(None, None, &source, Some(Path::new("/work")), |p| {
                             if present.contains(p) {
                                 Presence::Present
                             } else {
@@ -314,7 +328,7 @@ mod tests {
             "VNGCLOUD_SHARED_CREDENTIALS_FILE".into(),
             "/overrides/credentials".into(),
         );
-        let paths = select(None, None, &source, Path::new("/work"), |_| {
+        let paths = select(None, None, &source, Some(Path::new("/work")), |_| {
             Presence::Absent
         })
         .unwrap();
@@ -329,7 +343,7 @@ mod tests {
     #[test]
     fn legacy_credentials_default_alone_selects_legacy() {
         let source = Source::default();
-        let result = select(None, None, &source, Path::new("/work"), |p| {
+        let result = select(None, None, &source, Some(Path::new("/work")), |p| {
             if p.ends_with(".vngcloud/credentials") {
                 Presence::Present
             } else {
@@ -350,7 +364,7 @@ mod tests {
             Some(Path::new("")),
             None,
             &source,
-            Path::new("/work"),
+            Some(Path::new("/work")),
             |p| {
                 if p.ends_with(".vngcloud/config") {
                     Presence::Present
@@ -375,7 +389,7 @@ mod tests {
             Some(Path::new("/override")),
             Some(Path::new("/key")),
             &source,
-            Path::new("/work"),
+            Some(Path::new("/work")),
             |p| {
                 if p.starts_with("/override") || p.starts_with("/key") {
                     Presence::Present
@@ -391,7 +405,7 @@ mod tests {
     #[test]
     fn ambiguous_legacy_default_guards_incomplete_pair() {
         let source = Source::default();
-        let result = select(None, None, &source, Path::new("/work"), |p| {
+        let result = select(None, None, &source, Some(Path::new("/work")), |p| {
             if p.ends_with(".greennode/config") {
                 Presence::Present
             } else if p.ends_with(".vngcloud/credentials") {
@@ -414,6 +428,94 @@ mod tests {
     }
 
     #[test]
+    fn relative_home_is_not_probed() {
+        struct RelativeHome;
+        impl ConfigSource for RelativeHome {
+            fn var_os(&self, name: &OsStr) -> Option<OsString> {
+                (name == OsStr::new("VNGCLOUD_CONFIG_FILE"))
+                    .then(|| OsString::from("/legacy/config"))
+            }
+            fn home_dir(&self) -> Option<PathBuf> {
+                Some(PathBuf::from("relative-home"))
+            }
+        }
+        let seen = std::cell::RefCell::new(Vec::new());
+        let result = select(None, None, &RelativeHome, Some(Path::new("/work")), |p| {
+            seen.borrow_mut().push(p.to_path_buf());
+            if p.ends_with(".greennode/config") {
+                Presence::Present
+            } else {
+                Presence::Absent
+            }
+        });
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.mode, Mode::Legacy);
+        assert_eq!(result.config, Some(PathBuf::from("/legacy/config")));
+        assert!(
+            seen.borrow()
+                .iter()
+                .all(|p| !p.starts_with("relative-home"))
+        );
+    }
+
+    #[test]
+    fn relative_override_without_cwd_is_refused() {
+        let result = select(
+            Some(Path::new("relative")),
+            None,
+            &Source::default(),
+            None,
+            |_| Presence::Absent,
+        );
+        assert!(result.is_err());
+        let absolute = select(
+            Some(Path::new("/absolute")),
+            None,
+            &Source::default(),
+            None,
+            |_| Presence::Absent,
+        );
+        assert!(absolute.is_ok());
+    }
+
+    #[test]
+    fn relative_override_is_anchored_before_probing() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let paths = select(
+            Some(Path::new("new/config")),
+            Some(Path::new("new/credentials")),
+            &Source::default(),
+            Some(Path::new("/work")),
+            |p| {
+                seen.borrow_mut().push(p.to_path_buf());
+                Presence::Present
+            },
+        )
+        .unwrap();
+        assert_eq!(paths.config, Some(PathBuf::from("/work/new/config")));
+        assert!(seen.borrow().contains(&PathBuf::from("/work/new/config")));
+        assert!(!seen.borrow().contains(&PathBuf::from("new/config")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_partial_paths_are_refused() {
+        for path in [r"C:config", r"\config"] {
+            assert!(
+                select(
+                    Some(Path::new(path)),
+                    None,
+                    &Source::default(),
+                    Some(Path::new(r"C:\work")),
+                    |_| Presence::Absent
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn options_override_variables_and_resolve_relative_paths() {
         let mut source = Source::default();
         source
@@ -426,7 +528,7 @@ mod tests {
             Some(Path::new("config")),
             Some(Path::new("credentials")),
             &source,
-            Path::new("/work"),
+            Some(Path::new("/work")),
             |_| Presence::Present,
         )
         .unwrap();
@@ -450,7 +552,7 @@ mod tests {
     fn ambiguous_greennode_default_refuses() {
         let source = Source::default();
         assert!(
-            select(None, None, &source, Path::new("/work"), |p| {
+            select(None, None, &source, Some(Path::new("/work")), |p| {
                 if p.ends_with(".greennode/config") {
                     Presence::Ambiguous
                 } else {
@@ -460,7 +562,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            select(None, None, &source, Path::new("/work"), |_| {
+            select(None, None, &source, Some(Path::new("/work")), |_| {
                 Presence::Absent
             })
             .is_ok()
