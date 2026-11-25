@@ -66,9 +66,21 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
-    let canonical = canonicalize(text);
+    let needles: Vec<_> = credentials
+        .values()
+        .iter()
+        .filter_map(|secret| {
+            let value = secret.expose_secret();
+            (!value.is_empty()).then(|| Zeroizing::new(value.as_bytes().to_ascii_lowercase()))
+        })
+        .collect();
+    matches_forms(text.as_bytes(), &needles, [0; 3])
+}
+
+fn matches_forms(input: &[u8], needles: &[Zeroizing<Vec<u8>>], counts: [u8; 3]) -> bool {
+    let lower = Zeroizing::new(input.to_ascii_lowercase());
     let normalized = Zeroizing::new(
-        canonical
+        lower
             .iter()
             .copied()
             .filter(u8::is_ascii_alphanumeric)
@@ -77,39 +89,41 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
     if normalized
         .windows(b"clientsecret".len())
         .any(|part| part == b"clientsecret")
+        || needles.iter().any(|needle| {
+            lower
+                .windows(needle.len())
+                .any(|part| part == needle.as_slice())
+        })
     {
         return true;
     }
-    credentials.values().iter().any(|secret| {
-        let value = secret.expose_secret();
-        if value.is_empty() {
-            return false;
+    for step in 0..3 {
+        if counts[step] == 2 {
+            continue;
         }
-        let needle = canonicalize(value);
-        text.contains(value)
-            || (!needle.is_empty()
-                && canonical
-                    .windows(needle.len())
-                    .any(|part| part == needle.as_slice()))
-            || value.lines().map(str::trim).any(|line| {
-                if line.len() < 8 {
-                    return false;
-                }
-                let line = canonicalize(line);
-                !line.is_empty()
-                    && canonical
-                        .windows(line.len())
-                        .any(|part| part == line.as_slice())
-            })
-    })
+        let next = match step {
+            0 => Zeroizing::new(
+                input
+                    .iter()
+                    .copied()
+                    .filter(|byte| !byte.is_ascii_control())
+                    .collect(),
+            ),
+            1 => json_unescape(input),
+            _ => Zeroizing::new(percent_decode(input)),
+        };
+        if next.as_slice() != input {
+            let mut next_counts = counts;
+            next_counts[step] += 1;
+            if matches_forms(&next, needles, next_counts) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
-fn canonicalize(text: &str) -> Zeroizing<Vec<u8>> {
-    let input = Zeroizing::new(
-        text.bytes()
-            .filter(|byte| !byte.is_ascii_control())
-            .collect::<Vec<_>>(),
-    );
+fn json_unescape(input: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut unescaped = Zeroizing::new(Vec::with_capacity(input.len()));
     let mut index = 0;
     while index < input.len() {
@@ -163,9 +177,7 @@ fn canonicalize(text: &str) -> Zeroizing<Vec<u8>> {
         unescaped.push(input[index]);
         index += 1;
     }
-    let mut decoded = Zeroizing::new(percent_decode(&unescaped));
-    decoded.make_ascii_lowercase();
-    decoded
+    unescaped
 }
 
 fn retryable(status: StatusCode, retry: Retry) -> bool {
@@ -589,6 +601,19 @@ mod tests {
         let e = error(
             403,
             br#"{"message":"%54\\u006fy-key"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn encoded_literal_percent_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("tok%41end")]);
+        let e = error(
+            403,
+            br#"{"message":"tok%2541end"}"#,
             true,
             false,
             &credentials,
