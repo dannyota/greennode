@@ -25,7 +25,11 @@ and recovery.
    set +x
    umask 077
    unset GH_DEBUG
-   gh() { GH_TOKEN=$(command gh auth token -u dannyota) command gh "$@"; }
+   gh() {
+     local token
+     token=$(command gh auth token -u dannyota) && test -n "$token" || return 1
+     GH_TOKEN="$token" command gh "$@"
+   }
    git fetch origin master --tags
    COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
    git merge-base --is-ancestor "$COMMIT" origin/master
@@ -51,7 +55,7 @@ and recovery.
        200) jq -e '.users | type == "array"' "$OUT.body" > /dev/null
             mv "$OUT.body" "$OUT" ;;
        404) jq -e --arg d "crate \`$CRATE\` does not exist" \
-              '.errors == [{detail: $d}]' "$OUT.body" > /dev/null
+              '. == {errors: [{detail: $d}]}' "$OUT.body" > /dev/null
             printf 'null\n' > "$OUT" ;;
        *) exit 1 ;;
      esac
@@ -145,7 +149,8 @@ and recovery.
    ```bash
    OWNERS=$(curl -fsS -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners) &&
      jq -e '.users | any(.kind == "user" and .login == "dannyota")' <<< "$OWNERS" &&
-     python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" &&
+     STATE=$(python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT") &&
+     test "$STATE" = $'greennode-sdk: present-and-approved\ngreennode: absent' &&
      cargo +1.100.0 publish --no-verify --locked --registry crates-io \
        --package greennode --config "$PROVIDER" --config net.retry=0
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --wait greennode
