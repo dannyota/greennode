@@ -308,41 +308,26 @@ jobs:
           fi
           export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
           cargo +1.100.0 publish --workspace --dry-run --locked --registry crates-io
-          python3 -I - "$root/build/package/tmp-crate" "$RUNNER_TEMP/verified-hashes.json" "$TAG" <<'PYTHON'
-          import hashlib, json, pathlib, sys
-          source = pathlib.Path(sys.argv[1])
+          python3 -I - "$root/build/package/tmp-crate" "$RUNNER_TEMP/verified-crates" "$TAG" <<'PYTHON'
+          import pathlib, shutil, sys
+          source, destination = map(pathlib.Path, sys.argv[1:3])
+          destination.mkdir()
           expected = {f'{name}-{sys.argv[3][1:]}.crate' for name in ('greennode-sdk', 'greennode')}
           assert {p.name for p in source.iterdir() if p.name.endswith('.crate')} == expected
-          hashes = {}
           for name in expected:
               path = source / name
               assert path.is_file() and not path.is_symlink()
-              hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
-          pathlib.Path(sys.argv[2]).write_text(json.dumps(hashes))
+              shutil.copyfile(path, destination / name)
           PYTHON
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: staged-crates
-          path: ${{ runner.temp }}/staged-crates
-      - name: Compare staged archives
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          python3 -I - "$RUNNER_TEMP/staged-crates" "$RUNNER_TEMP/verified-hashes.json" "$TAG" <<'PYTHON'
-          import hashlib, json, pathlib, sys
-          source = pathlib.Path(sys.argv[1])
-          expected = {f'{name}-{sys.argv[3][1:]}.crate' for name in ('greennode-sdk', 'greennode')}
-          assert {p.name for p in source.iterdir()} == expected
-          hashes = json.loads(pathlib.Path(sys.argv[2]).read_text())
-          assert set(hashes) == expected
-          for name in expected:
-              path = source / name
-              assert path.is_file() and not path.is_symlink()
-              assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
-          PYTHON
+          name: verified-crates
+          path: ${{ runner.temp }}/verified-crates/*.crate
+          if-no-files-found: error
+          retention-days: 90
 
   receipt:
-    needs: [verify, packages]
+    needs: [verify, packages, verify-packages]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -361,6 +346,28 @@ jobs:
         with:
           name: staged-crates
           path: ${{ runner.temp }}/staged-crates
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-crates
+          path: ${{ runner.temp }}/verified-crates
+      - name: Compare staged archives
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 -I - "$RUNNER_TEMP/staged-crates" "$RUNNER_TEMP/verified-crates" "$TAG" <<'PYTHON'
+          import hashlib, pathlib, sys
+          staged, verified = map(pathlib.Path, sys.argv[1:3])
+          expected = {f'{name}-{sys.argv[3][1:]}.crate' for name in ('greennode-sdk', 'greennode')}
+          assert not staged.is_symlink() and staged.is_dir()
+          assert not verified.is_symlink() and verified.is_dir()
+          assert {p.name for p in staged.iterdir()} == expected
+          assert {p.name for p in verified.iterdir()} == expected
+          for name in expected:
+              path, other = staged / name, verified / name
+              assert path.is_file() and not path.is_symlink()
+              assert other.is_file() and not other.is_symlink()
+              assert hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(other.read_bytes()).digest()
+          PYTHON
       - name: Validate archives and create receipt
         env:
           TAG: ${{ github.ref_name }}
@@ -408,6 +415,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -449,19 +459,23 @@ jobs:
           shutil.copyfile(root / 'crate-checksums' / 'crate-checksums.json', 'assets/crate-checksums.json')
           PYTHON
       - name: Generate release notes
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPOSITORY: ${{ github.repository }}
         run: |
           body="$(gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body)"
+          test -n "${body//[[:space:]]/}"
           compare="$(printf '%s\n' "$body" | grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" || true)"
           {
             printf "## What's Changed\n"
             if [ -z "$compare" ]; then
               printf '\nFirst release.\n'
             else
-              gh api "repos/$REPOSITORY/compare/${compare##*/}" | jq -r '
+              response="$(gh api "repos/$REPOSITORY/compare/${compare##*/}")"
+              test -n "${response//[[:space:]]/}"
+              printf '%s\n' "$response" | jq -r '
                 [.commits[] | select(.parents | length == 1)]
                 | .[]
                 | "* \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"'

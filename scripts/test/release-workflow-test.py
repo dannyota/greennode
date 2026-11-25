@@ -51,11 +51,15 @@ def validate(text):
             assert 'ref: ${{ needs.verify.outputs.commit }}' in section, f"{name} checkout ref"
             assert 'test "$(git rev-parse HEAD)" = "$COMMIT"' in section, f"{name} checkout validation"
         if name == 'release':
+            for step in job['steps']:
+                if 'run' in step:
+                    shell = step.get('shell', job.get('defaults', {}).get('run', {}).get('shell', workflow.get('defaults', {}).get('run', {}).get('shell')))
+                    assert shell == 'bash', "release shell"
             assert all(not re.search(r'(?<![\w/])(?:\./|scripts/)', step.get('run', '')) and not step.get('uses', '').startswith('./') for step in job['steps']), f"{name} repository script"
     assert sections['inventory'].index('name: Find preceding release') < sections['inventory'].index('name: Check shipped commands'), "inventory token before tagged code"
     assert 'generate-notes' in sections['release'] and 'First release.' in sections['release'] and '.commits[]' in sections['release'], "inline release notes"
     assert 'name: staged-crates' in sections['packages'] and 'name: staged-crates' in sections['receipt'], "staged crates artifact"
-    assert 'packages' in parsed_jobs['receipt']['needs'] and 'packages' in parsed_jobs['verify-packages']['needs'], "receipt needs packaging"
+    assert 'packages' in parsed_jobs['receipt']['needs'] and 'verify-packages' in parsed_jobs['receipt']['needs'] and 'packages' in parsed_jobs['verify-packages']['needs'], "receipt needs packaging"
     assert any(step.get('with', {}).get('path') == '${{ runner.temp }}/staged-crates/*.crate' for step in parsed_jobs['packages']['steps']), "only staged archives uploaded"
     assert 'cargo ' not in sections['receipt'] and 'scripts/check-crate-release.py receipt' in sections['receipt'], "clean receipt job"
     assert 'scripts/check-crate-release.py receipt' not in sections['packages'], "untrusted packaging runner"
@@ -63,7 +67,11 @@ def validate(text):
     assert 'verify-packages' in parsed_jobs['release']['needs'], "verified archives required"
     assert 'cargo +1.100.0 publish --workspace --dry-run --no-verify --locked --registry crates-io' in sections['packages'], "unbuilt staging"
     assert 'cargo +1.100.0 publish --workspace --dry-run --locked --registry crates-io' in sections['verify-packages'], "verified packaging"
-    assert 'hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]' in sections['verify-packages'], "verified archive hashes"
+    assert 'hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(other.read_bytes()).digest()' in sections['receipt'], "verified archive hashes"
+    assert sections['receipt'].index('name: Compare staged archives') < sections['receipt'].index('scripts/check-crate-release.py receipt'), "compare before receipt"
+    assert 'name: verified-crates' in sections['verify-packages'] and 'name: verified-crates' in sections['receipt'], "verified archive artifact"
+    assert 'actions/download-artifact@' not in sections['verify-packages'], "verify job must not compare artifacts"
+    assert any(step.get('with', {}).get('path') == '${{ runner.temp }}/verified-crates/*.crate' for step in parsed_jobs['verify-packages']['steps']), "only verified archives uploaded"
     assert 'needs.inventory.outputs.previous' in sections['release'], "previous release identity"
     assert 'test "$previous" = "$EXPECTED_PREVIOUS"' in sections['release'], "previous release recheck"
     assert 'git/ref/tags/' in sections['release'] and 'test "$sha" = "$COMMIT"' in sections['release'], "live tag recheck"
@@ -93,15 +101,44 @@ class WorkflowTest(unittest.TestCase):
                 self.assertIsNotNone(executable)
                 (root / name).symlink_to(executable)
             gh = root / 'gh'
-            gh.write_text('#!/bin/sh\ncase "$2" in */generate-notes) printf "%s\\n" "$BODY";; *) printf "%s\\n" "$COMPARISON";; esac\n')
+            gh.write_text('#!/bin/sh\ncase "$2" in */generate-notes) [ "${FAIL:-}" != body ] || exit 1; printf "%s\\n" "$BODY";; *) [ "${FAIL:-}" != compare ] || exit 1; printf "%s\\n" "$COMPARISON";; esac\n')
             gh.chmod(0o755)
             url = 'https://github.com/dannyota/greennode/compare/v0.1.0...v0.2.0'
             comparison = {'commits': [{'parents': [{}], 'sha': '123456789', 'commit': {'message': 'Fix\nbody'}}, {'parents': [{}, {}], 'sha': 'abcdef123', 'commit': {'message': 'Merge'}}]}
-            for body, expected in [('', "## What's Changed\n\nFirst release.\n"), (url, f"## What's Changed\n* Fix (1234567)\n\n**Full Changelog**: {url}\n")]:
+            for body, expected in [('First release notes', "## What's Changed\n\nFirst release.\n"), (url, f"## What's Changed\n* Fix (1234567)\n\n**Full Changelog**: {url}\n")]:
                 env = {'PATH': directory, 'TAG': 'v0.2.0', 'REPOSITORY': 'dannyota/greennode', 'BODY': body, 'COMPARISON': json.dumps(comparison)}
                 result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], cwd=root, env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((root / 'notes.md').read_text(), expected)
+            for body, response, fail in [('', '{}', ''), (' ', '{}', ''), (url, '', ''), (url, ' ', ''), ('First release notes', '{}', 'body'), (url, '{}', 'compare')]:
+                env = {'PATH': directory, 'TAG': 'v0.2.0', 'REPOSITORY': 'dannyota/greennode', 'BODY': body, 'COMPARISON': response, 'FAIL': fail}
+                result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], cwd=root, env=env, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, (body, response, fail))
+
+    def test_receipt_compares_archives(self):
+        workflow = parse_workflow(WORKFLOW.read_text())
+        step = next(s for s in workflow['jobs']['receipt']['steps'] if s.get('name') == 'Compare staged archives')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for folder in ('staged-crates', 'verified-crates'):
+                (root / folder).mkdir()
+                for name in ('greennode', 'greennode-sdk'):
+                    (root / folder / f'{name}-0.2.0.crate').write_bytes(name.encode())
+            env = {'PATH': '/usr/bin:/bin', 'RUNNER_TEMP': directory, 'TAG': 'v0.2.0'}
+            def run():
+                return subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], env=env, capture_output=True, text=True).returncode
+            self.assertEqual(run(), 0)
+            archive = root / 'verified-crates/greennode-0.2.0.crate'
+            archive.write_bytes(b'different')
+            self.assertNotEqual(run(), 0)
+            archive.unlink()
+            self.assertNotEqual(run(), 0)
+            archive.symlink_to(root / 'staged-crates/greennode-0.2.0.crate')
+            self.assertNotEqual(run(), 0)
+            archive.unlink()
+            archive.write_bytes(b'greennode')
+            (root / 'verified-crates/extra').write_bytes(b'extra')
+            self.assertNotEqual(run(), 0)
 
     def test_ci_installs_before_release_checks(self):
         ci = WORKFLOW.parent / 'ci.yml'
@@ -175,9 +212,12 @@ class WorkflowTest(unittest.TestCase):
             ('cmp "$candidate" "$other"', 'true'),
             ('shipped "$candidate"', 'shipped /dev/null'),
             ('needs: [verify, packages]', 'needs: [verify, checks]'),
+            ('needs: [verify, packages, verify-packages]', 'needs: [verify, packages]'),
+            ('path: ${{ runner.temp }}/verified-crates/*.crate', 'path: ${{ runner.temp }}/verified-crates/'),
             ('path: ${{ runner.temp }}/staged-crates/*.crate', 'path: ${{ runner.temp }}/staged-crates/'),
             ('--dry-run --no-verify --locked', '--dry-run --locked'),
-            ('hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]', 'True'),
+            ('hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(other.read_bytes()).digest()', 'True'),
+            ('shell: bash\n    steps:', 'shell: sh\n    steps:'),
             ('mkdir assets', 'scripts/untrusted.sh\n          mkdir assets'),
         )
         for old, new in cases:
