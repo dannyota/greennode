@@ -44,6 +44,7 @@ pub struct Server {
     connections: Arc<AtomicUsize>,
     protocol: Arc<AtomicUsize>,
     heads: Arc<Mutex<Vec<Vec<u8>>>>,
+    bodies: Arc<Mutex<Vec<Vec<u8>>>>,
     shutdown: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -72,6 +73,8 @@ impl Server {
         let protocol_count = Arc::clone(&protocol);
         let heads = Arc::new(Mutex::new(Vec::new()));
         let request_heads = Arc::clone(&heads);
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let request_bodies = Arc::clone(&bodies);
         let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
         let (shutdown, mut stop) = oneshot::channel();
         let thread = thread::spawn(move || {
@@ -94,6 +97,7 @@ impl Server {
                             let requests = Arc::clone(&request_count);
                             let protocol = Arc::clone(&protocol_count);
                             let request_heads = Arc::clone(&request_heads);
+                            let request_bodies = Arc::clone(&request_bodies);
                             tasks.spawn(async move {
                                 let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
                                 let Ok(mut stream) = acceptor.accept(stream).await else { return };
@@ -127,6 +131,7 @@ impl Server {
                                     };
                                     let mut body = vec![0; length];
                                     if stream.read_exact(&mut body).await.is_err() { return; }
+                                    request_bodies.lock().unwrap().push(body);
                                     requests.fetch_add(1, Ordering::SeqCst);
                                     let bytes = match response {
                                         Response::ResetMidBody(_) => unreachable!(),
@@ -190,12 +195,16 @@ impl Server {
             connections,
             protocol,
             heads,
+            bodies,
             shutdown: Some(shutdown),
             thread: Some(thread),
         }
     }
     pub fn heads(&self) -> Vec<Vec<u8>> {
         self.heads.lock().unwrap().clone()
+    }
+    pub fn bodies(&self) -> Vec<Vec<u8>> {
+        self.bodies.lock().unwrap().clone()
     }
     pub fn protocol(&self) -> usize {
         self.protocol.load(Ordering::SeqCst)
