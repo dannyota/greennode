@@ -158,6 +158,7 @@ where
 
 fn render_help_path(registry: &crate::services::Registry, path: &[&str]) -> Option<String> {
     let mut root = command_with_registry(registry);
+    root.build();
     let mut selected = &mut root;
     for name in path {
         selected = selected.find_subcommand_mut(name)?;
@@ -243,9 +244,9 @@ where
         let _ = write!(stdout, "{}", inventory(registry));
     } else if let Some((name, submatches)) = matches.subcommand() {
         if submatches.subcommand().is_none()
-            && let Some(service) = command_with_registry(registry).find_subcommand_mut(name)
+            && let Some(text) = render_help_path(registry, &[name])
         {
-            let _ = write!(stdout, "{}", service.render_help());
+            let _ = write!(stdout, "{text}");
         }
     } else {
         let _ = write!(stdout, "{}", command_with_registry(registry).render_help());

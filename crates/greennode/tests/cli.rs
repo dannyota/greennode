@@ -117,6 +117,18 @@ fn shipped_commands_match_registry() {
 }
 
 #[test]
+fn version_help_includes_full_path_and_globals() {
+    for args in [&["version", "-h"][..], &["help", "version"]] {
+        let output = greennode(args);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("Usage: greennode version"), "{text}");
+        assert!(text.contains("--profile"), "{text}");
+    }
+}
+
+#[test]
 fn no_arguments_print_help() {
     let output = greennode(&[]);
     assert!(output.status.success());

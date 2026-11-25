@@ -152,8 +152,7 @@ fn inherited_project_binding_matches_storage_baseline() {
     .unwrap();
     let baseline: Baseline = serde_json::from_str(include_str!("parity/commands.json")).unwrap();
     assert!(compare(&registry, &baseline).is_ok());
-    let mut tree = greennode::cli::command_with_registry(&registry);
-    tree.build();
+    let tree = greennode::cli::command_with_registry(&registry);
     assert!(compare_tree(&registry, &baseline, &tree).is_ok());
 }
 
@@ -163,6 +162,25 @@ fn compare_tree(
     tree: &clap::Command,
 ) -> Result<(), String> {
     compare(registry, baseline)?;
+    for service in tree.get_subcommands() {
+        for leaf in service.get_subcommands() {
+            for arg in leaf.get_arguments() {
+                if tree
+                    .get_arguments()
+                    .any(|global| global.is_global_set() && global.get_id() == arg.get_id())
+                {
+                    return Err(format!(
+                        "redeclared global {} {}",
+                        service.get_name(),
+                        leaf.get_name()
+                    ));
+                }
+            }
+        }
+    }
+    let mut built = tree.clone();
+    built.build();
+    let tree = &built;
     let mut seen_services = std::collections::BTreeSet::new();
     for service_command in tree
         .get_subcommands()
@@ -287,6 +305,32 @@ fn comparison_rejects_short_only_flag() {
 }
 
 #[test]
+fn comparison_rejects_global_id_redeclared_at_leaf() {
+    let root = clap::Command::new("greennode").arg(
+        clap::Arg::new("read-only")
+            .long("read-only")
+            .global(true)
+            .action(clap::ArgAction::SetTrue),
+    );
+    let leaf = clap::Command::new("inspect").arg(clap::Arg::new("name").long("name"));
+    let clean = root
+        .clone()
+        .subcommand(clap::Command::new("toy").subcommand(leaf.clone()));
+    assert!(compare_tree(&toy(), &baseline(), &clean).is_ok());
+    let bad = root.subcommand(
+        clap::Command::new("toy").subcommand(
+            leaf.arg(
+                clap::Arg::new("read-only")
+                    .long("read-only")
+                    .global(true)
+                    .value_parser(clap::value_parser!(String)),
+            ),
+        ),
+    );
+    assert!(compare_tree(&toy(), &baseline(), &bad).is_err());
+}
+
+#[test]
 fn comparison_rejects_local_global_copy() {
     assert!(
         compare_tree(
@@ -332,8 +376,7 @@ fn comparison_rejects_empty_registered_service() {
 fn registered_operations_match_baseline() {
     let baseline: Baseline = serde_json::from_str(include_str!("parity/commands.json")).unwrap();
     let registry = greennode::services::registered().unwrap();
-    let mut tree = greennode::cli::command_with_registry(&registry);
-    tree.build();
+    let tree = greennode::cli::command_with_registry(&registry);
     compare_tree(&registry, &baseline, &tree).unwrap();
 }
 
