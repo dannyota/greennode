@@ -18,10 +18,14 @@ pub(super) enum Policy {
     S3Write,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SettingsError {
     InvalidConfig,
     ReadOnly(&'static str),
+    Parse {
+        mode: super::mode::Mode,
+        diagnostic: String,
+    },
 }
 
 #[derive(PartialEq, Eq)]
@@ -30,6 +34,7 @@ pub(super) struct Settings {
     pub region: Option<String>,
     pub project_id: Option<String>,
     pub read_only_source: Option<&'static str>,
+    pub file_read_only: Option<String>,
     pub output: String,
     pub section_present: bool,
 }
@@ -40,6 +45,47 @@ impl std::fmt::Debug for Settings {
     }
 }
 
+fn parse_latch(value: Option<&str>, validate: bool) -> Result<bool, SettingsError> {
+    match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" => Ok(false),
+        "1" | "true" => Ok(true),
+        _ if !validate => Ok(false),
+        _ => Err(SettingsError::InvalidConfig),
+    }
+}
+
+pub(super) fn preflight(
+    options: &Options,
+    source: &dyn ConfigSource,
+    policy: Policy,
+) -> Result<Option<&'static str>, SettingsError> {
+    use std::ffi::OsStr;
+    let latch = |name: &str| {
+        source
+            .var_os(OsStr::new(name))
+            .map(|v| v.to_string_lossy().into_owned())
+    };
+    let green = latch("GREENNODE_READ_ONLY");
+    let legacy = latch("VNGCLOUD_READ_ONLY");
+    let green_on = parse_latch(green.as_deref(), policy != Policy::Read)?;
+    let legacy_on = parse_latch(legacy.as_deref(), policy != Policy::Read)?;
+    let enabled = if options.read_only {
+        Some("option")
+    } else if green_on {
+        Some("GREENNODE_READ_ONLY")
+    } else if legacy_on {
+        Some("VNGCLOUD_READ_ONLY")
+    } else {
+        None
+    };
+    if matches!(policy, Policy::Write | Policy::S3Write)
+        && let Some(source) = enabled
+    {
+        return Err(SettingsError::ReadOnly(source));
+    }
+    Ok(enabled)
+}
+
 pub(super) fn resolve(
     paths: &Selection,
     options: &Options,
@@ -48,6 +94,7 @@ pub(super) fn resolve(
 ) -> Result<Settings, SettingsError> {
     use super::{Slot, file, ini};
     use std::ffi::OsStr;
+    let mut read_only_source = preflight(options, source, policy)?;
     let variable = |name: &str| -> Result<Option<String>, SettingsError> {
         source
             .var_os(OsStr::new(name))
@@ -70,38 +117,6 @@ pub(super) fn resolve(
     if profile.trim() != profile || profile.contains(['\r', '\n', '[', ']']) {
         return Err(SettingsError::InvalidConfig);
     }
-    let check_latch = policy != Policy::Read;
-    let parse_latch = |value: Option<&str>| -> Result<bool, SettingsError> {
-        match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-            "" | "0" | "false" => Ok(false),
-            "1" | "true" => Ok(true),
-            _ if !check_latch => Ok(false),
-            _ => Err(SettingsError::InvalidConfig),
-        }
-    };
-    let latch_variable = |name: &str| {
-        source
-            .var_os(OsStr::new(name))
-            .map(|value| value.to_string_lossy().into_owned())
-    };
-    let green_latch = latch_variable("GREENNODE_READ_ONLY");
-    let legacy_latch = latch_variable("VNGCLOUD_READ_ONLY");
-    let green_on = parse_latch(green_latch.as_deref())?;
-    let legacy_on = parse_latch(legacy_latch.as_deref())?;
-    let mut read_only_source = if options.read_only {
-        Some("option")
-    } else if green_on {
-        Some("GREENNODE_READ_ONLY")
-    } else if legacy_on {
-        Some("VNGCLOUD_READ_ONLY")
-    } else {
-        None
-    };
-    if matches!(policy, Policy::Write | Policy::S3Write)
-        && let Some(source) = read_only_source
-    {
-        return Err(SettingsError::ReadOnly(source));
-    }
     let ini = match &paths.config {
         None if matches!(policy, Policy::S3Read | Policy::S3Write) => {
             return Err(SettingsError::InvalidConfig);
@@ -115,7 +130,10 @@ pub(super) fn resolve(
             Slot::Config,
             file::open(path, Slot::Config).map_err(|_| SettingsError::InvalidConfig)?,
         )
-        .map_err(|_| SettingsError::InvalidConfig)?,
+        .map_err(|diagnostic| SettingsError::Parse {
+            mode: paths.mode,
+            diagnostic,
+        })?,
     };
     let section_name = if profile == "default" {
         profile.clone()
@@ -150,8 +168,9 @@ pub(super) fn resolve(
     if project_id.is_none() && (file_region.is_none() || file_region == region) {
         project_id = setting("project_id");
     }
-    let file_latch = setting("read_only");
-    if parse_latch(file_latch.as_deref())? && read_only_source.is_none() {
+    let file_latch = section.and_then(|values| values.get("read_only")).cloned();
+    let validate_file_latch = matches!(policy, Policy::S3Read | Policy::S3Write);
+    if parse_latch(file_latch.as_deref(), validate_file_latch)? && read_only_source.is_none() {
         read_only_source = Some("config");
     }
     if policy == Policy::S3Write
@@ -167,6 +186,7 @@ pub(super) fn resolve(
         region,
         project_id,
         read_only_source,
+        file_read_only: file_latch,
         output,
         section_present: section.is_some(),
     })
@@ -243,6 +263,126 @@ mod tests {
             resolve(&paths, &Options::default(), &source, Policy::Read),
             Err(SettingsError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn management_write_carries_malformed_file_latch() {
+        let fixture = Fixture::new("[default]\nread_only=maybe\n");
+        let settings = resolve(
+            &fixture.paths(),
+            &Options::default(),
+            &Source::default(),
+            Policy::Write,
+        );
+        assert!(settings.is_ok());
+        let settings = settings.unwrap();
+        assert_eq!(settings.file_read_only.as_deref(), Some("maybe"));
+        assert_eq!(
+            resolve(
+                &fixture.paths(),
+                &Options::default(),
+                &Source::default(),
+                Policy::S3Read
+            )
+            .err(),
+            Some(SettingsError::InvalidConfig)
+        );
+    }
+
+    #[test]
+    fn preflight_orchestrates_before_mode_and_profile() {
+        fn run(options: &Options, source: &Source) -> Result<Settings, SettingsError> {
+            preflight(options, source, Policy::Write)?;
+            let paths = crate::config::mode::select(None, None, source, None, |_| {
+                crate::config::mode::Presence::Absent
+            })
+            .map_err(|_| SettingsError::InvalidConfig)?;
+            resolve(&paths, options, source, Policy::Write)
+        }
+        let source = Source::default().with("GREENNODE_PROFILE", "bad[profile");
+        let options = Options {
+            read_only: true,
+            ..Options::default()
+        };
+        assert_eq!(
+            run(&options, &source).err(),
+            Some(SettingsError::ReadOnly("option"))
+        );
+        assert!(source.reads.lock().unwrap().iter().all(|name| matches!(
+            name.to_str(),
+            Some("GREENNODE_READ_ONLY" | "VNGCLOUD_READ_ONLY")
+        )));
+        let source = Source::default().with("GREENNODE_PROFILE", "bad[profile");
+        assert_eq!(
+            run(&Options::default(), &source).err(),
+            Some(SettingsError::InvalidConfig)
+        );
+    }
+
+    #[test]
+    fn read_only_precedes_invalid_profile() {
+        let fixture = Fixture::new("[default]\nregion=one\n");
+        let source = Source::default().with("GREENNODE_PROFILE", "bad[profile");
+        let options = Options {
+            read_only: true,
+            ..Options::default()
+        };
+        assert_eq!(
+            resolve(&fixture.paths(), &options, &source, Policy::Write).err(),
+            Some(SettingsError::ReadOnly("option"))
+        );
+        assert_eq!(
+            resolve(&fixture.paths(), &Options::default(), &source, Policy::Read).err(),
+            Some(SettingsError::InvalidConfig)
+        );
+    }
+
+    #[test]
+    fn malformed_config_keeps_safe_diagnostic() {
+        let fixture = Fixture::new("[default]\nregion=one\ncanary without equals\n");
+        let error = resolve(
+            &fixture.paths(),
+            &Options::default(),
+            &Source::default(),
+            Policy::Read,
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(&error, SettingsError::Parse { .. }));
+        match error {
+            SettingsError::Parse { mode, diagnostic } => {
+                assert_eq!(mode, Mode::Greennode);
+                assert!(diagnostic.starts_with("config:3:"));
+                assert!(!diagnostic.contains("canary"));
+                assert!(!diagnostic.contains(&fixture.0.to_string_lossy().to_string()));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_sources_remain_eligible_in_each_mode() {
+        let fixture = Fixture::new("[profile team]\nregion=file-region\nproject_id=file-project\n");
+        for mode in [Mode::Greennode, Mode::Legacy] {
+            let mut paths = fixture.paths();
+            paths.paths.mode = mode;
+            let source = Source::default()
+                .with("VNGCLOUD_PROFILE", "team")
+                .with("VNGCLOUD_REGION", "legacy-region")
+                .with("VNGCLOUD_PROJECT_ID", "legacy-project")
+                .with("VNGCLOUD_READ_ONLY", "true");
+            let inherited = resolve(&paths, &Options::default(), &source, Policy::S3Read).unwrap();
+            assert_eq!(inherited.region.as_deref(), Some("legacy-region"));
+            assert_eq!(inherited.project_id.as_deref(), Some("legacy-project"));
+            assert_eq!(inherited.read_only_source, Some("VNGCLOUD_READ_ONLY"));
+            let explicit = Options {
+                profile: Some("team".into()),
+                region: Some("file-region".into()),
+                ..Options::default()
+            };
+            let resolved = resolve(&paths, &explicit, &source, Policy::S3Read).unwrap();
+            assert_eq!(resolved.project_id.as_deref(), Some("file-project"));
+        }
     }
 
     #[test]
