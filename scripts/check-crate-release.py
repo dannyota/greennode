@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import http.client
 import json
+import os
 import queue
 import re
 import ssl
@@ -271,7 +272,19 @@ def reject_json_constant(value):
 
 def read_json(data):
     try:
-        return json.loads(data, object_pairs_hook=unique_object, parse_constant=reject_json_constant)
+        value = json.loads(data, object_pairs_hook=unique_object, parse_constant=reject_json_constant)
+        stack = [iter((value,))]
+        while stack:
+            try:
+                item = next(stack[-1])
+            except StopIteration:
+                stack.pop()
+                continue
+            if isinstance(item, (dict, list)):
+                if len(stack) > 64:
+                    raise ValueError("invalid JSON depth")
+                stack.append(iter(item.values() if isinstance(item, dict) else item))
+        return value
     except RecursionError as error:
         raise ValueError("invalid JSON depth") from error
 
@@ -491,6 +504,15 @@ def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
     return int(any(value in ("stop", "unknown") for value in results.values()))
 
 
+def artifact_entries_match(entries, expected):
+    remaining = set(expected)
+    for path in entries:
+        if path.name not in remaining:
+            return False
+        remaining.remove(path.name)
+    return not remaining
+
+
 def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False):
     if not isinstance(tag, str) or not TAG.fullmatch(tag):
         raise GateError("greennode: invalid release tag")
@@ -561,12 +583,18 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
     if set(by_name) != set().union(*expected.values()):
         raise GateError("greennode: unexpected release assets")
     artifacts = Path(artifacts)
-    if artifacts.is_symlink() or not artifacts.is_dir() or {path.name for path in artifacts.iterdir()} != set(expected):
+    if artifacts.is_symlink() or not artifacts.is_dir():
         raise GateError("greennode: invalid artifact directories")
+    with os.scandir(artifacts) as entries:
+        if not artifact_entries_match(entries, set(expected)):
+            raise GateError("greennode: invalid artifact directories")
     for directory, names in expected.items():
         folder = artifacts / directory
-        if folder.is_symlink() or not folder.is_dir() or {path.name for path in folder.iterdir()} != names:
+        if folder.is_symlink() or not folder.is_dir():
             raise GateError("greennode: invalid release artifact")
+        with os.scandir(folder) as entries:
+            if not artifact_entries_match(entries, names):
+                raise GateError("greennode: invalid release artifact")
         for name in names:
             path = folder / name
             asset = by_name.get(name, {})

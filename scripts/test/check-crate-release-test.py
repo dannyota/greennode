@@ -1242,6 +1242,48 @@ class Evidence(unittest.TestCase):
         path.write_bytes(original)
         self.assertEqual(check.main(args), 0)
 
+    def test_receipt_and_checksum_file_caps(self):
+        for directory, name in (("crate-checksums", "crate-checksums.json"),
+                                ("darwin-arm64", "greennode-darwin-arm64.sha256")):
+            with self.subTest(name=name):
+                path = self.artifacts / directory / name
+                original = path.read_bytes()
+                asset = next(item for item in self.release["assets"] if item["name"] == name)
+                old_digest = asset["digest"]
+                path.write_bytes(original + b" " * (1024 * 1024 + 1))
+                asset["digest"] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                with self.assertRaises(ValueError):
+                    self.validate()
+                path.write_bytes(original)
+                asset["digest"] = old_digest
+                self.assertIsNone(self.validate())
+
+    def test_json_depth_boundary(self):
+        with self.assertRaises(ValueError):
+            check.read_json(b"[" * 65 + b"0" + b"]" * 65)
+        result = check.read_json(b"[" * 64 + b"0" + b"]" * 64)
+        self.assertIsInstance(result, list)
+
+    def test_json_depth_limit_with_default_scanner(self):
+        args = self.command_args()
+        path = Path(args[3])
+        original = path.read_bytes()
+        path.write_bytes(original[:-1] + b',"ignored":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertNotEqual(check.main(args), 0)
+        path.write_bytes(original)
+        self.assertEqual(check.main(args), 0)
+
+    def test_directory_scan_stops_at_unexpected_entry(self):
+        visited = []
+        def entries():
+            yield Path("unexpected")
+            visited.append("past unexpected")
+            yield Path("expected")
+        self.assertFalse(check.artifact_entries_match(entries(), {"expected"}))
+        self.assertEqual(visited, [])
+        self.assertTrue(check.artifact_entries_match(iter([Path("expected")]), {"expected"}))
+
     def test_evidence_command(self):
         args = self.command_args()
         self.assertEqual(check.main(args), 0)
