@@ -133,7 +133,7 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
         Some(open(path, Slot::Config).map_err(&config_file_error)?)
     } else {
         if selection.config_named {
-            return Err(error(ConfigSlot::Config));
+            return Err(config_file_error("config: not found".to_owned()));
         }
         None
     };

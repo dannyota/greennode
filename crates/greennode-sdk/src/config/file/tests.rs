@@ -73,7 +73,7 @@ fn config_open_error_keeps_safe_source_and_reason() {
     use crate::config::mode::{Mode, Paths, Selection};
     let dir = Dir::new();
     let config = dir.0.join("config-canary");
-    std::fs::create_dir(&config).unwrap();
+    File::create(&config).unwrap().set_len(1_048_577).unwrap();
     let selection = Selection {
         paths: Paths {
             mode: Mode::Greennode,
@@ -93,9 +93,9 @@ fn config_open_error_keeps_safe_source_and_reason() {
     assert!(detail.is_some());
     let detail = detail.unwrap();
     assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: not a regular file");
+    assert_eq!(detail.diagnostic, "config: file too large");
     assert!(!format!("{detail:?}").contains("config-canary"));
-    std::fs::remove_dir(&config).unwrap();
+    std::fs::remove_file(&config).unwrap();
     let error = open_pair(&selection).err().unwrap();
     let detail = error.detail::<FileDiagnostic>().unwrap();
     assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
@@ -103,6 +103,17 @@ fn config_open_error_keeps_safe_source_and_reason() {
     assert!(!format!("{detail:?}").contains("config-canary"));
     std::fs::write(&config, "[default]\n").unwrap();
     assert!(open_pair(&selection).is_ok());
+    std::fs::remove_file(&config).unwrap();
+    let mut selection = selection;
+    selection.config_present = false;
+    let error = open_pair(&selection).err().unwrap();
+    assert_eq!(error.class(), crate::ErrorClass::InvalidConfig);
+    let detail = error.detail::<FileDiagnostic>();
+    assert!(detail.is_some());
+    let detail = detail.unwrap();
+    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
+    assert_eq!(detail.diagnostic, "config: not found");
+    assert!(!format!("{detail:?}").contains("config-canary"));
 }
 
 #[test]
