@@ -172,7 +172,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
+def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, status_seen=None):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" and not (allow_loopback and parsed.scheme == "http" and parsed.hostname == "127.0.0.1"):
         raise ValueError("HTTPS required")
@@ -180,16 +180,50 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
     deadline = clock() + timeout if deadline is None else deadline
     if clock() >= deadline:
         raise TimeoutError()
+    status_seen = status_seen or threading.Event()
+
+    class Response(http.client.HTTPResponse):
+        def _read_status(self):
+            try:
+                result = super()._read_status()
+            except TimeoutError as error:
+                raise TransientError() from error
+            status_seen.set()
+            return result
+
+    class Connect:
+        response_class = Response
+
+        def connect(self):
+            try:
+                return super().connect()
+            except TimeoutError as error:
+                raise TransientError() from error
+
+    class HTTPConnection(Connect, http.client.HTTPConnection):
+        pass
+
+    class HTTPSConnection(Connect, http.client.HTTPSConnection):
+        pass
+
+    class HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(HTTPConnection, req)
+
+    class HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(HTTPSConnection, req, context=self._context, check_hostname=self._check_hostname)
+
     request = urllib.request.Request(url, headers={"User-Agent": "release-checker", "Cache-Control": "no-cache"})
     try:
-        response = urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+        response = urllib.request.build_opener(NoRedirect(), HTTPHandler(), HTTPSHandler()).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
     except urllib.error.URLError as error:
-        if isinstance(error.reason, (TimeoutError, ConnectionRefusedError)):
+        if isinstance(error.reason, ConnectionRefusedError):
             raise error.reason from error
         raise GateError("greennode: transport failed") from error
-    except ConnectionResetError as error:
+    except (ConnectionResetError, TimeoutError) as error:
         raise GateError("greennode: transport failed") from error
     try:
         with response:
@@ -212,8 +246,8 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
             if len(data) > 1024 * 1024 or (length is not None and (not length.isdecimal() or int(length) != len(data))):
                 raise ValueError("invalid response framing")
             return response.status, data
-    except (http.client.HTTPException, ConnectionResetError, ConnectionRefusedError) as error:
-        raise ValueError("invalid response framing") from error
+    except (http.client.HTTPException, ConnectionResetError, ConnectionRefusedError, TimeoutError) as error:
+        raise GateError("greennode: invalid response framing") from error
 
 
 def unique_object(pairs):
@@ -301,51 +335,31 @@ def valid_semver(value):
 
 
 def index_record_valid(row, name):
-    if (not isinstance(row, dict) or row.get("name") != name or not valid_semver(row.get("vers"))
-            or not isinstance(row.get("deps"), list) or not isinstance(row.get("cksum"), str)
-            or not re.fullmatch(r"[0-9a-f]{64}", row["cksum"]) or type(row.get("yanked")) is not bool):
-        return False
-    for dependency in row["deps"]:
-        if (not isinstance(dependency, dict) or not isinstance(dependency.get("name"), str)
-                or not dependency["name"] or not isinstance(dependency.get("req"), str) or not dependency["req"]):
-            return False
-        if any(type(dependency[key]) is not bool for key in ("optional", "default_features") if key in dependency):
-            return False
-        if "features" in dependency and (not isinstance(dependency["features"], list)
-                or not all(isinstance(value, str) for value in dependency["features"])):
-            return False
-        if any(dependency[key] is not None and not isinstance(dependency[key], str)
-               for key in ("target", "kind", "registry", "package") if key in dependency):
-            return False
-        if dependency.get("kind") not in (None, "normal", "build", "dev"):
-            return False
-    for key in ("features", "features2"):
-        if key in row and (not isinstance(row[key], dict)
-                or any(not isinstance(k, str) or not isinstance(v, list)
-                       or not all(isinstance(item, str) for item in v) for k, v in row[key].items())):
-            return False
-    if "v" in row and (type(row["v"]) is not int or row["v"] not in (1, 2)):
-        return False
-    if "features2" in row and row.get("v", 1) < 2:
-        return False
-    for key in ("links", "rust_version", "pubtime"):
-        if key in row and row[key] is not None and not isinstance(row[key], str):
-            return False
-    return True
+    return (isinstance(row, dict) and row.get("name") == name and valid_semver(row.get("vers"))
+            and isinstance(row.get("cksum"), str) and re.fullmatch(r"[0-9a-f]{64}", row["cksum"]) is not None
+            and type(row.get("yanked")) is bool)
 
 
 def registry_state(record, fetch, first=False):
     name, version, digest = (record[key] for key in ("name", "version", "sha256"))
     api_status, api_data = fetch(f"https://crates.io/api/v1/crates/{name}/{version}")
-    index_status, index_data = fetch(f"https://index.crates.io/{index_prefix(name)}/{name}")
     allowed_transient = (502, 503, 504)
-    transient = api_status in allowed_transient or index_status in allowed_transient
-    if (type(api_status) is not int or type(index_status) is not int
-            or api_status not in (200, 404, *allowed_transient)
-            or index_status not in (200, 404, *allowed_transient)):
+    if type(api_status) is not int or api_status not in (200, 404, *allowed_transient):
         return "stop"
     if api_status == 404 and not api_not_found(api_data, name, version):
         return "stop"
+    if api_status == 200:
+        api = read_json(api_data)
+        if not isinstance(api, dict) or not isinstance(api.get("version"), dict):
+            return "stop"
+        api = api["version"]
+        if (api.get("crate") != name or not valid_semver(api.get("num")) or api.get("num") != version
+                or api.get("checksum") != digest or api.get("yanked") is not False):
+            return "stop"
+    index_status, index_data = fetch(f"https://index.crates.io/{index_prefix(name)}/{name}")
+    if type(index_status) is not int or index_status not in (200, 404, *allowed_transient):
+        return "stop"
+    transient = api_status in allowed_transient or index_status in allowed_transient
     if index_status == 404 and not index_not_found(index_data, name):
         return "stop"
     if first and index_status == 200:
@@ -366,14 +380,6 @@ def registry_state(record, fetch, first=False):
         return "stop"
     if api_status == 404 and not matches and not transient:
         return "absent"
-    if api_status == 200:
-        api = read_json(api_data)
-        if not isinstance(api, dict) or not isinstance(api.get("version"), dict):
-            return "stop"
-        api = api["version"]
-        if (api.get("crate") != name or not valid_semver(api.get("num")) or api.get("num") != version
-                or api.get("checksum") != digest or api.get("yanked") is not False):
-            return "stop"
     if transient:
         return "transient"
     if api_status != 200 or not matches:
@@ -381,7 +387,7 @@ def registry_state(record, fetch, first=False):
     return "present-and-approved"
 
 
-def deadline_fetch(fetch, timeout):
+def deadline_fetch(fetch, timeout, status_seen=None):
     result = queue.Queue(maxsize=1)
 
     def run():
@@ -394,6 +400,8 @@ def deadline_fetch(fetch, timeout):
     try:
         success, value = result.get(timeout=timeout)
     except queue.Empty as error:
+        if status_seen is not None and status_seen.is_set():
+            raise GateError("greennode: response timed out") from error
         raise TimeoutError() from error
     if not success:
         raise value
@@ -410,13 +418,17 @@ def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
         remaining = deadline - clock()
         if remaining <= 0:
             raise TimeoutError()
+        status_seen = threading.Event()
         try:
             result = deadline_fetch(
-                lambda: (fetch_url(url, timeout=min(30, remaining), deadline=deadline, clock=clock)
-                         if fetch is None else network(url)), remaining)
+                lambda: (fetch_url(url, timeout=min(30, remaining), deadline=deadline, clock=clock,
+                                   status_seen=status_seen) if fetch is None else network(url)),
+                remaining, status_seen=status_seen)
         except (TimeoutError, ConnectionRefusedError, ConnectionResetError) as error:
             raise TransientError() from error
         if clock() >= deadline:
+            if status_seen.is_set():
+                raise GateError("greennode: response timed out")
             raise TimeoutError()
         return result
 

@@ -504,6 +504,39 @@ class State(unittest.TestCase):
         self.assertEqual(output.getvalue(), "greennode-sdk: absent\ngreennode: absent\n")
         self.assertNotEqual(check.main(["state", str(self.receipt), "--bad"], fetch=self.fetch), 0)
 
+    def test_api_yank_precedes_index_timeout(self):
+        self.approved("greennode-sdk")
+        api_url = "https://crates.io/api/v1/crates/greennode-sdk/0.1.0"
+        index_url = "https://index.crates.io/gr/ee/greennode-sdk"
+        good_api = self.responses[api_url]
+        bad = json.loads(good_api[1]); bad["version"]["yanked"] = True
+        calls = []
+        def fetch(url):
+            calls.append(url)
+            if url == api_url and calls.count(api_url) == 1:
+                return 200, json.dumps(bad).encode()
+            if url == index_url and calls.count(index_url) == 1:
+                raise TimeoutError()
+            return self.fetch(url)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = check.state(self.receipt, wait="greennode-sdk", fetch=fetch, sleep=self.sleeps.append)
+        self.assertNotEqual(result, 0)
+        self.assertIn("greennode-sdk: unknown", output.getvalue())
+        self.assertEqual(calls.count(api_url), 1)
+        self.assertNotIn(index_url, calls)
+        self.assertEqual(self.run_state(wait="greennode-sdk")[0], 0)
+
+    def test_index_ignores_dependency_metadata(self):
+        key = "https://index.crates.io/gr/ee/greennode"
+        row = {"name": "greennode", "vers": "0.0.1", "cksum": "a" * 64,
+               "yanked": False, "deps": [{"name": "toy", "req": ""}]}
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
+        row["cksum"] = "invalid"
+        self.responses[key] = (200, json.dumps(row).encode() + b"\n")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+
     def test_framing_error_is_terminal_but_timeout_retries(self):
         self.approved("greennode-sdk")
         key = "https://crates.io/api/v1/crates/greennode-sdk/0.1.0"
@@ -550,12 +583,12 @@ class State(unittest.TestCase):
         self.assertFalse(check.valid_semver("1.2.3-alpha.01"))
         self.assertTrue(check.valid_semver("1.2.3-alpha.1+build.01"))
 
-    def test_index_dependency_shape(self):
+    def test_index_ignores_incomplete_dependency(self):
         key = "https://index.crates.io/gr/ee/greennode"
         row = {"name": "greennode", "vers": "0.0.1", "deps": [{"name": "dep"}],
                "cksum": "a" * 64, "yanked": False}
         self.responses[key] = (200, json.dumps(row).encode() + b"\n")
-        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
         row["deps"][0]["req"] = "^1.0"
         self.responses[key] = (200, json.dumps(row).encode() + b"\n")
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
@@ -569,11 +602,11 @@ class State(unittest.TestCase):
         self.responses[key] = (200, json.dumps(row).encode() + b"\n")
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
 
-    def test_index_rows_require_dependencies_field(self):
+    def test_index_allows_missing_dependency_metadata(self):
         key = "https://index.crates.io/gr/ee/greennode"
         row = {"name": "greennode", "vers": "0.0.1", "cksum": "a" * 64, "yanked": False}
         self.responses[key] = (200, json.dumps(row).encode() + b"\n")
-        self.assertEqual(check.registry_state(self.records[1], self.fetch), "stop")
+        self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
         row["deps"] = []
         self.responses[key] = (200, json.dumps(row).encode() + b"\n")
         self.assertEqual(check.registry_state(self.records[1], self.fetch), "absent")
@@ -833,6 +866,64 @@ class State(unittest.TestCase):
 
 
 class Transport(unittest.TestCase):
+    def test_timeout_before_status_and_during_body(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/body":
+                    self.send_response(200)
+                    self.send_header("Content-Length", "1")
+                    self.end_headers()
+                elif self.path == "/headers":
+                    self.send_response_only(200)
+                    self.flush_headers()
+                started.set()
+                release.wait(1)
+
+            def log_message(self, format, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(release.set)
+        url = f"http://127.0.0.1:{server.server_port}"
+        for path, expected in (("/body", check.GateError), ("/headers", check.GateError),
+                               ("/status", check.TransientError)):
+            with self.subTest(path=path):
+                try:
+                    check.fetch_url(url + path, timeout=0.05, allow_loopback=True)
+                except Exception as error:
+                    self.assertIsInstance(error, expected)
+                else:
+                    self.fail("expected timeout")
+                self.assertTrue(started.is_set())
+
+    def test_hard_deadline_after_status_is_terminal(self):
+        release = threading.Event()
+        finished = threading.Event()
+        status = threading.Event()
+        status.set()
+        def stalled():
+            release.wait(0.2)
+            finished.set()
+        try:
+            try:
+                check.deadline_fetch(stalled, 0.01, status_seen=status)
+            except Exception as error:
+                self.assertIsInstance(error, check.GateError)
+            else:
+                self.fail("expected deadline failure")
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(1))
+        self.assertEqual(check.deadline_fetch(lambda: 200, 1, status_seen=status), 200)
+
     def test_fetch_hard_deadline(self):
         release = threading.Event()
         finished = threading.Event()
@@ -874,7 +965,7 @@ class Transport(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         url = f"http://127.0.0.1:{server.server_port}/"
-        with self.assertRaises(TimeoutError):
+        with self.assertRaises(check.GateError):
             check.fetch_url(url, allow_loopback=True, deadline=3, clock=lambda: ticks[0])
         self.assertEqual(check.fetch_url(url, allow_loopback=True), (200, b"12345678"))
         with tempfile.TemporaryDirectory() as temporary:
