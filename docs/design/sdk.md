@@ -308,8 +308,11 @@ a typed field.
   cache directory when the SDK has no home.
 - Remove `WithHTTPClient`, `WithTransport`, and `IAMUserAuth.HTTPClient`. Expose
   a product connect timeout, not a raw sender. Endpoint overrides require
-  verified HTTPS. Drop the `GLB` and `VCR` aliases and ignore ambient proxies
-  and root-store settings.
+  verified HTTPS, canonical dotted-decimal IPv4, and a base path with no dot
+  segments, no malformed percent-escapes, and only bytes valid in a URI path; an
+  override such as `/gateway/./` that Go accepted is refused. A dashboard
+  override affects IAM-user sign-in only and never moves billing. Drop the `GLB`
+  and `VCR` aliases and ignore ambient proxies and root-store settings.
 - Capture only product response metadata, not URLs or bodies. Log static route
   templates rather than expanded paths. Withhold unapproved peer diagnostics.
 - Refuse redirects on IAM sign-in page fetches, writes and POST reads, even at
