@@ -4,7 +4,7 @@ Rules for moving a command or service from the Go SDK and CLI to Rust. The [arch
 
 ## Baseline
 
-The baseline is [vngcloud](https://github.com/dannyota/vngcloud) at tag `v1.0.1`, commit `d784efc9241adcc4ed31bcab21e80dfd4552aab5`. `make reference` clones that tag into `.reference/vngcloud` in the checkout where it runs. The directory is git-ignored and read-only. A brief gives its absolute path, because a worktree does not contain it.
+The baseline is [vngcloud](https://github.com/dannyota/vngcloud) at tag `v1.2.0`, commit `f99c71490b1006a95a6dac7b0eac7f182b34e917`. `make reference` clones that tag into `.reference/vngcloud` in the checkout where it runs. The directory is git-ignored and read-only. A brief gives its absolute path, because a worktree does not contain it.
 
 Read only the tag. A newer vngcloud commit is not the contract until the owner moves the baseline and the [architecture](../docs/design/architecture.md#baseline) records it.
 

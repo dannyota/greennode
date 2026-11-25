@@ -9,8 +9,8 @@ REAL_CARGO_HOME := $(or $(CARGO_HOME),$(HOME)/.cargo)
 REAL_RUSTUP_HOME := $(or $(RUSTUP_HOME),$(HOME)/.rustup)
 BIN := node_modules/.bin
 BASELINE_REPO := https://github.com/dannyota/vngcloud
-BASELINE_TAG := v1.0.1
-BASELINE_COMMIT := d784efc9241adcc4ed31bcab21e80dfd4552aab5
+BASELINE_TAG := v1.2.0
+BASELINE_COMMIT := f99c71490b1006a95a6dac7b0eac7f182b34e917
 
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed -E 's/^([a-z-]+):.*## /\1\t/'
@@ -69,7 +69,9 @@ tools-outdated: ## Fail when a pinned tool or action is behind its latest releas
 hooks-install: ## Use .githooks for this clone
 	git config --local core.hooksPath .githooks
 
-reference: ## Clone the vngcloud baseline tag into .reference/vngcloud
+reference: ## Clone or move .reference/vngcloud to the vngcloud baseline tag
 	@test -d .reference/vngcloud || git clone --quiet --depth 1 --branch "$(BASELINE_TAG)" "$(BASELINE_REPO)" .reference/vngcloud
+	@git -C .reference/vngcloud cat-file -e "$(BASELINE_COMMIT)^{commit}" 2>/dev/null || git -C .reference/vngcloud fetch --quiet --depth 1 origin tag "$(BASELINE_TAG)"
+	@git -C .reference/vngcloud checkout --quiet --detach "$(BASELINE_COMMIT)"
 	@test "$$(git -C .reference/vngcloud rev-parse HEAD)" = "$(BASELINE_COMMIT)" || { echo ".reference/vngcloud is not $(BASELINE_TAG)" >&2; exit 1; }
 	@echo ".reference/vngcloud is $(BASELINE_TAG)"

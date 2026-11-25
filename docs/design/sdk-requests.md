@@ -276,15 +276,15 @@ and injectable entropy for contention, retries and expiry; never use real
 account data or egress outside loopback.
 
 [go-auth]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/service-account-auth.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/service-account-auth.md
 [go-token]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/service-account-auth-api.md#token-exchange
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/service-account-auth-api.md#token-exchange
 [go-write]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0002-write-api-conventions.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0002-write-api-conventions.md
 [go-once]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0003-toggle-writes.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0003-toggle-writes.md
 [go-object]:
-  https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/storage-objects.md
+  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/storage-objects.md
 [tokio]: https://crates.io/crates/tokio
 [hyper]: https://crates.io/crates/hyper
 [hyper-util]: https://crates.io/crates/hyper-util
