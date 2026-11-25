@@ -20,12 +20,12 @@ JMESPath crate dependency.
 `query/mod.rs` exposes
 `compile(expression) -> Result<CompiledQuery, SyntaxError>` and
 `evaluate(compiled, value) -> Result<Value, EvaluationError>` to the CLI frame.
-`lexer.rs` tokenizes with byte offsets; `parser.rs` owns precedence, mandatory
-separators and the private AST; `interpreter.rs` evaluates that AST;
-`functions.rs` owns the fixed Go function names, arity, type checks and
-evaluation. There is no user-defined function registry, no internal function
-addressable by user syntax, and no reflection over SDK objects. This interface
-is not a public SDK API.
+`lexer.rs` tokenizes with byte offsets; `parser.rs` owns precedence, the Go
+parser's separator rules (including its quirks, which the differential fixtures
+pin) and the private AST; `interpreter.rs` evaluates that AST; `functions.rs`
+owns the fixed Go function names, arity, type checks and evaluation. There is no
+user-defined function registry, no internal function addressable by user syntax,
+and no reflection over SDK objects. This interface is not a public SDK API.
 
 The frame treats an omitted or empty query as no query, except where an
 operation rejects the flag itself. Compile a permitted nonempty query once in
@@ -66,10 +66,18 @@ checks structural depth before recursing into data or result trees (128 levels,
 excluding the root). Panics in Go, such as a `contains` comparison of two
 uncomparable arrays or objects, become safe evaluation errors. A value that
 cannot be encoded as JSON, including a nonfinite result, fails evaluation rather
-than replacing the value silently. For `*` on an object and for `keys` and
-`values`, traverse by UTF-8 key bytes in ascending order. Go's map iteration
-does not promise an order. Keep array ordering and all other specified ordering
-unchanged.
+than replacing the value silently. Evaluation also has a work budget, because
+depth alone does not bound it: a few `[@,@]` steps joined by pipes double the
+result each time. Count one unit for every AST node visited and every value
+element produced, and stop at 10,000,000 units. Track the expanded size of the
+result as it is built, counting shared subtrees once per use, and stop at 64
+MiB, the table limit. Both checks run before the allocation they guard.
+Exceeding either is `QueryFailed`, with the after-write wording when a write
+succeeded. A test runs one mutation, then a doubling query, and asserts exactly
+one mutation request and the no-retry message. For `*` on an object and for
+`keys` and `values`, traverse by UTF-8 key bytes in ascending order. Go's map
+iteration does not promise an order. Keep array ordering and all other specified
+ordering unchanged.
 
 ## Oracle and tests
 
@@ -113,8 +121,8 @@ keep the pinned source and fixture provenance with the port. The existing
 project license does not replace the upstream copyright notice.
 
 Concretely: copy the upstream license unchanged to
-`crates/greennode/licenses/go-jmespath-LICENSE`, which the published package
-includes. Each translated source file starts with one line,
+`crates/greennode/licenses/go-jmespath-LICENSE`, which the published package and
+every release archive include. Each translated source file starts with one line,
 `// Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.`,
 which the [engineering standard](../standards/engineering.md#code-comments)
 allows as a license notice. Copied fixtures carry a `PROVENANCE.md` naming the

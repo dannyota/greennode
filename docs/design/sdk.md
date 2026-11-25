@@ -150,13 +150,15 @@ cannot return a failure; use the signal to receive `Cancelled` or
 does not undo a write.
 
 `Clock` supplies running UTC and monotonic time and an async sleep until an
-instant. A `RequestContext` deadline and every derived timer use the same clock
-as the request. `ConfigOptions::with_clock` and the S3 runtime input select the
-clock; the default reads system time and uses Tokio timers. `Random` is
-internal: production reads the OS CSPRNG, and tests inject bytes for PKCE,
-temporary names, and retry jitter. Randomness failure during auth fails closed.
-Test time drives cache expiry, TOTP rollover, HTTP deadlines, signing, and
-settlement together.
+instant. A `RequestContext` deadline and every timer the SDK itself creates use
+the same clock as the request. Timers inside hyper-util's connector use Tokio
+time; test them with paused Tokio time, not the injected clock.
+`ConfigOptions::with_clock` and the S3 runtime input select the clock; the
+default reads system time and uses Tokio timers. `Random` is internal:
+production reads the OS CSPRNG, and tests inject bytes for PKCE, temporary
+names, and retry jitter. Randomness failure during auth fails closed. Test time
+drives cache expiry, TOTP rollover, HTTP deadlines, signing, and settlement
+together.
 
 ## Services and models
 
@@ -287,12 +289,15 @@ exposed secret or that all transient copies can be erased.
 
 Use `Secret` for known credential fields including one-time output secrets.
 Provide explicit accessors for the baseline's secret-file workflows; never
-serialize the file contents or include them in errors. Before serialization also
-sanitize free-form maps and reflected values under the baseline rules. Withhold
-unclassified secret-bearing text; a key filter alone cannot scrub a server echo.
-Neither the projection nor CLI query ever sees unredacted secrets. This applies
-equally to a partial result. SDK callers can distinguish safe projection from
-deliberately inspecting a typed field.
+serialize the file contents or include them in errors. Before serialization
+apply the [projection policy](cli-output.md) for reads, writes, and partial
+outputs alike: keep resource values as the baseline prints them, apply the
+baseline's dynamic-map rule, and replace a value that contains a credential sent
+during the same logical request, which wins over passthrough, as the
+[projection policy](cli-output.md#redaction) states. Neither the projection nor
+CLI query ever sees unredacted secrets. This applies equally to a partial
+result. SDK callers can distinguish safe projection from deliberately inspecting
+a typed field.
 
 ## Differences from the baseline
 

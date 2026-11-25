@@ -264,8 +264,11 @@ Resolve initial paths with the configuration design's profile-only reader. A
 write checks the effective read-only latch and refuses legacy mode (exit 2, with
 manual copy instructions owned by [Configuration](config.md)) before reading
 stdin, prompting or creating files. There is no migration or write under the
-legacy tree, including through an alias or path override. Hold locks through
-publication and apply the configuration design's
+legacy tree, including through an alias or path override. Before the recheck,
+take persistent sibling lock files for the selected config, which holds the
+latch, and for every file the command edits, deduplicated by file identity and
+acquired in canonical path order. Hold them through publication. Never lock only
+the file that the rename replaces. Then apply the configuration design's
 [under-lock recheck](config.md#configure) and cancellation checks. No command
 can clear a live profile latch.
 

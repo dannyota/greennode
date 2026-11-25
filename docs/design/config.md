@@ -78,14 +78,14 @@ Neither `PROFILE` variable makes it explicit.
   variables before deciding the latch from the flag and environment. An invalid
   value is `InvalidConfig` (exit 2); a valid on source is `ReadOnly` (exit 2).
   When several consulted sources are on, name the first in table order. For a
-  management write, the flag or environment refuses before any file read.
-  Otherwise finish the full offline load and resolve output before applying
-  `C.read_only`. A load failure wins over the profile latch: malformed
-  credentials with `C.read_only=1` return `NoCredentials` (exit 3), not
-  `ReadOnly`. Nothing in this sequence signs in. Ordinary management reads do
-  not fail solely because the latch is on or invalid. S3 has the policy checks
-  below. The SDK does not enforce the CLI latch; the baseline's method-specific
-  checks of the profile key in vMonitor are unchanged.
+  management write, the flag or environment refuses before any configuration or
+  credentials file is read. Otherwise finish the full offline load and resolve
+  output before applying `C.read_only`. A load failure wins over the profile
+  latch: malformed credentials with `C.read_only=1` return `NoCredentials` (exit
+  3), not `ReadOnly`. Nothing in this sequence signs in. Ordinary management
+  reads do not fail solely because the latch is on or invalid. S3 has the policy
+  checks below. The SDK does not enforce the CLI latch; the baseline's
+  method-specific checks of the profile key in vMonitor are unchanged.
 - The CLI accepts `json`, `table`, and `text`; a different winning output value
   refuses before any request. The SDK preserves the profile setting without
   interpreting it as a rendering option.
@@ -198,10 +198,14 @@ each opened file is checked, but the load is not an atomic snapshot.
 Apply these rules to either mode, including any file `configure` reads:
 
 - Reject a config/credentials alias with `InvalidConfig` before parsing the
-  config, including through hard links or distinct symlinks. Management loads
-  compare the opened files' identities. Settings-only lookups compare the opened
-  config's identity with metadata for the resolved credentials target without
-  opening that target for content.
+  config, including through hard links or distinct symlinks. Compare identities
+  of opened handles: device and inode on Unix, and on Windows the volume serial
+  number and file index through the `same-file` crate (MIT or Unlicense, safe
+  API), since the standard library's Windows accessors are unstable. Test two
+  names for one file on each platform. Management loads compare the opened
+  files' identities. Settings-only lookups compare the opened config's identity
+  with metadata for the resolved credentials target without opening that target
+  for content.
 - Open only regular files for content. On Unix, open nonblocking so a FIFO
   swapped into place cannot hang a read. Check type and permissions on the
   opened handle, not just from metadata collected before opening. On Windows,

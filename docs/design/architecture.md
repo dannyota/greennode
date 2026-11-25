@@ -136,8 +136,9 @@ service registration, the `Makefile`, and the workflows.
    selected files, and one credential source. A load error stops here. Then the
    profile's read-only setting is applied. Nothing has signed in or sent a
    request yet.
-5. The command calls one SDK operation, which signs in or reuses a cached token
-   and sends its requests.
+5. The command calls its CLI adapter, usually one SDK operation and sometimes
+   several with stated cleanup, which signs in or reuses a cached token and
+   sends the requests.
 6. `cli` projects the output, applies `--query`, renders the format, and writes
    stdout.
 7. A failure becomes the stderr document and one exit code. The SDK keeps any
@@ -166,7 +167,8 @@ service registration, the `Makefile`, and the workflows.
   secret, client secret, token, authorization code, cookie, API key, or
   `Authorization` header that greennode uses to sign in or to send a request
   reaches stdout, stderr, an error, a debug event, or a query. Resource data the
-  API returns for a read is printed as the baseline prints it; the
+  API returns for a read or a write is printed as the baseline prints it, unless
+  it contains a credential greennode sent in that request; the
   [CLI output design](cli-output.md) lists the fields and the baseline's own
   redaction rules.
 - **Results on stdout, everything else on stderr.** A script can parse stdout

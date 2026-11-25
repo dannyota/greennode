@@ -83,7 +83,7 @@ Each name is a model family that resolves to its newest model, so plans, briefs,
 
 - Run `gh` as `dannyota`: prefix it with `GH_TOKEN=$(gh auth token -u dannyota)` and pass `--repo dannyota/greennode`. Never run `gh auth switch` or change git config.
 - Push with `GH_TOKEN=$(gh auth token -u dannyota) git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.
-- Use one worktree per task under `.worktrees/`. Every change lands through a pull request against `master`. Only the primary edits the shared files the [plan](docs/plans/foundation.md#shared-files) lists.
+- Use one worktree per task under `.worktrees/`. Every change lands through a pull request against `master`. Only the primary edits the shared files the [plan](docs/plans/foundation.md#shared-files) lists, unless a brief hands a named one to a worker for that task.
 - The primary commits, pushes, opens pull requests, and merges with a merge commit when the `ci` check is green on the exact head and an independent review passes. CodeQL is not awaited. Documentation-only changes and changes only to agent setup (`AGENTS.md`, `CLAUDE.md`, `instructions/`) need no independent review unless they set a design or ADR.
 - Tags, releases, and crates.io publishing need the owner's approval each time.
 - Commits are signed. Use Conventional Commits. Messages describe the change only and never mention agents, AI, or automated assistance. Stage named paths; never use `git add -A` or `git add .`. Never use `git stash`.

@@ -58,6 +58,15 @@ encoder][encoder] rules:
 
 ## Redaction
 
+Reflection wins over passthrough. The SDK keeps the credentials it sent during
+one logical request, including retries and sign-in, and before it builds an
+output or a partial output it replaces any string value that contains one of
+them with `<redacted>`, in reads and writes alike. Any other value in a typed
+resource field passes through as the baseline prints it, even when it is some
+other credential. Tests plant a resource canary and an own-credential canary in
+the same field and check JSON, query, table, text, and the console log: the
+first prints, the second never does. No test loads a real credential.
+
 Never print greennode's own credentials or session material: profile password,
 one-time-code secret, client secret, access token, authorization code, cookies,
 own request `Authorization` header, vCDN API key, S3 signing keys, and issued
