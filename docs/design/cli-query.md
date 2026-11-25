@@ -59,7 +59,9 @@ Go's lexer and parser have no expression size or syntax-tree depth policy.
 Accept up to 16 KiB of expression bytes and 64 levels of parser nesting, AST
 depth and embedded JSON nesting. Check before recursive descent or constructing
 a deeper node; long left-associated chains count too. This is a syntax refusal,
-not a remote guard. Evaluation uses checked indexing and slice arithmetic, and
+not a remote guard. Go compiles an unterminated index such as `[1` to an empty
+node that fails only at evaluation, after a write may have run; refuse it at
+compile time instead. Evaluation uses checked indexing and slice arithmetic, and
 checks structural depth before recursing into data or result trees (128 levels,
 excluding the root). Panics in Go, such as a `contains` comparison of two
 uncomparable arrays or objects, become safe evaluation errors. A value that

@@ -63,15 +63,22 @@ fn split_top(input: &str, separator: char) -> Result<Vec<&str>, Error> {
 }
 
 fn hex_quad<I: Iterator<Item = char>>(input: &mut I) -> Result<u16, Error> {
-    let mut digits = String::new();
+    let mut value = 0_u16;
     for _ in 0..4 {
-        digits.push(
-            input
-                .next()
-                .ok_or_else(|| Error::Invalid("invalid raw JSON escape".into()))?,
-        );
+        let digit = input
+            .next()
+            .filter(char::is_ascii)
+            .ok_or_else(|| Error::Invalid("invalid raw JSON escape".into()))?
+            as u8;
+        let digit = match digit {
+            b'0'..=b'9' => digit - b'0',
+            b'a'..=b'f' => digit - b'a' + 10,
+            b'A'..=b'F' => digit - b'A' + 10,
+            _ => return Err(Error::Invalid("invalid raw JSON escape".into())),
+        };
+        value = value * 16 + u16::from(digit);
     }
-    u16::from_str_radix(&digits, 16).map_err(|_| Error::Invalid("invalid raw JSON escape".into()))
+    Ok(value)
 }
 
 pub(crate) fn decode_string(input: &str) -> Result<String, Error> {
@@ -253,6 +260,12 @@ mod tests {
         assert!(project(&Wrapped(127)).is_ok());
         assert!(matches!(project(&Wrapped(128)), Err(Error::DepthLimit)));
         assert!(project(&Nested).is_err());
+    }
+
+    #[test]
+    fn string_escape_requires_four_hex_digits() {
+        assert!(decode_string(r#""\u+123""#).is_err());
+        assert!(decode_string(r#""ģ""#).is_ok());
     }
 
     #[test]

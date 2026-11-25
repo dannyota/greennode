@@ -233,7 +233,11 @@ impl Parser {
             }
             Kind::Lbracket => {
                 if matches!(self.current(), Kind::Number | Kind::Colon) {
-                    let right = self.index_expression()?;
+                    let right = match self.index_expression() {
+                        Ok(right) => right,
+                        Err(error) if self.current() == Kind::Eof => return Err(error),
+                        Err(_) => return self.make(NodeKind::Empty, NodeValue::None, vec![]),
+                    };
                     let left = self.identity()?;
                     self.project_slice(left, right, depth)
                 } else if self.current() == Kind::Star && self.look(1) == Kind::Rbracket {
@@ -596,6 +600,38 @@ mod tests {
         ] {
             assert!(parse(input).is_err(), "{input}");
         }
+    }
+
+    #[test]
+    fn bounded_json_numbers_and_private_key() {
+        assert!(parse("`1.79769313486231581e308`").is_err());
+        assert!(parse("`1.7976931348623158e308`").is_ok());
+        assert!(parse(r#"`{"a":1e999,"a":1}`"#).is_err());
+        let expected = Value::Object(std::collections::BTreeMap::from([(
+            "$serde_json::private::Number".into(),
+            Value::String("123".into()),
+        )]));
+        assert_eq!(
+            parse(r#"`{"$serde_json::private::Number":"123"}`"#)
+                .unwrap()
+                .value,
+            NodeValue::Literal(expected)
+        );
+    }
+
+    #[test]
+    fn invalid_hex_escape_is_rejected() {
+        assert!(parse(r#""\u+123""#).is_err());
+        assert!(parse(r#"`"\u+123"`"#).is_err());
+        assert!(parse(r#""ģ""#).is_ok());
+        assert!(parse(r#"`"ģ"`"#).is_ok());
+    }
+
+    #[test]
+    fn incomplete_index_position_and_guard() {
+        assert_eq!(parse("[1.]").unwrap_err().offset, 3);
+        assert!(parse("[1").is_err());
+        assert!(parse("[1]").is_ok());
     }
 
     #[test]
