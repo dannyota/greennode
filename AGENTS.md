@@ -13,6 +13,9 @@ The tool builds one command, `greennode version`, and the SDK crate is empty. Re
 |Question|Entry point|
 |-|-|
 |What should the product become?|[Architecture](docs/design/architecture.md)|
+|How are settings, profiles, and the vngcloud fallback resolved?|[Configuration design](docs/design/config.md)|
+|What is the SDK's public interface, and how may it send requests?|[SDK design](docs/design/sdk.md) and [request policies](docs/design/sdk-requests.md)|
+|How are commands declared, guarded, run, and printed?|[CLI design](docs/design/cli.md) and [CLI output](docs/design/cli-output.md)|
 |What must hold for credentials, requests, and writes?|[Security design](docs/design/security.md)|
 |How does a version reach crates.io?|[Release design](docs/design/release.md)|
 |Why was a choice made?|[ADRs](docs/adr/README.md)|
@@ -53,9 +56,10 @@ The [architecture](docs/design/architecture.md#layout) owns the intended layout.
 
 |Role|Who|Duty|
 |-|-|-|
-|Primary|The session the owner talks to|Designs, writes documentation, decides, briefs, verifies, owns Git|
+|Primary|The session the owner talks to|Decides, edits every design, writes documentation and plans, briefs, verifies, owns Git and shared files|
+|Designer|GPT Sol|Drafts one design from a brief; never implements|
 |Implementer|GPT Terra|One bounded task in named paths, with tests; never commits|
-|Reviewer|GPT Sol for Terra's work, GPT Astra for the primary's work|Independent review of designs, ADRs, and code; never edits files or changes Git|
+|Reviewer|GPT Sol for Terra's code, GPT Astra for designs and the primary's work|Independent review of designs, ADRs, and code; never edits files or changes Git|
 
 |GPT model|Agent name|Claude stand-in when GPT is unavailable|
 |-|-|-|
@@ -63,7 +67,7 @@ The [architecture](docs/design/architecture.md#layout) owns the intended layout.
 |Sol|`sol`|Opus|
 |Astra|`astra`|Fable|
 
-Each name is a model family that resolves to its newest model, so plans, briefs, and notes name the family or role, never a versioned model ID. Astra and Fable design and review only; they never write code. A reviewer always runs on a different model from the author, never fixes the work it reviewed, and a worker's self-review never counts. The owner chooses the primary session's model. Worker rules live in [roles](instructions/roles.md).
+Each name is a model family that resolves to its newest model, so plans, briefs, and notes name the family or role, never a versioned model ID. Astra and Fable design and review only; they never write code. A reviewer always runs on a different model from the author, never fixes the work it reviewed, and a worker's self-review never counts. A designer never implements the design it drafted. The owner chooses the primary session's model. Worker rules live in [roles](instructions/roles.md).
 
 ## Rules for every task
 
@@ -79,7 +83,7 @@ Each name is a model family that resolves to its newest model, so plans, briefs,
 
 - Run `gh` as `dannyota`: prefix it with `GH_TOKEN=$(gh auth token -u dannyota)` and pass `--repo dannyota/greennode`. Never run `gh auth switch` or change git config.
 - Push with `GH_TOKEN=$(gh auth token -u dannyota) git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push`.
-- Use one worktree per task under `.worktrees/`. Every change lands through a pull request against `master`.
+- Use one worktree per task under `.worktrees/`. Every change lands through a pull request against `master`. Only the primary edits the shared files the [plan](docs/plans/foundation.md#shared-files) lists, unless a brief hands a named one to a worker for that task.
 - The primary commits, pushes, opens pull requests, and merges with a merge commit when the `ci` check is green on the exact head and an independent review passes. CodeQL is not awaited. Documentation-only changes and changes only to agent setup (`AGENTS.md`, `CLAUDE.md`, `instructions/`) need no independent review unless they set a design or ADR.
 - Tags, releases, and crates.io publishing need the owner's approval each time.
 - Commits are signed. Use Conventional Commits. Messages describe the change only and never mention agents, AI, or automated assistance. Stage named paths; never use `git add -A` or `git add .`. Never use `git stash`.
@@ -92,3 +96,5 @@ Each name is a model family that resolves to its newest model, so plans, briefs,
 - Never print request bodies, tokens, or credential values in test assertion messages. CodeQL flags them as cleartext logging.
 - `.reference/` is a git-ignored clone of another repository. Never edit it, and never copy from its `examples/` output or any `.env`.
 - A new worktree has no `node_modules`. Run `npm ci --ignore-scripts` in it before `make check`.
+- A worktree sits inside the main checkout, so Cargo there needs the worktree's own workspace `Cargo.toml`. Branch every worktree from a commit that has it.
+- Once the fallback exists, the built tool can reach a real account through `~/.vngcloud`. Run it only with a cleared environment and a temporary home.

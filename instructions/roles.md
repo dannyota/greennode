@@ -12,6 +12,16 @@ Never invent results or contracts. Stop and report a conflicting authority, over
 
 Write plain words in active voice, with no em dashes and no plan, task, or review IDs in code or living documents.
 
+## Designer
+
+Write the one design the brief names, inside the files it names; never implement or review code. The primary decides and edits the draft, and an independent reviewer on another model reviews it.
+
+Read the baseline's designs and code for every claim about its behavior and cite `path:line` in the report, not in the design. Mark inference as inference. Check first-party documentation for another tool's behavior and vet each crate you recommend: latest version, license, maintenance, and transitive dependencies.
+
+Record only what greennode decides or changes; name the baseline document and say "unchanged" for the rest. Each design has a status line, an Approaches section with the two or three ways considered and the one taken, and a list of its intended differences from the baseline. Decide what a competent designer can decide. For a choice only the owner or the primary can make, pick the safer option, write the design on it, and list the choice in the report.
+
+Report: exact files written; decisions made, each with its reason; choices for the owner or primary with alternatives and a recommendation; every assumption about a neighbouring design; baseline sources; open questions; what was not checked.
+
 ## Implementer
 
 Implement one bounded change or fix one failure. The design and the baseline are the contract; do not change either to fit the code. Write the failing test first with toy data and loopback servers, watch it fail, then make the smallest correct change. If you did not observe the failure, say so.

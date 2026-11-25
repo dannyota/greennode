@@ -28,7 +28,7 @@ Read only the tag. A newer vngcloud commit is not the contract until the owner m
 - Guards: `--read-only`, `--yes`, `--max-price`, and every refusal that happens before a request.
 - The request each operation sends: method, path, query, headers the API needs, and body.
 - Safety behavior: redirects refused, response size limits, the retry rule, and what happens on an unconfirmed write.
-- The SDK surface: one client per service, one method per Go method with the same name in snake case, one input type and one output type per method with the Go type's fields, and the same error identities. The [SDK section](../docs/design/architecture.md#the-sdk) owns the shape.
+- The SDK surface: one client per service, one method per Go method with the same name in snake case, one input type and one output type per method with the Go type's fields, and the same error identities. The [SDK design](../docs/design/sdk.md) owns the shape.
 
 ## What differs
 

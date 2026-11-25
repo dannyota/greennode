@@ -31,8 +31,7 @@ published on crates.io under the current name.
    environment prefix and the `~/.greennode` directory. Where a user has set
    nothing under those names, it falls back to the matching `VNGCLOUD_` variable
    and to the files under `~/.vngcloud`. The
-   [architecture](../design/architecture.md#fallback-to-vngcloud-settings) owns
-   the fallback rules.
+   [configuration design](../design/config.md) owns the fallback rules.
 7. The license is Apache-2.0, the same as vngcloud.
 
 ## Consequences

@@ -9,3 +9,4 @@
 - When a user-level agent cannot be dispatched, use the Codex plugin (`codex:codex-rescue`). When GPT is unavailable, start the Claude stand-in from the roles table with the Agent tool model alias `sonnet`, `opus`, or `fable`.
 - Keep at most three workers that run `make check` at once on this laptop, and give building workers `CARGO_BUILD_JOBS=4`.
 - Put briefs, review output, and temporary files in the session scratchpad, never under `docs/`.
+- Tell reviewers and designers not to invoke review skills. A generic review skill can start a side agent the worker cannot stop; stop it with `TaskStop` and confirm the worktrees are unchanged.
