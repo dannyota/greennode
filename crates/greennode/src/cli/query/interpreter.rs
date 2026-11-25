@@ -22,6 +22,7 @@ pub(in crate::cli) enum EvaluationError {
     FunctionVariadicArity,
     FunctionType,
     UnknownFunction,
+    Uncomparable,
 }
 
 fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
@@ -454,7 +455,22 @@ mod tests {
             (NodeKind::FunctionExpression, NodeValue::Text(name))
                 if !matches!(
                     name.as_str(),
-                    "abs" | "length" | "avg" | "ceil" | "floor" | "type" | "not_null" | "reverse"
+                    "abs"
+                        | "length"
+                        | "avg"
+                        | "ceil"
+                        | "floor"
+                        | "type"
+                        | "not_null"
+                        | "reverse"
+                        | "keys"
+                        | "values"
+                        | "starts_with"
+                        | "ends_with"
+                        | "contains"
+                        | "join"
+                        | "to_array"
+                        | "to_string"
                 ) =>
             {
                 return false;
@@ -521,13 +537,21 @@ mod tests {
         }
         eprintln!("functions: {passed} passed, {} skipped", skipped.len());
         let mut expected = vec!["0:10".to_owned()];
-        for range in [22..34, 50..69, 78..95, 100..126, 127..134, 139..141] {
+        for range in [
+            50..69,
+            78..79,
+            82..83,
+            105..110,
+            118..126,
+            127..134,
+            140..141,
+        ] {
             expected.extend(range.map(|index| format!("0:{index}")));
         }
         for (group, count) in [(2, 20), (3, 1), (4, 4), (5, 3), (6, 1)] {
             expected.extend((0..count).map(|index| format!("{group}:{index}")));
         }
-        assert_eq!(passed, 58);
+        assert_eq!(passed, 99);
         assert_eq!(skipped, expected);
         assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     }
