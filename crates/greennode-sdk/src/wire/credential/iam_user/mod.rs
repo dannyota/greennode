@@ -1,4 +1,7 @@
+mod flow;
 mod signin;
+mod token;
+mod totp;
 
 use crate::Secret;
 use data_encoding::BASE64URL_NOPAD;

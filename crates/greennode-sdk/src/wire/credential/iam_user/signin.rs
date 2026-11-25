@@ -7,7 +7,7 @@ pub(super) enum Next {
     Code(Secret),
 }
 
-fn classify(
+pub(super) fn classify(
     origin: &Url,
     dashboard: &Url,
     status: http::StatusCode,
@@ -45,6 +45,7 @@ fn classify(
     Ok(Next::Code(Secret::new(code.into_owned())))
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Login<'a> {
     pub(super) client: &'a crate::wire::connection::OneSendClient,
     pub(super) origin: &'a Url,
@@ -186,7 +187,7 @@ fn password_form(csrf: &Secret, root: &str, user: &str, password: &Secret) -> Se
     Secret::new(form.finish())
 }
 
-fn extract_csrf(text: &str) -> Option<Secret> {
+pub(super) fn extract_csrf(text: &str) -> Option<Secret> {
     for pattern in [
         r#"content="([^"]+)"[^>]*name="csrf-token""#,
         r#"name="_csrf"[^>]*value="([^"]+)""#,
