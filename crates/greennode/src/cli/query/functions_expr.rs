@@ -45,10 +45,18 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     };
     if name == "map" {
         let mut result = Vec::with_capacity(values.len());
+        let mut ordinary = None;
         for value in values {
-            let item = execute(reference, value)?;
-            check(&item, 1)?;
-            result.push(item);
+            match execute(reference, value).and_then(|item| {
+                check(&item, 1)?;
+                Ok(item)
+            }) {
+                Ok(item) => result.push(item),
+                Err(error) => record_error(error, &mut ordinary)?,
+            }
+        }
+        if let Some(error) = ordinary {
+            return Err(error);
         }
         return Ok(Value::Array(result));
     }
@@ -59,30 +67,60 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
             Ok(values.first().cloned().unwrap_or(Value::Null))
         };
     }
-    let key = execute(reference, &values[0])?;
-    let numeric = match key {
-        Value::Number(_) => true,
-        Value::String(_) => false,
-        _ => return Err(EvaluationError::FunctionType),
-    };
-    if name != "sort_by" {
-        let mut best = &values[0];
-        let mut best_key = key;
-        for value in &values[1..] {
-            let current = execute(reference, value)?;
-            let ordering =
-                compare_keys(&current, &best_key, numeric).ok_or(EvaluationError::FunctionType)?;
-            if (name == "max_by" && ordering.is_gt()) || (name == "min_by" && ordering.is_lt()) {
-                best = value;
-                best_key = current;
+    let mut ordinary = None;
+    let mut numeric = None;
+    let mut keys = Vec::with_capacity(values.len());
+    for (index, value) in values.iter().enumerate() {
+        match execute(reference, value) {
+            Ok(key) => {
+                if index == 0 {
+                    numeric = match key {
+                        Value::Number(_) => Some(true),
+                        Value::String(_) => Some(false),
+                        _ => {
+                            record_error(EvaluationError::FunctionType, &mut ordinary)?;
+                            None
+                        }
+                    };
+                } else if let Some(numeric) = numeric
+                    && !matches!(
+                        (&key, numeric),
+                        (Value::Number(_), true) | (Value::String(_), false)
+                    )
+                {
+                    let error = if name == "sort_by" {
+                        EvaluationError::FunctionComparison
+                    } else {
+                        EvaluationError::FunctionType
+                    };
+                    record_error(error, &mut ordinary)?;
+                }
+                keys.push(key);
+            }
+            Err(error) => {
+                let error = if name == "sort_by" && index > 0 {
+                    comparison_error(error)
+                } else {
+                    error
+                };
+                record_error(error, &mut ordinary)?;
             }
         }
-        return Ok(best.clone());
     }
-    let mut keys = Vec::with_capacity(values.len());
-    keys.push(key);
-    for value in &values[1..] {
-        keys.push(execute(reference, value).map_err(comparison_error)?);
+    if let Some(error) = ordinary {
+        return Err(error);
+    }
+    let numeric = numeric.ok_or(EvaluationError::InvalidNode)?;
+    if name != "sort_by" {
+        let mut best = 0;
+        for index in 1..keys.len() {
+            let ordering = compare_keys(&keys[index], &keys[best], numeric)
+                .ok_or(EvaluationError::FunctionType)?;
+            if (name == "max_by" && ordering.is_gt()) || (name == "min_by" && ordering.is_lt()) {
+                best = index;
+            }
+        }
+        return Ok(values[best].clone());
     }
     if numeric {
         let mut indexed = keys
@@ -126,16 +164,37 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     }
 }
 
-fn comparison_error(error: EvaluationError) -> EvaluationError {
-    match error {
+fn is_safety_error(error: &EvaluationError) -> bool {
+    matches!(
+        error,
         EvaluationError::Depth
-        | EvaluationError::SliceOverflow
-        | EvaluationError::NonFinite
-        | EvaluationError::Uncomparable
-        | EvaluationError::FunctionPanic
-        | EvaluationError::Unsupported
-        | EvaluationError::InvalidNode => error,
-        _ => EvaluationError::FunctionComparison,
+            | EvaluationError::SliceOverflow
+            | EvaluationError::NonFinite
+            | EvaluationError::Uncomparable
+            | EvaluationError::FunctionPanic
+            | EvaluationError::Unsupported
+            | EvaluationError::InvalidNode
+    )
+}
+
+fn record_error(
+    error: EvaluationError,
+    ordinary: &mut Option<EvaluationError>,
+) -> Result<(), EvaluationError> {
+    if is_safety_error(&error) {
+        return Err(error);
+    }
+    if ordinary.is_none() {
+        *ordinary = Some(error);
+    }
+    Ok(())
+}
+
+fn comparison_error(error: EvaluationError) -> EvaluationError {
+    if is_safety_error(&error) {
+        error
+    } else {
+        EvaluationError::FunctionComparison
     }
 }
 
@@ -252,6 +311,46 @@ mod tests {
             (first.to_bits(), second.to_bits()),
             (0.0f64.to_bits(), (-0.0f64).to_bits())
         );
+    }
+
+    #[test]
+    fn later_safety_errors_are_not_hidden_by_ordinary_errors() {
+        let input = crate::cli::render::project(&serde_json::json!([{"k":1},{"a":true},{}]))
+            .unwrap()
+            .for_query()
+            .unwrap();
+        for expression in [
+            "(sort_by(@, &(k || (a && unknown()) || merge(`null`)))).*",
+            "(max_by(@, &(k || (a && unknown()) || merge(`null`)))).*",
+            "(min_by(@, &(k || (a && unknown()) || merge(`null`)))).*",
+            "(map(&(k || (a && unknown()) || merge(`null`)), @)).*",
+        ] {
+            assert_eq!(
+                evaluate(&compile(expression).unwrap(), &input),
+                Err(super::EvaluationError::FunctionPanic),
+                "{expression}"
+            );
+        }
+    }
+
+    #[test]
+    fn first_ordinary_error_is_retained() {
+        let input = crate::cli::render::project(&serde_json::json!([{"a":true},{}]))
+            .unwrap()
+            .for_query()
+            .unwrap();
+        for expression in [
+            "sort_by(@, &(a && unknown() || length(`null`)))",
+            "max_by(@, &(a && unknown() || length(`null`)))",
+            "min_by(@, &(a && unknown() || length(`null`)))",
+            "map(&(a && unknown() || length(`null`)), @)",
+        ] {
+            assert_eq!(
+                evaluate(&compile(expression).unwrap(), &input),
+                Err(super::EvaluationError::UnknownFunction),
+                "{expression}"
+            );
+        }
     }
 
     #[test]
