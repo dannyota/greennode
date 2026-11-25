@@ -95,6 +95,31 @@ pub(super) fn resolve(
     source: &dyn ConfigSource,
     policy: Policy,
 ) -> Result<Settings, SettingsError> {
+    resolve_checked(paths, config_file, options, source, policy, &|| None)
+}
+
+struct CheckedReader<'a> {
+    file: std::fs::File,
+    check: &'a dyn Fn() -> Option<crate::ContextEnd>,
+}
+
+impl std::io::Read for CheckedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.check)().is_some() {
+            return Err(std::io::ErrorKind::Other.into());
+        }
+        std::io::Read::read(&mut self.file, buffer)
+    }
+}
+
+pub(super) fn resolve_checked(
+    paths: &Selection,
+    config_file: Option<std::fs::File>,
+    options: &Options,
+    source: &dyn ConfigSource,
+    policy: Policy,
+    check: &dyn Fn() -> Option<crate::ContextEnd>,
+) -> Result<Settings, SettingsError> {
     use super::{Slot, ini};
     use std::ffi::OsStr;
     let mut read_only_source = preflight(options, source, policy)?;
@@ -131,7 +156,10 @@ pub(super) fn resolve(
         Some(_) if !paths.config_present => ini::Ini::default(),
         Some(_) => ini::parse(
             Slot::Config,
-            config_file.ok_or(SettingsError::InvalidConfig)?,
+            CheckedReader {
+                file: config_file.ok_or(SettingsError::InvalidConfig)?,
+                check,
+            },
         )
         .map_err(|diagnostic| SettingsError::Parse {
             mode: paths.mode,

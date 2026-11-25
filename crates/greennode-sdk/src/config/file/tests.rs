@@ -375,5 +375,97 @@ fn settings_only_refuses_credentials_swapped_after_snapshot() {
         std::fs::remove_file(&credentials).unwrap();
         std::fs::hard_link(&config, &credentials).unwrap();
     });
-    assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig));
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.slot() == crate::FileSlot::Credentials && detail.source() == "option" && detail.reason() == "changed during read"))
+    );
+}
+
+#[test]
+fn absent_credentials_cannot_appear_as_config_alias() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\nsecret=toy\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: false,
+        },
+        config_present: true,
+        credentials_present: false,
+        config_source: Some("option"),
+        credentials_source: Some("~/.greennode"),
+    };
+    let result = open_settings_with(&selection, || {
+        std::fs::hard_link(&config, &credentials).unwrap();
+    });
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.reason() == "changed during read"))
+    );
+}
+
+#[test]
+fn cancelled_before_open_never_opens_config() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    use std::cell::Cell;
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    std::fs::write(&config, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config),
+            credentials: None,
+            config_named: true,
+            credentials_named: false,
+        },
+        config_present: true,
+        credentials_present: false,
+        config_source: Some("option"),
+        credentials_source: None,
+    };
+    let (ctx, cancel) = crate::RequestContext::new();
+    let opens = Cell::new(0);
+    let result = open_settings_guarded(
+        &selection,
+        || cancel.cancel(),
+        || ctx.check(&crate::SystemClock),
+        || opens.set(opens.get() + 1),
+    );
+    assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::Cancelled));
+    assert_eq!(opens.get(), 0);
+}
+
+#[test]
+fn changed_config_identity_has_safe_diagnostic() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\n").unwrap();
+    std::fs::write(&credentials, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    let result = open_settings_with(&selection, || {
+        std::fs::remove_file(&config).unwrap();
+        std::fs::hard_link(&credentials, &config).unwrap();
+    });
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.slot() == crate::FileSlot::Config && detail.source() == "option" && detail.reason() == "changed during read"))
+    );
 }

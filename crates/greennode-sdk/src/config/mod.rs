@@ -116,7 +116,10 @@ impl Config {
             return Err(end.into());
         }
         let options = options.clone();
-        let worker = tokio::task::spawn_blocking(move || resolve_profile_local(&options, snapshot));
+        let worker_ctx = ctx.clone();
+        let worker = tokio::task::spawn_blocking(move || {
+            resolve_profile_local(&options, snapshot, &worker_ctx)
+        });
         wait_profile_worker(ctx, worker).await
     }
 }
@@ -225,29 +228,44 @@ impl SourceSnapshot {
 fn resolve_profile_local(
     options: &ConfigOptions,
     source: SourceSnapshot,
+    ctx: &crate::RequestContext,
 ) -> Result<ResolvedProfile, crate::Error> {
+    let check = || ctx.check(&crate::SystemClock);
+    if let Some(end) = check() {
+        return Err(end.into());
+    }
     let cwd = std::path::absolute(".").ok();
     let selection = mode::select(
         options.config_file.as_deref(),
         options.credentials_file.as_deref(),
         &source,
         cwd.as_deref(),
-        mode::probe,
-    )
-    .map_err(|error| *error)?;
-    let file = file::open_settings(&selection).map_err(|error| *error)?;
+        |path| mode::probe_checked(path, &|| check().is_some()),
+    );
+    if let Some(end) = check() {
+        return Err(end.into());
+    }
+    let selection = selection.map_err(|error| *error)?;
+    let file = file::open_settings_checked(&selection, check).map_err(|error| *error)?;
+    if let Some(end) = check() {
+        return Err(end.into());
+    }
     let local_options = settings::Options {
         profile: options.profile.clone(),
         ..Default::default()
     };
-    let resolved = settings::resolve(
+    let resolved = settings::resolve_checked(
         &selection,
         file,
         &local_options,
         &source,
         settings::Policy::Read,
-    )
-    .map_err(|error| match error {
+        &check,
+    );
+    if let Some(end) = check() {
+        return Err(end.into());
+    }
+    let resolved = resolved.map_err(|error| match error {
         settings::SettingsError::Parse {
             source, diagnostic, ..
         } => crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(

@@ -56,7 +56,18 @@ fn check_credentials_permissions(file: &File) -> Result<(), String> {
 }
 
 fn open_without_permissions(path: &Path, slot: Slot) -> Result<File, String> {
+    open_without_permissions_checked(path, slot, &|| false)
+}
+
+fn open_without_permissions_checked(
+    path: &Path,
+    slot: Slot,
+    check: &dyn Fn() -> bool,
+) -> Result<File, String> {
     let error = |reason| format!("{}: {reason}", slot.label());
+    if check() {
+        return Err(error("open failed"));
+    }
     #[cfg(unix)]
     let file = File::from(
         rustix::fs::open(path, open_flags(), rustix::fs::Mode::empty())
@@ -67,12 +78,18 @@ fn open_without_permissions(path: &Path, slot: Slot) -> Result<File, String> {
         open_windows(path, |options, path| options.open(path)).map_err(|_| error("open failed"))?;
     #[cfg(not(any(unix, windows)))]
     let file = File::open(path).map_err(|_| error("open failed"))?;
+    if check() {
+        return Err(error("metadata failed"));
+    }
     #[cfg(windows)]
     if !winapi_util::file::typ(&file)
         .map_err(|_| error("metadata failed"))?
         .is_disk()
     {
         return Err(error("not a regular file"));
+    }
+    if check() {
+        return Err(error("metadata failed"));
     }
     let metadata = file.metadata().map_err(|_| error("metadata failed"))?;
     if !metadata.is_file() {
@@ -173,14 +190,20 @@ type Identity = same_file::Handle;
 type Identity = ();
 
 #[cfg(unix)]
-fn identity_file(file: &File) -> Result<Identity, &'static str> {
+fn identity_file(file: &File, check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
+    if check() {
+        return Err("metadata failed");
+    }
     use std::os::unix::fs::MetadataExt;
     let metadata = file.metadata().map_err(|_| "metadata failed")?;
     Ok((metadata.dev(), metadata.ino()))
 }
 
 #[cfg(unix)]
-fn identity_path(path: &Path) -> Result<Identity, &'static str> {
+fn identity_path(path: &Path, check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
+    if check() {
+        return Err("metadata failed");
+    }
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::metadata(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -196,13 +219,22 @@ fn identity_path(path: &Path) -> Result<Identity, &'static str> {
 }
 
 #[cfg(windows)]
-fn identity_file(file: &File) -> Result<Identity, &'static str> {
-    same_file::Handle::from_file(file.try_clone().map_err(|_| "metadata failed")?)
-        .map_err(|_| "metadata failed")
+fn identity_file(file: &File, check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
+    if check() {
+        return Err("metadata failed");
+    }
+    let file = file.try_clone().map_err(|_| "metadata failed")?;
+    if check() {
+        return Err("metadata failed");
+    }
+    same_file::Handle::from_file(file).map_err(|_| "metadata failed")
 }
 
 #[cfg(windows)]
-fn identity_path(path: &Path) -> Result<Identity, &'static str> {
+fn identity_path(path: &Path, check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
+    if check() {
+        return Err("metadata failed");
+    }
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_BACKUP_SEMANTICS, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
@@ -212,6 +244,9 @@ fn identity_path(path: &Path) -> Result<Identity, &'static str> {
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .security_qos_flags(SECURITY_IDENTIFICATION | SECURITY_SQOS_PRESENT);
+    if check() {
+        return Err("metadata failed");
+    }
     let file = options.open(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             "not found"
@@ -219,35 +254,65 @@ fn identity_path(path: &Path) -> Result<Identity, &'static str> {
             "metadata failed"
         }
     })?;
+    if check() {
+        return Err("metadata failed");
+    }
     if !winapi_util::file::typ(&file)
         .map_err(|_| "metadata failed")?
         .is_disk()
-        || !file.metadata().map_err(|_| "metadata failed")?.is_file()
     {
         return Err("not a regular file");
+    }
+    if check() {
+        return Err("metadata failed");
+    }
+    if !file.metadata().map_err(|_| "metadata failed")?.is_file() {
+        return Err("not a regular file");
+    }
+    if check() {
+        return Err("metadata failed");
     }
     same_file::Handle::from_file(file).map_err(|_| "metadata failed")
 }
 
 #[cfg(not(any(unix, windows)))]
-fn identity_path(_path: &Path) -> Result<Identity, &'static str> {
+fn identity_path(_path: &Path, _check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
     Err("metadata failed")
 }
 #[cfg(not(any(unix, windows)))]
-fn identity_file(_file: &File) -> Result<Identity, &'static str> {
+fn identity_file(_file: &File, _check: &dyn Fn() -> bool) -> Result<Identity, &'static str> {
     Err("metadata failed")
 }
 
+#[cfg(test)]
 pub(super) fn open_settings(
     selection: &super::mode::Selection,
 ) -> Result<Option<File>, Box<crate::Error>> {
     open_settings_with(selection, || {})
 }
 
+#[cfg(test)]
 fn open_settings_with(
     selection: &super::mode::Selection,
     before_open: impl FnOnce(),
 ) -> Result<Option<File>, Box<crate::Error>> {
+    open_settings_guarded(selection, before_open, || None, || {})
+}
+
+pub(super) fn open_settings_checked(
+    selection: &super::mode::Selection,
+    check: impl Fn() -> Option<crate::ContextEnd>,
+) -> Result<Option<File>, Box<crate::Error>> {
+    open_settings_guarded(selection, || {}, check, || {})
+}
+
+fn open_settings_guarded(
+    selection: &super::mode::Selection,
+    before_open: impl FnOnce(),
+    check: impl Fn() -> Option<crate::ContextEnd>,
+    on_open: impl FnOnce(),
+) -> Result<Option<File>, Box<crate::Error>> {
+    let guard = || check().map_or(Ok(()), |end| Err(Box::new(crate::Error::from(end))));
     let file_error = |slot, source, reason| {
         let class = if slot == crate::FileSlot::Config {
             crate::ErrorClass::InvalidConfig
@@ -263,6 +328,13 @@ fn open_settings_with(
         )
     };
     let invalid = || Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig));
+    let changed = |slot, source| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                crate::FileDiagnostic::from_text(slot, source, "file: changed during read"),
+            ),
+        )
+    };
     let selected_path = |path: &Option<std::path::PathBuf>,
                          present,
                          named,
@@ -293,61 +365,95 @@ fn open_settings_with(
         crate::FileSlot::Credentials,
         selection.credentials_source,
     )?;
+    guard()?;
     let config_identity = config_path
         .as_deref()
-        .map(identity_path)
-        .transpose()
+        .map(|path| identity_path(path, &|| check().is_some()))
+        .transpose();
+    guard()?;
+    let config_identity = config_identity
         .map_err(|reason| file_error(crate::FileSlot::Config, selection.config_source, reason))?;
+    guard()?;
     let credentials_identity = credentials_path
         .as_deref()
-        .map(identity_path)
-        .transpose()
-        .map_err(|reason| {
-            file_error(
-                crate::FileSlot::Credentials,
-                selection.credentials_source,
-                reason,
-            )
-        })?;
+        .map(|path| identity_path(path, &|| check().is_some()))
+        .transpose();
+    guard()?;
+    let credentials_identity = credentials_identity.map_err(|reason| {
+        file_error(
+            crate::FileSlot::Credentials,
+            selection.credentials_source,
+            reason,
+        )
+    })?;
     if config_identity.is_some() && config_identity == credentials_identity {
         return Err(invalid());
     }
     before_open();
+    guard()?;
+    if config_path.is_some() {
+        on_open();
+    }
     let config = config_path
         .as_deref()
-        .map(|path| open(path, Slot::Config))
-        .transpose()
-        .map_err(|diagnostic| {
-            Box::new(
-                crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
-                    crate::FileDiagnostic::from_text(
-                        crate::FileSlot::Config,
-                        selection.config_source,
-                        &diagnostic,
-                    ),
+        .map(|path| open_without_permissions_checked(path, Slot::Config, &|| check().is_some()))
+        .transpose();
+    guard()?;
+    let config = config.map_err(|diagnostic| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                crate::FileDiagnostic::from_text(
+                    crate::FileSlot::Config,
+                    selection.config_source,
+                    &diagnostic,
                 ),
-            )
-        })?;
+            ),
+        )
+    })?;
+    guard()?;
     let opened_identity = config
         .as_ref()
-        .map(identity_file)
-        .transpose()
-        .map_err(|_| invalid())?;
+        .map(|file| identity_file(file, &|| check().is_some()))
+        .transpose();
+    guard()?;
+    let opened_identity = opened_identity.map_err(|_| {
+        file_error(
+            crate::FileSlot::Config,
+            selection.config_source,
+            "metadata failed",
+        )
+    })?;
     if opened_identity != config_identity
         || (opened_identity.is_some() && opened_identity == credentials_identity)
     {
-        return Err(invalid());
+        return Err(changed(crate::FileSlot::Config, selection.config_source));
     }
-    if let Some(path) = credentials_path.as_deref() {
-        let after = identity_path(path).map_err(|reason| {
-            file_error(
-                crate::FileSlot::Credentials,
-                selection.credentials_source,
-                reason,
-            )
-        })?;
-        if Some(after) != credentials_identity {
-            return Err(invalid());
+    if let Some(path) = selection.credentials.as_deref() {
+        guard()?;
+        let after = identity_path(path, &|| check().is_some());
+        guard()?;
+        match after {
+            Ok(after) if Some(&after) != credentials_identity.as_ref() => {
+                return Err(changed(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                ));
+            }
+            Ok(_) => {}
+            Err("not found") if credentials_identity.is_none() => {}
+            Err("not found") => {
+                return Err(changed(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                ));
+            }
+            Err(reason) => {
+                return Err(file_error(
+                    crate::FileSlot::Credentials,
+                    selection.credentials_source,
+                    reason,
+                ));
+            }
         }
     }
     Ok(config)

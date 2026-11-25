@@ -274,7 +274,7 @@ async fn ambiguous_explicit_config_has_public_diagnostic() {
 }
 
 #[tokio::test]
-async fn file_decoding_errors_have_no_line_but_parse_errors_do() {
+async fn decoding_and_parse_errors_report_line_numbers() {
     let dir = Dir::new();
     let path = dir.0.join("config");
     let options = ConfigOptions::default().with_config_file(path.clone());
@@ -286,7 +286,14 @@ async fn file_decoding_errors_have_no_line_but_parse_errors_do() {
         .unwrap_err();
     let detail = error.detail::<FileDiagnostic>().unwrap();
     assert_eq!(detail.reason(), "invalid UTF-8");
-    assert_eq!(detail.line(), None);
+    assert_eq!(detail.line(), Some(1));
+    std::fs::write(&path, b"[default]\n\xff").unwrap();
+    let error = Config::resolve_profile(&ctx, &options, &source)
+        .await
+        .unwrap_err();
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.reason(), "invalid UTF-8");
+    assert_eq!(detail.line(), Some(2));
     std::fs::write(&path, "[default]\ninvalid line\n").unwrap();
     let error = Config::resolve_profile(&ctx, &options, &source)
         .await

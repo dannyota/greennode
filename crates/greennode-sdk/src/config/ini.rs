@@ -67,13 +67,7 @@ pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
             return Err(error("line too long"));
         }
-        let line = std::str::from_utf8(raw).map_err(|_| {
-            if index == 0 {
-                "credentials: invalid UTF-8".to_owned()
-            } else {
-                error("invalid UTF-8")
-            }
-        })?;
+        let line = std::str::from_utf8(raw).map_err(|_| error("invalid UTF-8"))?;
         let line = if index == 0 {
             line.strip_prefix('\u{feff}').unwrap_or(line)
         } else {
@@ -131,13 +125,7 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
             return Err(error("line too long"));
         }
-        let line = std::str::from_utf8(raw).map_err(|_| {
-            if index == 0 {
-                format!("{slot}: invalid UTF-8")
-            } else {
-                error("invalid UTF-8")
-            }
-        })?;
+        let line = std::str::from_utf8(raw).map_err(|_| error("invalid UTF-8"))?;
         let line = if index == 0 {
             line.strip_prefix('\u{feff}').unwrap_or(line)
         } else {

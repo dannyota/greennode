@@ -61,8 +61,25 @@ pub(super) fn probe(path: &Path) -> Presence {
 }
 
 #[cfg(windows)]
+pub(super) fn probe_checked(path: &Path, check: &dyn Fn() -> bool) -> Presence {
+    if check() {
+        return Presence::Ambiguous;
+    }
+    probe_windows_checked_with(path, check, |options, path| options.open(path))
+}
+
+#[cfg(windows)]
 fn probe_windows_with(
     path: &Path,
+    open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<std::fs::File>,
+) -> Presence {
+    probe_windows_checked_with(path, &|| false, open)
+}
+
+#[cfg(windows)]
+fn probe_windows_checked_with(
+    path: &Path,
+    check: &dyn Fn() -> bool,
     open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<std::fs::File>,
 ) -> Presence {
     use std::os::windows::fs::OpenOptionsExt;
@@ -75,9 +92,16 @@ fn probe_windows_with(
         .access_mode(0)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .security_qos_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION);
+    if check() {
+        return Presence::Ambiguous;
+    }
     match open(&options, path) {
         Ok(file) => {
-            if file.metadata().is_ok() && winapi_util::file::typ(&file).is_ok() {
+            if !check()
+                && file.metadata().is_ok()
+                && !check()
+                && winapi_util::file::typ(&file).is_ok()
+            {
                 Presence::Present
             } else {
                 Presence::Ambiguous
@@ -89,14 +113,25 @@ fn probe_windows_with(
 
 #[cfg(not(windows))]
 pub(super) fn probe(path: &Path) -> Presence {
+    probe_checked(path, &|| false)
+}
+
+#[cfg(not(windows))]
+pub(super) fn probe_checked(path: &Path, check: &dyn Fn() -> bool) -> Presence {
+    if check() {
+        return Presence::Ambiguous;
+    }
     match std::fs::symlink_metadata(path) {
         Ok(_) => Presence::Present,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let mut parent = path.parent();
             while let Some(path) = parent {
+                if check() {
+                    return Presence::Ambiguous;
+                }
                 match std::fs::symlink_metadata(path) {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return if std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+                        return if !check() && std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
                             Presence::Absent
                         } else {
                             Presence::Ambiguous

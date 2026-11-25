@@ -55,6 +55,7 @@ impl FileDiagnostic {
         let reason = match value {
             "lookup failed" => "lookup failed",
             "invalid path" => "invalid path",
+            "changed during read" => "changed during read",
             "not found" => "not found",
             "open failed" => "open failed",
             "metadata failed" => "metadata failed",
