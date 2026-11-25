@@ -305,6 +305,115 @@ mod tests {
     }
 
     #[test]
+    fn legacy_overrides_are_distinct_from_defaults() {
+        let mut source = Source::default();
+        source
+            .0
+            .insert("VNGCLOUD_CONFIG_FILE".into(), "/overrides/config".into());
+        source.0.insert(
+            "VNGCLOUD_SHARED_CREDENTIALS_FILE".into(),
+            "/overrides/credentials".into(),
+        );
+        let paths = select(None, None, &source, Path::new("/work"), |_| {
+            Presence::Absent
+        })
+        .unwrap();
+        assert_eq!(paths.mode, Mode::Legacy);
+        assert_eq!(paths.config, Some(PathBuf::from("/overrides/config")));
+        assert_eq!(
+            paths.credentials,
+            Some(PathBuf::from("/overrides/credentials"))
+        );
+    }
+
+    #[test]
+    fn legacy_credentials_default_alone_selects_legacy() {
+        let source = Source::default();
+        let result = select(None, None, &source, Path::new("/work"), |p| {
+            if p.ends_with(".vngcloud/credentials") {
+                Presence::Present
+            } else {
+                Presence::Absent
+            }
+        });
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        assert_eq!(paths.mode, Mode::Legacy);
+    }
+
+    #[test]
+    fn empty_overrides_do_not_select_mode() {
+        let mut source = Source::default();
+        source.0.insert("GREENNODE_CONFIG_FILE".into(), "".into());
+        source.0.insert("VNGCLOUD_CONFIG_FILE".into(), "".into());
+        let result = select(
+            Some(Path::new("")),
+            None,
+            &source,
+            Path::new("/work"),
+            |p| {
+                if p.ends_with(".vngcloud/config") {
+                    Presence::Present
+                } else {
+                    Presence::Absent
+                }
+            },
+        );
+        assert!(result.is_ok());
+        let paths = result.unwrap();
+        assert_eq!(paths.mode, Mode::Legacy);
+        assert!(!paths.config_named);
+    }
+
+    #[test]
+    fn sdk_option_alone_selects_greennode() {
+        let mut source = Source::default();
+        source
+            .0
+            .insert("VNGCLOUD_CONFIG_FILE".into(), "/old".into());
+        let paths = select(
+            Some(Path::new("/override")),
+            Some(Path::new("/key")),
+            &source,
+            Path::new("/work"),
+            |p| {
+                if p.starts_with("/override") || p.starts_with("/key") {
+                    Presence::Present
+                } else {
+                    Presence::Absent
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(paths.mode, Mode::Greennode);
+    }
+
+    #[test]
+    fn ambiguous_legacy_default_guards_incomplete_pair() {
+        let source = Source::default();
+        let result = select(None, None, &source, Path::new("/work"), |p| {
+            if p.ends_with(".greennode/config") {
+                Presence::Present
+            } else if p.ends_with(".vngcloud/credentials") {
+                Presence::Ambiguous
+            } else {
+                Presence::Absent
+            }
+        });
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_leaf_is_present() {
+        let dir = env::temp_dir().join(format!("greennode-mode-leaf-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), dir.join("link")).unwrap();
+        assert_eq!(probe(&dir.join("link")), Presence::Present);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn options_override_variables_and_resolve_relative_paths() {
         let mut source = Source::default();
         source
