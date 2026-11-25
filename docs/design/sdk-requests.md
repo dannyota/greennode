@@ -3,8 +3,8 @@
 Status: proposed.
 
 The SDK has three senders: private credential exchange, product API, and signed
-S3. They share socket and TLS code, not request types, auth state, redirect
-handlers, or hooks. [SDK design](sdk.md) owns the public interface. The
+S3. They share a private HTTP implementation, not request types, auth state,
+redirect handlers, or hooks. [SDK design](sdk.md) owns the public interface. The
 baseline's [auth][go-auth], [write][go-write], [single-send][go-once], and
 [object][go-object] contracts apply unchanged except as stated here.
 
@@ -14,8 +14,9 @@ baseline's [auth][go-auth], [write][go-write], [single-send][go-once], and
   let any operation turn credentials, redirects, or capture on.
 - Build three unrelated HTTP clients. This isolates policy but duplicates
   cancellation, bounds, and TLS setup.
-- Use three typed senders over a private socket layer. Take this approach: each
-  sender can construct only its own kind of request.
+- Use three typed senders over private `hyper-util` clients and a common TLS
+  connector. Take this approach: policy stays isolated without owning DNS, TCP,
+  or TLS assembly.
 
 ## Contract
 
@@ -29,18 +30,19 @@ baseline's [auth][go-auth], [write][go-write], [single-send][go-once], and
 | Bounds                  | Service account 64 KiB decoded; IAM-user page and token response 1 MiB decoded. Bound headers separately.             | Default 8 MiB decoded, with the baseline's operation-specific limits and precedence. Bound headers separately.                                                                             | Keep operation-specific streaming, response byte, XML and metadata limits. No decompression.    |
 | Debug                   | Login/exchange start and finish only.                                                                                 | One typed attempt event; no raw HTTP tracing.                                                                                                                                              | None.                                                                                           |
 
-`wire/connection.rs` owns DNS, TCP, TLS, HTTP framing and cancellable body
-reads. Its request/connection types are not exported from `wire`. No external or
-service caller can construct a raw request or choose a sender by flag.
-`wire/credential/` receives only auth-specific input, a clock and deadline,
-randomness, and a secret-free event sink. Credential request constructors are
-private to that subtree. Neither product capture nor product HTTP options are
-arguments to its constructor. `wire/product/` receives a session token source
-and returns bounded responses to operation decoders; services reach it through
-an operation client, not the socket layer. `wire/s3/` accepts an S3 key pair, S3
-region, timeout, and clock. It cannot accept `Config`, `Session`, a token
-provider, a cache handle, or a product sender. Only the storage object client
-calls it. Do not add outside imports of the HTTP stack in SDK service modules.
+`wire/connection.rs` wraps `hyper_util::client::legacy::Client` and
+`hyper_rustls::HttpsConnector`. Its raw request and connection types stay in
+`wire`. No external or service caller can construct a raw request or choose a
+sender by flag. `wire/credential/` receives only auth-specific input, a clock
+and deadline, randomness, and a secret-free event sink. Credential request
+constructors are private to that subtree. Neither product capture nor product
+HTTP options are arguments to its constructor. `wire/product/` receives a
+session token source and returns bounded responses to operation decoders;
+services reach it through an operation client, not the socket layer. `wire/s3/`
+accepts an S3 key pair, S3 region, timeout, and clock. It cannot accept
+`Config`, `Session`, a token provider, a cache handle, or a product sender. Only
+the storage object client calls it. Do not add outside imports of the HTTP stack
+in SDK service modules.
 
 Use verified TLS with WebPKI roots and SNI. No ambient proxy, cookies, or
 root-store settings. The only cookie jar is per IAM-user login. Endpoint
@@ -51,24 +53,54 @@ plain HTTP or insecure TLS override in production. A public product endpoint
 override is a deliberate trust decision: its origin may see the configured
 product credential for that route. Provider errors do not change destinations.
 
-Every request times out even with no caller deadline. The product and login
-request timeout defaults to 120 seconds and `with_timeout` sets a positive
-replacement. It includes the bounded body read, and may not extend the caller's
-deadline. The product connect timeout only narrows this limit. Use one fresh
-HTTP/1.1 connection per attempt in the first implementation. The transport must
-not reuse a connection, renegotiate to HTTP/2, or replay an attempt in any
-class. Track the pre-send boundary: DNS, TCP, TLS, local encoding and auth
-acquisition can fail before a write. Once handing the request to HTTP framing,
-classify a failed attempt as possibly sent unless there is positive evidence
-otherwise; cancel the connection on drop.
+### Private HTTP implementation
 
-Cap response heads at 64 KiB for login and product and at the baseline's 32 KiB
-for S3. Reject oversized bodies with an overflow-byte probe and retain observed
-status only where the operation contract requires it. Close or drop the
-connection on early refusal. For login and product allow identity or gzip; apply
-the decoded limit before JSON or other parsers, and limit encoded bytes too
-(decoded cap plus 64 KiB). S3 accepts no automatic decoding or request URL
-normalization. Do not use a JSON walker that rewrites exact integers to floats.
+Build each `HttpsConnector` with WebPKI roots, an explicit rustls `ring`
+provider, no client certificate and `ClientConfig.enable_early_data = false`.
+Use `with_tls_config`, `https_only`, `enable_http1`, and `wrap_connector` over
+`HttpConnector::enforce_http(false)`. The inner connector accepts an HTTPS URI;
+the outer connector still refuses plain HTTP. Do not enable HTTP/2, upgrade,
+CONNECT, proxy settings, or TLS 0-RTT. The [connector source][tls-builder]
+confirms the HTTP/1-only path does not advertise HTTP/2 in ALPN.
+
+Set `Client::builder(...).retry_canceled_requests(false)` on every client. The
+[client source][legacy-client] shows this disables both the send retry on a
+closed reused connection and the retry loop after a canceled pool checkout. The
+Hyper client does not follow redirects; only product code can issue a new
+request after validating a redirect. Pool only repeatable product reads. Scope
+the pool to the session. Set `pool_max_idle_per_host(2)`, a 30-second
+`pool_idle_timeout`, and an injected `pool_timer`. All other attempts use
+`pool_max_idle_per_host(0)`; the [pool source][legacy-pool] shows zero removes
+the pool, not just idle retention. Credential steps, `Once` and S3 always use a
+fresh HTTP/1.1 connection. Reuse only after Hyper marks the connection ready for
+another request at a valid HTTP boundary. An idle connection driver may live
+with the pool, but no request continues detached from its operation or body
+owner.
+
+Every request times out even with no caller deadline. Product and login requests
+default to 120 seconds; `with_timeout` sets a positive replacement. Include the
+bounded body read and never extend the caller's deadline. Apply a shorter
+product connect timeout to the connector future, including DNS and TLS. Keep a
+separate typed indication of a DNS/TCP dial failure from the inner connector.
+Hyper's `is_connect()` can also cover a closed checkout or TLS failure; it alone
+does not prove a failed dial for `NonIdempotent` retry. Track dispatch
+separately. Before encoding, auth, or connection establishment finishes, a
+failed attempt cannot have sent HTTP bytes. After handing the request to HTTP
+framing, report a possible send unless there is positive evidence otherwise.
+Drop the connection or body on cancellation.
+
+Set `http1_max_buf_size` to 64 KiB for login and product and 32 KiB for S3. This
+bounds header buffering, not the exact accepted head length. The
+[parser][hyper-head-buffer] grows the buffer within a bounded allocation and can
+accept a head over the cap if the last read completes it before the buffer limit
+check. Do not add a raw HTTP reader to tighten the cutoff.
+
+Reject oversized bodies with an overflow-byte probe and retain observed status
+only where the operation contract requires it. Close or drop the connection on
+early refusal. For login and product allow identity or gzip; apply the decoded
+limit before JSON or other parsers, and limit encoded bytes too (decoded cap
+plus 64 KiB). S3 accepts no automatic decoding or request URL normalization. Do
+not use a JSON walker that rewrites exact integers to floats.
 
 ### Private exchange
 
@@ -105,16 +137,21 @@ interval), backoff, and 30-second cap on delays including `Retry-After`.
 `NonIdempotent` can retry only a proven failed dial or 429. Preserve the
 baseline's separate single 401 recovery when the operation allows it; neither
 key-based nor unauthenticated requests try management credentials on 401.
-`with_retry` may change the budget and interval but not the eligible cases.
-Preserve status, decode strictness, empty-body handling, and body-overflow
+`with_retry` may change the budget and interval but not the eligible cases. A
+failed send can enter the network retry path. A body read, decompression, or
+close failure after response headers does not retry, even for `Repeatable` and
+even if the status would qualify. A 401 that remains visible after body-error
+mapping may invalidate the exact bearer, but cannot trigger a resend. Preserve
+observed status, decode strictness, empty-body handling, and overflow
 classification per operation. A retry hint is not a guarantee that rerunning a
 multi-step operation is safe.
 
-Product redirects also reject userinfo, fragments, cycles and a redirect chain
-longer than nine hops. Check before attaching credentials to a newly resolved
-URI. No write follows a redirect, even at the same origin. Discard `Location`
-when building public errors. Routes own trusted templates; validate caller path
-IDs before escaping and never interpolate them in a log event.
+Product redirects also reject userinfo, fragments, cycles and a chain longer
+than nine hops. Check before attaching credentials to a newly resolved URI.
+Unlike Go, refuse every write redirect and every POST read redirect, even at the
+same origin. This includes the VPC rename and monitor log-project quote. Discard
+`Location` in public errors. Routes own trusted templates; validate caller path
+IDs before escaping and never interpolate them in log events.
 
 Decoders may receive bounded response bytes and typed status internally. Accept
 peer error codes and message fields only through the operation's safe
@@ -130,13 +167,21 @@ only within the logical request for reflection checks, including across retries.
 `ObjectConfig` is independent of `Config`: explicit `ObjectCredentials` (two
 `Secret` values), `HCM04` or `HAN02`, operation timeout, optional injected
 clock. Keep the five-minute default, one-hour timeout ceiling and fixed regional
-path-style origin. Preserve the 30-second dial, 10-second TLS and 30-second
-response header timeouts, all within the operation deadline. Keep the baseline's
-SHA-256 payload hash, SigV4 header, escaped path, and canonical query rules
-unchanged. Retain the exact signed bytes in the transmitted request target. In
-particular, do not pass object paths through a URL parser that removes dot
-segments, changes escaping, or collapses slashes. Serialize the S3 signature and
-key only for that origin.
+path-style origin. Keep the baseline's SHA-256 payload hash, SigV4 header,
+escaped path, and canonical query rules. Build a raw `http::Uri` with the exact
+signed `PathAndQuery`. The [Hyper client][legacy-client] copies that value
+verbatim when it emits the HTTP/1 origin form. Do not pass it through `Url`
+parsing or normalize dot segments, slashes, or escapes. Send the S3 signature
+and key only to the selected region's origin.
+
+Keep the operation deadline. Set `HttpConnector::set_connect_timeout` to 30
+seconds for TCP dialing. Put a 40-second deadline around the entire connector
+future, including DNS, TCP and TLS. The [TLS connector][tls-connect] has no
+separate handshake timer. For a request with no streamed body, bound the entire
+`Client::request` future to 30 seconds through response headers. That includes
+any connection setup. For a streamed upload, the operation deadline bounds both
+the upload and the response wait; there is no separate 30-second post-flush
+timer. All timers respect earlier caller deadlines.
 
 `GetObjectOutput` carries metadata and an owned `ObjectBody`. Its async chunk
 reader retains the deadline and cancellation signal and enforces both the
@@ -174,41 +219,52 @@ links in registry metadata. The HTTP/TLS, time, parsing and crypto families have
 release. `dual` means MIT OR Apache-2.0. Rerun advisory, license, age, and
 feature-graph checks when adding each crate.
 
-| Crate and version checked                                      | License                                             | Use and dependency cost                                                                                                                                                                        |
-| -------------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [tokio] 1.54.1                                                 | MIT                                                 | `rt`, `net`, `time`, `sync`, `macros`, `io-util`; mio/socket2 and macros. No multithread runtime requirement for the SDK.                                                                      |
-| [hyper] 1.13.0, [hyper-util] 0.1.21                            | MIT                                                 | Low-level client HTTP/1 and Tokio I/O adapter only; httparse and small futures primitives, no legacy pooled client or h2. Test server only in dev features.                                    |
-| [tokio-rustls] 0.26.6, [rustls] 0.23.46, [webpki-roots] 1.0.12 | dual; Apache-2.0 OR ISC OR MIT; CDLA-Permissive-2.0 | Explicit `ring`, `tls12` and `std` where supported, defaults off. Ring adds C/assembly build tooling; avoid AWS-LC, native cert loading and OpenSSL. TLS 1.2 and 1.3 with bundled roots.       |
-| [http] 1.5.0, [http-body-util] 0.1.5, [bytes] 1.12.2           | dual; MIT; MIT                                      | Share Hyper's HTTP value and body types; no additional transport.                                                                                                                              |
-| [serde] 1.0.229, [serde_json] 1.0.154                          | dual                                                | Derive adds proc macros. Enable `raw_value` and `arbitrary_precision` for bounded exact payloads; no insertion-ordered map dependency in the SDK.                                              |
-| [time] 0.3.55, [httpdate] 1.0.3                                | dual                                                | `formatting` and `parsing` for fixed time formats; no local time feature. Small time helpers; `httpdate` is a stable dependency-free HTTP date parser.                                         |
-| [hmac] 0.13.0, [sha1] 0.11.0, [sha2] 0.11.1                    | dual                                                | Shared RustCrypto digest family. HMAC-SHA1 only for TOTP; SHA-256 for PKCE, cache keys and SigV4.                                                                                              |
-| [getrandom] 0.4.3, [data-encoding] 2.11.1, [zeroize] 1.9.2     | dual; MIT; dual                                     | OS entropy, no RNG framework. Leaf Base32/Base64/hex and zeroizing owned secrets.                                                                                                              |
-| [url] 2.5.9, [cookie] 0.18.3, [regex-lite] 0.1.9               | dual                                                | Parse origin and redirect/form data; URL adds IDNA/ICU. Parse login cookies only, no signed/private cookie features. Leaf matcher for bounded sign-in fields.                                  |
-| [flate2] 1.1.11, [quick-xml] 0.42.0                            | dual; MIT                                           | Rust `miniz_oxide` gzip backend. XML reader with no encoding or serde features; reject DTD/entities outside the baseline rules.                                                                |
-| [rustix] 1.1.6                                                 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Unix `fs` flags for no-follow, exclusive creation and nonblocking open; select the allowlisted license branch. Use `std::fs::File::try_lock` for cancelable lock polling without a lock crate. |
-| [rcgen] 0.14.10, [tempfile] 3.27.0                             | dual                                                | Dev only: test roots with `ring` and isolated dirs, no PEM or X.509 parser features.                                                                                                           |
+| Crate and version checked                                       | License                                                                 | Use and dependency cost                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [tokio] 1.54.1                                                  | MIT                                                                     | `rt`, `net`, `time`, `sync`, `macros`, `io-util`; mio/socket2 and macros. No multithread runtime requirement for the SDK.                                                                                                                                                                                  |
+| [hyper] 1.13.0, [hyper-util] 0.1.21                             | MIT                                                                     | Low-level HTTP/1 framing plus `client-legacy`, `http1`, and `tokio` in hyper-util. The latter enables the private client, pool, and TCP connector; no `http2` or proxy features. Server features are dev-only.                                                                                             |
+| [hyper-rustls] 0.27.10, [rustls] 0.23.46, [webpki-roots] 1.0.12 | Apache-2.0 OR ISC OR MIT; Apache-2.0 OR ISC OR MIT; CDLA-Permissive-2.0 | `hyper-rustls` released 2026-09-20 from the rustls project. Disable defaults; enable `http1`, `ring`, and `tls12`. No native roots, platform verifier, logging, or AWS-LC. Adds `tokio-rustls` and `tower-service`; ring needs C/assembly build tooling. Enable only `std`, `ring`, and `tls12` in rustls. |
+| [tower-service] 0.3.3                                           | MIT                                                                     | Dependency-free connector interface already used by both HTTP crates; use it to apply deadlines to connector futures.                                                                                                                                                                                      |
+| [http] 1.5.0, [http-body-util] 0.1.5, [bytes] 1.12.2            | dual; MIT; MIT                                                          | Share Hyper's HTTP value and body types; no additional transport.                                                                                                                                                                                                                                          |
+| [serde] 1.0.229, [serde_json] 1.0.154                           | dual                                                                    | Derive adds proc macros. Enable `raw_value` and `arbitrary_precision` for bounded exact payloads; no insertion-ordered map dependency in the SDK.                                                                                                                                                          |
+| [time] 0.3.55, [httpdate] 1.0.3                                 | dual                                                                    | `formatting` and `parsing` for fixed time formats; no local time feature. Small time helpers; `httpdate` is a stable dependency-free HTTP date parser.                                                                                                                                                     |
+| [hmac] 0.13.0, [sha1] 0.11.0, [sha2] 0.11.1                     | dual                                                                    | Shared RustCrypto digest family. HMAC-SHA1 only for TOTP; SHA-256 for PKCE, cache keys and SigV4.                                                                                                                                                                                                          |
+| [getrandom] 0.4.3, [data-encoding] 2.11.1, [zeroize] 1.9.2      | dual; MIT; dual                                                         | OS entropy, no RNG framework. Leaf Base32/Base64/hex and zeroizing owned secrets.                                                                                                                                                                                                                          |
+| [url] 2.5.9, [cookie] 0.18.3, [regex-lite] 0.1.9                | dual                                                                    | Parse origin and redirect/form data; URL adds IDNA/ICU. Parse login cookies only, no signed/private cookie features. Leaf matcher for bounded sign-in fields.                                                                                                                                              |
+| [flate2] 1.1.11, [quick-xml] 0.42.0                             | dual; MIT                                                               | Rust `miniz_oxide` gzip backend. XML reader with no encoding or serde features; reject DTD/entities outside the baseline rules.                                                                                                                                                                            |
+| [rustix] 1.1.6                                                  | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT                     | Unix `fs` flags for no-follow, exclusive creation and nonblocking open; select the allowlisted license branch. Use `std::fs::File::try_lock` for cancelable lock polling without a lock crate.                                                                                                             |
+| [rcgen] 0.14.10, [tempfile] 3.27.0                              | dual                                                                    | Dev only: test roots with `ring` and isolated dirs, no PEM or X.509 parser features.                                                                                                                                                                                                                       |
 
-A candidate feature graph resolves about 105 production packages, including
-build dependencies. URL's ICU and TLS explain most of the weight; split new
-features when they land instead of enabling default bundles. Add S3 XML and
-signing dependencies only when used. Do not add reqwest, an AWS SDK, OAuth or
-TOTP clients, native TLS, ambient tracing, argument or JMESPath parsers, shell,
-or terminal libraries. Offer no blocking SDK and do not create an internal
-runtime. Callers run async methods on Tokio. Run bounded filesystem work on
-blocking workers; lock attempts never block a Tokio worker or hold up a canceled
-waiter.
+The pool adds connector and concurrency helpers. URL's ICU and TLS remain the
+largest dependency groups. Enable only the features each slice needs. Add S3 XML
+and signing dependencies only when used. Do not add reqwest, an AWS SDK, OAuth
+or TOTP clients, native TLS, ambient tracing, argument or JMESPath parsers,
+shell, or terminal libraries. Offer no blocking SDK and do not create an
+internal runtime. Callers run async methods on Tokio. Run bounded filesystem
+work on blocking workers; lock attempts never block a Tokio worker or hold up a
+canceled waiter.
 
 ## Policy tests
 
 `tests/support/` runs a scripted loopback HTTP/TLS peer with a per-test root,
 request counts, explicit barriers, and arbitrary malformed/oversized responses.
-Return an owned test handle and join the peer on cleanup. Test wire bytes and S3
-signature vectors, including dot segments and escaped keys. Count sends on
-same-origin and cross-origin redirects, scheme and port changes, fragmented
-bodies, 401 recovery, `Once`, cancellation after a send, and signed writes.
-Prove decoded bounds with a compressed body and cap+1 probes for each policy.
-Test S3 metadata and streaming errors without constructing a management config.
+Return an owned test handle and join the peer on cleanup. Compare the raw HTTP/1
+request target byte for byte with the signed path and query, using SigV4 vectors
+with `/../`, `/./`, repeated slashes, and escaped keys. Count HTTP sends and
+accepted connections for each policy. Close a pooled read's idle connection just
+as a new request checks it out; with SDK retry disabled, the HTTP client must
+not resend. Test that credential steps, `Once` and S3 never reuse a connection
+or retry 401, 429, or transport failures. For ordinary product requests, verify
+the separate 401 recovery, 429 and transient status retry rules, and no retry
+for a truncated body even on retryable status. Test redirect send counts for
+same-origin GET, POST quote and writes, other origins, changed schemes and
+ports. Test cancellation, fragmented cap+1 response heads, and clearly oversized
+heads. Assert refusal at or shortly above the head cap and bounded buffering,
+not an exact accepted byte count. Check exact decoded body limits with cap+1
+probes and compressed input. Test the S3 connector, bodyless request, and
+overall deadlines separately. A streamed upload with a stalled response fails at
+the operation deadline, not 30 seconds after the last byte. Test S3 metadata and
+streaming errors without constructing a management config.
 
 Inject a distinct toy canary for each password, TOTP seed and code, client
 secret, login cookie, auth code, bearer (including rejected and new tokens), CDN
@@ -234,7 +290,18 @@ account data or egress outside loopback.
 [tokio]: https://crates.io/crates/tokio
 [hyper]: https://crates.io/crates/hyper
 [hyper-util]: https://crates.io/crates/hyper-util
-[tokio-rustls]: https://crates.io/crates/tokio-rustls
+[hyper-rustls]: https://crates.io/crates/hyper-rustls
+[tower-service]: https://crates.io/crates/tower-service
+[legacy-client]:
+  https://docs.rs/hyper-util/0.1.21/src/hyper_util/client/legacy/client.rs.html
+[legacy-pool]:
+  https://docs.rs/hyper-util/0.1.21/src/hyper_util/client/legacy/pool.rs.html
+[tls-builder]:
+  https://docs.rs/hyper-rustls/0.27.10/src/hyper_rustls/connector/builder.rs.html
+[tls-connect]:
+  https://docs.rs/hyper-rustls/0.27.10/src/hyper_rustls/connector.rs.html
+[hyper-head-buffer]:
+  https://docs.rs/hyper/1.13.0/src/hyper/proto/h1/io.rs.html#174-244
 [rustls]: https://crates.io/crates/rustls
 [webpki-roots]: https://crates.io/crates/webpki-roots
 [http]: https://crates.io/crates/http

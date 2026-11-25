@@ -77,12 +77,15 @@ Neither `PROFILE` variable makes it explicit.
   `--read-only=false` leaves its own source off. For writes, validate both
   variables before deciding the latch from the flag and environment. An invalid
   value is `InvalidConfig` (exit 2); a valid on source is `ReadOnly` (exit 2).
-  These sources may refuse a write without reading any file. Otherwise finish
-  the check offline with `C.read_only`, using the same rules. When several
-  consulted sources are on, name the first in table order. Reads do not fail
-  solely because the latch is on or invalid. The SDK does not enforce the CLI
-  latch; the baseline's method-specific checks of the profile key in vMonitor
-  are unchanged.
+  When several consulted sources are on, name the first in table order. For a
+  management write, the flag or environment refuses before any file read.
+  Otherwise finish the full offline load and resolve output before applying
+  `C.read_only`. A load failure wins over the profile latch: malformed
+  credentials with `C.read_only=1` return `NoCredentials` (exit 3), not
+  `ReadOnly`. Nothing in this sequence signs in. Ordinary management reads do
+  not fail solely because the latch is on or invalid. S3 has the policy checks
+  below. The SDK does not enforce the CLI latch; the baseline's method-specific
+  checks of the profile key in vMonitor are unchanged.
 - The CLI accepts `json`, `table`, and `text`; a different winning output value
   refuses before any request. The SDK preserves the profile setting without
   interpreting it as a rendering option.
@@ -101,13 +104,19 @@ non-empty `client_id` and `client_secret`; refuse them before exposing settings.
 
 ## File mode and paths
 
-Choose a mode once. A non-empty SDK path option, a non-empty `GREENNODE_` path
-variable, or an entry at either greennode default selects **greennode mode**.
-Otherwise select **legacy mode**. A path option or greennode variable decides
-that choice without probing unselected defaults. There are no CLI path flags. An
-explicit profile does not affect either path rule. A home directory that cannot
-be resolved supplies no defaults in either mode; a relative override is relative
-to the invocation's working directory, not to either home subdirectory.
+Choose a mode once:
+
+1. A non-empty SDK path option, a non-empty `GREENNODE_` path variable, or an
+   entry at either greennode default selects **greennode mode**. A path option
+   or variable decides this without probing unselected default paths.
+2. Otherwise, a non-empty `VNGCLOUD_` path variable or an entry at either legacy
+   default selects **legacy mode**.
+3. If neither tool has a file or path override, select **greennode mode**. Both
+   greennode default files may be absent on a fresh install.
+
+There are no CLI path flags. An explicit profile does not change path selection.
+No home means no default paths. Resolve relative overrides against the
+invocation's working directory, not either tool directory.
 
 | File        | SDK option (selects greennode mode) | Greennode path order after option                                    | Legacy path order                                                  |
 | ----------- | ----------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------ |
@@ -122,7 +131,8 @@ and replaces its slot, regardless of the table's choice.
 
 | Non-empty greennode path variables            | Neither legacy variable | `Vc` only | `Vk` only | Both legacy variables |
 | --------------------------------------------- | ----------------------- | --------- | --------- | --------------------- |
-| Neither; no greennode default entry           | Vd, Vd                  | Vc, Vd    | Vd, Vk    | Vc, Vk                |
+| Neither; no default entry for either tool     | Gd, Gd                  | Vc, Vd    | Vd, Vk    | Vc, Vk                |
+| Neither; only legacy has a default entry      | Vd, Vd                  | Vc, Vd    | Vd, Vk    | Vc, Vk                |
 | Neither; at least one greennode default entry | Gd, Gd                  | Gd, Gd    | Gd, Gd    | Gd, Gd                |
 | `Gc` only                                     | Gc, Gd                  | Gc, Gd    | Gc, Gd    | Gc, Gd                |
 | `Gk` only                                     | Gd, Gk                  | Gd, Gk    | Gd, Gk    | Gd, Gk                |
@@ -131,59 +141,71 @@ and replaces its slot, regardless of the table's choice.
 An entry is present when lookup without following the leaf finds it, including
 an unreadable file, directory, or link (even dangling). Only a missing leaf or
 missing ordinary parent is absent. A permission error or other ambiguous lookup
-at a greennode default is a configuration error, not permission to fall back. A
-present but unsafe entry selects a mode and is refused if selected for use;
-paths overridden in that mode are not read. Failure to open a path already
-observed present is never treated as absence. Missing named paths are errors;
-missing defaults supply no contents, subject to the following guard.
+cannot establish a default's absence. If needed to choose the mode, stop with a
+configuration error. A present but unsafe entry selects a mode and is refused if
+selected for use; paths overridden in that mode are not read. Failure to open a
+path already observed present is never treated as absence. Missing named paths
+are errors; missing defaults supply no contents, subject to this guard.
 
 | Selected greennode pair after overrides | Legacy file indication       | Result                                                               |
 | --------------------------------------- | ---------------------------- | -------------------------------------------------------------------- |
 | Both files present                      | Any                          | Intentional cutover; skip the incomplete-pair guard                  |
-| One file absent                         | None                         | Use only the selected file                                           |
-| One file absent                         | Either legacy slot indicated | `InvalidConfig` (exit 2); complete the pair or return to legacy mode |
+| Either or both files absent             | None                         | Use the files that are present                                       |
+| Either or both files absent             | Either legacy slot indicated | `InvalidConfig` (exit 2); complete the pair or return to legacy mode |
 
-For this guard only, a legacy slot is indicated by a non-empty legacy path
-variable or by an entry at its legacy default. An ambiguous legacy default
-lookup counts as indicated. Read only a path-variable presence bit, not the
-value as a path. Do not open, parse, or use legacy files in greennode mode.
-Check both slots: even a legacy file of the same kind as the sole greennode file
-can supply a different account or a missing write restriction. Two selected
-overrides can complete the pair even with only one default present. A named path
-that is absent or unsafe is an error even if the other slot is available. Never
-switch modes or retry another source on an error.
+For this guard, a legacy slot is indicated by a non-empty legacy path variable,
+an entry at its default, or an ambiguous lookup at that default. Read only a
+path-variable presence bit, not the value as a path. Do not open or parse an
+unselected legacy file. Check both slots: even a legacy file of the same kind as
+the sole greennode file can supply a different account or a missing write
+restriction. A complete pair can come from overrides even if a default is
+absent. Never switch modes or retry another source on error.
 
-## Offline stages and file safety
+## Offline resolution and file safety
 
-1. `Config::resolve_profile` selects the profile name, mode and paths. It checks
-   path presence and type in both slots and runs the incomplete-pair guard. A
-   missing explicit credentials path, or an entry there that is not a regular
-   file once links are followed, is refused now. It checks and parses the config
-   file, if present. It resolves the latch from the flag, both variables and the
-   selected config; it resolves output from the flag or the selected config. It
-   returns immutable settings, path decisions and provenance. It requires no
-   region or credentials and never signs in, checks the token cache, reads
-   management credential variables (not even their presence), or opens the
-   credentials file for content. It does not require the profile to exist in
-   either file. An offline-only command can apply the latch without building a
-   management client.
-2. `Config::load_resolved` uses the selected paths and settings without
-   rereading them or choosing a mode again. Open and validate the credentials
-   file if present, then check profile existence, resolve and validate the
-   management region, project and credential inputs, and resolve the vCDN key.
-   Check the credentials file on the opened handle. This step still sends no
-   request. Only the management path runs it. Standalone discovery can inspect
-   settings first and load management credentials only if its request needs
-   them. S3 object commands never call it and never use the management token
-   cache.
+`Config::load(ctx, options, source)` performs one offline management load. It
+selects the mode, paths and profile, opens each present file once, and parses
+from those handles. It validates the profile, region and winning credentials and
+resolves the project ID and vCDN key. The returned config carries the selected
+profile settings, including the raw latch. It does not sign in or create cache
+files. There is no public second stage and no way to combine settings from one
+load with credentials from another.
+
+`Config::resolve_profile(ctx, &options, source)` returns settings, section
+presence, mode, path decisions and provenance, not a management config. It
+selects the files and checks metadata for both slots, including the
+incomplete-pair guard and alias check, but parses only the config file. A
+missing explicit credentials path or a target that is not a regular file is an
+error even here. It does not require a region, check the token cache, look up
+management credential variables, or open the credentials file for content.
+
+| Settings-only caller                              | Named non-default section required in config?   | Read-only policy                                                                                |
+| ------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| S3 object commands and other policy-only callers  | Yes; absent `default` is allowed                | Reject malformed consulted settings on reads and writes. A valid on source refuses writes only. |
+| `configure get` and `configure list`              | No; report absent values as empty               | Inspection does not validate the latch; show the stored value                                   |
+| `configure` and `configure set`                   | No; a write can create a profile                | Validate and enforce the latch before editing in greennode mode                                 |
+| Standalone project discovery, local settings only | No extra check; not authorization for a request | Use normal management read rules; an authenticated request needs its own full `Config::load`    |
+
+S3 applies both checks before reading the S3 key or sending any request. With no
+home and no config override, S3 refuses rather than assuming empty policy. S3
+never uses a management config or cache. The management command
+`project list-projects` keeps ordinary management profile rules: a named profile
+can be in either file, and a malformed latch does not stop a read.
+
+A directory swap during one load can yield files from different deployments;
+each opened file is checked, but the load is not an atomic snapshot.
 
 Apply these rules to either mode, including any file `configure` reads:
 
+- Reject a config/credentials alias with `InvalidConfig` before parsing the
+  config, including through hard links or distinct symlinks. Management loads
+  compare the opened files' identities. Settings-only lookups compare the opened
+  config's identity with metadata for the resolved credentials target without
+  opening that target for content.
 - Open only regular files for content. On Unix, open nonblocking so a FIFO
-  swapped into place cannot hang a read. Check type and permissions on the open
-  handle, and parse from that handle. Whatever the open reaches is what gets
-  checked, so a swap between the path check and the open cannot skip a check. On
-  Windows, refuse devices, pipes, and other non-regular entries before reading.
+  swapped into place cannot hang a read. Check type and permissions on the
+  opened handle, not just from metadata collected before opening. On Windows,
+  refuse devices, pipes, and other non-regular entries before reading.
 - On Unix, refuse an opened credentials file if **any** group or other
   permission bit is set (`mode & 0o077 != 0`). Suggest `chmod 600`; the file
   need not have exactly mode 0600. Check this only when opening to read the
@@ -207,13 +229,6 @@ Apply these rules to either mode, including any file `configure` reads:
   failures keep the credentials-file identity (`NoCredentials`, exit 3).
   Mode-selection and incomplete-pair errors are `InvalidConfig`.
 
-The Go loader follows symlinks, requires an opened regular file, and limits INI
-lines, not total file bytes. greennode keeps the first two. Bounding total bytes
-and refusing invalid UTF-8 are deliberate tightenings. The 1 MiB file cap
-matches the Go `configure` reader; greennode uses strict SDK parsing and the
-credentials-mode check there as well. The [security design](security.md) owns
-the separate cache checks.
-
 ## Configure
 
 `configure` does not build a management client. Reads use the same selection and
@@ -227,49 +242,77 @@ opens and checks that file without selecting auth. With no home, a requested
 file whose path has no override is a configuration error for `get` or `list`.
 
 In greennode mode, interactive `configure` and `configure set` edit only the
-selected greennode files, subject to the same read-only latch. They cannot clear
-it. If no home is known, refuse writes rather than assuming a target is outside
-the legacy tree. The CLI design owns prompts, writes, and locking.
+selected greennode files, subject to the latch. They cannot clear it. On a fresh
+install with no file indication for either tool, run `greennode configure`, or
+start with `greennode configure set region <region>`. No files need to be copied
+or pre-created. Under the write locks, resolve the mode, both selected paths and
+the latch again. Refuse the write if the mode, either real path, or the latch
+differs from the result before prompting. A write with no home refuses rather
+than assuming its target is outside the legacy tree. The CLI design owns
+prompts, publication and locking.
 
 In legacy mode every `configure` write exits 2. After choosing legacy mode,
 refuse before reading profile contents for the write, prompting, consuming
-stdin, or creating any file, directory, or lock. No refusal changes either file
-pair or the cache. Say that greennode will not edit legacy settings, that no
-files changed, and that the user must copy the selected files manually. Give
-these commands for a POSIX shell. Tell the user to use the same working
-directory as the failed command, check the sources with
-`greennode configure list`, verify the destination is not a link, avoid
-overwriting either greennode file, and stop on error:
+stdin, or creating any file, directory, or lock. No refusal changes either pair
+or the cache. Say why, say that no files changed, and give this manual copy
+recipe for macOS and Linux. Tell the user to stay in the same working directory,
+check the sources with `greennode configure list`, and verify the real
+destination is outside the legacy tree. Use their private directory and do not
+run another configuration editor during the copy.
 
 ```sh
-umask 077
-mkdir -p "$HOME/.greennode"
-cp "${VNGCLOUD_CONFIG_FILE:-$HOME/.vngcloud/config}" \
-  "$HOME/.greennode/config"
-cp "${VNGCLOUD_SHARED_CREDENTIALS_FILE:-$HOME/.vngcloud/credentials}" \
-  "$HOME/.greennode/credentials"
-chmod 600 "$HOME/.greennode/config" "$HOME/.greennode/credentials"
+(
+  set -eu
+  umask 077
+  d="$HOME/.greennode"
+  mkdir -p "$d"
+  test ! -L "$d"
+  for f in config credentials; do
+    test ! -e "$d/$f" && test ! -L "$d/$f" || exit 1
+  done
+  t=$(mktemp -d "$d/.migration.XXXXXX")
+  trap 'rm -f "$t/config" "$t/credentials"; rmdir "$t"' 0
+  cat < "${VNGCLOUD_CONFIG_FILE:-$HOME/.vngcloud/config}" > "$t/config"
+  cat < "${VNGCLOUD_SHARED_CREDENTIALS_FILE:-$HOME/.vngcloud/credentials}" \
+    > "$t/credentials"
+  link "$t/config" "$d/config"
+  link "$t/credentials" "$d/credentials"
+)
 ```
 
-If a legacy default is genuinely absent and no override supplies it, create its
-empty counterpart in `~/.greennode` instead of copying. Never substitute an
-empty file for an unreadable source or missing explicit path. Preserve
-`read_only` and verify the copied settings with `greennode configure list`
-before retrying a write. If the home cannot be resolved, tell the user to set it
-first. On Windows give the same source and destination file names and tell the
-user to copy them with access limited to their account.
+Stage both copies before publishing either. `link` fails if the exact
+destination already exists. If a legacy default is genuinely absent and no
+override supplies it, replace its copy line with `: > "$t/config"` or
+`: > "$t/credentials"`. Never substitute an empty file for an unreadable source
+or a missing override. If only one publication succeeded, keep the legacy
+sources in place and complete or undo the copy before running commands. Verify
+the copied settings and preserved `read_only` with `greennode configure list`.
+If the home cannot be resolved, set it first. On Windows, name the same sources
+and destinations and require the same private staging and no-overwrite copy.
 
 ## Token cache and debug
 
-The tool opts into `~/.greennode/cache` in either mode, never vngcloud's cache.
-No home means no tool disk cache, not a home or credential error on its own. An
-SDK caller gets no disk cache by default, even with a home. The caller can opt
-in with an explicit cache directory without needing a home. The caller must
-choose a private directory that does not share vngcloud's cache. Static tokens
-and custom providers do not use the disk cache. Cache mechanics and auth-kind
-namespaces follow the baseline designs, unchanged except for the tool's
-location. An offline profile lookup or a `configure` command never opens a
-cache. [Security](security.md) owns cache path safety and request debug events.
+The tool opts into `~/.greennode/cache` in either mode. SDK callers opt in with
+an explicit directory. Static tokens and custom providers never use the disk
+cache. An offline profile lookup or `configure` never opens a cache.
+
+For both built-in auth kinds, when `Config::load` has a home from its source,
+resolve the cache directory (default or explicit) and `~/.vngcloud` to their
+real locations. Refuse a cache equal to or inside the real legacy tree before
+creating a directory or lock, reading a token or marker, or writing anything.
+Resolve the existing ancestors even if the cache does not exist yet. Compare
+filesystem ancestry, not string prefixes, and anchor disk operations to the
+checked directory. If separation cannot be established safely, refuse cache use.
+Do not follow a retargeted ancestor after the check. This supplements, not
+replaces, the baseline's checks on the cache directory and entries.
+
+Without a home, the tool has no default disk cache. `Config::load` with no home
+and `Config::new` have no legacy path to compare with; they use an explicit
+cache directory as given, with the normal cache checks. A caller in that case
+must choose a private directory that does not share vngcloud's cache.
+`Config::new` does not read the home to check this. Cache mechanics and
+auth-kind namespaces are otherwise unchanged. [Security](security.md) owns
+cache-entry checks and request debug events.
 
 With `--debug`, configuration provenance on stderr may name a fixed setting, the
 chosen mode, and a fixed source label: option or flag, the exact variable name,
@@ -279,6 +322,22 @@ variable name. For the latch, sources that turned it on may be named. Do not log
 profile names, region, project ID, output value, other setting values, resolved
 paths, override paths, file contents, or raw filesystem errors.
 
+## Differences from the baseline
+
+- Add the greennode paths and prefix, one legacy fallback mode, and the
+  incomplete-pair guard. Both read-only variables can latch a write.
+- Keep regular-file reads through symlinks. Reject shared config/credentials
+  identities and selected dangling links, even at default locations. Load
+  strictly as UTF-8; bound the total INI input as well as the line size.
+  `configure` uses the same strict checks, including the credentials mode check.
+  Policy-only reads check both path identities without reading management
+  credentials.
+- Let a fresh home configure directly. Refuse legacy edits and any write
+  destination in the real legacy tree, including temp and lock files. Migration
+  is manual. Keep a separate default disk cache and check cache paths against
+  that tree when home is known.
+- Use fixed, value-free source labels in diagnostics and debug provenance.
+
 ## Tests
 
 Use injected process state, temporary files, and toy credentials. Track which
@@ -287,16 +346,17 @@ Drive every eligible precedence row with distinct inputs: start with all sources
 supplied, remove each winner in turn, and assert the next winner or missing
 result. Repeat file cases in both modes and with empty winning values.
 
-| Rule                   | Legitimate case                                                                                                                                                    | Hostile or conflicting case                                                                                                                                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Explicit profile       | Each prefix's `PROFILE` stays non-explicit; option or flag still wins                                                                                              | Explicit profile skips inherited credentials, project ID and vCDN key from either prefix, but retains region, paths and the read-only latch                                                                                                                                                      |
-| Project and region     | Matching or empty `C.region` uses its project; region and management credentials can come from opposite prefixes                                                   | Differing region drops only the file project ID; an inherited project ID wins only when eligible                                                                                                                                                                                                 |
-| Whole management set   | A `VNGCLOUD_ACCESS_TOKEN` beats greennode profile credentials without an explicit profile; provider, static, service account and IAM precedence hold in one source | Partial G IAM or service account cannot be filled by V or files; a V token cannot beat a populated G set; failed sign-in never falls through                                                                                                                                                     |
-| Independent CDN key    | Greennode IAM with `VNGCLOUD_VCDN_API_KEY` works when not explicit; explicit key option wins                                                                       | A key never fills absent management credentials; an invalid winning key does not fall back                                                                                                                                                                                                       |
-| Latch before requests  | Each on source independently refuses writes; reads still run                                                                                                       | `--read-only=false` and either false variable cannot clear a latch; invalid text fails a write with zero requests                                                                                                                                                                                |
-| Paths and mode         | Exercise every path-table cell and SDK option substitution; complete overrides ignore a lone default and bad legacy overrides                                      | Directory, unreadable path, missing explicit path, or dangling link never turns into fallback; a `configure` write whose target resolves under `~/.vngcloud` is refused                                                                                                                          |
-| Incomplete pair        | Missing defaults succeed with no legacy file footprint                                                                                                             | Missing opposite slot: new credentials plus old config with `read_only=1`. Same-slot latch: new and old config only, env credentials. Same-slot identity: new and old credentials only, env region. Repeat with a legacy path variable instead of the old default; all refuse with zero requests |
-| Offline boundary       | S3 settings resolve without region or auth; an available file can supply output and the latch                                                                      | Unusable selected credentials path refuses offline; unsafe opened permissions and malformed credentials content refuse only when read; assert no management variable lookup or credentials-content open for S3                                                                                   |
-| File checks and bounds | Read 0600 credentials and 0644 config, valid BOM and repeated sections, and files at the byte cap; skip mode-bit checks on Windows                                 | Refuse Unix group write or execute even without group read, a FIFO swapped for the file, the line or file cap plus one, and malformed data without echo                                                                                                                                          |
-| Configure              | In each mode `get` and `list` show stored values, masked, even with latch on; greennode writes stay in the selected pair                                           | Legacy write gives the copy commands; a read-only or unsafe-target write does not prompt, consume stdin or change files, locks or cache                                                                                                                                                          |
-| Cache and debug        | CLI cache path stays greennode in both modes; SDK opt-in works without a home; debug shows fixed provenance                                                        | With no home, CLI and default SDK never touch disk cache; hostile values and override paths do not reach debug output                                                                                                                                                                            |
+| Rule                      | Legitimate case                                                                                                                                     | Hostile or conflicting case                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Explicit profile          | Each prefix's `PROFILE` stays non-explicit; option or flag still wins                                                                               | Explicit profile skips inherited credentials, project ID and vCDN key from both prefixes, but retains region, paths and the latch                                                                 |
+| Project and region        | Matching or empty `C.region` uses its project; region and credentials can come from opposite prefixes                                               | Differing region drops only the file project ID; an inherited project ID wins only when eligible                                                                                                  |
+| Whole management set      | A legacy environment token beats greennode file credentials without an explicit profile; method precedence holds in one source                      | Partial G IAM or service account cannot be filled by V or files; a V token cannot beat a populated G set; failed sign-in never falls through                                                      |
+| Independent CDN key       | Greennode IAM with legacy environment key works when not explicit; explicit key option wins                                                         | A key never fills absent management credentials; an invalid winning key never falls back                                                                                                          |
+| Management latch ordering | Valid files with `C.read_only=1` refuse the write; reads still run                                                                                  | Flag/env latch refuses before file reads. With only `C.read_only=1` and malformed credentials, return `NoCredentials`/3. No request in either refusal. False sources cannot clear a true one.     |
+| Paths and mode            | Exercise path-table cells and SDK option substitution. Fresh home with no path vars selects greennode. A legacy path override alone selects legacy. | Unreadable or dangling paths do not trigger fallback; a write target resolving into the legacy tree is refused.                                                                                   |
+| Incomplete pair           | A missing default is allowed without a legacy indication. Complete overrides ignore legacy path variables.                                          | New credentials with old config, new and old config only, and new and old credentials only all refuse. Repeat with non-empty legacy path variables instead of legacy defaults.                    |
+| Identity and aliases      | Read a stable linked pair through regular opened files                                                                                              | Point both paths at one file through symlinks or hard links. Both readers refuse before parsing the config.                                                                                       |
+| S3 policy                 | Absent default or an existing named config section works without management credentials; true latch permits reads                                   | Missing named section (even if named in credentials) or malformed latch refuses before reading the S3 key. Assert no management variable lookup, credentials content read, cache use, or request. |
+| File checks and bounds    | Read 0600 credentials and 0644 config, valid BOM and repeated sections, and files at the cap. Skip mode-bit checks on Windows.                      | Refuse group-only write or execute bits on Unix, a FIFO swapped for the file, invalid UTF-8, and the line or file cap plus one. Never echo content.                                               |
+| Configure                 | First configure succeeds in an empty home. Get/list show stored and masked values for a missing or read-only profile in either mode.                | Legacy write prints the recipe without side effects. Refuse if mode, real paths, or latch change during a prompt. Copy never overwrites or publishes a partially read source.                     |
+| Cache and debug           | Both built-in auth kinds use a separate resolved cache; a private SDK opt-in works without a home                                                   | An ancestor link into the legacy tree refuses both built-in auth kinds for the CLI default and SDK explicit paths before cache I/O. Debug prints no values or paths.                              |

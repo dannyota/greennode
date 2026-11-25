@@ -1,4 +1,4 @@
-# CLI output and queries
+# CLI output
 
 Status: proposed.
 
@@ -56,30 +56,73 @@ encoder][encoder] rules:
   too: U+061C, U+200E/U+200F, U+202A–U+202E and U+2066–U+2069. A wire codec
   handles invalid UTF-8 replacement where the baseline decoder does.
 
-Redact typed secrets or withhold the affected field according to the operation's
-contract. Keep the [baseline dynamic-map rule][map-redaction] before any
-serialization or query: lowercase letters and digits only for comparison,
-replace sensitive-key values with `<redacted>` and recurse through other values,
-including nested arrays and objects. Do not conflate typed maps with untyped
-maps: apply each typed field's explicit policy. A secret written to
-`--secret-file` is never part of the projection, including on failure. Raw
-fragments must already be approved as safe; raw is not a redaction bypass.
+## Redaction
 
-Ordinary list outputs keep their `Items` wrapper and any page metadata. Do not
-wrap or flatten a result merely because the operation name starts with `list-`:
-`iam list-policy-attachments` has `Groups`, `UserIDs` and `ServiceAccountIDs`.
-Keep each service's baseline custom output where present, such as compact native
-S3 metadata, pricing views and Synthetic quota outcomes. They share the safe
-output path and error dispatcher.
+Never print greennode's own credentials or session material: profile password,
+one-time-code secret, client secret, access token, authorization code, cookies,
+own request `Authorization` header, vCDN API key, S3 signing keys, and issued
+one-time secrets the baseline writes to a secret file. Keep the baseline's
+explicit typed redaction and withholding, including monitor channel reads and
+writes. Run it before queries and every renderer, also on partial output. Raw
+fragments and a `--secret-file` diagnostic are not redaction bypasses.
 
-## Query, table and text
+For the baseline's [dynamic-map rule][map-redaction], lowercase each key
+character with `char::to_lowercase` and retain only ASCII letters and digits for
+matching. Keep the original key. Replace sensitive-key values with `<redacted>`;
+recurse through other values, arrays and objects. This drops non-ASCII
+characters Go keeps and can mask additional keys. Do not add a Unicode data
+dependency. Use the baseline's sensitive-name match list.
 
-When a query is present, or the output is table/text, take the same redacted
-projection and normalize every JSON number to IEEE 754 `f64`, including query
-JSON literals. Values above 2^53 can round. This never changes plain JSON. Use
-the compiled query, if any. A queried JSON result uses sorted object keys at
-every depth, two-space indentation and the same escaping. No match yields JSON
-`null`, not an error. Float results use Go's generic JSON float spelling.
+Requested resource data is not the CLI's own credential material. Keep the
+baseline behavior for the following typed fields; do not run the dynamic-map
+mask over them. The caller may see credentials configured in those resources.
+Only their selected output path may reveal the data; never copy it to errors or
+debug logs.
+
+| Resource fields                                                   | Baseline evidence                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monitor `Check.Config.Request`: `Headers`, `Query`, `Body`, `URL` | [internal/cli/redact_maps_test.go:177][check-test] explicitly tests typed header and query passthrough. [monitor/models.go:70][check-model] defines the request; list, get, create, update, pause and resume project the same `Check` type. |
+| Global load balancer `Listener.Headers`                           | [globalloadbalancer/globalloadbalancer.go:528][glb-header] declares the optional string, used by listener list/get and create.                                                                                                              |
+| Load balancer `Listener.InsertHeaders[].HeaderValue`              | [loadbalancer/loadbalancer.go:562][lb-header] declares the typed name and value. Listener list/get and create/update use it.                                                                                                                |
+| S3 `HeadObject.Metadata`                                          | [storage/objects_head.go:24][head-metadata] defines already filtered metadata; [internal/cli/svc_storage_object_operations.go:191][head-cli] projects it directly. Keep SDK filtering, which includes the signing pair.                     |
+| Compute `GetServerConsoleLogOutput.Log`                           | [internal/cli/svc_compute_console_log.go:18][console-log] explicitly reveals the `Secret` only in the `compute get-server-console-log` output adapter. No other output adapter adds a secret reveal.                                        |
+
+Use Rust canaries for greennode's own credentials, the dynamic-map matcher,
+existing typed withholding and secret-file output. Keep a separate resource
+canary that verifies the baseline passthrough, including queries on the typed
+monitor headers and query fields. Synthetic test data never uses real secrets.
+
+## Operation policies
+
+Every declaration carries a policy for partial output, query and rendering.
+Ordinary output is its safe projection with the selected format and query. A
+safe SDK partial uses the selected format without query; any operation failure
+still decides stderr and exit. No output means no stdout unless a policy
+declares a safe fallback. Preserve each operation's documented privacy and
+absence rules. An ordinary list keeps `Items` and page metadata; do not force
+that wrapper on `iam list-policy-attachments`, which returns `Groups`, `UserIDs`
+and `ServiceAccountIDs`.
+
+| Operations                                                                                                                                                                                                                                             | Non-default policy                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `containerregistry create-user`                                                                                                                                                                                                                        | On `UserNotFound` always render the safe partial with `SecretFile`, ignoring `--query`. The registry create failure still decides stderr and exit.                                                                                                                                                                                                     |
+| `billing list-transactions`, `list-payments`                                                                                                                                                                                                           | Buffer the report. An unqueried table uses fixed columns in baseline order, not sorted generic keys. Codec, query or table refusal withholds output and returns `QueryFailed`/1; a stdout write failure is separate.                                                                                                                                   |
+| `billing list-resources`; `storage get-project-auto-renew`, `put-project-auto-renew`                                                                                                                                                                   | Use the operation's table view only without an explicit query. JSON and queries use the SDK shape.                                                                                                                                                                                                                                                     |
+| `compute list-flavor-prices`; `network list-network-prices`; `storage list-storage-prices`; `volume list-volume-prices`                                                                                                                                | Sort before rendering; keep the query on `DiscoveryIncomplete` partials. Unqueried table/text uses the pricing row view; include the baseline coverage notes on stderr.                                                                                                                                                                                |
+| `pricing estimate`                                                                                                                                                                                                                                     | Keep queries on estimate results or approved partials. Unqueried table/text presents rows, breakdown and totals. Keep baseline coverage on stderr for non-JSON or any query.                                                                                                                                                                           |
+| `monitor get-notification-quota`, `get-notification-quota-usage`, `create-notification-quota`, `set-notification-quota-auto-renew`, `delete-notification-quota`, `set-synthetic-quota-auto-renew`, `list-notification-packages`, `get-synthetic-quota` | On success, table/text queries see the presentation view with UTC timestamp strings where present; replace null with `unknown` after the query. Usage also has its explicit JSON view. Settlement partials use the safe SDK projection without query as in the ordinary write failure path.                                                            |
+| `monitor quota-status`, `list-synthetic-packages`                                                                                                                                                                                                      | Use the unqueried table/text reports, or the safe SDK shape for queries and JSON, with `unknown` for null cells in table/text. `QuotaStatusIncomplete` renders the safe report without query.                                                                                                                                                          |
+| `monitor create-synthetic-quota`, `ensure-synthetic-quota`, `recover-synthetic-quota`, `renew-synthetic-quota`, `delete-synthetic-quota`                                                                                                               | Reject `--query` even if empty. Keep safe outcomes even on preflight refusal, including the fixed mutation stderr operation/code/status where specified and the delete effect text. On a render failure before any stdout attempt, use the baseline safe fallback; do not claim the write was not sent. After any attempt never write another outcome. |
+| `compute get-server-console-log`                                                                                                                                                                                                                       | Reveal `Log` explicitly in this output adapter. For plain JSON keep `Log`; queries see the same root. Text without a query, or a text query returning a string, writes raw bytes on a pipe/file and escapes terminal controls except LF and tab on a terminal. No added newline. Query errors withhold the log.                                        |
+| `storage put-object`, `get-object`, `list-objects`, `head-object`, `delete-object`, `copy-object`                                                                                                                                                      | Keep the compact native metadata JSON, not transfer bytes, and query only that metadata. Preserve the baseline completed-transfer diagnostic, even for a download's local file change.                                                                                                                                                                 |
+| `compute create-ssh-key`; `iam create-service-account`, `reset-service-account-secret`, `create-user`, `reset-user-password`; `storage create-s3-key`                                                                                                  | Publish the adapter's safe secret-file outcome and added fields rather than serializing a secret. Keep per-command recovery if file creation fails or the write is unconfirmed.                                                                                                                                                                        |
+
+## Table and text
+
+Use the [query engine](cli-query.md) on the chosen safe tree. Queried JSON uses
+sorted object keys, two-space indentation and the same escaping as plain JSON.
+No match yields JSON `null`. Table and text without query still use the engine's
+generic `f64` value tree; this does not change plain JSON.
 
 Table and text use a result array as rows. If the result is an object with an
 array-valued `Items`, use that array instead; render every other object or
@@ -98,39 +141,19 @@ compact sorted-key JSON. In string cells and table headers write visible `\t`,
 `\n`, `\r`, `\xNN` for other C0/DEL/C1 controls, and lowercase `\uNNNN` for bidi
 controls. JSON cells use JSON escaping, not double escaping.
 
-Syntax is checked before any request. Evaluation failure is `QueryFailed`, exit
-1, without the raw engine error. After a successful write the message says
-`query failed after the write succeeded` and warns against retrying. A table
-limit after success is also `QueryFailed`, with the baseline guidance not to
-rerun the write and to use `--output json`. On reads a table limit is
-`InvalidUsage`, exit 2. Any other encoding or stdout failure after a confirmed
-write exits 1 with `RequestFailed` and says the write succeeded and must not be
-retried. Never turn a failed write into a claimed success; reconciliation and
-partial-output precedence live in
+The [query engine](cli-query.md#module-boundary) owns query failures. A table
+limit after a confirmed write is `QueryFailed`/1 with the baseline guidance not
+to rerun the write and to use `--output json`. An ordinary read table limit is
+`InvalidUsage`/2 unless the operation policy says otherwise. Any other encoding
+or stdout failure after a confirmed write exits 1 with `RequestFailed` and says
+the write succeeded and must not be retried. Never turn a failed write into a
+claimed success; reconciliation and partial-output precedence live in
 [the dispatcher](cli.md#errors-and-exit-codes).
 
-## Dependencies and compatibility
-
-| Choice                                                                              | Evidence                                                                                                                                                                                                                                                                       |
-| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [jmespath](https://crates.io/crates/jmespath) 0.5.0, MIT (chosen)                   | Official project, January 2026 release and latest upstream commit checked. It has [generated compliance tests][rust-tests], a reusable expression and public AST/runtime. Uses `serde`, `serde_json`, and build-time `slug` (with `deunicode`). Use stable Rust features only. |
-| [jmespath_community](https://crates.io/crates/jmespath_community) 0.1.2, Apache-2.0 | November 2025 release and upstream activity. Its [compliance suite][community-tests] targets the community spec, which adds syntax and functions not in the Go baseline. Adds `indexmap`, `lazy_static`, `regex` and `santiago` on top of Serde.                               |
-| [serde_json](https://crates.io/crates/serde_json) 1.0.154, MIT or Apache-2.0        | October 2026 release. Use for JSON input and generic query values, not as the exact plain output formatter. Runtime dependencies include `serde_core`, `itoa`, `memchr` and `zmij`; no `preserve_order` feature required.                                                      |
-
-The Go baseline uses [go-jmespath v0.4.0][go-tests]. Both projects run a
-JMESPath compliance suite; that does not prove equivalence across versions. Use
-an adapter in `query.rs` rather than equating the stock engines. In particular
-the [Rust value equality][rust-equality] tolerates near-equal floats while [Go
-compares exactly][go-equality]. Normalize number literals and operands to `f64`;
-lower equality and inequality in the parsed AST to internal runtime functions
-with exact recursive comparison, including comparisons in filters and expression
-references. Adapt affected built-ins as differential tests require. Keep
-ordering comparisons numeric only. Leave an unknown function or invalid runtime
-argument to evaluation, as in Go. Do not reproduce a Go panic on a query input;
-return `QueryFailed`. Object wildcard and object `keys`/`values` do not promise
-Go's map iteration order; use the Rust engine's stable order. Resolve
-differences on supported queries before shipping, using the release engine in
-the compatibility tests.
+`serde_json` 1.0.154 (MIT or Apache-2.0, October 2026) handles generic JSON
+values, not the exact plain output formatter. Its runtime dependencies include
+`serde_core`, `itoa`, `memchr` and `zmij`; no `preserve_order` feature is
+needed.
 
 ## Goldens
 
@@ -145,11 +168,10 @@ final LF, and never runs Go or regenerates the expected side from Rust.
 Cover ordered/flattened structs and maps, time and raw JSON, nil/empty/present
 slices and maps, exact integer and float boundaries, hostile keys and cells,
 redaction before queries, heterogeneous rows, non-`Items` shapes, table limits,
-partial outputs and failed stdout. Take a shared spec corpus plus locally
-generated Go differential cases for numeric comparisons, filters, projections,
-quoting, functions, runtime errors and null. For unspecified object traversal
-order compare membership, not bytes. Snapshot the result or error of each
-deterministic case before running the Rust comparison.
+partial output, ignored recovery queries, billing render refusal, quota
+presentation timestamps and failed stdout. The query engine's
+[Go corpus](cli-query.md#oracle-and-tests) checks parser acceptance and query
+semantics separately.
 
 [baseline]:
   https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/cli.md#output
@@ -161,8 +183,17 @@ deterministic case before running the Rust comparison.
   https://github.com/dannyota/vngcloud/blob/v1.0.1/internal/cli/render.go
 [map-redaction]:
   https://github.com/dannyota/vngcloud/blob/v1.0.1/internal/cli/redact_maps.go
-[rust-tests]: https://github.com/jmespath/jmespath.rs/tree/master/jmespath/tests
-[community-tests]: https://github.com/jmespath-community/rust-jmespath
-[go-tests]: https://github.com/jmespath/go-jmespath/tree/v0.4.0/compliance
-[rust-equality]: https://docs.rs/jmespath/0.5.0/src/jmespath/variable.rs.html
-[go-equality]: https://github.com/jmespath/go-jmespath/blob/v0.4.0/util.go
+[check-test]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/internal/cli/redact_maps_test.go#L177
+[check-model]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/monitor/models.go#L70
+[glb-header]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/globalloadbalancer/globalloadbalancer.go#L528
+[lb-header]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/loadbalancer/loadbalancer.go#L562
+[head-metadata]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/storage/objects_head.go#L24
+[head-cli]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/internal/cli/svc_storage_object_operations.go#L191
+[console-log]:
+  https://github.com/dannyota/vngcloud/blob/v1.0.1/internal/cli/svc_compute_console_log.go#L18

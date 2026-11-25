@@ -44,7 +44,7 @@ has no public mutable fields.
 | `ServiceAccountAuth`, `WithServiceAccount`                      | `ServiceAccountAuth`, `with_service_account`; client ID and `Secret` client secret. Private fixed exchange.                                                                                                                                                  |
 | `CredentialsProvider`, `Token`, `WithCredentialsProvider`       | `CredentialsProvider`, `Token`, `with_credentials_provider`. See the contract below.                                                                                                                                                                         |
 | `WithStaticToken`, `WithCDNAPIKey`                              | `with_static_token`, `with_cdn_api_key` each take a `Secret`. A CDN key does not select a management identity.                                                                                                                                               |
-| `WithTokenCache`                                                | `with_token_cache(PathBuf)` opts the two built-in logins into disk cache. Static tokens and custom providers never use it. No SDK implicit disk cache.                                                                                                       |
+| `WithTokenCache`                                                | `with_token_cache(PathBuf)` opts the two built-in logins into disk cache, subject to the [cache directory check](config.md#token-cache-and-debug). Static tokens and custom providers never use it. No implicit disk cache.                                  |
 | `EndpointOverrides`, `WithEndpointOverrides`                    | `EndpointOverrides`, `with_endpoint_overrides`; validate bases before use. Keep distinct product and IAM-user destinations. `GLB` and `VCR` synonyms go away; use `global_load_balancer` and `container_registry`.                                           |
 | `WithHTTPClient`, `WithTransport`                               | No raw client or round-tripper option. `with_http_options(HttpOptions)` controls the product connect timeout. The SDK owns TLS, origins, and single-send enforcement.                                                                                        |
 | `WithTimeout`, `WithRetry`, `WithUserAgent`                     | `with_timeout(Duration)`, `with_retry(RetryOptions)`, `with_user_agent`. Options never widen an operation policy.                                                                                                                                            |
@@ -80,13 +80,16 @@ ordinary failure; never forward an underlying provider diagnostic. Providers
 must cooperate with cancellation and may not retain references or be required to
 complete after their future is dropped.
 
-`Token` holds the access `Secret` and an optional UTC expiry. No expiry means
-ask again for every logical request. Reject empty or unsafe bearer values before
-sending; keep the baseline's 30-second expiry margin. Invalidation receives only
-the exact, non-empty token sent on a 401 and must compare before evicting. A
-custom provider owns its own cache. For SDK-built providers use the baseline's
-age, pending invalidation, TOTP marker, and token cache rules unchanged. Static
-tokens are not refreshed. Never refresh on 403.
+`Token` holds the access `Secret` and an optional UTC expiry. The equivalent of
+Go's `NeedsRefresh` is
+`Token::needs_refresh(&self, now: OffsetDateTime) -> bool`. Use `now` from the
+injected clock. An empty token, absent expiry, or less than 30 seconds remaining
+means refresh. With no expiry, ask the provider again on each logical request.
+Reject empty or unsafe bearer values before sending. Invalidate only the exact,
+non-empty token sent on a 401; the provider must compare before evicting. A
+custom provider owns its own cache. Built-in auth keeps the baseline age,
+pending invalidation, TOTP marker and token cache rules. Static tokens do not
+refresh. Never refresh on 403.
 
 `Config` holds `Arc<Session>`. A session owns auth kind, token state, projects,
 validated product endpoints, and runtime settings. Cloning it shares refresh and
@@ -115,16 +118,26 @@ of allowed process inputs. `Config::new` does not consult a source, even for
 home, TLS roots, or proxy settings. Use temporary directories, not a fake
 filesystem, to exercise file checks and locking.
 
-`Config::resolve_profile(ctx, &options, source).await` returns an opaque
-`ResolvedProfile` with name, safe settings, file selection and provenance. It
-can run without a region or credentials and does not sign in, open management
-credentials, or read management credential values from the environment.
-`Config::load_resolved(ctx, options, source, profile).await` consumes the
-profile selection and resolves remaining inputs without repeating the offline
-stage. Reject a different set of profile selection options. `load` composes
-these two calls. The configuration design owns which paths are inspected and
-which file and env values can populate these results. `configure` and S3 reuse
-the offline result without building a management `Config`.
+- `async fn load(ctx: &RequestContext, options: ConfigOptions, source: &dyn ConfigSource) -> Result<Config, Error>`
+- `fn new(options: ConfigOptions) -> Result<Config, Error>`
+- `async fn resolve_profile(ctx: &RequestContext, options: &ConfigOptions, source: &dyn ConfigSource) -> Result<ResolvedProfile, Error>`
+
+All three are associated functions on `Config`. `load` resolves the profile,
+checks and reads both selected files, and selects credentials in one offline
+call with one options value and one source, opening each selected file once, as
+the [configuration design](config.md) specifies. Never reuse a settings-only
+result to construct a management config.
+
+`resolve_profile` returns an opaque `ResolvedProfile` with name, safe settings,
+file selection and provenance, without requiring a region or credentials. It
+never signs in, opens the credentials file for content, or reads credential
+values from the environment. `configure`, standalone discovery, and S3 object
+commands may use this result without loading management credentials.
+
+For a management write, the CLI first checks the flag and environment read-only
+guards without reading files. It then calls `load`. A load error wins over a
+profile read-only refusal. If load succeeds, check the profile latch on that
+`Config` before building a service client.
 
 `RequestContext` carries a cloneable cancellation signal and optional monotonic
 deadline. A separate handle cancels the request. A child deadline cannot extend
@@ -159,7 +172,7 @@ Go names separately for CLI serialization, never derive them from Rust names.
 | Go shape                              | Rust shape                                                                                                                                                                                                                                                                            |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Optional pointer or nil update member | `Option<T>`; `Some(false)`, `Some(0)`, empty collections and explicit null retain their operation-specific meaning. Use a three-state field if the wire distinguishes omitted from null.                                                                                              |
-| Slice or map                          | `Vec<T>` or `BTreeMap<K, V>`; wrap in `Option` whenever nil and empty differ. `[]byte` maps to bytes, with the operation's encoding, not implicitly to a numeric array.                                                                                                               |
+| Slice or map                          | Use `Vec<T>` for an ordinary output slice, `Option<Vec<T>>` for a pointer to a slice, and `BTreeMap<K, V>` for a map. Keep map nullability explicitly. Use the operation's encoding for bytes.                                                                                        |
 | Scalar                                | Exact `i64` or `u64` for Go integers, regardless of target pointer width; narrower type only where the contract says so. Keep exact numeric strings and decimals when the baseline does.                                                                                              |
 | `time.Duration`, `time.Time`          | `Duration` for nonnegative durations, `time::Duration` when negative is meaningful. Time values use `time::OffsetDateTime` with explicit wire and projection formats. Preserve the baseline's precision, offsets, units and zero/absent distinction.                                  |
 | `core.List[T]`, `core.PagedList[T]`   | `List<T>`, `PagedList<T>` with `items`, and for paged shapes `page`, `page_size`, `total_page`, `total_item`. Keep `Page`/`Size` inputs, defaults and operation caps. No implicit walk; preserve operations that already walk, and purpose-built outputs such as continuation tokens. |
@@ -251,19 +264,17 @@ DTO and validate before constructing the result. Never infer wire encoding from
 public `Serialize`: use private request DTOs for request bodies. Decoder errors
 cannot quote raw input, even when decoding partially succeeds.
 
-Projection emits exact Go field names, in declaration order, with embedded
-fields inlined at their original position and map keys sorted. Use explicit
-serialization names and a manual serializer if flattening would lose order. Keep
-absent and empty collections distinct (`null`, `[]`, `{}`). Serialize integers
-as integers, without an `f64` round trip; use exact numeric lexemes for
-arbitrary JSON numbers. The CLI's serializer must collect the ordered value tree
-without round-tripping through a sorted JSON object. Tests compare the value
-tree and field order to the baseline, including outputs that lack `Items`. The
-CLI owns bytes, escaping, layout, query, and special renderers.
+The [CLI output design](cli-output.md#projection-and-bytes) owns the exact
+projection rules. Output types implement them before the CLI sees any value. For
+ordinary collections a Go slice uses `Vec<T>`: nil and empty both project as
+`[]`. A Go pointer to a slice uses `Option<Vec<T>>`: `None` projects as `null`,
+and `Some(Vec::new())` as `[]`. Use a separate wire DTO when wire presence or
+nullability matters. Golden tests cover the SDK value stream, including outputs
+without `Items`; the CLI owns encoding and rendering.
 
-`Secret` owns zeroizing storage. Its `Debug`, `Display`, and `Serialize` always
-give the redacted marker. `expose_secret` is intentional and must not appear in
-formatting or generic serialization. `Config`, credential options, raw wire
+`Secret` owns zeroizing storage. Its `Debug` and `Serialize` give the redacted
+marker. It has no `Display`. `expose_secret` is intentional and must not appear
+in formatting or generic serialization. `Config`, credential options, raw wire
 DTOs, and S3 streams never derive printable forms that expose secret or
 account-bearing internals. Do not promise that callers cannot copy an explicitly
 exposed secret or that all transient copies can be erased.
@@ -276,6 +287,37 @@ unclassified secret-bearing text; a key filter alone cannot scrub a server echo.
 Neither the projection nor CLI query ever sees unredacted secrets. This applies
 equally to a partial result. SDK callers can distinguish safe projection from
 deliberately inspecting a typed field.
+
+## Differences from the baseline
+
+- Use async Rust clients, owned options and inputs, typed cancellation and
+  failure with partial output and dispatch state. There is no Go-style nil
+  input, zero `Config`, blocking API, pointer helper, or context value map.
+- Load settings and credentials in one management call. Settings-only lookup
+  cannot build a management `Config`. Configuration and cache location changes
+  are in the [configuration design](config.md), including who checks an explicit
+  cache directory when the SDK has no home.
+- Remove `WithHTTPClient`, `WithTransport`, and `IAMUserAuth.HTTPClient`. Expose
+  a product connect timeout, not a raw sender. Endpoint overrides require
+  verified HTTPS. Drop the `GLB` and `VCR` aliases and ignore ambient proxies
+  and root-store settings.
+- Capture only product response metadata, not URLs or bodies. Log static route
+  templates rather than expanded paths. Withhold unapproved peer diagnostics.
+- Refuse redirects on IAM sign-in page fetches, writes and POST reads, even at
+  the same origin. Only declared GET/HEAD reads can follow same-origin
+  redirects, within the [request policy](sdk-requests.md#product-api).
+- Use private HTTP/1.1 clients. Pool only repeatable product reads. Keep
+  credential steps, `Once` writes and S3 unpooled and disable automatic replay
+  everywhere. The HTTP/1 buffer gives an approximate head limit, not an exact
+  byte cutoff. Decoded body bounds remain exact.
+- S3 uses one DNS/TCP/TLS deadline in addition to the TCP dial limit. For an
+  upload, a stalled response waits until the operation deadline rather than a
+  separate 30-second response-header timer. Bodyless requests have a 30-second
+  response-header limit including connection setup. See the
+  [request policy](sdk-requests.md#signed-s3).
+- Use an injected time for `Token::needs_refresh` and async invalidation for
+  providers. `Secret` has no `Display`; debug and serialization redact it. S3
+  uses async upload sources and an owned bounded download body.
 
 ## Layout and ownership
 

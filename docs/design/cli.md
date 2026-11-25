@@ -9,7 +9,8 @@ that service's files. The CLI calls GreenNode only through `greennode-sdk`.
 The baseline's [CLI design][baseline], [read conventions][reads], [usability
 design][usability], and [write][writes] and [toggle][toggles] ADRs are unchanged
 except where this design or [Configuration](config.md) says otherwise.
-[CLI output](cli-output.md) owns projection, rendering and queries.
+[CLI output](cli-output.md) owns projection and rendering. The
+[query engine](cli-query.md) owns query semantics.
 
 ## Approaches
 
@@ -21,23 +22,22 @@ except where this design or [Configuration](config.md) says otherwise.
 
 ## Operation declaration
 
-Build each declaration with generic constructors over the SDK client, input and
-output. Bind the actual SDK method, not its name as a string. The factory binds
-a typed call adapter when the method alone is insufficient. Register
-heterogeneous operations by erasing the executor only after the generic builder
-checks the types. Metadata and the executor travel together; each invocation
-starts with a fresh input. A service exports one descriptor with its name,
-summary and operation collection.
+Build each declaration over a typed CLI staging value, SDK input and output.
+Bind one typed CLI adapter, normally backed by one SDK method. Erase the
+executor only after the builder checks those types. Start each invocation with
+fresh staged defaults and source presence, not an SDK instance whose constructor
+needs required arguments. Merge and validate before creating the SDK input. Each
+service exports its descriptor and operations.
 
 | Part          | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Identity      | CLI name, SDK operation, short help, optional notes and example. Own these in the service file, not in a documentation table.                                                                                                                                                                                                                                                                                                                   |
 | Effects       | `Read`, `Write`, `Write, destructive`, `Read, local replacement requires --yes`, or `Write, replacement requires --yes`. The two replacement kinds are `storage get-object` and `put-object`; `--replace` triggers confirmation, while `--yes` alone grants no replacement. `copy-object` stays destructive and also requires `--replace`.                                                                                                      |
-| Input fields  | Each descriptor binds a typed accessor to the SDK input and declares its exact Go JSON name and wiki type. Generate the parser and JSON setter from the accessor's type where possible. The default public flag is the baseline's kebab-case name (including exceptions such as `Query` → `--search`); allow an explicit name. Use typed codecs for nested records, raw JSON and service-specific encodings.                                    |
+| Input fields  | Each descriptor binds a typed accessor to the staging value and declares its exact Go JSON name and wiki type. Generate the parser and JSON setter from the accessor's type where possible. The default public flag is the baseline's kebab-case name (including exceptions such as `Query` → `--search`); allow an explicit name. Use typed codecs for nested records, raw JSON and service-specific encodings.                                |
 | Input sources | Derive ordinary flags for strings, `int`, `int64`, `float64`, booleans and string arrays, including their pointer forms. Mark complex or suppressed fields JSON-only. An Input can also use a custom extra flag codec (such as `--allowed-cidrs`), a global `--project-id` binding, or a secret source bound to a dedicated file flag (with stdin only where the baseline allows it). No literal argv value or JSON setter exists for a secret. |
 | Extras        | Typed flags with no input accessor supply CLI settings: output paths, waits, sorting, scopes and other local options. Record defaults, exclusive groups, parser shape, and required state regardless of how a flag is implemented. An op can disable `--cli-input-json` or `--query`; S3 object commands disable input JSON.                                                                                                                    |
 | Requirements  | Record ordinary required (nonzero in the Go sense), optional overrides for reused inputs such as quotes, and presence-required (explicit non-null assignment, including zero, false or empty when valid). Required pointers must be set; required slices distinguish absent from explicit `[]`. For a required file/CLI-only flag, require that source. Record errors in declaration order.                                                     |
-| Hooks         | Typed local validation, SDK call, safe projection or renderer, and optional preflight outcome. No hook registers arguments, sends HTTP directly, handles exit codes or writes the error envelope. A custom input preparer or result formatter lives with the operation that needs it.                                                                                                                                                           |
+| Hooks         | Named guard phase, typed CLI adapter and explicit [output policy](cli-output.md#operation-policies) for partials, queries and rendering. No hook registers arguments, sends HTTP directly, decides exit status or writes error documents.                                                                                                                                                                                                       |
 
 Use clap's `Command` and `Arg` builders, `try_get_matches_from`, global args,
 value parsers, `ValueSource::CommandLine`, `ArgAction::Append` and hidden
@@ -129,42 +129,61 @@ returns the resulting process exit status.
 
 ## Dispatch and guards
 
-The [SDK](sdk.md) exposes offline `Config::resolve_profile` and
-`Config::load_resolved`, `Client::new(&Config)`, and async methods that take an
-input and a `RequestContext`. A failure retains the typed error, optional
-partial output and write-dispatch state. The runner preserves that state and
-never retries a write. The [configuration design](config.md) owns file modes,
-path safety, provenance, prefix precedence and the additive read-only latch.
-Neither offline resolution nor client construction authenticates or performs
-project discovery. Only the SDK call can access the network.
+Use the [SDK](sdk.md) offline `Config::load(ctx, options, source)` for a
+management operation. It resolves the profile, reads both selected files and
+selects credentials once without authenticating. The
+[configuration design](config.md) owns profile rules and the read-only latch.
 
-Run the baseline's ordinary dispatch stages in this order:
+The ordinary runner uses these phases, in order:
 
-1. Parse argv. Run any declared pre-input validation, JSON/flag merge and
-   operation-specific input-shape and conditional confirmation guards.
-2. For a write, check flag and environment read-only. An enabled source refuses
-   the write; false never clears another source. Validate required input,
-   compile `--query` once and retain it, validate explicit output, and enforce
-   unconditional `--yes`. A bad query is a usage error, not a write.
-3. Resolve the selected profile and load config offline from the same resolved
-   view. Preserve baseline config-load errors over an ordinary profile read-only
-   refusal. Resolve output, then apply profile read-only for writes. Name the
-   refusing source; invalid read-only values fail closed as config errors. No
-   refusal in these stages sends even a sign-in or quote request.
-4. Resolve any remaining local file prerequisites before the first request.
-   Invoke the SDK once. For a paid operation the SDK checks the bound's shape
-   locally and compares the operation's quote against `--max-price` before
-   ordering. A quote can involve sign-in and reads, even a read-only POST. An
-   over-cap or unpriced quote sends no mutation. The cap is not a server limit
-   and a matching quote is not an atomic price guarantee.
-5. Render the safe result, then write a failure document and choose an exit code
-   if needed. Keep the operation's dispatch state and recovery advice.
+1. **Before input.** Parse argv and run argv/source guards such as a refusal of
+   literal passwords before decoding JSON. No files open here.
+2. **Merge and input guards.** Read only ordinary `--cli-input-json file://` if
+   given, then merge typed flags and the global project binding. Run input shape
+   guards and any `--yes` check declared here. `network add-route` and
+   `remove-route` need `--yes` here even though not destructive. With
+   `--read-only` and no `--yes`, `add-route` returns `InvalidUsage`, not
+   `ReadOnly`. No config, credential, secret or transfer file opens here.
+3. **Local checks.** Refuse a write on flag or environment read-only. Then check
+   required input, enforce the operation's query policy, compile `--query` once,
+   validate explicit output, and enforce destructive `--yes`, in that order. No
+   files open here. False never clears another latch.
+4. **Offline settings.** Open only the selected configuration and management
+   credentials files via `Config::load`. A load error wins over the profile
+   latch. Resolve the output format and then enforce the latch from the loaded
+   configuration's profile settings before building the client.
+5. **Prepare and execute.** Read dedicated secret or transfer inputs and
+   validate local file prerequisites before the first request. Construct the SDK
+   input and call the CLI adapter once. The adapter invokes SDK methods; only
+   those methods can access the network. The CLI never retries a write.
+6. **Finish.** Apply the operation's output policy. Preserve typed failure,
+   partial output and dispatch state; render before printing the error line.
 
-Standalone commands can register a policy that uses only profile settings or no
-profile. Native S3 keeps the baseline's early read-only check before S3
-credentials or transfer data access and refuses explicit management region or
-project flags. `get-object` remains a read even when replacing a local file;
-read-only permits it, while replacement still needs `--replace --yes`.
+Settings-only operations use `Config::resolve_profile(ctx, &options, source)`,
+never a management client built from those settings. Native S3 checks
+flag/environment read-only before accessing profile files on writes; it reads
+only the config settings, never management credentials. Follow the
+[policy-only profile rules](config.md#offline-resolution-and-file-safety): a
+named config section must exist and malformed `read_only` fails even on reads.
+Check both before opening S3 credentials or transfer input. Explicit management
+region/project flags are refused. `get-object` is a read; replacing a local file
+still needs `--replace --yes`.
+
+All local refusals send zero requests, including sign-in. A paid operation's SDK
+method may then authenticate and get a quote, even by POST. An over-cap or
+unpriced quote sends no mutation. The cap is not a server guarantee.
+
+A multi-step adapter declares each SDK call, local step, allowed compensation,
+and cancellation path. `storage create-s3-key` creates, optionally attaches, and
+only then persists the secret. On a missing secret, failed attachment or failed
+save it compensates with a delete of that proven key. `compute create-ssh-key`
+and `iam create-service-account` also have failure deletes; the IAM adapter must
+prove ownership first. Use the same account and product policy and a fresh
+10-second context detached from caller cancellation for those deletes only.
+Never compensate on a guessed ID, retry the original mutation or expose an
+unpublished secret. If cleanup cannot be confirmed, return the safe
+reconciliation guidance. Each adapter tests cancellation, failed cleanup and no
+delete without a proven target.
 
 ## Errors and exit codes
 
@@ -201,58 +220,54 @@ For exit status, first match wins:
 | 1    | `NotSettled`, `WriteFailed`, `StatusUnconfirmed`, `UnexpectedStatus`, `OpenLogin`, `QuotaStatusIncomplete`, reset-secret file failure, IAM uncertain/create-unconfirmed/origin-not-IAM, object copy/delete/write unconfirmed or exists, `DiscoveryIncomplete`, `BucketEncryptionIncomplete`, storage attach failure, `PurgeCooldown`, CDN busy, `ZoneBusy`, registry create `UserNotFound`, `OTPRejected`, `VolumeInUse`, storage `PaymentRequired` or `ProjectNotEmpty`. These identities beat nested cancellation, auth and not-found. |
 | 1    | Cancellation or deadline, anywhere in the cause chain                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 3    | Missing credentials, credentials file error, generic login failure, auth identity, or HTTP 401. Unmatched HTTP 403 is not an auth exit.                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 4    | SDK not-found identity, including HTTP 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 4    | SDK not-found identity or first API detail status 404                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | 2    | Usage, local read-only, invalid input, invalid config or ambiguous project. Keep the API code when a server-side error carries invalid-input identity.                                                                                                                                                                                                                                                                                                                                                                                   |
 | 1    | Everything else, including token cache, noncancelled query execution and ordinary render failures                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-Shared `errors.rs` owns the algorithm and common facts. A service descriptor
-supplies typed identity-to-rule mappings with a stable name rank, exit tier and
-metadata policy for service-specific cases. The SDK supplies common `ErrorClass`
-facts and typed detail instead of a string classification. Merge candidates from
-registered services over all causes so a dependency's error can classify too.
-Keep an independent baseline matrix of code, metadata and exit collisions.
-Adding a service identity changes the service's file and its tests, not the
-shared classifier or other services.
+Use the first API detail in preorder (outer error, then children in SDK cause
+order) for status, operation and API code. Match semantic identities and
+cancellation across the entire tree separately. Status-only `500` then `404` is
+exit 1, not 4; with a nested not-found identity it is 4, absent an outranking
+fact. HTTP 401 checks only the first API detail too.
 
-If the operation returns output and an error, render the safe partial output to
-stdout and keep the original operation failure on stderr and for exit. Use the
-requested format and omit query for settlement and quota status partials; keep
-documented exceptions such as pricing discovery's query and sorting. A render
-error must not replace mutation evidence, cause a second stdout write after a
-failed or partial write, or cause an API retry. Synthetic quota declarations
-carry the baseline's safe no-send outcome for preflight failure, fixed stderr
-operation/code/status (including zero) where specified, and query prohibition.
-On a clap parse error, use a diagnostic-only pass of the same tree with
-`ignore_errors(true)` to identify a recognized leaf for its preflight outcome.
-Never execute those matches or change the original usage error. If no safe
-partial output or declared fallback exists, stdout is empty. Successful writes
-whose output fails report that the write succeeded and must not be retried; see
-[CLI output](cli-output.md).
+`errors.rs` owns this algorithm. Service descriptors supply typed rules; match
+by identity, not message, across all causes. A common identity and its aliases
+have one rule. Reject conflicting identities or duplicate name ranks at registry
+construction. Exit tiers can share one outcome. Registry order never resolves a
+tie. Test first-detail versus nested-identity cases and reject ambiguous rule
+registration.
+
+Render safe partial output under the operation's
+[output policy](cli-output.md#operation-policies). A render failure cannot
+replace the operation error or trigger another SDK call. On a clap parse error,
+use a diagnostic-only pass of the same tree with `ignore_errors(true)` to select
+a declared preflight outcome. Never execute those matches or change the usage
+error.
 
 ## Configure
 
 Keep the baseline's four command forms, key file/section mapping, prompt order,
-blank-to-keep behavior, stdin limit and masks. `configure` requires terminal
-stdin, prompts on stdout, and reads secrets without echo.
-`configure set <key> -` requires nonterminal stdin, reads at most 4096 bytes
-plus one, strips one final LF or CRLF, and rejects an empty value or embedded
-newline. Never accept literal `password`, `totp_secret`, `vcdn_api_key` or
-`client_secret`. None of the commands authenticate. `get <key>` prints the
-stored value and `list` prints the stored keys in fixed order, with `****` for
-nonempty secrets. Both ignore output/query selection and remain available under
-read-only and in legacy mode. Keep the missing-region hint on stderr, using the
-selected paths and prefixes. Escape terminal controls in displayed settings.
+blank-to-keep behavior, stdin limit and masks. On Unix `configure` requires
+terminal stdin and reads secrets without echo. Windows interactive `configure`
+refuses with `InvalidUsage`/2 and names `configure set <key> -`; that
+noninteractive form works on Windows. `configure set <key> -` requires
+nonterminal stdin, reads at most 4096 bytes plus one, strips one final LF or
+CRLF, and rejects an empty value or embedded newline. Never accept literal
+`password`, `totp_secret`, `vcdn_api_key` or `client_secret`. None of the
+commands authenticate. `get <key>` prints the stored value and `list` prints the
+stored keys in fixed order, with `****` for nonempty secrets. Both ignore
+output/query selection and remain available under read-only and in legacy mode.
+Keep the missing-region hint on stderr, using the selected paths and prefixes.
+Escape terminal controls in displayed settings.
 
 Resolve paths once with the configuration design's profile-only reader. A write
 checks the effective read-only latch and refuses legacy mode (exit 2, with
 manual copy instructions owned by [Configuration](config.md)) before reading
 stdin, prompting or creating files. There is no migration or write under the
-legacy tree, including through an alias or path override. Recheck the profile
-latch and cancellation under lock and immediately before publish; no command can
-clear a live profile latch. Lock both the config that holds the latch and any
-target being edited, in canonical path order. Deduplicate aliases by file
-identity before acquisition. Use persistent sibling locks; do not lock only the
-inode that the rename replaces. Hold locks through publication.
+legacy tree, including through an alias or path override. Hold locks through
+publication and apply the configuration design's
+[under-lock recheck](config.md#configure) and cancellation checks. No command
+can clear a live profile latch.
 
 Preserve unrelated INI lines, comments, BOM and sections. Replace the effective
 key, not an earlier duplicate. Use same-directory exclusive temporary files,
@@ -281,6 +296,12 @@ These add to the names and paths in the
   table limit, says the write succeeded and must not be retried.
 - When rendering a partial output fails, the operation's own failure stays on
   stderr and decides the exit code.
+- On Windows `configure` has no interactive prompt in the first releases. Use
+  `configure set <key> -` for secrets.
+- [Output key normalization](cli-output.md#redaction) also redacts sensitive
+  dynamic-map keys surrounded by non-ASCII letters or digits.
+- The [query engine](cli-query.md) bounds query length and depth, reports
+  evaluation errors rather than panicking, and fixes object traversal order.
 
 ## Debug and dependencies
 
@@ -293,30 +314,27 @@ query strings, URLs, error chains or credential-exchange internals. No logger or
 capture hook sees the private exchange. Do not forward SDK or transport log
 records verbatim.
 
-| Choice                                                                                                                                                      | Evidence and dependency scope                                                                                                                                                                                                                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [clap](https://crates.io/crates/clap) 4.6.10, MIT or Apache-2.0                                                                                             | Recent release; use builder, `std`, `help`, `usage`, `error-context`, no derive or color feature needed for the frame. `clap_builder` uses `clap_lex` and `anstyle`; exclude optional terminal width, colors and suggestion stack.                                                                                                                              |
-| [Tokio](https://crates.io/crates/tokio) 1.54.1, MIT                                                                                                         | Shared SDK runtime, released October 2026. Add `signal` for [Ctrl-C](https://docs.rs/tokio/latest/tokio/signal/fn.ctrl_c.html); shared timer and Unix signal support bring `mio` and `signal-hook-registry`, Windows uses `windows-sys`.                                                                                                                        |
-| [rustix](https://crates.io/crates/rustix) 1.1.6, Apache-2.0 or MIT available; [windows-sys](https://crates.io/crates/windows-sys) 0.61.2, MIT or Apache-2.0 | October 2026 rustix release; Windows binding is already in the lockfile. Target-specific adapters use [termios](https://docs.rs/rustix/latest/rustix/termios/) or [console mode](https://learn.microsoft.com/en-us/windows/console/setconsolemode). Rustix uses `bitflags` and platform `errno`/`libc` or `linux-raw-sys`; Windows bindings use `windows-link`. |
+| Choice                                                                       | Evidence and dependency scope                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [clap](https://crates.io/crates/clap) 4.6.10, MIT or Apache-2.0              | Recent release; use builder, `std`, `help`, `usage`, `error-context`, no derive or color feature needed for the frame. `clap_builder` uses `clap_lex` and `anstyle`; exclude optional terminal width, colors and suggestion stack.       |
+| [Tokio](https://crates.io/crates/tokio) 1.54.1, MIT                          | Shared SDK runtime, released October 2026. Add `signal` for [Ctrl-C](https://docs.rs/tokio/latest/tokio/signal/fn.ctrl_c.html); shared timer and Unix signal support bring `mio` and `signal-hook-registry`, Windows uses `windows-sys`. |
+| [rustix](https://crates.io/crates/rustix) 1.1.6, Apache-2.0 or MIT available | October 2026 release. Use safe Unix [termios](https://docs.rs/rustix/latest/rustix/termios/) and `poll`. Rustix uses `bitflags` and platform `errno`/`libc` or `linux-raw-sys`. No direct console FFI.                                   |
 
-Use the terminal adapter on the injected stdin handle. Disable echo only around
-secret input, keep normal line editing, and restore the previous mode on
-success, failure or cancellation. Use cancellable input on pipes too; do not
-abandon a blocking stdin worker holding the terminal mode. On Unix wait for
-stdin readiness with a cancellation wakeup. On Windows interrupt a pending
-synchronous read with [CancelSynchronousIo][cancel-io] and join its worker
-before exit. `rpassword` 7.5.5 (Apache-2.0, November 2026;
-`rtoolbox`/`libc`/`windows-sys`) has [blocking password and TTY APIs][password];
-it does not provide the required cancellable, injected-terminal contract. Use
-standard [file locks][file-lock] and filesystem operations where supported. Pin
-eligible releases through the lockfile and run license, dependency and crate-age
-checks on the resolved graph.
+On Unix use the injected stdin handle, keep normal line editing, turn echo alone
+off during secret input and restore the mode on every exit. Wait on stdin
+readiness with a cancellation wakeup. `rpassword` has [blocking TTY
+APIs][password], not the required cancellable terminal contract. On Windows read
+redirected stdin with the bounded noninteractive reader, without changing
+console mode or using unsafe FFI. A blocked Windows pipe reader must not prevent
+process exit or publish an edit after cancellation. Use standard [file
+locks][file-lock] where supported. Run license, dependency and crate-age checks
+on the locked graph.
 
 ## Layout, parity and tests
 
 `crates/greennode/src/main.rs` owns OS adapters. One frame owner maintains
 `src/cli/`: `root.rs` and `op.rs` for construction and execution, `input.rs`,
-`configure.rs` and its file helpers, `render.rs`, `query.rs`, `errors.rs` and
+`configure.rs` and its file helpers, `render.rs`, `query/`, `errors.rs` and
 `gendocs.rs`. A service owner owns `src/services/<service>.rs`,
 `tests/<service>.rs` and service fixtures. Register a service once in
 `src/services/mod.rs` with its module and descriptor; root, docs and parity walk
@@ -341,20 +359,23 @@ leaf, implicit flag presence/absence, empty input, real parser types, defaults
 `--zone-id` and `--volume-type-zone-id` on `volume list-volume-types`). Run
 `gen-docs` twice and compare bytes to committed generated pages. Run dedicated
 `configure` syntax and behavior tests, including all key positions and masking.
-Commit the candidate release inventory from the live registry, including
-built-in paths and version aliases. The release gate checks exact equality
-between that inventory and the candidate binary, then checks that the preceding
-published tag's inventory is a subset. A baseline update cannot rewrite the
-preceding published inventory; fail on any disappearance even before 1.0.
+Generate `crates/greennode/tests/parity/shipped-commands.json` with the built
+candidate's hidden `gen-docs <dir> --command-inventory <path>` option. Commit
+its sorted command paths, built-ins and version/help aliases. The Rust
+`shipped_commands_match_registry` test compares a fresh export byte for byte and
+fails on a stale file. The [release gate](release.md) also checks the preceding
+published tag's inventory is a subset of the candidate.
 
 Use injected streams, sources, terminal and clock in frame tests. Use temp homes
 and loopback HTTP in service tests. Assert exact stdout, stderr and exit
 together, especially partial output and competing failure classes. Prove zero
 requests for local refusals, quote reads but no mutation for price refusal, and
-one mutation after all checks. Exercise both settings prefixes, file selection,
-read-only priority, EOF, cancellation, no-echo restoration, lock contention,
-permission checks, atomic replacement and failed writes on Unix and Windows.
-Test projections against the [baseline goldens][goldens].
+the declared mutation sequence after all checks. Test S3 named-profile absence
+and malformed latch on reads with zero requests and no S3 credential opens.
+Exercise both prefixes, file selection, guard priority, quote reads, EOF,
+cancellation, Unix echo restoration, Windows prompt refusal and pipe input, lock
+contention, permission checks and atomic replacement. Test projections against
+the [baseline goldens][goldens].
 
 [baseline]: https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/design/cli.md
 [reads]:
@@ -365,8 +386,6 @@ Test projections against the [baseline goldens][goldens].
   https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0002-write-api-conventions.md
 [toggles]:
   https://github.com/dannyota/vngcloud/blob/v1.0.1/docs/adr/0003-toggle-writes.md
-[cancel-io]:
-  https://learn.microsoft.com/en-us/windows/win32/fileio/cancelsynchronousio-func
 [password]: https://docs.rs/rpassword/7.5.5/rpassword/
 [file-lock]: https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock
 [goldens]: cli-output.md#goldens

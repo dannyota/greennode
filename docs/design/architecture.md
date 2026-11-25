@@ -68,8 +68,8 @@ For every ported command, these match the baseline:
 - `--query` with JMESPath on that JSON, and `--output table` and `text`
   rendering the query result.
 - Errors on stderr as one JSON line with `code`, `message`, and for an API error
-  `status` and `operation`. An operation that returns an output together with an
-  error prints both.
+  `status` and `operation`. Where the baseline prints an output together with an
+  error, greennode prints both.
 - Exit codes: 0 success, 1 API or network error or a cancelled command, 2 usage
   or configuration error, 3 missing or refused credentials, 4 not found, with
   the baseline's precedence among them.
@@ -83,23 +83,19 @@ For every ported command, these match the baseline:
 
 ## Differences from the baseline
 
-| Topic                    | Baseline                                                 | greennode                                                                               |
-| ------------------------ | -------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Command name             | `vngcloud`                                               | `greennode`                                                                             |
-| Environment prefix       | `VNGCLOUD_`                                              | `GREENNODE_`, then `VNGCLOUD_`, as [configuration](config.md) defines                   |
-| Config and credentials   | `~/.vngcloud/`                                           | `~/.greennode/`, or `~/.vngcloud/` read-only while greennode has no files of its own    |
-| Editing vngcloud's files | `configure` writes them                                  | Never; `configure` refuses and gives the copy commands                                  |
-| Token cache              | `~/.vngcloud/cache`                                      | `~/.greennode/cache` only                                                               |
-| File checks              | Line length bound                                        | A total size bound and valid UTF-8 as well                                              |
-| Version line             | `vngcloud <version> go<go> <os>/<arch>`                  | `greennode <version> <os>/<arch>`                                                       |
-| Help and usage text      | cobra's wording                                          | clap's wording; names, streams, and exit codes unchanged                                |
-| Diagnostics              | As the baseline prints them                              | The safer forms in the [CLI design](cli.md#differences-from-the-baseline)               |
-| Library                  | Go module `danny.vn/vngcloud`                            | Rust crate `greennode-sdk`, with the changes in the [SDK design](sdk.md#public-surface) |
-| Caller HTTP hooks        | A caller can supply an HTTP client and capture responses | No raw client; capture sees response metadata only                                      |
-| Connections              | Pooled                                                   | One fresh HTTP/1.1 connection per attempt in the first implementation                   |
-| IAM sign-in page         | Follows redirects                                        | Follows none; a moved page is a sign-in failure                                         |
-| Install                  | `go install`                                             | `cargo install greennode --locked` or a release archive                                 |
-| Unported commands        | Not applicable                                           | Absent from help until ported                                                           |
+| Topic                      | Baseline                                | greennode                                                                                                                                                                    |
+| -------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Command name               | `vngcloud`                              | `greennode`                                                                                                                                                                  |
+| Environment prefix         | `VNGCLOUD_`                             | `GREENNODE_`, then `VNGCLOUD_`, as [configuration](config.md) defines                                                                                                        |
+| Config and credentials     | `~/.vngcloud/`                          | `~/.greennode/`, or `~/.vngcloud/` read-only while greennode has no files of its own                                                                                         |
+| Editing vngcloud's files   | `configure` writes them                 | Never; `configure` refuses and gives the copy commands                                                                                                                       |
+| Token cache                | `~/.vngcloud/cache`                     | `~/.greennode/cache` only                                                                                                                                                    |
+| Version line               | `vngcloud <version> go<go> <os>/<arch>` | `greennode <version> <os>/<arch>`                                                                                                                                            |
+| Help and usage text        | cobra's wording                         | clap's wording; names, streams, and exit codes unchanged                                                                                                                     |
+| Library                    | Go module `danny.vn/vngcloud`           | Rust crate `greennode-sdk`                                                                                                                                                   |
+| Install                    | `go install`                            | `cargo install greennode --locked` or a release archive                                                                                                                      |
+| Unported commands          | Not applicable                          | Absent from help until ported                                                                                                                                                |
+| Other intended differences |                                         | Listed in the [configuration](config.md#differences-from-the-baseline), [SDK](sdk.md#differences-from-the-baseline), and [CLI](cli.md#differences-from-the-baseline) designs |
 
 Error and help text names `greennode` and `GREENNODE_` wherever the baseline
 names `vngcloud` and `VNGCLOUD_`. Any other difference is a defect.
@@ -135,14 +131,17 @@ service registration, the `Makefile`, and the workflows.
    error exits 2 before anything else runs.
 3. Local guards run: read-only from the flag and environment, required input,
    the `--query` syntax, and `--yes`.
-4. The SDK resolves the profile offline. The profile's read-only setting is
-   applied. Nothing has signed in or sent a request yet.
-5. The SDK loads the rest of the configuration and the command calls one SDK
-   operation, which signs in or reuses a cached token and sends its requests.
+4. The SDK loads the configuration offline in one call: the profile, both
+   selected files, and one credential source. A load error stops here. Then the
+   profile's read-only setting is applied. Nothing has signed in or sent a
+   request yet.
+5. The command calls one SDK operation, which signs in or reuses a cached token
+   and sends its requests.
 6. `cli` projects the output, applies `--query`, renders the format, and writes
    stdout.
-7. A failure becomes the stderr document and one exit code. A partial output
-   that came with it is still printed.
+7. A failure becomes the stderr document and one exit code. The SDK keeps any
+   partial output that came with it, and the
+   [CLI design](cli.md#errors-and-exit-codes) decides which are printed.
 
 ## Invariants
 
@@ -162,9 +161,13 @@ service registration, the `Makefile`, and the workflows.
   management credentials.
 - **A write's outcome is never guessed.** Once a change may have been sent, the
   result says so through every later error, and nothing resends it silently.
-- **Secrets stay out of output.** No password, one-time-code secret, token,
-  authorization code, cookie, or `Authorization` header reaches stdout, stderr,
-  an error, a debug event, or a query.
+- **greennode's own credentials stay out of output.** No password, one-time-code
+  secret, client secret, token, authorization code, cookie, API key, or
+  `Authorization` header that greennode uses to sign in or to send a request
+  reaches stdout, stderr, an error, a debug event, or a query. Resource data the
+  API returns for a read is printed as the baseline prints it; the
+  [CLI output design](cli-output.md) lists the fields and the baseline's own
+  redaction rules.
 - **Results on stdout, everything else on stderr.** A script can parse stdout
   without filtering.
 - **Never prompt without a terminal.** A command that needs confirmation fails

@@ -30,19 +30,25 @@ These have no switch to weaken them.
   the [request policies](sdk-requests.md#contract) define. A credential exchange
   and a signed S3 request follow no redirect. A product read follows one only to
   the same scheme, host, and port. No write follows any.
-- One command uses one account. The [configuration design](config.md) picks one
-  file pair and one credential source, never a mix of greennode's and
-  vngcloud's, and refuses a half-finished move between the two.
+- One command uses one management credential source. The
+  [configuration design](config.md) picks one file pair and one source, never a
+  mix of greennode's and vngcloud's, and refuses a half-finished move between
+  the two. The vCDN API key and S3 object keys are separate credential domains
+  with their own sources.
 - Read-only is on when any source turns it on, and no source can turn it off for
   another. It is decided offline, before any sign-in.
 - The credentials file is refused when group or others have any access to it.
   Token cache files use mode 0600 inside a mode 0700 directory.
-- greennode never writes under `~/.vngcloud` and never shares its token cache.
+- greennode never writes under `~/.vngcloud`, never shares its token cache, and
+  refuses a cache directory that resolves inside `~/.vngcloud`.
 - Secrets never come from command-line arguments. `configure` reads them without
   echo or from stdin.
-- No password, one-time-code secret, token, authorization code, cookie, or
-  `Authorization` header is printed, logged, placed in an error, or shown to a
-  query.
+- No password, one-time-code secret, client secret, token, authorization code,
+  cookie, API key, or `Authorization` header that greennode uses to sign in or
+  to send a request is printed, logged, placed in an error, or shown to a query.
+  Resource data the API returns for a read, such as a monitored URL's configured
+  headers or a server's console log, is printed as the baseline prints it, with
+  the baseline's redaction of sensitive keys in untyped maps.
 - Debug output is an allow list: the events in the
   [request policies](sdk-requests.md#event-allowlist), the configuration sources
   in the [configuration design](config.md#token-cache-and-debug), and the tool's
