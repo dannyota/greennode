@@ -5,7 +5,7 @@ use std::fs::File;
 
 #[derive(Default)]
 pub(super) struct Options {
-    pub provider: bool,
+    pub provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
     pub token: Option<Secret>,
     pub service_account: Option<ServiceAccount>,
     pub iam_user: Option<IamUser>,
@@ -26,12 +26,17 @@ pub(super) struct IamUser {
     pub totp_secret: Option<Secret>,
 }
 
-#[derive(Debug)]
 pub(super) enum Kind {
-    Provider,
+    Provider(std::sync::Arc<dyn crate::CredentialsProvider>),
     StaticToken(Secret),
     ServiceAccount(ServiceAccount),
     IamUser(IamUser),
+}
+
+impl std::fmt::Debug for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Kind([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,8 +266,8 @@ pub(super) fn select_checked(
         .profile
         .as_ref()
         .is_some_and(|p| !p.is_empty());
-    let chosen = if options.provider {
-        Some((Source::Options, Kind::Provider))
+    let chosen = if let Some(provider) = &options.provider {
+        Some((Source::Options, Kind::Provider(provider.clone())))
     } else if present(&options.token) {
         options
             .token

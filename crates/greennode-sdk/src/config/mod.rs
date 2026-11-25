@@ -3,6 +3,7 @@
 mod credentials;
 mod file;
 mod ini;
+mod load;
 mod mode;
 mod settings;
 
@@ -27,9 +28,18 @@ pub struct ConfigOptions {
     profile: Option<String>,
     config_file: Option<std::path::PathBuf>,
     credentials_file: Option<std::path::PathBuf>,
+    provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
 }
 
 impl ConfigOptions {
+    /// Supplies the management credentials provider.
+    pub fn with_credentials_provider(
+        mut self,
+        provider: std::sync::Arc<dyn crate::CredentialsProvider>,
+    ) -> Self {
+        self.provider = Some(provider);
+        self
+    }
     /// Selects a named profile.
     pub fn with_profile(mut self, profile: String) -> Self {
         self.profile = Some(profile);
@@ -56,7 +66,17 @@ impl std::fmt::Debug for ConfigOptions {
 /// A management configuration.
 #[derive(Clone)]
 pub struct Config {
-    _private: (),
+    region: String,
+    profile: String,
+    project_id: Option<String>,
+    settings: std::collections::BTreeMap<String, String>,
+    credentials: std::sync::Arc<credentials::Selected>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Config([REDACTED])")
+    }
 }
 
 /// The settings and file provenance selected by an offline lookup.
@@ -98,6 +118,26 @@ impl ResolvedProfile {
 }
 
 impl Config {
+    /// Loads configuration and credentials without network access.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The public API returns Error by value"
+    )]
+    pub async fn load(
+        ctx: &crate::RequestContext,
+        options: ConfigOptions,
+        source: &dyn crate::ConfigSource,
+    ) -> Result<Self, crate::Error> {
+        load::load(ctx, options, source).await
+    }
+    /// Returns the selected region.
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+    /// Returns a non-credential profile setting.
+    pub fn profile_setting(&self, key: &str) -> Option<&str> {
+        self.settings.get(key).map(String::as_str)
+    }
     /// Resolves local profile settings without reading credentials.
     #[expect(
         clippy::result_large_err,
@@ -152,10 +192,10 @@ async fn resolve_profile_with(
     clippy::result_large_err,
     reason = "The public API returns Error by value"
 )]
-async fn wait_profile_worker(
+async fn wait_profile_worker<T>(
     ctx: &crate::RequestContext,
-    worker: tokio::task::JoinHandle<Result<ResolvedProfile, crate::Error>>,
-) -> Result<ResolvedProfile, crate::Error> {
+    worker: tokio::task::JoinHandle<Result<T, crate::Error>>,
+) -> Result<T, crate::Error> {
     let clock = crate::SystemClock;
     let mut worker = std::pin::pin!(worker);
     let mut ended = std::pin::pin!(ctx.wait(&clock));
@@ -336,7 +376,7 @@ mod worker_tests {
                 let _ = started_tx.send(());
                 let _ = release_rx.recv();
                 let _ = done_tx.send(());
-                Err(crate::Error::new(crate::ErrorClass::InvalidConfig))
+                Err::<ResolvedProfile, _>(crate::Error::new(crate::ErrorClass::InvalidConfig))
             });
             started_rx.await.unwrap();
             let (ctx, cancel) = crate::RequestContext::new();

@@ -1,5 +1,25 @@
 use super::*;
 
+pub(super) struct Provider;
+impl crate::CredentialsProvider for Provider {
+    fn token<'a>(
+        &'a self,
+        _: &'a crate::RequestContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>,
+    > {
+        Box::pin(async { Err(crate::Error::provider_failed()) })
+    }
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a crate::RequestContext,
+        _: &'a crate::Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::Error>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 #[test]
 fn ended_workers_do_not_read_credentials() {
     use std::io::Seek;
