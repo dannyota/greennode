@@ -131,7 +131,11 @@ every release archive include. Each translated source file starts with one line,
 `// Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.`,
 which the [engineering standard](../standards/engineering.md#code-comments)
 allows as a license notice. Copied fixtures carry a `PROVENANCE.md` naming the
-same source and license.
+same source and license. Behavior go-jmespath takes from the Go standard library
+(`strconv` float parsing, `sort.Stable`) is reimplemented from its documented
+results and differential tests, never translated, so no Go BSD notice is needed.
+`sort_by` returns a sorted copy; Go sorts its input in place, which a later
+reference to the same array in one query can observe.
 
 [go-jmespath]: https://github.com/jmespath/go-jmespath/tree/v0.4.0
 [go-license]: https://github.com/jmespath/go-jmespath/blob/v0.4.0/LICENSE
