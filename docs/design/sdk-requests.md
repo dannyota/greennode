@@ -122,7 +122,9 @@ and `rustls` targets.
 
 Use the baseline's [fixed request and response contract][go-token] for service
 accounts unchanged. There is no token endpoint option, alternate encoding, scope
-negotiation, cookie jar, capture, or fallback identity. If the fixed endpoint
+negotiation, cookie jar, capture, or fallback identity. Token responses pass a
+strict schema check: duplicate keys and fold aliases of known fields are refused
+at every level, and nesting stops at 128 containers. If the fixed endpoint
 redirects, fail with a fixed typed reason, not its destination. The cache sees
 only a successful validated token.
 
