@@ -34,7 +34,11 @@ impl BearerSource for PublicSource<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<BearerToken, crate::Error>> + Send + 'a>> {
         Box::pin(async move {
             Ok(BearerToken {
-                token: self.0.token(ctx).await?,
+                token: self
+                    .0
+                    .token(ctx)
+                    .await
+                    .map_err(|_| crate::Error::provider_failed())?,
                 obtained_at: None,
             })
         })
@@ -45,7 +49,12 @@ impl BearerSource for PublicSource<'_> {
         sent: &'a Secret,
         _: bool,
     ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
-        self.0.invalidate(ctx, sent)
+        Box::pin(async move {
+            self.0
+                .invalidate(ctx, sent)
+                .await
+                .map_err(|_| crate::Error::provider_failed())
+        })
     }
 }
 #[derive(Clone, Copy)]
@@ -178,7 +187,7 @@ impl std::ops::Deref for Response {
 #[derive(Debug)]
 pub(crate) enum Error {
     Context(crate::ContextEnd),
-    Provider,
+    Provider(Box<crate::Error>),
     Send(send::Error),
     Redirect(redirect::Refusal),
     InvalidRequest,
@@ -192,10 +201,9 @@ pub(crate) struct Failure {
 }
 impl Failure {
     pub(crate) fn into_failure<T>(self, error: crate::Error) -> crate::Failure<T> {
-        let error = if matches!(self.error, Error::Provider) {
-            crate::Error::provider_failed()
-        } else {
-            error
+        let error = match self.error {
+            Error::Provider(provider) => *provider,
+            _ => error,
         };
         let error = match self.status {
             Some(status) => error.with_outer_detail(status),
@@ -389,7 +397,7 @@ async fn run_inner(
         Auth::Bearer(source) => Some(
             bounded(&ctx, clock, || source.token(&ctx))
                 .await?
-                .map_err(|_| Error::Provider)?,
+                .map_err(|error| Error::Provider(Box::new(error)))?,
         ),
         _ => None,
     };
@@ -486,7 +494,7 @@ async fn run_inner(
                         source.rejected(&ctx, sent, decision.invalidate.is_some())
                     })
                     .await?
-                    .map_err(|_| Error::Provider)?;
+                    .map_err(|error| Error::Provider(Box::new(error)))?;
                 }
                 if decision.resend
                     && let Auth::Bearer(source) = auth
@@ -494,7 +502,7 @@ async fn run_inner(
                     bearer = Some(
                         bounded(&ctx, clock, || source.token(&ctx))
                             .await?
-                            .map_err(|_| Error::Provider)?,
+                            .map_err(|error| Error::Provider(Box::new(error)))?,
                     );
                     recovered = true;
                     attempt = 0;

@@ -218,8 +218,9 @@ pub(crate) async fn once_with_evidence(
     let is_head = request.method() == Method::HEAD;
     let mut request = Box::pin(client.request(request));
     let send = poll_fn(|cx| {
-        evidence.started = true;
-        request.as_mut().poll(cx)
+        let result = request.as_mut().poll(cx);
+        evidence.started |= guard.capture.connection_metadata().is_some();
+        result
     });
     let response = timed(clock, deadline, send)
         .await?

@@ -13,23 +13,152 @@ fn failure(result: Result<super::super::Response, Failure>) -> Failure {
         Ok(_) => panic!("expected failure"),
     }
 }
-#[test]
-fn provider_error_text_is_not_exposed() {
-    use crate::error::{ApiError, SafeText};
-    let raw = SdkError::from_api(ApiError::new(
-        "toy-provider",
-        Some(401),
-        SafeText::new("", &[]),
-        SafeText::new("toy-provider-canary", &[]),
-        false,
-    ));
+enum BuiltInFailure {
+    Cache,
+    Login,
+}
+impl BearerSource for BuiltInFailure {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<BearerToken, SdkError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(match self {
+                Self::Cache => SdkError::new(crate::ErrorClass::TokenCache),
+                Self::Login => SdkError::new(crate::ErrorClass::Auth)
+                    .with_login(crate::LoginError::new("login failed", Some(403), false)),
+            })
+        })
+    }
+    fn rejected<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+        _: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SdkError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+#[tokio::test]
+async fn builtin_token_cache_error_is_preserved() {
+    let server = Server::start(vec![response("200 OK", &[])]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let sleeper = Immediate::default();
+    let err = failure(
+        run!(
+            &clients,
+            &ctx,
+            &clock,
+            deadline,
+            &write(Method::POST, redirect::Retry::Once),
+            Auth::Bearer(&BuiltInFailure::Cache),
+            &request(&server.origin),
+            &sleeper,
+            &mut || 0
+        )
+        .await,
+    );
+    let sdk: crate::Failure<()> = err.into_failure(SdkError::provider_failed());
+    assert!(sdk.error().has_class(crate::ErrorClass::TokenCache));
+    assert_eq!(sdk.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}
+#[tokio::test]
+async fn builtin_login_error_is_preserved() {
+    let server = Server::start(vec![response("200 OK", &[])]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let sleeper = Immediate::default();
+    let err = failure(
+        run!(
+            &clients,
+            &ctx,
+            &clock,
+            deadline,
+            &write(Method::POST, redirect::Retry::Once),
+            Auth::Bearer(&BuiltInFailure::Login),
+            &request(&server.origin),
+            &sleeper,
+            &mut || 0
+        )
+        .await,
+    );
+    let sdk: crate::Failure<()> = err.into_failure(SdkError::provider_failed());
+    assert_eq!(
+        sdk.error().login_error().and_then(|detail| detail.status()),
+        Some(403)
+    );
+    assert_eq!(sdk.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}
+struct FailToken;
+impl CredentialsProvider for FailToken {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, SdkError>> + Send + 'a>> {
+        Box::pin(async {
+            use crate::error::{ApiError, SafeText};
+            Err(SdkError::from_api(ApiError::new(
+                "toy-provider",
+                Some(401),
+                SafeText::new("", &[]),
+                SafeText::new("toy-provider-canary", &[]),
+                false,
+            )))
+        })
+    }
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SdkError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+#[tokio::test]
+async fn caller_token_error_is_sanitized() {
+    let server = Server::start(vec![]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let sleeper = Immediate::default();
+    let err = failure(
+        run!(
+            &clients,
+            &ctx,
+            &clock,
+            deadline,
+            &write(Method::POST, redirect::Retry::Once),
+            Auth::Bearer(&PublicSource(&FailToken)),
+            &request(&server.origin),
+            &sleeper,
+            &mut || 0
+        )
+        .await,
+    );
+    let sdk: crate::Failure<()> = err.into_failure(SdkError::provider_failed());
+    assert!(sdk.error().api_error().is_none());
+    assert!(sdk.error().has_identity(crate::ErrorClass::Auth));
+    assert!(!format!("{sdk:?}").contains("toy-provider-canary"));
+}
+#[tokio::test]
+async fn provider_error_text_is_not_exposed() {
+    let provider = FailInvalidation;
+    let source = PublicSource(&provider);
+    let (ctx, _) = RequestContext::new();
+    let sent = Secret::new("toy");
+    let safe = match source.rejected(&ctx, &sent, true).await {
+        Err(error) => error,
+        Ok(()) => panic!("expected provider failure"),
+    };
     let failure = Failure {
-        error: Error::Provider,
+        error: Error::Provider(Box::new(safe)),
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::MayHaveBeenSent,
         credentials: SentCredentials::default(),
     };
-    let sdk: crate::Failure<()> = failure.into_failure(raw);
+    let sdk: crate::Failure<()> = failure.into_failure(SdkError::provider_failed());
     assert!(sdk.error().api_error().is_none());
     assert!(!format!("{:?}", sdk.error()).contains("toy-provider-canary"));
     let mut source: Option<&(dyn std::error::Error + 'static)> = Some(sdk.error());
@@ -70,6 +199,77 @@ fn status_detail_preserves_identity_and_api_error() {
     assert!(explicit.has_identity(crate::ErrorClass::Auth));
     assert_eq!(explicit.detail::<u32>(), Some(&17));
     assert!(explicit.api_error().is_none());
+}
+#[tokio::test]
+async fn untrusted_tls_failure_is_not_sent() {
+    let server = Server::start(vec![]);
+    let clients = Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+    };
+    let (ctx, clock, deadline) = ctx();
+    let sleeper = Immediate::default();
+    let err = failure(
+        run!(
+            &clients,
+            &ctx,
+            &clock,
+            deadline,
+            &write(Method::POST, redirect::Retry::Once),
+            Auth::None,
+            &request(&server.origin),
+            &sleeper,
+            &mut || 0
+        )
+        .await,
+    );
+    assert!(matches!(
+        err.error,
+        Error::Send(send::Error::Transport(retry::SendFailure::PossiblySent))
+    ));
+    assert_eq!(err.dispatch, WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}
+#[tokio::test]
+async fn cancellation_during_tls_handshake_stays_not_sent() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (accepted, received) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _ = accepted.send(());
+        std::future::pending::<()>().await;
+        drop(stream);
+    });
+    let clients = Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::webpki()).unwrap(),
+    };
+    let (ctx, cancel) = RequestContext::new();
+    let clock = TestClock::new(OffsetDateTime::UNIX_EPOCH);
+    let deadline = clock.monotonic_now() + std::time::Duration::from_secs(5);
+    let sleeper = Immediate::default();
+    let op = write(Method::POST, redirect::Retry::Once);
+    let request = request(&format!("https://{address}/"));
+    let mut jitter = || 0;
+    let future = run!(
+        &clients,
+        &ctx,
+        &clock,
+        deadline,
+        &op,
+        Auth::None,
+        &request,
+        &sleeper,
+        &mut jitter
+    );
+    tokio::pin!(future);
+    tokio::select! { result=&mut future=>panic!("ended before cancellation: {}",result.is_ok()), ready=received=>assert!(ready.is_ok()) }
+    cancel.cancel();
+    let err = failure(future.await);
+    assert_eq!(err.dispatch, WriteDispatch::NotSent);
+    server.abort();
+    let _ = server.await;
 }
 #[tokio::test]
 async fn cancel_before_send_stays_not_sent() {
@@ -376,7 +576,7 @@ async fn once_invalidation_error_keeps_status_and_dispatch() {
         )
         .await,
     );
-    assert!(matches!(err.error, Error::Provider));
+    assert!(matches!(err.error, Error::Provider(_)));
     assert_eq!(err.status, Some(StatusCode::UNAUTHORIZED));
     assert_eq!(err.dispatch, WriteDispatch::MayHaveBeenSent);
     assert!(!format!("{err:?}").contains("toy-header"));
