@@ -22,6 +22,9 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
             arguments.push(Argument::Value(execute(node, input)?));
         }
     }
+    if !matches!(name, "map" | "sort_by" | "max_by" | "min_by") {
+        return call_regular(name, &arguments);
+    }
     let [first, second] = arguments.as_slice() else {
         return Err(EvaluationError::FunctionArity);
     };
@@ -77,17 +80,82 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         return Ok(best.clone());
     }
     let mut sorted = values.clone();
-    let mut sorter = Sorter {
-        values: &mut sorted,
-        reference,
-        numeric,
-        failed: false,
-    };
-    sorter.sort();
-    if sorter.failed {
+    let mut failed = false;
+    sorted.sort_by(|a, b| {
+        let result = execute(reference, a).and_then(|ka| {
+            execute(reference, b)
+                .and_then(|kb| compare_keys(&ka, &kb, numeric).ok_or(EvaluationError::FunctionType))
+        });
+        match result {
+            Ok(order) => order,
+            Err(_) => {
+                failed = true;
+                std::cmp::Ordering::Equal
+            }
+        }
+    });
+    if failed {
         return Err(EvaluationError::FunctionComparison);
     }
     Ok(Value::Array(sorted))
+}
+
+fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, EvaluationError> {
+    use super::functions::{self, Type};
+    let signature = functions::signature(name).ok_or(EvaluationError::UnknownFunction)?;
+    if signature.variadic {
+        if arguments.len() < signature.arguments.len() {
+            return Err(EvaluationError::FunctionVariadicArity);
+        }
+    } else {
+        if arguments.len() != signature.arguments.len() {
+            return Err(EvaluationError::FunctionArity);
+        }
+        for (arg, allowed) in arguments.iter().zip(signature.arguments) {
+            let valid = allowed.iter().any(|kind| match arg {
+                Argument::Value(value) => functions::matches_type(value, *kind),
+                Argument::Reference(_) => matches!(kind, Type::Any | Type::Expref),
+            });
+            if !valid {
+                return Err(EvaluationError::FunctionType);
+            }
+        }
+    }
+    if arguments
+        .iter()
+        .all(|arg| matches!(arg, Argument::Value(_)))
+    {
+        let values = arguments
+            .iter()
+            .filter_map(|arg| match arg {
+                Argument::Value(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        return functions::call(name, &values);
+    }
+    match (name, arguments) {
+        (
+            "contains",
+            [
+                Argument::Value(Value::String(_) | Value::Array(_)),
+                Argument::Reference(_),
+            ],
+        ) => Ok(Value::Bool(false)),
+        ("to_string", [Argument::Reference(_)]) => Ok(Value::String("{}".into())),
+        ("not_null", values) => {
+            for value in values {
+                match value {
+                    Argument::Value(Value::Null) => {}
+                    Argument::Value(value) => return Ok(value.clone()),
+                    Argument::Reference(_) => return Err(EvaluationError::Unsupported),
+                }
+            }
+            Ok(Value::Null)
+        }
+        ("to_array", [Argument::Reference(_)]) => Err(EvaluationError::Unsupported),
+        _ => Err(EvaluationError::FunctionType),
+    }
 }
 
 fn compare_keys(a: &Value, b: &Value, numeric: bool) -> Option<std::cmp::Ordering> {
@@ -98,136 +166,37 @@ fn compare_keys(a: &Value, b: &Value, numeric: bool) -> Option<std::cmp::Orderin
     }
 }
 
-struct Sorter<'a> {
-    values: &'a mut [Value],
-    reference: &'a Node,
-    numeric: bool,
-    failed: bool,
-}
-impl Sorter<'_> {
-    fn less(&mut self, i: usize, j: usize) -> bool {
-        let result = execute(self.reference, &self.values[i]).and_then(|a| {
-            execute(self.reference, &self.values[j]).and_then(|b| {
-                compare_keys(&a, &b, self.numeric).ok_or(EvaluationError::FunctionType)
-            })
-        });
-        match result {
-            Ok(order) => order.is_lt(),
-            Err(_) => {
-                self.failed = true;
-                true
-            }
-        }
-    }
-    fn insertion(&mut self, a: usize, b: usize) {
-        for i in a + 1..b {
-            let mut j = i;
-            while j > a && self.less(j, j - 1) {
-                self.values.swap(j, j - 1);
-                j -= 1;
-            }
-        }
-    }
-    fn rotate(&mut self, a: usize, m: usize, b: usize) {
-        let (mut i, mut j) = (m - a, b - m);
-        while i != j {
-            if i > j {
-                for k in 0..j {
-                    self.values.swap(m - i + k, m + k);
-                }
-                i -= j;
-            } else {
-                for k in 0..i {
-                    self.values.swap(m - i + k, m + j - i + k);
-                }
-                j -= i;
-            }
-        }
-        for k in 0..i {
-            self.values.swap(m - i + k, m + k);
-        }
-    }
-    fn merge(&mut self, a: usize, m: usize, b: usize) {
-        if m - a == 1 {
-            let (mut i, mut j) = (m, b);
-            while i < j {
-                let h = i + (j - i) / 2;
-                if self.less(h, a) {
-                    i = h + 1;
-                } else {
-                    j = h;
-                }
-            }
-            for k in a..i - 1 {
-                self.values.swap(k, k + 1);
-            }
-            return;
-        }
-        if b - m == 1 {
-            let (mut i, mut j) = (a, m);
-            while i < j {
-                let h = i + (j - i) / 2;
-                if !self.less(m, h) {
-                    i = h + 1;
-                } else {
-                    j = h;
-                }
-            }
-            for k in (i + 1..=m).rev() {
-                self.values.swap(k, k - 1);
-            }
-            return;
-        }
-        let mid = a + (b - a) / 2;
-        let n = mid + m;
-        let (mut start, mut r) = if m > mid { (n - b, mid) } else { (a, m) };
-        let p = n - 1;
-        while start < r {
-            let c = start + (r - start) / 2;
-            if !self.less(p - c, c) {
-                start = c + 1;
-            } else {
-                r = c;
-            }
-        }
-        let end = n - start;
-        if start < m && m < end {
-            self.rotate(start, m, end);
-        }
-        if a < start && start < mid {
-            self.merge(a, start, mid);
-        }
-        if mid < end && end < b {
-            self.merge(mid, end, b);
-        }
-    }
-    fn sort(&mut self) {
-        let n = self.values.len();
-        let mut a = 0;
-        while a + 20 <= n {
-            self.insertion(a, a + 20);
-            a += 20;
-        }
-        self.insertion(a, n);
-        let mut block = 20;
-        while block < n {
-            let mut a = 0;
-            while a + 2 * block <= n {
-                self.merge(a, a + block, a + 2 * block);
-                a += 2 * block;
-            }
-            if a + block < n {
-                self.merge(a, a + block, n);
-            }
-            block *= 2;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{compile, evaluate};
     use crate::cli::render::Value;
+
+    #[test]
+    fn direct_references_reach_any_function() {
+        let input = Value::Bool(true);
+        for (expression, expected) in [
+            ("contains('abc', &foo)", Value::Bool(false)),
+            ("to_string(&foo)", Value::String("{}".into())),
+            ("not_null(`1`, &foo)", Value::Number(1.0)),
+        ] {
+            assert_eq!(
+                evaluate(&compile(expression).unwrap(), &input),
+                Ok(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn sort_by_preserves_input_array() {
+        let input = Value::Array(vec![Value::Number(2.0), Value::Number(1.0)]);
+        assert_eq!(
+            evaluate(&compile("[sort_by(@,&@),@[0]]").unwrap(), &input),
+            Ok(Value::Array(vec![
+                Value::Array(vec![Value::Number(1.0), Value::Number(2.0)]),
+                Value::Number(2.0)
+            ]))
+        );
+    }
 
     #[test]
     fn sort_by_stays_stable_across_merge_blocks() {

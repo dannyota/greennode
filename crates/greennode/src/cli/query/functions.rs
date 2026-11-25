@@ -5,7 +5,7 @@ use crate::cli::render::Value;
 use super::interpreter::EvaluationError;
 
 #[derive(Clone, Copy)]
-enum Type {
+pub(super) enum Type {
     Number,
     String,
     Array,
@@ -16,12 +16,12 @@ enum Type {
     Any,
 }
 
-struct Signature {
-    arguments: &'static [&'static [Type]],
-    variadic: bool,
+pub(super) struct Signature {
+    pub(super) arguments: &'static [&'static [Type]],
+    pub(super) variadic: bool,
 }
 
-fn signature(name: &str) -> Option<Signature> {
+pub(super) fn signature(name: &str) -> Option<Signature> {
     use Type::{Any, Array, ArrayNumber, ArrayString, Expref, Number, Object, String};
     let (arguments, variadic): (&[&[Type]], bool) = match name {
         "length" => (&[&[String, Array, Object]], false),
@@ -47,7 +47,7 @@ fn signature(name: &str) -> Option<Signature> {
     })
 }
 
-fn matches_type(value: &Value, kind: Type) -> bool {
+pub(super) fn matches_type(value: &Value, kind: Type) -> bool {
     match kind {
         Type::Number => matches!(value, Value::Number(_)),
         Type::String => matches!(value, Value::String(_)),
@@ -128,6 +128,20 @@ fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), 
     Ok(())
 }
 
+fn valid_digits(value: &str, radix: u32) -> bool {
+    let bytes = value.as_bytes();
+    bytes.iter().enumerate().all(|(i, byte)| {
+        if *byte == b'_' {
+            i > 0
+                && i + 1 < bytes.len()
+                && (bytes[i - 1] as char).is_digit(radix)
+                && (bytes[i + 1] as char).is_digit(radix)
+        } else {
+            (*byte as char).is_digit(radix)
+        }
+    })
+}
+
 fn parse_go_float(value: &str) -> Option<f64> {
     let lower = value.to_ascii_lowercase();
     match lower.as_str() {
@@ -136,98 +150,47 @@ fn parse_go_float(value: &str) -> Option<f64> {
         "-inf" | "-infinity" => return Some(f64::NEG_INFINITY),
         _ => {}
     }
-    let bytes = value.as_bytes();
-    let mut index = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
-    let negative = bytes.first() == Some(&b'-');
-    let hex = bytes
-        .get(index..index + 2)
-        .is_some_and(|s| s.eq_ignore_ascii_case(b"0x"));
-    if hex {
-        index += 2;
-    }
-    let mut last_digit = hex;
-    let mut pending_underscore = false;
-    let mut digits = false;
-    let mut dot = false;
-    let mut count = 0i64;
-    let mut point = 0i64;
-    let mut kept = 0i64;
-    let mut mantissa = 0u64;
-    let mut truncated = false;
-    while let Some(&byte) = bytes.get(index) {
-        if byte == b'_' {
-            if !last_digit {
-                return None;
-            }
-            last_digit = false;
-            pending_underscore = true;
-        } else if byte == b'.' {
-            if dot || pending_underscore {
-                return None;
-            }
-            dot = true;
-            point = count;
-            last_digit = false;
-        } else if let Some(digit) = (byte as char).to_digit(if hex { 16 } else { 10 }) {
-            digits = true;
-            last_digit = true;
-            pending_underscore = false;
-            if digit == 0 && count == 0 {
-                point = point.saturating_sub(1);
-            } else {
-                count = count.saturating_add(1);
-                if hex && kept < 16 {
-                    mantissa = mantissa * 16 + u64::from(digit);
-                    kept += 1;
-                } else if hex && digit != 0 {
-                    truncated = true;
-                }
-            }
-        } else {
-            break;
-        }
-        index += 1;
-    }
-    if !digits || pending_underscore {
-        return None;
-    }
-    if !dot {
-        point = count;
-    }
-    let mut exponent = 0i64;
-    if bytes
-        .get(index)
-        .is_some_and(|b| b.eq_ignore_ascii_case(&if hex { b'p' } else { b'e' }))
-    {
-        index += 1;
-        let exponent_negative = bytes.get(index) == Some(&b'-');
-        if matches!(bytes.get(index), Some(b'+' | b'-')) {
-            index += 1;
-        }
-        let mut exponent_digits = false;
-        let mut previous_digit = false;
-        while let Some(&byte) = bytes.get(index) {
-            if byte.is_ascii_digit() {
-                exponent_digits = true;
-                previous_digit = true;
-                exponent = (exponent * 10 + i64::from(byte - b'0')).min(100_000);
-            } else if byte == b'_' && previous_digit {
-                previous_digit = false;
-            } else {
-                return None;
-            }
-            index += 1;
-        }
-        if !exponent_digits || !previous_digit {
+    let negative = lower.starts_with('-');
+    let unsigned = lower.strip_prefix(['+', '-']).unwrap_or(&lower);
+    let (hex, number) = match unsigned.strip_prefix("0x") {
+        Some(rest) => (true, rest),
+        None => (false, unsigned),
+    };
+    let marker = if hex { 'p' } else { 'e' };
+    let (significand, exponent_text) = match number.split_once(marker) {
+        Some((a, b)) => (a, Some(b)),
+        None if hex => return None,
+        None => (number, None),
+    };
+    let exponent = if let Some(text) = exponent_text {
+        let neg = text.starts_with('-');
+        let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+        if digits.is_empty() || !valid_digits(digits, 10) {
             return None;
         }
-        if exponent_negative {
-            exponent = -exponent;
+        let magnitude = digits
+            .bytes()
+            .filter(|b| *b != b'_')
+            .fold(0i64, |n, b| (n * 10 + i64::from(b - b'0')).min(100_000));
+        if neg { -magnitude } else { magnitude }
+    } else {
+        0
+    };
+    let significand = if hex && significand.starts_with('_') {
+        let rest = &significand[1..];
+        if !rest.as_bytes().first().is_some_and(u8::is_ascii_hexdigit) {
+            return None;
         }
-    } else if hex {
-        return None;
-    }
-    if index != bytes.len() {
+        rest
+    } else {
+        significand
+    };
+    let (integer, fraction) = significand.split_once('.').unwrap_or((significand, ""));
+    let radix = if hex { 16 } else { 10 };
+    if (integer.is_empty() && fraction.is_empty())
+        || !valid_digits(integer, radix)
+        || !valid_digits(fraction, radix)
+    {
         return None;
     }
     if !hex {
@@ -235,46 +198,66 @@ fn parse_go_float(value: &str) -> Option<f64> {
         let parsed = clean.parse::<f64>().ok()?;
         return parsed.is_finite().then_some(parsed);
     }
-    let mut exp = point
-        .saturating_mul(4)
-        .saturating_add(exponent)
-        .saturating_sub(kept * 4)
-        .saturating_add(52);
-    while mantissa != 0 && mantissa >> 54 == 0 {
-        mantissa <<= 1;
-        exp -= 1;
+    let integer = integer.replace('_', "");
+    let fraction = fraction.replace('_', "");
+    let point = i64::try_from(integer.len()).ok()?;
+    let digits = integer + &fraction;
+    let trimmed = digits.trim_start_matches('0');
+    let leading = i64::try_from(digits.len() - trimmed.len()).ok()?;
+    let kept = trimmed.len().min(16);
+    let mantissa = if kept == 0 {
+        0
+    } else {
+        u64::from_str_radix(&trimmed[..kept], 16).ok()?
+    };
+    let truncated = trimmed[kept..].bytes().any(|b| b != b'0');
+    let scale = exponent.saturating_add(4 * (point - leading - i64::try_from(kept).ok()?));
+    let sign = u64::from(negative) << 63;
+    if mantissa == 0 {
+        return Some(f64::from_bits(sign));
     }
-    if truncated {
-        mantissa |= 1;
-    }
-    while mantissa >> 55 != 0 {
-        mantissa = (mantissa >> 1) | (mantissa & 1);
-        exp += 1;
-    }
-    while mantissa > 1 && exp < -1024 {
-        mantissa = (mantissa >> 1) | (mantissa & 1);
-        exp += 1;
-    }
-    let mut round = mantissa & 3;
-    mantissa >>= 2;
-    round |= mantissa & 1;
-    exp += 2;
-    if round == 3 {
-        mantissa += 1;
-        if mantissa == (1 << 53) {
-            mantissa >>= 1;
-            exp += 1;
-        }
-    }
-    if mantissa >> 52 == 0 {
-        exp = -1023;
-    }
-    if exp > 1023 {
+    let high = i64::from(63 - mantissa.leading_zeros());
+    let mut power = high.saturating_add(scale);
+    if power > 1023 {
         return None;
     }
-    let bits =
-        (mantissa & ((1 << 52) - 1)) | (((exp + 1023) as u64) << 52) | (u64::from(negative) << 63);
-    Some(f64::from_bits(bits))
+    let shift = if power >= -1022 {
+        high - 52
+    } else {
+        (-1074i64).saturating_sub(scale)
+    };
+    let rounded = if shift <= 0 {
+        mantissa << u32::try_from(-shift).ok()?
+    } else if shift > 64 {
+        0
+    } else {
+        let shift = u32::try_from(shift).ok()?;
+        let retained = if shift == 64 { 0 } else { mantissa >> shift };
+        let halfway = 1u64 << (shift - 1);
+        let remainder = if shift == 64 {
+            mantissa
+        } else {
+            mantissa & ((1u64 << shift) - 1)
+        };
+        retained
+            + u64::from(
+                remainder > halfway || (remainder == halfway && (truncated || retained & 1 != 0)),
+            )
+    };
+    let bits = if power < -1022 {
+        rounded
+    } else {
+        let mut significand = rounded;
+        if significand == 1 << 53 {
+            significand >>= 1;
+            power += 1;
+        }
+        if power > 1023 {
+            return None;
+        }
+        (((power + 1023) as u64) << 52) | (significand & ((1 << 52) - 1))
+    };
+    Some(f64::from_bits(sign | bits))
 }
 
 pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {

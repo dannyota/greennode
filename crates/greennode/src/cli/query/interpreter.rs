@@ -102,15 +102,7 @@ pub(super) fn execute(node: &Node, input: &Value) -> Result<Value, EvaluationErr
             let NodeValue::Text(name) = &node.value else {
                 return Err(EvaluationError::InvalidNode);
             };
-            if matches!(name.as_str(), "map" | "sort_by" | "max_by" | "min_by") {
-                return super::functions_expr::call(name, &node.children, input);
-            }
-            let arguments = node
-                .children
-                .iter()
-                .map(|child| execute(child, input))
-                .collect::<Result<Vec<_>, _>>()?;
-            super::functions::call(name, &arguments)
+            super::functions_expr::call(name, &node.children, input)
         }
         NodeKind::Comparator => {
             let left = execute(child(node, 0)?, input)?;
