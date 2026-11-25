@@ -148,19 +148,21 @@ one attempt, no redirect, and no resend. On 401 invalidate the exact bearer
 sent, subject to the baseline age rule, without fetching another.
 
 Keep the baseline's normal retry budget (three retries, one-second initial
-interval), backoff, and 30-second cap on delays including `Retry-After`.
-`Repeatable` can retry a transient network error or 429, 502, 503, or 504.
-`NonIdempotent` can retry only a proven failed dial or 429. Preserve the
-baseline's separate single 401 recovery when the operation allows it; neither
-key-based nor unauthenticated requests try management credentials on 401.
-`with_retry` may change the budget and interval but not the eligible cases. A
-failed send can enter the network retry path. A body read, decompression, or
-close failure after response headers does not retry, even for `Repeatable` and
-even if the status would qualify. A 401 that remains visible after body-error
-mapping may invalidate the exact bearer, but cannot trigger a resend. Preserve
-observed status, decode strictness, empty-body handling, and overflow
-classification per operation. A retry hint is not a guarantee that rerunning a
-multi-step operation is safe.
+interval), backoff, and 30-second cap on delays including `Retry-After`. Its
+dates follow Go's HTTP-date layouts. Every zone abbreviation keeps the instant
+as written, as Go does for `GMT±n` and unknown names; Go shifts a name the
+machine's local zone recognizes. `Repeatable` can retry a transient network
+error or 429, 502, 503, or 504. `NonIdempotent` can retry only a proven failed
+dial or 429. Preserve the baseline's separate single 401 recovery when the
+operation allows it; neither key-based nor unauthenticated requests try
+management credentials on 401. `with_retry` may change the budget and interval
+but not the eligible cases. A failed send can enter the network retry path. A
+body read, decompression, or close failure after response headers does not
+retry, even for `Repeatable` and even if the status would qualify. A 401 that
+remains visible after body-error mapping may invalidate the exact bearer, but
+cannot trigger a resend. Preserve observed status, decode strictness, empty-body
+handling, and overflow classification per operation. A retry hint is not a
+guarantee that rerunning a multi-step operation is safe.
 
 Product redirects also reject userinfo, fragments, cycles and a chain longer
 than nine hops. Check before attaching credentials to a newly resolved URI.
