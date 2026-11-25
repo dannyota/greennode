@@ -1,7 +1,9 @@
-use super::sender::SentCredentials;
+use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
 use http::StatusCode;
-use serde_json::Value;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use serde_json::value::RawValue;
 use zeroize::Zeroizing;
 
 #[allow(dead_code)]
@@ -10,44 +12,47 @@ pub(crate) fn classify(
     status: StatusCode,
     body: Bytes,
     success: &[StatusCode],
-    fallback: bool,
-    sensitive: bool,
+    rules: (bool, bool, Retry),
     credentials: &SentCredentials,
 ) -> Result<Bytes, Box<crate::Error>> {
     if success.contains(&status) {
         return Ok(body);
     }
-    let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let root = parsed
-        .as_array()
-        .and_then(|items| items.first())
-        .unwrap_or(&parsed);
-    let mut code = field_code(root);
-    let mut message = field_message(root).to_owned();
-    if code.is_empty()
-        && message.is_empty()
-        && let Some(entries) = root.get("errors").and_then(Value::as_array)
-    {
-        let objects: Vec<_> = entries.iter().filter(|v| v.is_object()).collect();
-        if let Some(first) = objects.first() {
-            code = field_code(first);
-        }
-        message = objects
-            .iter()
-            .map(|v| field_message(v))
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join("; ");
-    }
-    if sensitive {
-        code.clear();
-        message.clear();
-    }
+    let (fallback, sensitive, retry) = rules;
+    let (code, message) = if sensitive {
+        (String::new(), String::new())
+    } else {
+        decode(&body)
+    };
     let secrets: Vec<_> = credentials.values().iter().collect();
     let safe = |text: &str| {
         let sanitized = crate::error::SafeText::new(text, &secrets);
         let decoded = Zeroizing::new(percent_decode(sanitized.as_str().as_bytes()));
-        if credentials.reflects(&decoded) {
+        let normalized: String = text
+            .chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        let escaped = credentials.values().iter().any(|secret| {
+            let json =
+                Zeroizing::new(serde_json::to_string(secret.expose_secret()).unwrap_or_default());
+            let inner = json.get(1..json.len().saturating_sub(1)).unwrap_or("");
+            let html = Zeroizing::new(
+                inner
+                    .replace('<', "\\u003c")
+                    .replace('>', "\\u003e")
+                    .replace('&', "\\u0026")
+                    .replace('\u{2028}', "\\u2028")
+                    .replace('\u{2029}', "\\u2029"),
+            );
+            (!inner.is_empty() && (text.contains(inner) || text.contains(html.as_str())))
+                || secret
+                    .expose_secret()
+                    .lines()
+                    .map(str::trim)
+                    .any(|line| line.len() >= 8 && text.contains(line))
+        });
+        if normalized.contains("clientsecret") || escaped || credentials.reflects(&decoded) {
             crate::error::SafeText::new("", &secrets)
         } else {
             sanitized
@@ -55,11 +60,11 @@ pub(crate) fn classify(
     };
     let code = safe(&code);
     let message = if sensitive || message.is_empty() {
-        safe(status.canonical_reason().unwrap_or("request failed"))
+        safe(status_text(status))
     } else {
         safe(message.trim())
     };
-    let retryable = matches!(status.as_u16(), 429 | 502 | 503 | 504);
+    let retryable = retryable(status, retry);
     let api = if fallback {
         crate::ApiError::new(operation, Some(status.as_u16()), code, message, retryable)
     } else {
@@ -74,20 +79,130 @@ pub(crate) fn classify(
     Err(Box::new(crate::Error::from_api(api)))
 }
 
-fn field_code(value: &Value) -> String {
-    match value.get("code") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => String::new(),
+fn retryable(status: StatusCode, retry: Retry) -> bool {
+    status == StatusCode::TOO_MANY_REQUESTS
+        || (matches!(retry, Retry::Repeatable) && matches!(status.as_u16(), 502..=504))
+}
+
+fn status_text(status: StatusCode) -> &'static str {
+    match status.as_u16() {
+        413 => "Request Entity Too Large",
+        414 => "Request URI Too Long",
+        416 => "Requested Range Not Satisfiable",
+        422 => "Unprocessable Entity",
+        _ => status.canonical_reason().unwrap_or(""),
     }
 }
 
-fn field_message(value: &Value) -> &str {
-    ["message", "error", "detail", "title"]
-        .into_iter()
-        .filter_map(|key| value.get(key).and_then(Value::as_str))
-        .find(|s| !s.is_empty())
-        .unwrap_or("")
+#[derive(Default)]
+struct Envelope {
+    code: String,
+    message: String,
+    error: String,
+    detail: String,
+    title: String,
+    errors: Option<Box<RawValue>>,
+    invalid: bool,
+}
+impl Envelope {
+    fn text(&self) -> &str {
+        [&self.message, &self.error, &self.detail, &self.title]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .map_or("", String::as_str)
+    }
+}
+impl<'de> Deserialize<'de> for Envelope {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EnvelopeVisitor;
+        impl<'de> Visitor<'de> for EnvelopeVisitor {
+            type Value = Envelope;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an error object")
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Envelope, E> {
+                Ok(Envelope::default())
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Envelope, M::Error> {
+                let mut result = Envelope::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    if key.eq_ignore_ascii_case("code") {
+                        let raw = map.next_value::<Box<RawValue>>()?;
+                        let value = raw.get();
+                        result.code = if value.starts_with('"') {
+                            serde_json::from_str(value).unwrap_or_default()
+                        } else if value.starts_with('-')
+                            || value.starts_with(|c: char| c.is_ascii_digit())
+                        {
+                            value.to_owned()
+                        } else {
+                            String::new()
+                        };
+                    } else if key.eq_ignore_ascii_case("errors") {
+                        result.errors = Some(map.next_value()?);
+                    } else if key.eq_ignore_ascii_case("message")
+                        || key.eq_ignore_ascii_case("error")
+                        || key.eq_ignore_ascii_case("detail")
+                        || key.eq_ignore_ascii_case("title")
+                    {
+                        let raw = map.next_value::<Box<RawValue>>()?;
+                        if let Ok(Some(value)) = serde_json::from_str::<Option<String>>(raw.get()) {
+                            if key.eq_ignore_ascii_case("message") {
+                                result.message = value;
+                            } else if key.eq_ignore_ascii_case("error") {
+                                result.error = value;
+                            } else if key.eq_ignore_ascii_case("detail") {
+                                result.detail = value;
+                            } else {
+                                result.title = value;
+                            }
+                        } else if raw.get() != "null" {
+                            result.invalid = true;
+                        }
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(result)
+            }
+        }
+        deserializer.deserialize_any(EnvelopeVisitor)
+    }
+}
+fn decode(body: &[u8]) -> (String, String) {
+    let trimmed = body.iter().copied().find(|b| !b.is_ascii_whitespace());
+    let envelope = if trimmed == Some(b'[') {
+        serde_json::from_slice::<Vec<Envelope>>(body)
+            .ok()
+            .filter(|v| v.iter().all(|entry| !entry.invalid))
+            .and_then(|v| v.into_iter().next())
+            .unwrap_or_default()
+    } else {
+        serde_json::from_slice::<Envelope>(body).unwrap_or_default()
+    };
+    if envelope.code.is_empty()
+        && envelope.text().is_empty()
+        && let Some(raw) = envelope.errors.as_ref()
+        && let Ok(entries) = serde_json::from_str::<Vec<Box<RawValue>>>(raw.get())
+    {
+        let mut first = None;
+        let mut messages = Vec::new();
+        for entry in entries {
+            if !entry.get().trim_start().starts_with('{') {
+                continue;
+            }
+            let item: Envelope = serde_json::from_str(entry.get()).unwrap_or_default();
+            if first.is_none() {
+                first = Some(item.code.clone());
+            }
+            if !item.text().is_empty() {
+                messages.push(item.text().to_owned());
+            }
+        }
+        return (first.unwrap_or_default(), messages.join("; "));
+    }
+    let message = envelope.text().to_owned();
+    (envelope.code, message)
 }
 
 fn percent_decode(data: &[u8]) -> Vec<u8> {
@@ -127,8 +242,11 @@ mod tests {
             StatusCode::from_u16(status).unwrap(),
             Bytes::from_static(body),
             &[StatusCode::OK],
-            fallback,
-            sensitive,
+            (
+                fallback,
+                sensitive,
+                super::super::redirect::Retry::Repeatable,
+            ),
             credentials,
         )
         .unwrap_err()
@@ -210,6 +328,130 @@ mod tests {
     }
 
     #[test]
+    fn case_insensitive_fields() {
+        let e = error(
+            403,
+            br#"{"Message":"denied"}"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().message(), "denied");
+    }
+
+    #[test]
+    fn invalid_array_entry_discards_envelope() {
+        let e = error(
+            403,
+            br#"[{"message":"denied"},42]"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn numeric_code_keeps_original_token() {
+        let e = error(
+            403,
+            br#"{"code":1E3}"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().code(), "1E3");
+    }
+
+    #[test]
+    fn credential_marker_is_withheld() {
+        let e = error(
+            403,
+            br#"{"message":"client_secret: private"}"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert!(!e.api_error().unwrap().message().contains("private"));
+    }
+
+    #[test]
+    fn json_escaped_credentials_are_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("toy<secret")]);
+        let e = error(
+            403,
+            br#"{"message":"toy\\u003csecret"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert!(!e.api_error().unwrap().message().contains("toy"));
+    }
+
+    #[test]
+    fn go_status_text_is_used() {
+        let e = error(413, b"{}", true, false, &SentCredentials::default());
+        assert_eq!(e.api_error().unwrap().message(), "Request Entity Too Large");
+    }
+
+    #[test]
+    fn retries_follow_operation_policy() {
+        for policy in [
+            super::super::redirect::Retry::Once,
+            super::super::redirect::Retry::NonIdempotent,
+        ] {
+            assert!(!retryable(StatusCode::SERVICE_UNAVAILABLE, policy));
+            assert!(retryable(StatusCode::TOO_MANY_REQUESTS, policy));
+        }
+        assert!(retryable(
+            StatusCode::SERVICE_UNAVAILABLE,
+            super::super::redirect::Retry::Repeatable
+        ));
+    }
+
+    #[test]
+    fn object_code_is_not_a_number() {
+        let e = error(
+            403,
+            br#"{"code":{"$serde_json::private::Number":"123"}}"#,
+            false,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().code(), "");
+    }
+
+    #[test]
+    fn large_unknown_field_is_ignored() {
+        let body = format!(
+            "{{\"unknown\":\"{}\",\"message\":\"denied\"}}",
+            "x".repeat(1_000_000)
+        );
+        let result = classify(
+            "test",
+            StatusCode::FORBIDDEN,
+            Bytes::from(body),
+            &[StatusCode::OK],
+            (true, false, Retry::Repeatable),
+            &SentCredentials::default(),
+        )
+        .unwrap_err();
+        assert_eq!(result.api_error().unwrap().message(), "denied");
+    }
+
+    #[test]
+    fn invalid_array_field_discards_envelope() {
+        let e = error(
+            403,
+            br#"[{"message":"denied"},{"message":42}]"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
     fn success_returns_body() {
         let body = Bytes::from_static(b"result");
         assert_eq!(
@@ -218,8 +460,7 @@ mod tests {
                 StatusCode::OK,
                 body.clone(),
                 &[StatusCode::OK],
-                true,
-                false,
+                (true, false, super::super::redirect::Retry::Repeatable),
                 &SentCredentials::default()
             )
             .unwrap(),
