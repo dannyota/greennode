@@ -86,6 +86,37 @@ fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
         .filter(|duration| !duration.is_zero())
 }
 
+fn signed_zone(value: &str) -> bool {
+    let digits = value.strip_prefix('+').or_else(|| value.strip_prefix('-'));
+    digits.is_some_and(|digits| {
+        !digits.is_empty()
+            && digits
+                .bytes()
+                .try_fold(0u64, |number, digit| {
+                    digit.is_ascii_digit().then_some(())?;
+                    number.checked_mul(10)?.checked_add(u64::from(digit - b'0'))
+                })
+                .is_some_and(|number| number <= 23)
+    })
+}
+
+fn rfc850_zone(value: &str) -> bool {
+    if value.starts_with("UTC") {
+        return value == "UTC";
+    }
+    if let Some(suffix) = value.strip_prefix("GMT") {
+        return suffix.is_empty() || signed_zone(suffix);
+    }
+    if matches!(value, "ChST" | "MeST" | "WITA") {
+        return true;
+    }
+    if value.starts_with(['+', '-']) {
+        return value.len() >= 3 && signed_zone(value);
+    }
+    value.bytes().all(|b| b.is_ascii_uppercase())
+        && (value.len() == 3 || ((value.len() == 4 || value.len() == 5) && value.ends_with('T')))
+}
+
 fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
     if value.starts_with(' ')
         || value.ends_with(' ')
@@ -100,7 +131,7 @@ fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
         .collect();
     let (weekday, day, month, year, clock, layout) = match fields.as_slice() {
         [weekday, day, month, year, clock, "GMT"] => (*weekday, *day, *month, *year, *clock, 0),
-        [weekday, date, clock, "GMT"] => {
+        [weekday, date, clock, zone] if rfc850_zone(zone) => {
             let mut parts = date.split('-');
             let day = parts.next()?;
             let month = parts.next()?;
@@ -361,6 +392,43 @@ mod tests {
             ),
             Some(Duration::from_secs(15))
         );
+    }
+    #[test]
+    fn rfc850_zone() {
+        for zone in [
+            "UTC", "XYZ", "ABCT", "ABCXT", "ChST", "MeST", "WITA", "GMT+03", "+03",
+        ] {
+            let date = format!("Thursday, 01-Jan-70 00:00:08 {zone}");
+            assert_eq!(
+                check(Retry::Repeatable, 0, Outcome::Status(429, Some(&date))),
+                Some(Duration::from_secs(8))
+            );
+        }
+        for zone in ["ABCD", "ABCDEF", "UTC+03", "+24"] {
+            let date = format!("Thursday, 01-Jan-70 00:00:08 {zone}");
+            assert_eq!(
+                check(Retry::Repeatable, 0, Outcome::Status(429, Some(&date))),
+                Some(Duration::from_millis(500))
+            );
+        }
+        assert_eq!(
+            check(
+                Retry::Repeatable,
+                0,
+                Outcome::Status(429, Some("Thu, 01 Jan 1970 00:00:08 UTC"))
+            ),
+            Some(Duration::from_millis(500))
+        );
+    }
+    #[test]
+    fn gmt_offsets_preserve_instant() {
+        for zone in ["GMT+03", "GMT-3"] {
+            let date = format!("Thursday, 01-Jan-70 00:00:08 {zone}");
+            assert_eq!(
+                check(Retry::Repeatable, 0, Outcome::Status(429, Some(&date))),
+                Some(Duration::from_secs(8))
+            );
+        }
     }
     #[test]
     fn legacy_dates() {
