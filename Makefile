@@ -54,10 +54,10 @@ parity: ## Test the parity list generator
 parity-list: ## Regenerate the parity list from the baseline clone
 	python3 -I scripts/parity-list.py "$(if $(wildcard .reference/vngcloud),.reference/vngcloud,../../.reference/vngcloud)" --tag "$(BASELINE_TAG)" --commit "$(BASELINE_COMMIT)"
 
-release-checks: ## Test the release checker, credential helper, and release notes script
+release-checks: ## Test the release checker, credential helper, and release workflow policy
 	python3 -I scripts/test/check-crate-release-test.py
 	python3 -I scripts/test/check-crate-publish-credential-test.py
-	python3 -I scripts/test/release-notes-test.py
+	python3 -I scripts/test/release-workflow-test.py
 	python3 -I scripts/check-crate-release.py manifest
 
 docs: ## Check Markdown with Prettier and markdownlint; needs npm ci --ignore-scripts
