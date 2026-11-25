@@ -3,6 +3,7 @@
 mod credentials;
 mod file;
 mod ini;
+mod load;
 mod mode;
 mod settings;
 
@@ -27,9 +28,26 @@ pub struct ConfigOptions {
     profile: Option<String>,
     config_file: Option<std::path::PathBuf>,
     credentials_file: Option<std::path::PathBuf>,
+    provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
+    #[cfg(test)]
+    hooks: Option<std::sync::Arc<ParseHooks>>,
+}
+
+#[cfg(test)]
+struct ParseHooks {
+    on_read: Box<dyn Fn(usize) + Send + Sync>,
+    on_line: Box<dyn Fn() + Send + Sync>,
 }
 
 impl ConfigOptions {
+    /// Supplies the management credentials provider.
+    pub fn with_credentials_provider(
+        mut self,
+        provider: std::sync::Arc<dyn crate::CredentialsProvider>,
+    ) -> Self {
+        self.provider = Some(provider);
+        self
+    }
     /// Selects a named profile.
     pub fn with_profile(mut self, profile: String) -> Self {
         self.profile = Some(profile);
@@ -56,7 +74,17 @@ impl std::fmt::Debug for ConfigOptions {
 /// A management configuration.
 #[derive(Clone)]
 pub struct Config {
-    _private: (),
+    region: String,
+    profile: String,
+    project_id: Option<String>,
+    settings: std::collections::BTreeMap<String, String>,
+    credentials: std::sync::Arc<credentials::Selected>,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Config([REDACTED])")
+    }
 }
 
 /// The settings and file provenance selected by an offline lookup.
@@ -83,7 +111,7 @@ impl ResolvedProfile {
     pub fn section_present(&self) -> bool {
         self.section_present
     }
-    /// Returns a stored non-credential setting from the selected section.
+    /// Returns a raw stored non-credential value from the selected config section.
     pub fn profile_setting(&self, key: &str) -> Option<&str> {
         self.settings.get(key).map(String::as_str)
     }
@@ -98,7 +126,27 @@ impl ResolvedProfile {
 }
 
 impl Config {
-    /// Resolves local profile settings without reading credentials.
+    /// Loads configuration offline; requires a Tokio runtime with timers.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The public API returns Error by value"
+    )]
+    pub async fn load(
+        ctx: &crate::RequestContext,
+        options: ConfigOptions,
+        source: &dyn crate::ConfigSource,
+    ) -> Result<Self, crate::Error> {
+        load::load(ctx, options, source).await
+    }
+    /// Returns the selected region.
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+    /// Returns a raw stored non-credential value from the selected config section.
+    pub fn profile_setting(&self, key: &str) -> Option<&str> {
+        self.settings.get(key).map(String::as_str)
+    }
+    /// Resolves settings with credentials metadata only; requires a Tokio runtime with timers.
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
@@ -152,10 +200,10 @@ async fn resolve_profile_with(
     clippy::result_large_err,
     reason = "The public API returns Error by value"
 )]
-async fn wait_profile_worker(
+async fn wait_profile_worker<T>(
     ctx: &crate::RequestContext,
-    worker: tokio::task::JoinHandle<Result<ResolvedProfile, crate::Error>>,
-) -> Result<ResolvedProfile, crate::Error> {
+    worker: tokio::task::JoinHandle<Result<T, crate::Error>>,
+) -> Result<T, crate::Error> {
     let clock = crate::SystemClock;
     let mut worker = std::pin::pin!(worker);
     let mut ended = std::pin::pin!(ctx.wait(&clock));
@@ -199,12 +247,37 @@ const SETTINGS_VARIABLES: [&str; 12] = [
 
 struct SourceSnapshot {
     values: std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+    secrets: std::collections::HashMap<std::ffi::OsString, zeroize::Zeroizing<Vec<u8>>>,
     home: Option<std::path::PathBuf>,
+}
+
+#[cfg(unix)]
+fn invalid_os_string() -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(vec![0xff])
+}
+
+#[cfg(windows)]
+fn invalid_os_string() -> std::ffi::OsString {
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&[0xd800])
+}
+
+#[cfg(not(any(unix, windows)))]
+fn invalid_os_string() -> std::ffi::OsString {
+    std::ffi::OsString::from("\0")
 }
 
 impl crate::ConfigSource for SourceSnapshot {
     fn var_os(&self, name: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
-        self.values.get(name).cloned()
+        self.values.get(name).cloned().or_else(|| {
+            self.secrets
+                .get(name)
+                .map(|value| match std::str::from_utf8(value) {
+                    Ok(value) => std::ffi::OsString::from(value),
+                    Err(_) => invalid_os_string(),
+                })
+        })
     }
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         self.home.clone()
@@ -240,6 +313,7 @@ impl SourceSnapshot {
         }
         Self {
             values,
+            secrets: Default::default(),
             home: source.home_dir(),
         }
     }
@@ -336,7 +410,7 @@ mod worker_tests {
                 let _ = started_tx.send(());
                 let _ = release_rx.recv();
                 let _ = done_tx.send(());
-                Err(crate::Error::new(crate::ErrorClass::InvalidConfig))
+                Err::<ResolvedProfile, _>(crate::Error::new(crate::ErrorClass::InvalidConfig))
             });
             started_rx.await.unwrap();
             let (ctx, cancel) = crate::RequestContext::new();

@@ -55,6 +55,13 @@ fn read_limited(
 }
 
 pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
+    parse_secrets_checked(input, &|| false)
+}
+
+pub(super) fn parse_secrets_checked(
+    input: impl Read,
+    check: &dyn Fn() -> bool,
+) -> Result<SecretsIni, String> {
     let (bytes, used) = read_limited(input, Slot::Credentials)?;
     let mut result = SecretsIni::default();
     let mut section: Option<String> = None;
@@ -62,6 +69,9 @@ pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
         .split_inclusive(|byte| *byte == b'\n')
         .enumerate()
     {
+        if index % 64 == 0 && check() {
+            return Err("credentials: read failed".into());
+        }
         let number = index + 1;
         let error = |reason| format!("credentials:{number}: {reason}");
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
@@ -78,6 +88,9 @@ pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
             continue;
         }
         if let Some(header) = trimmed.strip_prefix('[') {
+            if index % 64 != 0 && check() {
+                return Err("credentials: read failed".into());
+            }
             let name = header
                 .strip_suffix(']')
                 .ok_or_else(|| error("unclosed section header"))?
@@ -110,7 +123,53 @@ pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
     Ok(result)
 }
 
+pub(super) fn credential_key(key: &str) -> bool {
+    matches!(
+        key,
+        "client_id"
+            | "client_secret"
+            | "root_email"
+            | "username"
+            | "password"
+            | "totp_secret"
+            | "vcdn_api_key"
+    )
+}
+
 pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
+    parse_checked(slot, input, &|| false)
+}
+
+pub(super) fn parse_checked(
+    slot: Slot,
+    input: impl Read,
+    check: &dyn Fn() -> bool,
+) -> Result<Ini, String> {
+    parse_checked_inner(
+        slot,
+        input,
+        check,
+        #[cfg(test)]
+        None,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn parse_observed(
+    slot: Slot,
+    input: impl Read,
+    check: &dyn Fn() -> bool,
+    on_line: &dyn Fn(),
+) -> Result<Ini, String> {
+    parse_checked_inner(slot, input, check, Some(on_line))
+}
+
+fn parse_checked_inner(
+    slot: Slot,
+    input: impl Read,
+    check: &dyn Fn() -> bool,
+    #[cfg(test)] on_line: Option<&dyn Fn()>,
+) -> Result<Ini, String> {
     let config = matches!(slot, Slot::Config);
     let (bytes, used) = read_limited(input, slot)?;
     let slot = slot.label();
@@ -120,6 +179,13 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
         .split_inclusive(|byte| *byte == b'\n')
         .enumerate()
     {
+        if index % 64 == 0 && check() {
+            return Err(format!("{slot}: read failed"));
+        }
+        #[cfg(test)]
+        if let Some(on_line) = on_line {
+            on_line();
+        }
         let number = index + 1;
         let error = |reason| format!("{slot}:{number}: {reason}");
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
@@ -158,7 +224,7 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
             if key.is_empty() {
                 return Err(error("empty key"));
             }
-            let value = if config && matches!(key.as_str(), "client_id" | "client_secret") {
+            let value = if config && credential_key(&key) {
                 if value.trim().is_empty() {
                     String::new()
                 } else {
@@ -179,6 +245,34 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
 #[cfg(test)]
 mod tests {
     use super::{Slot, parse};
+
+    #[test]
+    fn parsers_stop_during_line_and_section_processing() {
+        use std::cell::Cell;
+        let input = format!("[default]\n{}", "key=value\n".repeat(200));
+        for secrets in [true, false] {
+            let checks = Cell::new(0);
+            let check = || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 2
+            };
+            let failed = if secrets {
+                super::parse_secrets_checked(input.as_bytes(), &check).is_err()
+            } else {
+                super::parse_checked(Slot::Config, input.as_bytes(), &check).is_err()
+            };
+            assert!(failed);
+            assert_eq!(checks.get(), 2);
+        }
+        let input = "[one]\nx=y\n[two]\nx=y\n[three]\nx=y\n";
+        let checks = Cell::new(0);
+        let result = super::parse_secrets_checked(input.as_bytes(), &|| {
+            checks.set(checks.get() + 1);
+            checks.get() >= 2
+        });
+        assert!(result.is_err());
+        assert_eq!(checks.get(), 2);
+    }
 
     #[test]
     fn credential_parser_reads_directly_into_one_large_buffer() {
@@ -216,6 +310,26 @@ mod tests {
             },
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_masks_all_credential_fields() {
+        for key in [
+            "client_id",
+            "client_secret",
+            "root_email",
+            "username",
+            "password",
+            "totp_secret",
+            "vcdn_api_key",
+        ] {
+            let input = format!("[default]\n{key}=toy-secret\n");
+            let parsed = parse(Slot::Config, input.as_bytes()).unwrap();
+            assert!(parsed["default"][key] == "1", "{key}");
+            let input = format!("[default]\n{key}=\n");
+            let parsed = parse(Slot::Config, input.as_bytes()).unwrap();
+            assert_eq!(parsed["default"][key], "", "{key}");
+        }
     }
 
     #[test]

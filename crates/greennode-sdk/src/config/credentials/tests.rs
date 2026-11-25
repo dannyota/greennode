@@ -1,4 +1,5 @@
 mod diagnostics;
+mod worker;
 
 use super::*;
 use crate::config::mode::{Mode, Paths};
@@ -419,7 +420,7 @@ fn method_order_and_provider_reservation() {
     );
     assert!(matches!(selected.unwrap().kind, Kind::StaticToken(_)));
     let opts = Options {
-        provider: true,
+        provider: Some(std::sync::Arc::new(worker::Provider)),
         token: Some(Secret::new("other")),
         ..Options::default()
     };
@@ -431,7 +432,7 @@ fn method_order_and_provider_reservation() {
         &source,
         Some(fixture.file()),
     );
-    assert!(matches!(selected.unwrap().kind, Kind::Provider));
+    assert!(matches!(selected.unwrap().kind, Kind::Provider(_)));
 }
 
 #[test]

@@ -5,7 +5,7 @@ use std::fs::File;
 
 #[derive(Default)]
 pub(super) struct Options {
-    pub provider: bool,
+    pub provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
     pub token: Option<Secret>,
     pub service_account: Option<ServiceAccount>,
     pub iam_user: Option<IamUser>,
@@ -26,12 +26,17 @@ pub(super) struct IamUser {
     pub totp_secret: Option<Secret>,
 }
 
-#[derive(Debug)]
 pub(super) enum Kind {
-    Provider,
+    Provider(std::sync::Arc<dyn crate::CredentialsProvider>),
     StaticToken(Secret),
     ServiceAccount(ServiceAccount),
     IamUser(IamUser),
+}
+
+impl std::fmt::Debug for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Kind([REDACTED])")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,9 +190,48 @@ pub(super) fn select(
     source: &dyn ConfigSource,
     file: Option<File>,
 ) -> Result<Selected, Box<Error>> {
+    select_checked(
+        selection,
+        settings,
+        settings_options,
+        options,
+        source,
+        file,
+        &|| None,
+    )
+}
+
+struct CheckedReader<'a> {
+    file: File,
+    check: &'a dyn Fn() -> Option<crate::ContextEnd>,
+}
+
+impl std::io::Read for CheckedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.check)().is_some() {
+            return Err(std::io::ErrorKind::Other.into());
+        }
+        std::io::Read::read(&mut self.file, buffer)
+    }
+}
+
+pub(super) fn select_checked(
+    selection: &Selection,
+    settings: &Settings,
+    settings_options: &SettingsOptions,
+    options: &Options,
+    source: &dyn ConfigSource,
+    file: Option<File>,
+    check: &dyn Fn() -> Option<crate::ContextEnd>,
+) -> Result<Selected, Box<Error>> {
     let mut ini = if selection.credentials_present {
         let file = file.ok_or_else(|| failure(crate::ErrorClass::NoCredentials))?;
-        super::ini::parse_secrets(file).map_err(|diagnostic| {
+        let parsed =
+            super::ini::parse_secrets_checked(CheckedReader { file, check }, &|| check().is_some());
+        if let Some(end) = check() {
+            return Err(Box::new(end.into()));
+        }
+        parsed.map_err(|diagnostic| {
             Box::new(Error::new(crate::ErrorClass::CredentialsFile).with_detail(
                 FileDiagnostic::from_text(
                     crate::FileSlot::Credentials,
@@ -223,8 +267,8 @@ pub(super) fn select(
         .profile
         .as_ref()
         .is_some_and(|p| !p.is_empty());
-    let chosen = if options.provider {
-        Some((Source::Options, Kind::Provider))
+    let chosen = if let Some(provider) = &options.provider {
+        Some((Source::Options, Kind::Provider(provider.clone())))
     } else if present(&options.token) {
         options
             .token
