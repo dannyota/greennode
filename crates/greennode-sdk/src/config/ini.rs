@@ -45,11 +45,11 @@ fn read_limited(
             Ok(0) => break,
             Ok(count) => used += count,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(format!("{}:1: read failed", slot.label())),
+            Err(_) => return Err(format!("{}: read failed", slot.label())),
         }
     }
     if used > 1_048_576 {
-        return Err(format!("{}:1: file too large", slot.label()));
+        return Err(format!("{}: file too large", slot.label()));
     }
     Ok((bytes, used))
 }
@@ -348,5 +348,28 @@ mod tests {
         assert_eq!(exact.len(), 1024 * 1024);
         assert!(parse(Slot::Config, exact.as_bytes()).is_ok());
         assert!(parse(Slot::Config, format!("{exact}\n").as_bytes()).is_err());
+    }
+    #[test]
+    fn read_and_size_errors_have_no_line() {
+        struct BadRead;
+        impl std::io::Read for BadRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::Other.into())
+            }
+        }
+        for (error, reason) in [
+            (parse(Slot::Config, BadRead).err().unwrap(), "read failed"),
+            (
+                parse(Slot::Config, vec![b'x'; 1_048_577].as_slice())
+                    .err()
+                    .unwrap(),
+                "file too large",
+            ),
+        ] {
+            let detail =
+                crate::FileDiagnostic::from_text(crate::FileSlot::Config, Some("option"), &error);
+            assert_eq!(detail.reason(), reason);
+            assert_eq!(detail.line(), None);
+        }
     }
 }

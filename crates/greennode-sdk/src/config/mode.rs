@@ -61,8 +61,25 @@ pub(super) fn probe(path: &Path) -> Presence {
 }
 
 #[cfg(windows)]
+pub(super) fn probe_checked(path: &Path, check: &dyn Fn() -> bool) -> Presence {
+    if check() {
+        return Presence::Ambiguous;
+    }
+    probe_windows_checked_with(path, check, |options, path| options.open(path))
+}
+
+#[cfg(windows)]
 fn probe_windows_with(
     path: &Path,
+    open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<std::fs::File>,
+) -> Presence {
+    probe_windows_checked_with(path, &|| false, open)
+}
+
+#[cfg(windows)]
+fn probe_windows_checked_with(
+    path: &Path,
+    check: &dyn Fn() -> bool,
     open: impl FnOnce(&std::fs::OpenOptions, &Path) -> std::io::Result<std::fs::File>,
 ) -> Presence {
     use std::os::windows::fs::OpenOptionsExt;
@@ -75,9 +92,16 @@ fn probe_windows_with(
         .access_mode(0)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .security_qos_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION);
+    if check() {
+        return Presence::Ambiguous;
+    }
     match open(&options, path) {
         Ok(file) => {
-            if file.metadata().is_ok() && winapi_util::file::typ(&file).is_ok() {
+            if !check()
+                && file.metadata().is_ok()
+                && !check()
+                && winapi_util::file::typ(&file).is_ok()
+            {
                 Presence::Present
             } else {
                 Presence::Ambiguous
@@ -89,14 +113,25 @@ fn probe_windows_with(
 
 #[cfg(not(windows))]
 pub(super) fn probe(path: &Path) -> Presence {
+    probe_checked(path, &|| false)
+}
+
+#[cfg(not(windows))]
+pub(super) fn probe_checked(path: &Path, check: &dyn Fn() -> bool) -> Presence {
+    if check() {
+        return Presence::Ambiguous;
+    }
     match std::fs::symlink_metadata(path) {
         Ok(_) => Presence::Present,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let mut parent = path.parent();
             while let Some(path) = parent {
+                if check() {
+                    return Presence::Ambiguous;
+                }
                 match std::fs::symlink_metadata(path) {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return if std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+                        return if !check() && std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
                             Presence::Absent
                         } else {
                             Presence::Ambiguous
@@ -131,13 +166,21 @@ pub(super) fn select(
     let invalid = |slot: ConfigSlot| {
         Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(slot))
     };
+    let selected_error = |slot, source, reason: &'static str| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                crate::FileDiagnostic::from_text(slot, source, &format!("file: {reason}")),
+            ),
+        )
+    };
     let credentials_error = |source, reason: &'static str| {
         Box::new(
             crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
-                super::credentials::FileDiagnostic {
+                super::credentials::FileDiagnostic::from_text(
+                    crate::FileSlot::Credentials,
                     source,
-                    diagnostic: format!("credentials: {reason}"),
-                },
+                    &format!("credentials: {reason}"),
+                ),
             ),
         )
     };
@@ -233,9 +276,9 @@ pub(super) fn select(
             && !path.is_absolute()
         {
             let slot = if i == 0 {
-                ConfigSlot::Config
+                crate::FileSlot::Config
             } else {
-                ConfigSlot::Credentials
+                crate::FileSlot::Credentials
             };
             #[cfg(windows)]
             if path.has_root()
@@ -244,14 +287,14 @@ pub(super) fn select(
                     Some(std::path::Component::Prefix(_))
                 )
             {
-                return Err(invalid(slot));
+                return Err(selected_error(slot, labels[i], "invalid path"));
             }
             let base = cwd
                 .filter(|p| p.is_absolute())
-                .ok_or_else(|| invalid(slot))?;
+                .ok_or_else(|| selected_error(slot, labels[i], "invalid path"))?;
             *path = base.join(&*path);
             if !path.is_absolute() {
-                return Err(invalid(slot));
+                return Err(selected_error(slot, labels[i], "invalid path"));
             }
         }
     }
@@ -266,13 +309,17 @@ pub(super) fn select(
         cached.map_or_else(|| presence(&chosen[i]), |states| states[i])
     });
     if states[0] == Presence::Ambiguous {
-        return Err(invalid(ConfigSlot::Config));
+        return Err(selected_error(
+            crate::FileSlot::Config,
+            labels[0],
+            "lookup failed",
+        ));
     }
     if states[1] == Presence::Ambiguous {
         return Err(if named[1] {
             credentials_error(labels[1], "lookup failed")
         } else {
-            invalid(ConfigSlot::Credentials)
+            selected_error(crate::FileSlot::Credentials, labels[1], "lookup failed")
         });
     }
     if mode == Mode::Greennode
@@ -460,11 +507,11 @@ mod tests {
         let detail = error
             .detail::<super::super::credentials::FileDiagnostic>()
             .unwrap();
-        assert_eq!(detail.source, Some("option"));
-        assert_eq!(detail.diagnostic, "credentials: lookup failed");
+        assert_eq!(detail.source(), "option");
+        assert_eq!(detail.reason(), "lookup failed");
         assert!(
             !detail
-                .diagnostic
+                .reason()
                 .contains(&absolute("/cred").to_string_lossy().to_string())
         );
         let result = select(
@@ -567,7 +614,7 @@ mod tests {
                 let detail = error
                     .detail::<super::super::credentials::FileDiagnostic>()
                     .unwrap();
-                assert_eq!(detail.source, Some(variable));
+                assert_eq!(detail.source(), variable);
                 assert!(!format!("{detail:?}").contains("credentials-canary"));
             }
         }
@@ -589,8 +636,8 @@ mod tests {
         let detail = missing
             .detail::<super::super::credentials::FileDiagnostic>()
             .unwrap();
-        assert_eq!(detail.source, Some("option"));
-        assert_eq!(detail.diagnostic, "credentials: not found");
+        assert_eq!(detail.source(), "option");
+        assert_eq!(detail.reason(), "not found");
         let present = select(
             None,
             Some(absolute("/present").as_path()),

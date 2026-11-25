@@ -1,3 +1,5 @@
+mod diagnostics;
+
 use super::*;
 use crate::config::mode::{Mode, Paths};
 use std::collections::HashMap;
@@ -80,6 +82,7 @@ fn settings(profile: &str) -> Settings {
         file_read_only: None,
         output: "json".into(),
         section_present: false,
+        profile_settings: Default::default(),
     }
 }
 
@@ -628,8 +631,8 @@ fn malformed_file_and_debug_do_not_disclose_values() {
     assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
     assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
     let detail = error.detail::<FileDiagnostic>().unwrap();
-    assert_eq!(detail.source, Some("~/.greennode"));
-    assert!(detail.diagnostic.starts_with("credentials:3:"));
+    assert_eq!(detail.source(), "~/.greennode");
+    assert!(detail.line() == Some(3));
     assert!(!format!("{error:?} {error} {detail:?}").contains("toy-canary"));
     std::fs::write(fixture.0.join("credentials"), "[default]\n").unwrap();
     let source = Map::default().with("GREENNODE_ACCESS_TOKEN", "toy-canary");
@@ -643,4 +646,17 @@ fn malformed_file_and_debug_do_not_disclose_values() {
     )
     .unwrap();
     assert!(!format!("{selected:?}").contains("toy-canary"));
+}
+
+#[test]
+fn diagnostic_rejects_untrusted_values() {
+    let value = FileDiagnostic::from_text(
+        crate::FileSlot::Credentials,
+        Some("/toy-path"),
+        "credentials:3: /toy-secret",
+    );
+    assert_eq!(value.source(), "unknown");
+    assert_eq!(value.reason(), "unknown error");
+    assert_eq!(value.line(), Some(3));
+    assert!(!format!("{value:?}").contains("toy"));
 }

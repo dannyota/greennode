@@ -126,11 +126,16 @@ call with one options value and one source, opening each selected file once, as
 the [configuration design](config.md) specifies. Never reuse a settings-only
 result to construct a management config.
 
-`resolve_profile` returns an opaque `ResolvedProfile` with name, safe settings,
-file selection and provenance, without requiring a region or credentials. It
-never signs in, opens the credentials file for content, or reads credential
-values from the environment. `configure`, standalone discovery, and S3 object
-commands may use this result without loading management credentials.
+`resolve_profile` returns an opaque `ResolvedProfile` with `name()`,
+`profile_setting(key)` (the same rules as on `Config`), `section_present()`
+(whether the selected config file has the profile's section, even empty), and
+`config_source()` and `credentials_source()`, each the fixed value-free label of
+the selected file or `None`, without requiring a region or credentials. The CLI
+reads the profile latch as `profile_setting("read_only")` and validates it;
+`load` does not. It never signs in, opens the credentials file for content, or
+reads credential values from the environment. `configure`, standalone discovery,
+and S3 object commands may use this result without loading management
+credentials.
 
 For a management write, the CLI first checks the flag and environment read-only
 guards without reading a configuration, credentials, secret, or transfer file; a
@@ -222,9 +227,13 @@ retained, typed causes. Accessors expose optional `ApiError`, `LoginError`, and
 `ServiceAccountLoginError` data from the error or its causes, outermost first.
 `ApiError` holds a static operation ID, optional HTTP status, safe code and
 message, and the baseline's retryability hint. Login diagnostics hold a fixed
-reason and optional status; only IAM-user login has a captcha hint. Preserve
-status when the operation contract says it is observed. No raw HTTP, decode,
-filesystem, or caller-provider error is reachable through `source()` or debug.
+reason and optional status; only IAM-user login has a captcha hint. A
+configuration file failure attaches a public `FileDiagnostic` with `slot()`
+(`FileSlot::Config` or `FileSlot::Credentials`), `source()` (the fixed
+value-free label), `reason()` (a fixed `&'static str`) and `line()`
+(`Option<u32>`); it never holds a path or value. Preserve status when the
+operation contract says it is observed. No raw HTTP, decode, filesystem, or
+caller-provider error is reachable through `source()` or debug.
 
 | Baseline identity                                                    | Rust class or diagnostic                                                                                                                                                         |
 | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -92,14 +92,14 @@ fn config_open_error_keeps_safe_source_and_reason() {
     let detail = error.detail::<FileDiagnostic>();
     assert!(detail.is_some());
     let detail = detail.unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: file too large");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "file too large");
     assert!(!format!("{detail:?}").contains("config-canary"));
     std::fs::remove_file(&config).unwrap();
     let error = open_pair(&selection).err().unwrap();
     let detail = error.detail::<FileDiagnostic>().unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: open failed");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "open failed");
     assert!(!format!("{detail:?}").contains("config-canary"));
     std::fs::write(&config, "[default]\n").unwrap();
     assert!(open_pair(&selection).is_ok());
@@ -111,8 +111,8 @@ fn config_open_error_keeps_safe_source_and_reason() {
     let detail = error.detail::<FileDiagnostic>();
     assert!(detail.is_some());
     let detail = detail.unwrap();
-    assert_eq!(detail.source, Some("GREENNODE_CONFIG_FILE"));
-    assert_eq!(detail.diagnostic, "config: not found");
+    assert_eq!(detail.source(), "GREENNODE_CONFIG_FILE");
+    assert_eq!(detail.reason(), "not found");
     assert!(!format!("{detail:?}").contains("config-canary"));
 }
 
@@ -184,11 +184,11 @@ fn unsafe_credentials_report_source_and_permission_guidance() {
     assert_eq!(error.class(), crate::ErrorClass::CredentialsFile);
     assert!(error.has_identity(crate::ErrorClass::InvalidConfig));
     let detail = error.detail::<FileDiagnostic>().unwrap();
-    assert_eq!(detail.source, Some("VNGCLOUD_SHARED_CREDENTIALS_FILE"));
-    assert!(detail.diagnostic.contains("chmod 600"));
+    assert_eq!(detail.source(), "VNGCLOUD_SHARED_CREDENTIALS_FILE");
+    assert!(detail.reason().contains("chmod 600"));
     assert!(
         !detail
-            .diagnostic
+            .reason()
             .contains(&credentials.to_string_lossy().to_string())
     );
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -294,4 +294,185 @@ fn follows_symlink_and_refuses_fifo() {
             .success()
     );
     assert!(open(&fifo, Slot::Config).is_err());
+}
+
+#[test]
+fn settings_only_validates_credentials_without_content_open() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\n").unwrap();
+    std::fs::write(&credentials, "toy-value").unwrap();
+    let mut selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert!(std::fs::File::open(&credentials).is_err());
+    }
+    assert!(matches!(open_settings(&selection), Ok(Some(_))));
+    std::fs::remove_file(&credentials).unwrap();
+    std::fs::hard_link(&config, &credentials).unwrap();
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::InvalidConfig)
+    );
+    std::fs::remove_file(&credentials).unwrap();
+    selection.credentials_present = false;
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::CredentialsFile)
+    );
+    let error = open_settings(&selection).err().unwrap();
+    let detail = error.detail::<crate::FileDiagnostic>().unwrap();
+    assert_eq!(detail.source(), "option");
+    assert_eq!(detail.reason(), "not found");
+    std::fs::create_dir(&credentials).unwrap();
+    selection.credentials_present = true;
+    assert!(
+        matches!(open_settings(&selection), Err(error) if error.class() == crate::ErrorClass::CredentialsFile)
+    );
+    let error = open_settings(&selection).err().unwrap();
+    assert_eq!(
+        error.detail::<crate::FileDiagnostic>().unwrap().reason(),
+        "not a regular file"
+    );
+}
+
+#[test]
+fn settings_only_refuses_credentials_swapped_after_snapshot() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\nsecret=toy\n").unwrap();
+    std::fs::write(&credentials, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    let result = open_settings_with(&selection, || {
+        std::fs::remove_file(&credentials).unwrap();
+        std::fs::hard_link(&config, &credentials).unwrap();
+    });
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.slot() == crate::FileSlot::Credentials && detail.source() == "option" && detail.reason() == "changed during read"))
+    );
+}
+
+#[test]
+fn absent_credentials_cannot_appear_as_config_alias() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\nsecret=toy\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: false,
+        },
+        config_present: true,
+        credentials_present: false,
+        config_source: Some("option"),
+        credentials_source: Some("~/.greennode"),
+    };
+    let opens = std::cell::Cell::new(0);
+    let result = open_settings_guarded(
+        &selection,
+        || {
+            std::fs::hard_link(&config, &credentials).unwrap();
+        },
+        || None,
+        || opens.set(opens.get() + 1),
+    );
+    assert_eq!(opens.get(), 0);
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.reason() == "changed during read"))
+    );
+}
+
+#[test]
+fn cancelled_before_open_never_opens_config() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    use std::cell::Cell;
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    std::fs::write(&config, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config),
+            credentials: None,
+            config_named: true,
+            credentials_named: false,
+        },
+        config_present: true,
+        credentials_present: false,
+        config_source: Some("option"),
+        credentials_source: None,
+    };
+    let (ctx, cancel) = crate::RequestContext::new();
+    let opens = Cell::new(0);
+    let result = open_settings_guarded(
+        &selection,
+        || cancel.cancel(),
+        || ctx.check(&crate::SystemClock),
+        || opens.set(opens.get() + 1),
+    );
+    assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::Cancelled));
+    assert_eq!(opens.get(), 0);
+}
+
+#[test]
+fn changed_config_identity_has_safe_diagnostic() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\n").unwrap();
+    std::fs::write(&credentials, "[default]\n").unwrap();
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config.clone()),
+            credentials: Some(credentials.clone()),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    let result = open_settings_with(&selection, || {
+        std::fs::remove_file(&config).unwrap();
+        std::fs::hard_link(&credentials, &config).unwrap();
+    });
+    assert!(
+        matches!(result, Err(error) if error.class() == crate::ErrorClass::InvalidConfig && error.detail::<crate::FileDiagnostic>().is_some_and(|detail| detail.slot() == crate::FileSlot::Config && detail.source() == "option" && detail.reason() == "changed during read"))
+    );
 }

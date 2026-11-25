@@ -38,6 +38,7 @@ pub(super) struct Settings {
     pub file_read_only: Option<String>,
     pub output: String,
     pub section_present: bool,
+    pub profile_settings: std::collections::BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -94,6 +95,31 @@ pub(super) fn resolve(
     source: &dyn ConfigSource,
     policy: Policy,
 ) -> Result<Settings, SettingsError> {
+    resolve_checked(paths, config_file, options, source, policy, &|| None)
+}
+
+struct CheckedReader<'a> {
+    file: std::fs::File,
+    check: &'a dyn Fn() -> Option<crate::ContextEnd>,
+}
+
+impl std::io::Read for CheckedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.check)().is_some() {
+            return Err(std::io::ErrorKind::Other.into());
+        }
+        std::io::Read::read(&mut self.file, buffer)
+    }
+}
+
+pub(super) fn resolve_checked(
+    paths: &Selection,
+    config_file: Option<std::fs::File>,
+    options: &Options,
+    source: &dyn ConfigSource,
+    policy: Policy,
+    check: &dyn Fn() -> Option<crate::ContextEnd>,
+) -> Result<Settings, SettingsError> {
     use super::{Slot, ini};
     use std::ffi::OsStr;
     let mut read_only_source = preflight(options, source, policy)?;
@@ -130,7 +156,10 @@ pub(super) fn resolve(
         Some(_) if !paths.config_present => ini::Ini::default(),
         Some(_) => ini::parse(
             Slot::Config,
-            config_file.ok_or(SettingsError::InvalidConfig)?,
+            CheckedReader {
+                file: config_file.ok_or(SettingsError::InvalidConfig)?,
+                check,
+            },
         )
         .map_err(|diagnostic| SettingsError::Parse {
             mode: paths.mode,
@@ -192,6 +221,12 @@ pub(super) fn resolve(
         file_read_only: file_latch,
         output,
         section_present: section.is_some(),
+        profile_settings: section
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .filter(|(key, _)| !matches!(key.as_str(), "client_id" | "client_secret"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     })
 }
 
@@ -814,5 +849,26 @@ mod tests {
                     | "VNGCLOUD_READ_ONLY"
             ));
         }
+    }
+    #[test]
+    fn selected_section_preserves_only_safe_settings() {
+        let fixture = Fixture::new(
+            "[default]\nREGION=  RegionValue  \nclient_id=\nclient_secret=\n[profile other]\nother_key=other-value\n",
+        );
+        let settings = resolve(
+            &fixture.paths(),
+            &Options::default(),
+            &Source::default(),
+            Policy::Read,
+        )
+        .unwrap();
+        assert_eq!(
+            settings.profile_settings.get("region").map(String::as_str),
+            Some("RegionValue")
+        );
+        assert!(!settings.profile_settings.contains_key("client_id"));
+        assert!(!settings.profile_settings.contains_key("client_secret"));
+        assert!(!settings.profile_settings.contains_key("other_key"));
+        assert!(!format!("{settings:?}").contains("RegionValue"));
     }
 }
