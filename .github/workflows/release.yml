@@ -255,7 +255,7 @@ jobs:
           export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
           cargo package --list --locked --registry crates-io -p greennode-sdk
           cargo package --list --locked --registry crates-io -p greennode
-          cargo publish --workspace --dry-run --locked --registry crates-io
+          cargo +1.100.0 publish --workspace --dry-run --no-verify --locked --registry crates-io
           python3 -I - "$root/build/package/tmp-crate" "$stage" "$TAG" <<'PYTHON'
           import pathlib, shutil, sys
           source, stage, tag = map(pathlib.Path, sys.argv[1:])
@@ -274,6 +274,72 @@ jobs:
           path: ${{ runner.temp }}/staged-crates/*.crate
           if-no-files-found: error
           retention-days: 90
+
+  verify-packages:
+    needs: [verify, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+      - name: Install pinned Rust
+        run: |
+          version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
+          test "$version" = 1.100.0
+          rustup toolchain install "$version" --profile minimal
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
+      - name: Verify workspace packages
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          root="$(mktemp -d)"
+          test -z "$(git ls-files --stage | grep '^120000 ' || true)"
+          if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
+            exit 1
+          fi
+          export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
+          cargo +1.100.0 publish --workspace --dry-run --locked --registry crates-io
+          python3 -I - "$root/build/package/tmp-crate" "$RUNNER_TEMP/verified-hashes.json" "$TAG" <<'PYTHON'
+          import hashlib, json, pathlib, sys
+          source = pathlib.Path(sys.argv[1])
+          expected = {f'{name}-{sys.argv[3][1:]}.crate' for name in ('greennode-sdk', 'greennode')}
+          assert {p.name for p in source.iterdir() if p.name.endswith('.crate')} == expected
+          hashes = {}
+          for name in expected:
+              path = source / name
+              assert path.is_file() and not path.is_symlink()
+              hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+          pathlib.Path(sys.argv[2]).write_text(json.dumps(hashes))
+          PYTHON
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: staged-crates
+          path: ${{ runner.temp }}/staged-crates
+      - name: Compare staged archives
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 -I - "$RUNNER_TEMP/staged-crates" "$RUNNER_TEMP/verified-hashes.json" "$TAG" <<'PYTHON'
+          import hashlib, json, pathlib, sys
+          source = pathlib.Path(sys.argv[1])
+          expected = {f'{name}-{sys.argv[3][1:]}.crate' for name in ('greennode-sdk', 'greennode')}
+          assert {p.name for p in source.iterdir()} == expected
+          hashes = json.loads(pathlib.Path(sys.argv[2]).read_text())
+          assert set(hashes) == expected
+          for name in expected:
+              path = source / name
+              assert path.is_file() and not path.is_symlink()
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
+          PYTHON
 
   receipt:
     needs: [verify, packages]
@@ -336,65 +402,8 @@ jobs:
           $actual = & .\extracted\greennode.exe --version
           if ($actual -ne "greennode $($env:TAG.Substring(1)) windows/amd64") { exit 1 }
 
-  notes-data:
-    needs: verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - name: Fetch release note data
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          mkdir "$RUNNER_TEMP/notes-data"
-          gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/notes-data/body.txt"
-          compare="$(grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" "$RUNNER_TEMP/notes-data/body.txt" || true)"
-          if [ -n "$compare" ]; then
-            gh api "repos/$REPOSITORY/compare/${compare##*/}" > "$RUNNER_TEMP/notes-data/compare.json"
-          else
-            printf '{}\n' > "$RUNNER_TEMP/notes-data/compare.json"
-          fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-notes-data
-          path: ${{ runner.temp }}/notes-data/
-          if-no-files-found: error
-          retention-days: 90
-
-  notes:
-    needs: [verify, notes-data]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ needs.verify.outputs.commit }}
-      - name: Verify checkout
-        shell: bash
-        env:
-          COMMIT: ${{ needs.verify.outputs.commit }}
-        run: test "$(git rev-parse HEAD)" = "$COMMIT"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-notes-data
-          path: ${{ runner.temp }}/notes-data
-      - name: Generate release notes without credentials
-        run: scripts/release-notes.sh "$RUNNER_TEMP/notes-data/body.txt" "$RUNNER_TEMP/notes-data/compare.json" > notes.md
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-notes
-          path: notes.md
-          if-no-files-found: error
-          retention-days: 90
-
   release:
-    needs: [verify, build, inventory, receipt, smoke-windows, notes]
+    needs: [verify, build, inventory, receipt, verify-packages, smoke-windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -439,10 +448,30 @@ jobs:
               shutil.copyfile(checksum, pathlib.Path('assets') / checksum.name)
           shutil.copyfile(root / 'crate-checksums' / 'crate-checksums.json', 'assets/crate-checksums.json')
           PYTHON
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          body="$(gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body)"
+          compare="$(printf '%s\n' "$body" | grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" || true)"
+          {
+            printf "## What's Changed\n"
+            if [ -z "$compare" ]; then
+              printf '\nFirst release.\n'
+            else
+              gh api "repos/$REPOSITORY/compare/${compare##*/}" | jq -r '
+                [.commits[] | select(.parents | length == 1)]
+                | .[]
+                | "* \(.commit.message | split("\n")[0]) (\(.sha[0:7]))"'
+              printf '\n**Full Changelog**: %s\n' "$compare"
+            fi
+          } > notes.md
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
-          body_path: artifacts/release-notes/notes.md
+          body_path: notes.md
           fail_on_unmatched_files: true
           files: assets/*
       - name: Publish draft

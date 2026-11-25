@@ -1,6 +1,8 @@
 import json
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,33 +33,37 @@ def validate(text):
     verify = sections["verify"]
     for required in ('fetch-depth: 0', 'persist-credentials: false', 'git merge-base --is-ancestor "$commit" origin/master', 'refs/tags/$TAG^{commit}', '$EVENT_SHA^{commit}', 'commit=$commit'):
         assert required in verify, f"verify {required}"
-    for name, section in sections.items():
-        job = parsed_jobs[name]
+    for name, job in parsed_jobs.items():
+        permissions = job.get('permissions', workflow['permissions'])
+        assert permissions == {'contents': 'write' if name == 'release' else 'read'}, f"{name} permissions"
+        assert 'environment' not in job, f"{name} environment"
+        for step in job.get('steps', []):
+            command = step.get('run', '')
+            assert isinstance(command, str), f"{name} run command"
+            if re.search(r'\bcargo\b|\bmake\b|__command-inventory|scripts/|target/.*greennode|extracted.*greennode|(?:^|[\s;|])\./|\bgreennode(?:\.exe)?(?:\s|$)', command, re.I):
+                env = {**workflow.get('env', {}), **job.get('env', {}), **step.get('env', {})}
+                assert not any(re.search(r'token|secret|password|credential', str(k), re.I) or re.search(r'github\.token|secrets\.', str(v), re.I) for k, v in env.items()), f"{name} token on tagged code"
+        assert name in sections, f"{name} section"
+        section = sections[name]
         if name != "verify":
             needs = job.get('needs', [])
             assert 'verify' in ([needs] if isinstance(needs, str) else needs), f"{name} needs verify"
-            if name != 'notes-data':
-                assert 'ref: ${{ needs.verify.outputs.commit }}' in section, f"{name} checkout ref"
-                assert 'test "$(git rev-parse HEAD)" = "$COMMIT"' in section, f"{name} checkout validation"
-        permissions = job.get('permissions', workflow['permissions'])
-        assert permissions == {'contents': 'write' if name in ('release', 'notes-data') else 'read'}, f"{name} permissions"
-        assert 'environment' not in job, f"{name} environment"
-        if name in ('release', 'notes-data'):
+            assert 'ref: ${{ needs.verify.outputs.commit }}' in section, f"{name} checkout ref"
+            assert 'test "$(git rev-parse HEAD)" = "$COMMIT"' in section, f"{name} checkout validation"
+        if name == 'release':
             assert all(not re.search(r'(?<![\w/])(?:\./|scripts/)', step.get('run', '')) and not step.get('uses', '').startswith('./') for step in job['steps']), f"{name} repository script"
-        steps = re.split(r"(?m)^      - ", section)[1:]
-        for step in steps:
-            if any(command in step for command in ('cargo ', '__command-inventory', 'scripts/release-notes.sh', 'scripts/check-crate-release.py')):
-                assert 'GH_TOKEN:' not in step and 'github.token' not in step, f"{name} token on tagged code"
     assert sections['inventory'].index('name: Find preceding release') < sections['inventory'].index('name: Check shipped commands'), "inventory token before tagged code"
-    assert 'scripts/release-notes.sh' in sections['notes'] and 'release-notes-data' in sections['notes'], "notes data"
-    assert 'actions/checkout@' not in sections['notes-data'], "notes data checkout"
+    assert 'generate-notes' in sections['release'] and 'First release.' in sections['release'] and '.commits[]' in sections['release'], "inline release notes"
     assert 'name: staged-crates' in sections['packages'] and 'name: staged-crates' in sections['receipt'], "staged crates artifact"
-    assert 'packages' in parsed_jobs['receipt']['needs'], "receipt needs packaging"
+    assert 'packages' in parsed_jobs['receipt']['needs'] and 'packages' in parsed_jobs['verify-packages']['needs'], "receipt needs packaging"
     assert any(step.get('with', {}).get('path') == '${{ runner.temp }}/staged-crates/*.crate' for step in parsed_jobs['packages']['steps']), "only staged archives uploaded"
     assert 'cargo ' not in sections['receipt'] and 'scripts/check-crate-release.py receipt' in sections['receipt'], "clean receipt job"
     assert 'scripts/check-crate-release.py receipt' not in sections['packages'], "untrusted packaging runner"
     assert 'scripts/release-notes.sh' not in sections['release'], "release executes tagged script"
-    assert any(step.get('with', {}).get('name') == 'release-notes' for step in parsed_jobs['notes']['steps']) and 'artifacts/release-notes/notes.md' in sections['release'], "notes artifact"
+    assert 'verify-packages' in parsed_jobs['release']['needs'], "verified archives required"
+    assert 'cargo +1.100.0 publish --workspace --dry-run --no-verify --locked --registry crates-io' in sections['packages'], "unbuilt staging"
+    assert 'cargo +1.100.0 publish --workspace --dry-run --locked --registry crates-io' in sections['verify-packages'], "verified packaging"
+    assert 'hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]' in sections['verify-packages'], "verified archive hashes"
     assert 'needs.inventory.outputs.previous' in sections['release'], "previous release identity"
     assert 'test "$previous" = "$EXPECTED_PREVIOUS"' in sections['release'], "previous release recheck"
     assert 'git/ref/tags/' in sections['release'] and 'test "$sha" = "$COMMIT"' in sections['release'], "live tag recheck"
@@ -77,6 +83,43 @@ def validate(text):
 
 
 class WorkflowTest(unittest.TestCase):
+    def test_release_notes_offline(self):
+        workflow = parse_workflow(WORKFLOW.read_text())
+        step = next(s for s in workflow['jobs']['release']['steps'] if s.get('name') == 'Generate release notes')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('jq', 'grep'):
+                executable = shutil.which(name)
+                self.assertIsNotNone(executable)
+                (root / name).symlink_to(executable)
+            gh = root / 'gh'
+            gh.write_text('#!/bin/sh\ncase "$2" in */generate-notes) printf "%s\\n" "$BODY";; *) printf "%s\\n" "$COMPARISON";; esac\n')
+            gh.chmod(0o755)
+            url = 'https://github.com/dannyota/greennode/compare/v0.1.0...v0.2.0'
+            comparison = {'commits': [{'parents': [{}], 'sha': '123456789', 'commit': {'message': 'Fix\nbody'}}, {'parents': [{}, {}], 'sha': 'abcdef123', 'commit': {'message': 'Merge'}}]}
+            for body, expected in [('', "## What's Changed\n\nFirst release.\n"), (url, f"## What's Changed\n* Fix (1234567)\n\n**Full Changelog**: {url}\n")]:
+                env = {'PATH': directory, 'TAG': 'v0.2.0', 'REPOSITORY': 'dannyota/greennode', 'BODY': body, 'COMPARISON': json.dumps(comparison)}
+                result = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', step['run']], cwd=root, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((root / 'notes.md').read_text(), expected)
+
+    def test_ci_installs_before_release_checks(self):
+        ci = WORKFLOW.parent / 'ci.yml'
+        steps = parse_workflow(ci.read_text())['jobs']['gates']['steps']
+        install = next(i for i, step in enumerate(steps) if 'npm ci --ignore-scripts' in step.get('run', ''))
+        checks = next(i for i, step in enumerate(steps) if step.get('run') == 'make release-checks')
+        self.assertLess(install, checks)
+
+    def test_job_token_rejected(self):
+        text = WORKFLOW.read_text().replace('  packages:\n', '  packages:\n    env:\n      GH_TOKEN: ${{ github.token }}\n', 1)
+        with self.assertRaisesRegex(AssertionError, 'token'):
+            validate(text)
+
+    def test_extra_write_job_rejected(self):
+        text = WORKFLOW.read_text().replace('  packages:\n', '  extra:\n    permissions:\n      contents: write\n    steps: []\n  packages:\n', 1)
+        with self.assertRaisesRegex(AssertionError, 'permissions'):
+            validate(text)
+
     def test_release(self):
         validate(WORKFLOW.read_text())
 
@@ -120,8 +163,8 @@ class WorkflowTest(unittest.TestCase):
             ('ref: ${{ needs.verify.outputs.commit }}', 'ref: ${{ github.ref }}'),
             ('test "$(git rev-parse HEAD)" = "$COMMIT"', 'true'),
             ('      - name: Check shipped commands\n        env:\n', '      - name: Check shipped commands\n        env:\n          GH_TOKEN: ${{ github.token }}\n'),
-            ('name: release-notes\n', 'name: other-notes\n'),
-            ('artifacts/release-notes/notes.md', 'notes.md'),
+            ('generate-notes', 'other-endpoint'),
+            ('First release.', 'No notes.'),
             ('needs.inventory.outputs.previous', 'github.ref'),
             ('test "$previous" = "$EXPECTED_PREVIOUS"', 'true'),
             ('git/ref/tags/', 'git/refs/heads/'),
@@ -133,8 +176,8 @@ class WorkflowTest(unittest.TestCase):
             ('shipped "$candidate"', 'shipped /dev/null'),
             ('needs: [verify, packages]', 'needs: [verify, checks]'),
             ('path: ${{ runner.temp }}/staged-crates/*.crate', 'path: ${{ runner.temp }}/staged-crates/'),
-            ('run: scripts/release-notes.sh', 'run: scripts/other.sh'),
-            ('mkdir "$RUNNER_TEMP/notes-data"', 'scripts/untrusted.sh\n          mkdir "$RUNNER_TEMP/notes-data"'),
+            ('--dry-run --no-verify --locked', '--dry-run --locked'),
+            ('hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]', 'True'),
             ('mkdir assets', 'scripts/untrusted.sh\n          mkdir assets'),
         )
         for old, new in cases:

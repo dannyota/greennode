@@ -17,7 +17,7 @@ The tool builds one command, `greennode version`, and the SDK holds its shared c
 |What is the SDK's public interface, and how may it send requests?|[SDK design](docs/design/sdk.md) and [request policies](docs/design/sdk-requests.md)|
 |How are commands declared, guarded, run, and printed?|[CLI design](docs/design/cli.md) and [CLI output](docs/design/cli-output.md)|
 |What must hold for credentials, requests, and writes?|[Security design](docs/design/security.md)|
-|How does a version reach crates.io?|[Release design](docs/design/release.md)|
+|How does a version reach crates.io?|[Release design](docs/design/release.md) and [first release](docs/design/release-first.md)|
 |Why was a choice made?|[ADRs](docs/adr/README.md)|
 |What work remains, in what order?|[Plans](docs/plans/)|
 |How should documents and comments be written?|[Engineering standard](docs/standards/engineering.md)|
