@@ -95,10 +95,14 @@ pub(super) fn parse(expression: &str) -> Result<Node, SyntaxError> {
         tokens,
         index: 0,
         end: expression.len(),
+        recovered: None,
     };
     let result = parser.expression(0, 0)?;
     if parser.current() != Kind::Eof {
         return Err(parser.error());
+    }
+    if let Some(error) = parser.recovered {
+        return Err(error);
     }
     Ok(result)
 }
@@ -107,6 +111,7 @@ struct Parser {
     tokens: Vec<Token>,
     index: usize,
     end: usize,
+    recovered: Option<SyntaxError>,
 }
 
 impl Parser {
@@ -236,7 +241,10 @@ impl Parser {
                     let right = match self.index_expression() {
                         Ok(right) => right,
                         Err(error) if self.current() == Kind::Eof => return Err(error),
-                        Err(_) => return self.make(NodeKind::Empty, NodeValue::None, vec![]),
+                        Err(error) => {
+                            self.recovered.get_or_insert(error);
+                            return self.make(NodeKind::Empty, NodeValue::None, vec![]);
+                        }
                     };
                     let left = self.identity()?;
                     self.project_slice(left, right, depth)
@@ -632,6 +640,47 @@ mod tests {
         assert_eq!(parse("[1.]").unwrap_err().offset, 3);
         assert!(parse("[1").is_err());
         assert!(parse("[1]").is_ok());
+    }
+
+    #[test]
+    fn recovered_top_level_index_is_rejected() {
+        assert_eq!(
+            super::super::compile("[1.foo").err().map(|e| e.offset),
+            Some(2)
+        );
+        assert!(super::super::compile("[1].foo").is_ok());
+    }
+
+    #[test]
+    fn recovered_function_argument_is_rejected() {
+        assert_eq!(
+            super::super::compile("length([1)").err().map(|e| e.offset),
+            Some(9)
+        );
+        assert!(super::super::compile("length([1])").is_ok());
+    }
+
+    #[test]
+    fn recovered_deep_index_is_rejected() {
+        assert_eq!(
+            super::super::compile("a | [[1.foo]")
+                .err()
+                .map(|e| e.offset),
+            Some(7)
+        );
+        assert!(super::super::compile("a | [[1].foo]").is_ok());
+    }
+
+    #[test]
+    fn unterminated_index_is_rejected() {
+        assert_eq!(super::super::compile("[1").err().map(|e| e.offset), Some(2));
+        assert!(super::super::compile("[1]").is_ok());
+    }
+
+    #[test]
+    fn unterminated_list_is_rejected() {
+        assert!(super::super::compile("a | [b[1]").is_err());
+        assert!(super::super::compile("a | [b[1]]").is_ok());
     }
 
     #[test]
