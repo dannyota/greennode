@@ -24,6 +24,7 @@ pub(super) enum SettingsError {
     ReadOnly(&'static str),
     Parse {
         mode: super::mode::Mode,
+        source: Option<&'static str>,
         diagnostic: String,
     },
 }
@@ -132,6 +133,7 @@ pub(super) fn resolve(
         )
         .map_err(|diagnostic| SettingsError::Parse {
             mode: paths.mode,
+            source: paths.config_source,
             diagnostic,
         })?,
     };
@@ -242,6 +244,8 @@ mod tests {
                 },
                 config_present: true,
                 credentials_present: false,
+                config_source: Some("~/.greennode"),
+                credentials_source: Some("~/.greennode"),
             }
         }
     }
@@ -338,6 +342,58 @@ mod tests {
     }
 
     #[test]
+    fn parse_error_reports_default_or_override_source_without_path() {
+        use crate::config::mode::{probe, select};
+        let fixture = Fixture::new("[default]\nregion=x\nmalformed\n");
+        let home_name = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let home = fixture.0.to_str().unwrap();
+        std::fs::create_dir(fixture.0.join(".greennode")).unwrap();
+        std::fs::write(
+            fixture.0.join(".greennode/config"),
+            "[default]\nregion=x\nmalformed\n",
+        )
+        .unwrap();
+        let default_source = Source::default().with(home_name, home);
+        let default_paths = select(None, None, &default_source, Some(&fixture.0), probe).unwrap();
+        let default_error = resolve(
+            &default_paths,
+            &Options::default(),
+            &default_source,
+            Policy::Read,
+        )
+        .err()
+        .unwrap();
+        let override_path = fixture.0.join("config");
+        let override_source = Source::default()
+            .with(home_name, home)
+            .with("GREENNODE_CONFIG_FILE", override_path.to_str().unwrap());
+        let override_paths = select(None, None, &override_source, Some(&fixture.0), probe).unwrap();
+        let override_error = resolve(
+            &override_paths,
+            &Options::default(),
+            &override_source,
+            Policy::Read,
+        )
+        .err()
+        .unwrap();
+        assert!(matches!(
+            &default_error,
+            SettingsError::Parse {
+                source: Some("~/.greennode"),
+                ..
+            }
+        ));
+        assert!(matches!(
+            &override_error,
+            SettingsError::Parse {
+                source: Some("GREENNODE_CONFIG_FILE"),
+                ..
+            }
+        ));
+        assert!(!format!("{default_error:?} {override_error:?}").contains(home));
+    }
+
+    #[test]
     fn malformed_config_keeps_safe_diagnostic() {
         let fixture = Fixture::new("[default]\nregion=one\ncanary without equals\n");
         let error = resolve(
@@ -350,7 +406,9 @@ mod tests {
         .unwrap();
         assert!(matches!(&error, SettingsError::Parse { .. }));
         match error {
-            SettingsError::Parse { mode, diagnostic } => {
+            SettingsError::Parse {
+                mode, diagnostic, ..
+            } => {
                 assert_eq!(mode, Mode::Greennode);
                 assert!(diagnostic.starts_with("config:3:"));
                 assert!(!diagnostic.contains("canary"));

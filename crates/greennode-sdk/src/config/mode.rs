@@ -35,6 +35,8 @@ pub(super) struct Selection {
     pub paths: Paths,
     pub config_present: bool,
     pub credentials_present: bool,
+    pub config_source: Option<&'static str>,
+    pub credentials_source: Option<&'static str>,
 }
 
 impl std::ops::Deref for Selection {
@@ -195,6 +197,7 @@ pub(super) fn select(
     };
     let mut chosen = [None, None];
     let mut named = [false, false];
+    let mut labels = [None, None];
     for i in 0..2 {
         let explicit = if mode == Mode::Greennode {
             options[i].clone().or_else(|| green[i].clone())
@@ -209,6 +212,19 @@ pub(super) fn select(
                 vd[i].clone()
             }
         });
+        labels[i] = if chosen[i].is_none() {
+            None
+        } else if mode == Mode::Greennode && options[i].is_some() {
+            Some("option")
+        } else if mode == Mode::Greennode && green[i].is_some() {
+            Some(["GREENNODE_CONFIG_FILE", "GREENNODE_SHARED_CREDENTIALS_FILE"][i])
+        } else if mode == Mode::Legacy && legacy[i].is_some() {
+            Some(["VNGCLOUD_CONFIG_FILE", "VNGCLOUD_SHARED_CREDENTIALS_FILE"][i])
+        } else if mode == Mode::Greennode {
+            Some("~/.greennode")
+        } else {
+            Some("~/.vngcloud")
+        };
         if let Some(path) = &mut chosen[i]
             && !path.is_absolute()
         {
@@ -279,6 +295,8 @@ pub(super) fn select(
         },
         config_present: states[0] == Presence::Present,
         credentials_present: states[1] == Presence::Present,
+        config_source: labels[0],
+        credentials_source: labels[1],
     })
 }
 
@@ -299,6 +317,97 @@ mod tests {
         {
             PathBuf::from(path)
         }
+    }
+
+    #[test]
+    fn selected_sources_name_both_slots() {
+        let config = absolute("/chosen/config");
+        let credentials = absolute("/chosen/credentials");
+        let mut source = Source::default();
+        source.0.insert(
+            "GREENNODE_CONFIG_FILE".into(),
+            config.clone().into_os_string(),
+        );
+        source.0.insert(
+            "GREENNODE_SHARED_CREDENTIALS_FILE".into(),
+            credentials.clone().into_os_string(),
+        );
+        let vars = select(
+            None,
+            None,
+            &source,
+            Some(absolute("/work").as_path()),
+            |_| Presence::Present,
+        )
+        .unwrap();
+        assert_eq!(vars.config_source, Some("GREENNODE_CONFIG_FILE"));
+        assert_eq!(
+            vars.credentials_source,
+            Some("GREENNODE_SHARED_CREDENTIALS_FILE")
+        );
+        let options = select(
+            Some(&config),
+            Some(&credentials),
+            &source,
+            Some(absolute("/work").as_path()),
+            |_| Presence::Present,
+        )
+        .unwrap();
+        assert_eq!(options.config_source, Some("option"));
+        assert_eq!(options.credentials_source, Some("option"));
+        let mut source = Source::default();
+        source
+            .0
+            .insert("VNGCLOUD_CONFIG_FILE".into(), config.into_os_string());
+        source.0.insert(
+            "VNGCLOUD_SHARED_CREDENTIALS_FILE".into(),
+            credentials.into_os_string(),
+        );
+        let legacy = select(
+            None,
+            None,
+            &source,
+            Some(absolute("/work").as_path()),
+            |path| {
+                if path.starts_with(absolute("/chosen")) {
+                    Presence::Present
+                } else {
+                    Presence::Absent
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(legacy.config_source, Some("VNGCLOUD_CONFIG_FILE"));
+        assert_eq!(
+            legacy.credentials_source,
+            Some("VNGCLOUD_SHARED_CREDENTIALS_FILE")
+        );
+        let legacy_defaults = select(
+            None,
+            None,
+            &Source::default(),
+            Some(absolute("/work").as_path()),
+            |path| {
+                if path.ends_with(".vngcloud/config") {
+                    Presence::Present
+                } else {
+                    Presence::Absent
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(legacy_defaults.config_source, Some("~/.vngcloud"));
+        assert_eq!(legacy_defaults.credentials_source, Some("~/.vngcloud"));
+        let defaults = select(
+            None,
+            None,
+            &Source::default(),
+            Some(absolute("/work").as_path()),
+            |_| Presence::Absent,
+        )
+        .unwrap();
+        assert_eq!(defaults.config_source, Some("~/.greennode"));
+        assert_eq!(defaults.credentials_source, Some("~/.greennode"));
     }
 
     #[test]
