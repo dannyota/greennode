@@ -19,8 +19,19 @@ pub enum Response {
         body: Vec<u8>,
     },
     Raw(Vec<u8>),
+    RawClose(Vec<u8>),
     Close,
     Stall(oneshot::Sender<()>, usize),
+    ObserveStall {
+        head: Vec<u8>,
+        sent: oneshot::Sender<()>,
+        eof: oneshot::Sender<bool>,
+    },
+    Fragment {
+        first: oneshot::Sender<()>,
+        proceed: oneshot::Receiver<()>,
+        last: oneshot::Sender<bool>,
+    },
 }
 
 pub struct Server {
@@ -101,11 +112,32 @@ impl Server {
                                     let response = responses.lock().unwrap().pop_front();
                                     let Some(response) = response else { return; };
                                     let bytes = match response {
+                                        Response::Fragment { first, proceed, last } => {
+                                            if stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\nTrailer: X-Trailer\r\n\r\n3\r\nabc\r\n").await.is_err() || stream.flush().await.is_err() { return; }
+                                            let _ = first.send(());
+                                            if proceed.await.is_err() { return; }
+                                            let written = stream.write_all(b"1\r\nd\r\n0\r\nX-Trailer: done\r\n\r\n").await.is_ok() && stream.flush().await.is_ok();
+                                            let _ = last.send(written);
+                                            return;
+                                        }
+                                        Response::ObserveStall { head, sent, eof } => {
+                                            if stream.write_all(&head).await.is_err() || stream.flush().await.is_err() { return; }
+                                            let _ = sent.send(());
+                                            let mut byte = [0];
+                                            let result = stream.read(&mut byte).await;
+                                            let _ = eof.send(matches!(result, Ok(0)) || matches!(result, Err(ref e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset)));
+                                            return;
+                                        }
                                         Response::Close => return,
                                         Response::Stall(started, length) => {
                                             if stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n").as_bytes()).await.is_err() || stream.flush().await.is_err() { return; }
                                             let _ = started.send(());
                                             std::future::pending::<()>().await;
+                                            return;
+                                        }
+                                        Response::RawClose(bytes) => {
+                                            let _ = stream.write_all(&bytes).await;
+                                            let _ = stream.flush().await;
                                             return;
                                         }
                                         Response::Raw(bytes) => bytes,
