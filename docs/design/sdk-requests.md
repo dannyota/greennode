@@ -98,7 +98,25 @@ only where the operation contract requires it. Close or drop the connection on
 early refusal. For login and product allow identity or gzip; apply the decoded
 limit before JSON or other parsers, and limit encoded bytes too (decoded cap
 plus 64 KiB). S3 accepts no automatic decoding or request URL normalization. Do
-not use a JSON walker that rewrites exact integers to floats.
+not use a JSON walker that rewrites exact integers to floats. The cap bounds the
+payload the SDK retains, not wire bytes: hyper reads into spare buffer capacity
+that can grow beyond `http1_max_buf_size`, handles chunk framing separately, and
+may drain a short body when a response is dropped. Refuse before reading when
+hyper's validated body size exceeds the cap; when `Transfer-Encoding` is present
+hyper ignores `Content-Length`. HEAD, 204 and 304 responses are bodyless
+whatever length they declare. A refused connection is poisoned so the pool never
+checks it out again; one already idle stays open until eviction, and hyper may
+return a connection at a clean message boundary to the pool before the refusal
+runs.
+
+`hyper-util`'s `client-legacy` always emits `tracing` events with destinations
+and socket addresses, and logs a whole URI on requests without scheme or
+authority and the path and query of `CONNECT`; the shared send step refuses
+those requests first. hyper's `tracing` and rustls's `logging` features are off;
+an embedding build that enables them can see header names, sizes and formatted
+errors. The SDK puts no credential in a URI and the CLI installs no subscriber.
+An embedding application should filter the `hyper`, `hyper_util`, `hyper_rustls`
+and `rustls` targets.
 
 ### Private exchange
 
