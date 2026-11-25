@@ -1,7 +1,9 @@
 # Usage: python3 -I scripts/check-crate-publish-credential.py --cargo-plugin
 import json
 import os
+import pwd
 import re
+import stat
 import sys
 import tomllib
 from pathlib import Path
@@ -60,9 +62,20 @@ def token(env):
         value = env["CARGO_REGISTRY_TOKEN"]
     else:
         home = env.get("CARGO_HOME")
-        if not home:
-            raise ValueError("missing cargo home")
-        credentials = tomllib.loads(bounded(Path(home) / "credentials.toml").decode("utf-8"))
+        if not home or home != env.get("GREENNODE_RELEASE_CARGO_HOME") or not env.get("HOME"):
+            raise ValueError("invalid cargo home")
+        ordinary_homes = {Path(env["HOME"]) / ".cargo", Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cargo"}
+        if Path(home).resolve() in {path.resolve() for path in ordinary_homes}:
+            raise ValueError("invalid cargo home")
+        fd = os.open(Path(home) / "credentials.toml", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+                raise ValueError("invalid credentials file")
+            data = stream.read(LIMIT + 1)
+        if len(data) > LIMIT:
+            raise ValueError("invalid credentials file")
+        credentials = tomllib.loads(data.decode("utf-8"))
         value = credentials["registry"]["token"]
     if not isinstance(value, str) or not value:
         raise ValueError("missing token")
@@ -70,12 +83,30 @@ def token(env):
 
 
 def response(request, env):
-    if not isinstance(request, dict) or request.get("v") != 1 or request.get("kind") != "get":
+    if (not isinstance(request, dict) or type(request.get("v")) is not int
+            or request.get("v") != 1 or request.get("kind") != "get"):
         raise ValueError("unsupported request")
-    registry = request.get("registry")
-    if not isinstance(registry, dict) or registry.get("index-url") not in INDEXES:
-        raise ValueError("unsupported registry")
     operation = request.get("operation")
+    required = {"v", "kind", "operation", "registry"}
+    if operation == "publish":
+        required |= {"name", "vers", "cksum"}
+        if any(not isinstance(request.get(key), str) for key in ("name", "vers", "cksum")):
+            raise ValueError("invalid publish request")
+    elif operation != "read":
+        raise ValueError("unsupported operation")
+    if not required <= request.keys() or not request.keys() <= required | {"args"}:
+        raise ValueError("invalid request fields")
+    if "args" in request and (not isinstance(request["args"], list)
+                              or not all(isinstance(value, str) for value in request["args"])):
+        raise ValueError("invalid request args")
+    registry = request.get("registry")
+    if (not isinstance(registry, dict) or not {"index-url"} <= registry.keys()
+            or not registry.keys() <= {"index-url", "name", "headers"}
+            or registry.get("index-url") not in INDEXES
+            or ("name" in registry and not isinstance(registry["name"], str))
+            or ("headers" in registry and (not isinstance(registry["headers"], list)
+                or not all(isinstance(value, str) for value in registry["headers"])) )):
+        raise ValueError("unsupported registry")
     if operation == "publish":
         crates = receipt(env["GREENNODE_RELEASE_RECEIPT"])
         if not any(request.get("name") == crate["name"] and request.get("vers") == crate["version"]

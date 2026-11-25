@@ -2,7 +2,7 @@
 
 
 import hashlib
-import io
+import http.client
 import json
 import re
 import sys
@@ -12,6 +12,7 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from pathlib import Path, PurePosixPath
 
 
@@ -28,23 +29,52 @@ def archive_data(name, version, data):
     prefix = f"{name}-{version}"
     required = {f"{prefix}/Cargo.toml", f"{prefix}/Cargo.lock"}
     found = {}
+    seen = set()
     try:
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r|gz") as archive:
-            for count, member in enumerate(archive, 1):
-                path = PurePosixPath(member.name)
-                if (count > 10000 or member.size > 16 * 1024 * 1024 or member.size < 0
-                        or path.is_absolute() or ".." in path.parts or not path.parts
-                        or path.parts[0] != prefix or not (member.isfile() or member.isdir())):
-                    raise GateError(f"{name}: unsafe archive member")
-                if member.name in required:
-                    if member.name in found or not member.isfile():
-                        raise GateError(f"{name}: invalid archive metadata")
-                    found[member.name] = archive.extractfile(member).read()
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        raw = inflater.decompress(data, 50 * 1024 * 1024 + 1)
+        if len(raw) > 50 * 1024 * 1024 or not inflater.eof or inflater.unused_data or inflater.unconsumed_tail:
+            raise GateError(f"{name}: invalid gzip framing")
+        if len(raw) % 512:
+            raise GateError(f"{name}: invalid tar framing")
+        offset = 0
+        count = 0
+        ended = False
+        while offset + 512 <= len(raw):
+            header = raw[offset:offset + 512]
+            if header == bytes(512):
+                if offset + 1024 > len(raw) or any(raw[offset:]):
+                    raise GateError(f"{name}: invalid tar framing")
+                ended = True
+                break
+            if header[156:157] not in (b"0", b"\0", b"5"):
+                raise GateError(f"{name}: unsupported archive member")
+            member = tarfile.TarInfo.frombuf(header, "utf-8", "strict")
+            count += 1
+            path = PurePosixPath(member.name)
+            canonical = path.as_posix()
+            if (count > 10000 or member.size > 16 * 1024 * 1024 or member.size < 0
+                    or path.is_absolute() or ".." in path.parts or not path.parts
+                    or path.parts[0] != prefix or canonical in seen or member.linkname
+                    or (len(path.parts) == 1 and not member.isdir())):
+                raise GateError(f"{name}: unsafe archive member")
+            seen.add(canonical)
+            start = offset + 512
+            end = start + member.size
+            offset = start + ((member.size + 511) // 512) * 512
+            if end > len(raw) or offset > len(raw) or (member.isdir() and member.size):
+                raise GateError(f"{name}: invalid tar framing")
+            if canonical in required:
+                if not member.isfile():
+                    raise GateError(f"{name}: invalid archive metadata")
+                found[canonical] = raw[start:end]
+        if not ended:
+            raise GateError(f"{name}: invalid tar framing")
         if set(found) != required:
             raise GateError(f"{name}: missing archive metadata")
         return (tomllib.loads(found[f"{prefix}/Cargo.toml"].decode("utf-8")),
                 tomllib.loads(found[f"{prefix}/Cargo.lock"].decode("utf-8")))
-    except (tarfile.TarError, UnicodeError, OSError, EOFError, tomllib.TOMLDecodeError) as error:
+    except (tarfile.TarError, UnicodeError, OSError, EOFError, tomllib.TOMLDecodeError, zlib.error) as error:
         raise GateError(f"{name}: invalid archive") from error
 
 
@@ -87,8 +117,10 @@ def receipt(tag, staged, target, commit, toolchain):
             if not isinstance(packages, list):
                 raise GateError("greennode: invalid SDK lockfile")
             matching = [p for p in packages if isinstance(p, dict) and p.get("name") == "greennode-sdk"]
-            if len(matching) != 1 or matching[0].get("version") != version or matching[0].get("checksum") != sdk_hash:
-                raise GateError("greennode: invalid SDK lockfile checksum")
+            if (len(matching) != 1 or matching[0].get("version") != version
+                    or matching[0].get("checksum") != sdk_hash
+                    or matching[0].get("source") != "registry+https://github.com/rust-lang/crates.io-index"):
+                raise GateError("greennode: invalid SDK lockfile checksum or source")
         records.append({"name": name, "version": version, "filename": filename, "sha256": digest})
     result = {"tag": tag, "commit": commit, "toolchain": toolchain, "crates": records}
     try:
@@ -103,18 +135,42 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch_url(url):
-    if urllib.parse.urlsplit(url).scheme != "https":
+def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None):
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" and not (allow_loopback and parsed.scheme == "http" and parsed.hostname == "127.0.0.1"):
         raise ValueError("HTTPS required")
+    clock = clock or time.monotonic
+    deadline = clock() + timeout if deadline is None else deadline
+    if clock() >= deadline:
+        raise TimeoutError()
     request = urllib.request.Request(url, headers={"User-Agent": "release-checker", "Cache-Control": "no-cache"})
     try:
-        with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
-            data = response.read(1024 * 1024 + 1)
-            if len(data) > 1024 * 1024:
-                raise ValueError("response too large")
-            return response.status, data
+        response = urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
-        return error.code, b""
+        response = error
+    try:
+        with response:
+            chunks = []
+            size = 0
+            while True:
+                if clock() >= deadline:
+                    raise TimeoutError()
+                chunk = response.read1(min(65536, 1024 * 1024 + 1 - size))
+                if clock() >= deadline:
+                    raise TimeoutError()
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > 1024 * 1024:
+                    raise ValueError("invalid response framing")
+            data = b"".join(chunks)
+            length = response.headers.get("Content-Length")
+            if len(data) > 1024 * 1024 or (length is not None and (not length.isdecimal() or int(length) != len(data))):
+                raise ValueError("invalid response framing")
+            return response.status, data
+    except http.client.HTTPException as error:
+        raise ValueError("invalid response framing") from error
 
 
 def unique_object(pairs):
@@ -160,15 +216,39 @@ def index_prefix(name):
     return f"{name[:2]}/{name[2:4]}"
 
 
-def registry_state(record, fetch):
+def api_not_found(data, name, version=None):
+    payload = read_json(data)
+    if not isinstance(payload, dict) or set(payload) != {"errors"}:
+        return False
+    errors = payload["errors"]
+    if not isinstance(errors, list) or len(errors) != 1 or not isinstance(errors[0], dict):
+        return False
+    details = {f"crate `{name}` does not exist"}
+    if version is not None:
+        details.add(f"crate `{name}` does not have a version `{version}`")
+    return set(errors[0]) == {"detail"} and errors[0]["detail"] in details
+
+
+def index_not_found(data, name):
+    key = f"{index_prefix(name)}/{name}".encode()
+    return b"<Code>NoSuchKey</Code>" in data and b"<Key>" + key + b"</Key>" in data
+
+
+def registry_state(record, fetch, first=False):
     name, version, digest = (record[key] for key in ("name", "version", "sha256"))
     api_status, api_data = fetch(f"https://crates.io/api/v1/crates/{name}/{version}")
     index_status, index_data = fetch(f"https://index.crates.io/{index_prefix(name)}/{name}")
     if api_status not in (200, 404) or index_status not in (200, 404):
         return "stop"
+    if api_status == 404 and not api_not_found(api_data, name, version):
+        return "stop"
+    if index_status == 404 and not index_not_found(index_data, name):
+        return "stop"
+    if first and index_status != 404:
+        return "stop"
     matches = []
     if index_status == 200:
-        if not index_data.splitlines():
+        if not index_data.endswith(b"\n"):
             return "stop"
         for line in index_data.splitlines():
             row = read_json(line)
@@ -179,27 +259,41 @@ def registry_state(record, fetch):
                 return "stop"
             if row["vers"] == version:
                 matches.append(row)
-    if api_status == 404 and not matches:
-        return "absent"
     if len(matches) > 1:
         return "stop"
+    if matches and (matches[0].get("cksum") != digest or matches[0].get("yanked") is not False):
+        return "stop"
+    if api_status == 404 and not matches:
+        return "absent"
+    if api_status == 200:
+        api = read_json(api_data)
+        if not isinstance(api, dict) or not isinstance(api.get("version"), dict):
+            return "stop"
+        api = api["version"]
+        if (api.get("crate") != name or api.get("num") != version or api.get("checksum") != digest
+                or api.get("yanked") is not False):
+            return "stop"
     if api_status != 200 or not matches:
         return "pending"
-    api = read_json(api_data)
-    if not isinstance(api, dict) or not isinstance(api.get("version"), dict):
-        return "stop"
-    api = api["version"]
-    index = matches[0]
-    if (api.get("crate") != name or api.get("num") != version or api.get("checksum") != digest
-            or api.get("yanked") is not False or index.get("cksum") != digest
-            or index.get("yanked") is not False):
-        return "stop"
     return "present-and-approved"
 
 
-def state(path, first=False, wait=None, fetch=None, sleep=None):
-    fetch = fetch or fetch_url
+def state(path, first=False, wait=None, fetch=None, sleep=None, clock=None):
+    network = fetch or fetch_url
     sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + 60
+
+    def timed_fetch(url):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise TimeoutError()
+        result = (fetch_url(url, timeout=min(30, remaining), deadline=deadline, clock=clock)
+                  if fetch is None else network(url))
+        if clock() >= deadline:
+            raise TimeoutError()
+        return result
+
     try:
         records = validate_receipt(path)
         if wait is not None and wait not in NAMES:
@@ -213,22 +307,23 @@ def state(path, first=False, wait=None, fetch=None, sleep=None):
         attempts = 5 if name == wait else 1
         for attempt in range(attempts):
             try:
-                result = registry_state(record, fetch)
+                result = registry_state(record, timed_fetch, first=first)
                 if first and result == "absent":
-                    status, _ = fetch(f"https://crates.io/api/v1/crates/{name}")
-                    if status != 404:
+                    status, data = timed_fetch(f"https://crates.io/api/v1/crates/{name}")
+                    if status != 404 or not api_not_found(data, name):
                         result = "stop"
                 elif first:
                     result = "stop"
-            except OSError:
-                result = "pending" if name == wait else "stop"
-            except (ValueError, TypeError, KeyError):
+            except Exception:
                 result = "stop"
-            if name != wait or result in ("present-and-approved", "stop"):
+            if name != wait or result == "present-and-approved":
                 break
-            if attempt + 1 < attempts:
-                sleep(2)
-        if name == wait and result in ("absent", "pending"):
+            remaining = deadline - clock()
+            if attempt + 1 < attempts and remaining > 0:
+                sleep(min(2, remaining))
+            else:
+                break
+        if name == wait and result != "present-and-approved":
             result = "unknown"
         elif result == "pending":
             result = "stop"
@@ -265,8 +360,12 @@ def main(args, root=None, fetch=None, sleep=None):
                     raise GateError("greennode: invalid manifest arguments")
             manifest(Path(root) if root is not None else Path.cwd(), tag, release)
             return 0
-        if args and args[0] == "shipped" and len(args) in (3, 4):
-            shipped(*(Path(arg) for arg in args[1:]))
+        if args and args[0] == "shipped" and len(args) == 4:
+            candidate, committed, previous = args[1:]
+            if previous == "--first":
+                shipped(Path(candidate), Path(committed), first=True)
+            else:
+                shipped(Path(candidate), Path(committed), Path(previous))
             return 0
         if args and args[0] == "state" and len(args) >= 2:
             rest = args[2:]
@@ -292,12 +391,20 @@ def main(args, root=None, fetch=None, sleep=None):
     return 1
 
 
-def shipped(candidate, committed, previous=None):
+def shipped(candidate, committed, previous=None, first=False):
+    if (previous is None) == (not first):
+        raise GateError("greennode: previous inventory or first required")
+    builtins = {"greennode", "greennode --help", "greennode --version", "greennode -h",
+                "greennode -v", "greennode help", "greennode version"}
+
     def inventory(path):
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise GateError("greennode: invalid shipped inventory")
-        if value != sorted(set(value)):
+        if (value != sorted(set(value)) or not builtins.issubset(value)
+                or any(item not in builtins and (not re.fullmatch(r"greennode [a-z0-9][a-z0-9-]* [a-z0-9][a-z0-9-]*", item)
+                                                  or item.split()[1] in {"gen-docs", "help", "version"})
+                       for item in value)):
             raise GateError("greennode: invalid shipped inventory")
         return value
 
@@ -319,14 +426,29 @@ def manifest(root, tag=None, release=False):
         package = data["package"]
         if package.get("name") != name or package.get("version") != {"workspace": True}:
             raise GateError(f"{name}: workspace version required")
-        if name == "greennode":
-            dependency = data.get("dependencies", {}).get("greennode-sdk")
-            if dependency is None and release:
-                raise GateError("greennode: SDK dependency required for release")
-            if dependency is not None and (not isinstance(dependency, dict)
-                    or dependency.get("path") != "../greennode-sdk"
-                    or dependency.get("version") != f"={version}"):
-                raise GateError("greennode: exact SDK path and pin required")
+        tables = [data]
+        targets = data.get("target", {})
+        if not isinstance(targets, dict):
+            raise GateError(f"{name}: invalid dependency tables")
+        tables.extend(targets.values())
+        sdk_found = False
+        for table in tables:
+            if not isinstance(table, dict):
+                raise GateError(f"{name}: invalid dependency tables")
+            for section in ("dependencies", "build-dependencies", "dev-dependencies"):
+                dependencies = table.get(section, {})
+                if not isinstance(dependencies, dict):
+                    raise GateError(f"{name}: invalid dependency table")
+                for alias, dependency in dependencies.items():
+                    package_name = dependency.get("package", alias) if isinstance(dependency, dict) else alias
+                    if package_name != "greennode-sdk":
+                        continue
+                    sdk_found = True
+                    if (not isinstance(dependency, dict) or dependency.get("path") != "../greennode-sdk"
+                            or dependency.get("version") != f"={version}"):
+                        raise GateError(f"{name}: exact SDK path and pin required")
+        if name == "greennode" and release and not sdk_found:
+            raise GateError("greennode: SDK dependency required for release")
     return None
 
 

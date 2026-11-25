@@ -58,6 +58,7 @@ release-checks: ## Test the release checker, credential helper, and release note
 	python3 -I scripts/test/check-crate-release-test.py
 	python3 -I scripts/test/check-crate-publish-credential-test.py
 	python3 -I scripts/test/release-notes-test.py
+	python3 -I scripts/check-crate-release.py manifest
 
 docs: ## Check Markdown with Prettier and markdownlint; needs npm ci --ignore-scripts
 	@test -x $(BIN)/prettier -a -x $(BIN)/markdownlint-cli2 || { echo "run npm ci --ignore-scripts first" >&2; exit 1; }

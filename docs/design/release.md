@@ -2,10 +2,8 @@
 
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
-exactly `=VERSION` of the SDK. The owner publishes the first pair from the
-owner's Mac. Later releases use GitHub Actions and crates.io Trusted Publishing.
-A GitHub Release does not authorize a crates.io upload. An uploaded version
-cannot be replaced or deleted ([Cargo publishing]).
+exactly `=VERSION` of the SDK. The owner publishes the first pair from the Mac,
+later ones through GitHub Actions. Uploads are permanent ([Cargo publishing]).
 
 ## Approaches
 
@@ -71,7 +69,8 @@ then repeat with `--locked`. Do not edit a member's inherited version.
    mkdir -p "$(dirname "$RECEIPT_DIR")"
    mkdir "$RECEIPT_DIR"
    export GREENNODE_RELEASE_RECEIPT="$RECEIPT_DIR/crate-checksums.json"
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" receipt "$TAG" "$COMMIT" "$STAGE" "$RECEIPT_DIR"
+   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" receipt "$TAG" "$STAGE" \
+     "$GREENNODE_RELEASE_RECEIPT" --commit "$COMMIT" --toolchain 1.100.0
    python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --first
    ```
 
@@ -85,14 +84,16 @@ then repeat with `--locked`. Do not edit a member's inherited version.
    wildcard, update, owner or yank scope ([Token scopes]).
 
 4. **Owner only.** In the fresh checkout, log in with the built-in provider. The
-   token may exist in the crates.io form, the hidden prompt and stdin pipe,
-   Cargo processes, and isolated `$CARGO_HOME/credentials.toml`. Never put it in
-   command arguments, history, a checkout, GitHub secrets, logs or chat.
+   token lives only in the form, the hidden prompt, Cargo, and the isolated
+   `$CARGO_HOME/credentials.toml`, never in arguments, history, a checkout,
+   secrets, logs or chat. The helper reads that file only when
+   `GREENNODE_RELEASE_CARGO_HOME` equals `CARGO_HOME`, it is not `~/.cargo`, and
+   the file is an owner-only regular file.
 
    ```bash
    set +x
    CARGO_HOME=$(mktemp -d)
-   export CARGO_HOME
+   export CARGO_HOME GREENNODE_RELEASE_CARGO_HOME="$CARGO_HOME"
    IFS= read -r -s -p 'crates.io API token: ' release_token
    printf '\n'
    printf '%s\n' "$release_token" | cargo +1.100.0 login --registry crates-io \
@@ -130,7 +131,7 @@ then repeat with `--locked`. Do not edit a member's inherited version.
    cargo +1.100.0 logout --registry crates-io \
      --config 'registry.credential-provider="cargo:token"'
    rm -rf -- "$CARGO_HOME"
-   unset CARGO_HOME
+   unset CARGO_HOME GREENNODE_RELEASE_CARGO_HOME
    ```
 
 8. **Owner only.** Set up both Trusted Publishers after confirming the pair.
@@ -157,12 +158,13 @@ pinned Rust and CI tools. Build only the tool with
 `cargo build --locked --release --package greennode --target TARGET`. Check its
 version against the tag and smoke-test the extracted Windows archive.
 
-Use the built candidate's hidden `gen-docs <dir> --command-inventory <path>`
-export. Block the Release unless the export exactly matches
-`crates/greennode/tests/parity/shipped-commands.json` at the tag. The
-[CLI design](cli.md) owns the sorted paths, built-ins and version/help aliases.
-Require the preceding published tag's list to be a subset, even if crates.io
-publication was incomplete. On the first release, check equality only.
+Export the built candidate's list with its hidden `__command-inventory` command
+and run `check-crate-release.py shipped CANDIDATE COMMITTED PREVIOUS`, or
+`--first` in place of `PREVIOUS` for the first release. It blocks the Release
+unless the export matches `crates/greennode/tests/parity/shipped-commands.json`
+at the tag and contains every entry of the preceding published tag's list, even
+if crates.io publication was incomplete. The [CLI design](cli.md) owns the
+format.
 
 | Target                      | Archive                         |
 | --------------------------- | ------------------------------- |
