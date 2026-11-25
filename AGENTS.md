@@ -52,7 +52,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|
 |`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
-|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, safe response classification, and the loopback TLS test server (crate-private)|
+|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, safe response classification, strict token validation, the service-account exchange, and the loopback TLS test server (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
 
 The [architecture](docs/design/architecture.md#layout) owns the intended layout. Add a row here in the change that adds the path.

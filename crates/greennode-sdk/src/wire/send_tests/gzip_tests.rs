@@ -178,13 +178,64 @@ async fn gzip_streamed_encoded_cap_rejects_overflow() {
 }
 
 #[tokio::test]
-async fn gzip_multiple_members_are_refused() {
+async fn gzip_multiple_members_are_decoded() {
     assert!(gzip_send(GZIP_ABC, "gzip", 6, Encoding::Gzip).await.is_ok());
     let mut body = GZIP_ABC.to_vec();
     body.extend_from_slice(GZIP_ABC);
     assert!(
-        matches!(gzip_send(&body, "gzip", 6, Encoding::Gzip).await, Err(e) if e.kind() == &Error::Body && e.observed().is_some())
+        matches!(gzip_send(&body, "gzip", 6, Encoding::Gzip).await, Ok(reply) if reply.body == b"abcabc")
     );
+}
+
+#[tokio::test]
+async fn gzip_multiple_members_share_decoded_cap() {
+    let mut body = GZIP_ABC.to_vec();
+    body.extend_from_slice(GZIP_ABC);
+    assert!(
+        matches!(gzip_send(&body, "gzip", 5, Encoding::Gzip).await, Err(e) if e.kind() == &Error::BodyTooLarge && e.observed().is_some())
+    );
+    assert!(
+        matches!(gzip_send(&body, "gzip", 6, Encoding::Gzip).await, Ok(reply) if reply.body == b"abcabc")
+    );
+}
+
+#[tokio::test]
+async fn gzip_multiple_members_share_encoded_cap() {
+    for extra in [65494usize, 65495] {
+        let mut body = GZIP_ABC.to_vec();
+        let mut second = GZIP_ABC[..10].to_vec();
+        second[3] = 4;
+        body.extend_from_slice(&second);
+        body.extend_from_slice(&(extra as u16).to_le_bytes());
+        body.extend_from_slice(&vec![0; extra]);
+        body.extend_from_slice(&GZIP_ABC[10..]);
+        let mut raw = b"HTTP/1.1 401 Unauthorized\r\nContent-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for part in [&body[..GZIP_ABC.len()], &body[GZIP_ABC.len()..]] {
+            raw.extend_from_slice(format!("{:x}\r\n", part.len()).as_bytes());
+            raw.extend_from_slice(part);
+            raw.extend_from_slice(b"\r\n");
+        }
+        raw.extend_from_slice(b"0\r\n\r\n");
+        let server = Server::start(vec![Response::Raw(raw)]);
+        let client = client(&server);
+        let clock = crate::SystemClock;
+        let result = send::once(
+            &client,
+            req(Method::GET, &server.origin),
+            6,
+            Encoding::Gzip,
+            &clock,
+            clock.monotonic_now() + Duration::from_secs(5),
+        )
+        .await;
+        if extra == 65494 {
+            assert!(matches!(result, Ok(reply) if reply.body == b"abcabc"));
+        } else {
+            assert!(
+                matches!(result, Err(e) if e.kind() == &Error::BodyTooLarge && e.observed().is_some())
+            );
+        }
+    }
 }
 
 #[tokio::test]

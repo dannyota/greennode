@@ -177,12 +177,54 @@ pub(crate) async fn once(
 
 pub(crate) async fn once_with_evidence(
     client: &Client,
-    mut request: Request<Full<Bytes>>,
+    request: Request<Full<Bytes>>,
     cap: usize,
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
     evidence: &mut Evidence,
+) -> Result<Reply, Error> {
+    once_inner(
+        client,
+        request,
+        cap,
+        encoding,
+        clock,
+        deadline,
+        (evidence, None),
+    )
+    .await
+}
+
+pub(crate) async fn once_with_expected(
+    client: &Client,
+    request: Request<Full<Bytes>>,
+    cap: usize,
+    encoding: Encoding,
+    clock: &dyn Clock,
+    deadline: Instant,
+    (evidence, expected): (&mut Evidence, &[StatusCode]),
+) -> Result<Reply, Error> {
+    once_inner(
+        client,
+        request,
+        cap,
+        encoding,
+        clock,
+        deadline,
+        (evidence, Some(expected)),
+    )
+    .await
+}
+
+async fn once_inner(
+    client: &Client,
+    mut request: Request<Full<Bytes>>,
+    cap: usize,
+    encoding: Encoding,
+    clock: &dyn Clock,
+    deadline: Instant,
+    (evidence, expected): (&mut Evidence, Option<&[StatusCode]>),
 ) -> Result<Reply, Error> {
     let method = request.method();
     if !matches!(
@@ -234,6 +276,15 @@ pub(crate) async fn once_with_evidence(
     if clock.monotonic_now() >= deadline {
         return Err(Error::Deadline.with_head(head));
     }
+    if expected.is_some_and(|statuses| !statuses.contains(&head.status)) {
+        drop(guard);
+        drop(body);
+        return Ok(Reply {
+            status: head.status,
+            headers,
+            body: Vec::new(),
+        });
+    }
     if head.status == StatusCode::SWITCHING_PROTOCOLS {
         return Err(Error::SwitchingProtocols.with_head(head));
     }
@@ -266,7 +317,7 @@ pub(crate) async fn once_with_evidence(
         let mut bytes = Vec::new();
         let mut encoded = 0usize;
         let mut decoder = (gzip && !bodyless).then(|| {
-            flate2::write::GzDecoder::new(Bounded {
+            flate2::write::MultiGzDecoder::new(Bounded {
                 bytes: Vec::new(),
                 cap,
                 overflow: false,
