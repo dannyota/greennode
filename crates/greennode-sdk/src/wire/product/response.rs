@@ -52,7 +52,13 @@ pub(crate) fn classify(
                     .map(str::trim)
                     .any(|line| line.len() >= 8 && text.contains(line))
         });
-        if normalized.contains("clientsecret") || escaped || credentials.reflects(&decoded) {
+        if normalized.contains("clientsecret")
+            || escaped
+            || credentials.reflects(&decoded)
+            || (!secrets.is_empty()
+                && (unsafe_message(text, credentials)
+                    || unsafe_message(sanitized.as_str(), credentials)))
+        {
             crate::error::SafeText::new("", &secrets)
         } else {
             sanitized
@@ -486,6 +492,32 @@ mod tests {
             &credentials,
         );
         assert!(!e.api_error().unwrap().message().contains("toy"));
+    }
+
+    #[test]
+    fn sanitized_escaped_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("toy<secret")]);
+        let e = error(
+            403,
+            br#"{"message":"toy\\u00\u00003csecret"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn sanitized_case_insensitive_credential_is_withheld() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("toy-key")]);
+        let e = error(
+            403,
+            br#"{"message":"TOY\u0000-KEY"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(e.api_error().unwrap().message(), "Forbidden");
     }
 
     #[test]
