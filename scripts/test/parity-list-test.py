@@ -87,6 +87,21 @@ class Parity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid operation example"):
             self.parse(text)
 
+    def test_tab_after_command(self):
+        text = page().replace("vngcloud things list-things", "vngcloud\twrong list-things\nvngcloud things list-things")
+        with self.assertRaisesRegex(ValueError, "invalid operation example"):
+            self.parse(text)
+
+    def test_backslash_followed_by_space(self):
+        text = page().replace("vngcloud things list-things", "vngcloud things list-things \\ \nvngcloud wrong list-things")
+        with self.assertRaisesRegex(ValueError, "invalid operation example"):
+            self.parse(text)
+
+    def test_indented_valid_command(self):
+        text = page().replace("vngcloud things list-things", "  vngcloud things list-things")
+        with self.assertRaisesRegex(ValueError, "invalid operation example"):
+            self.parse(text)
+
     def test_example_continuation(self):
         text = page().replace("vngcloud things list-things", "vngcloud things list-things \\\n  --name value")
         self.assertEqual(self.parse(text)["name"], "things")
@@ -119,19 +134,29 @@ class PageSource(unittest.TestCase):
         spec.loader.exec_module(self.module)
         self.output = self.root / "commands.json"
 
-    def head(self):
-        return self.commit
+        self.calls = []
 
-    def source_pages(self, commit):
-        self.assertEqual(commit, self.commit)
-        return self.pages
+    def check_output(self, command, *, env):
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.assertFalse(key in env, key)
+        self.assertEqual(command[:3], ["git", "-C", str(self.repo)])
+        args = command[3:]
+        self.calls.append(args)
+        if args == ["rev-parse", "HEAD"]:
+            return (self.commit + "\n").encode()
+        if args == ["ls-tree", "-rz", "--name-only", self.commit, "--", "docs/wiki"]:
+            return b"docs/wiki/CLI-Things.md\0docs/wiki/CLI-Other.md\0docs/wiki/Other.md\0"
+        blobs = {f"{self.commit}:{path}": text.encode("utf-8") for path, text in self.pages}
+        if len(args) == 2 and args[0] == "show" and args[1] in blobs:
+            return blobs[args[1]]
+        self.fail(f"unexpected Git arguments: {args}")
 
     def run_list(self, *args, commit=None):
         argv = [str(SCRIPT), str(self.repo), "--tag", "test", "--commit", commit or self.commit, *args]
+        hostile = {"GIT_DIR": "/wrong", "GIT_WORK_TREE": "/wrong", "GIT_INDEX_FILE": "/wrong"}
         with patch.object(sys, "argv", argv), patch.object(self.module, "OUTPUT", self.output), \
-             patch.object(self.module, "GitBaseline") as source:
-            source.return_value.head.side_effect = self.head
-            source.return_value.pages.side_effect = self.source_pages
+             patch.dict(self.module.os.environ, hostile), \
+             patch.object(self.module.subprocess, "check_output", side_effect=self.check_output):
             return self.module.main()
 
     def test_git_environment_isolated(self):
@@ -164,6 +189,10 @@ class PageSource(unittest.TestCase):
         self.assertEqual(self.run_list("--check"), 0)
         self.assertEqual(self.output.read_bytes(), canonical)
         self.assertEqual([service["name"] for service in json.loads(canonical)["services"]], ["other", "things"])
+        expected = [["rev-parse", "HEAD"], ["ls-tree", "-rz", "--name-only", self.commit, "--", "docs/wiki"],
+                    ["show", f"{self.commit}:docs/wiki/CLI-Other.md"],
+                    ["show", f"{self.commit}:docs/wiki/CLI-Things.md"]]
+        self.assertEqual(self.calls, expected * 2)
 
 
 if __name__ == "__main__":

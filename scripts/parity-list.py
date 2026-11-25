@@ -104,15 +104,18 @@ def parse_page(path, text=None):
                 if found_fields:
                     if found_example or line != "```sh":
                         fail(opening, "unrecognized section after fields")
-                    commands = [x.lstrip() for j, x in enumerate(block)
-                                if (j == 0 or not block[j - 1].rstrip().endswith("\\")) and x.lstrip().startswith("vngcloud ")]
-                    matches = [re.match(r"vngcloud (" + NAME + r") (" + NAME + r")(?:\s|$)", x) for x in commands]
-                    if any(match is None for match in matches):
+                    commands = 0
+                    for j, example_line in enumerate(block):
+                        if not example_line:
+                            continue
+                        if j and block[j - 1].endswith("\\"):
+                            continue
+                        if not re.match(r"^vngcloud " + re.escape(expected_service) + r"(?: |$)", example_line):
+                            fail(opening + 1 + j, "invalid operation example")
+                        commands += 1
+                    if not commands:
                         fail(opening, "invalid operation example")
-                    matches = [match.group(1) for match in matches]
-                    if not matches or len(set(matches)) != 1 or matches[0] != expected_service or (service is not None and service != matches[0]):
-                        fail(opening, "invalid operation example")
-                    service = matches[0]
+                    service = expected_service
                     found_example = True
                 i += 1
                 continue
