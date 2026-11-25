@@ -3,12 +3,17 @@ use std::{future::Future, pin::Pin, time::Duration};
 use time::OffsetDateTime;
 use tokio::{sync::watch, time::Instant};
 
+/// Source of wall time, monotonic time, and deadline waits.
 pub trait Clock: Send + Sync {
+    /// Returns the current UTC wall time.
     fn utc_now(&self) -> OffsetDateTime;
+    /// Returns an instant suitable for measuring elapsed time.
     fn monotonic_now(&self) -> Instant;
+    /// Completes when the monotonic deadline is reached.
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
+/// Uses the system wall clock and Tokio monotonic clock.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemClock;
 
@@ -32,12 +37,14 @@ struct TimeState {
     monotonic: Instant,
 }
 
+/// A manually advanced clock shared by its clones.
 #[derive(Clone)]
 pub struct TestClock {
     state: watch::Sender<TimeState>,
 }
 
 impl TestClock {
+    /// Starts at the given wall time and the current Tokio instant.
     pub fn new(utc: OffsetDateTime) -> Self {
         let (state, _) = watch::channel(TimeState {
             utc,
@@ -46,6 +53,7 @@ impl TestClock {
         Self { state }
     }
 
+    /// Advances both clocks and wakes deadline waiters. Does nothing if the monotonic instant overflows; wall time saturates.
     pub fn advance(&self, duration: Duration) {
         self.state.send_modify(|state| {
             if let Some(monotonic) = state.monotonic.checked_add(duration) {

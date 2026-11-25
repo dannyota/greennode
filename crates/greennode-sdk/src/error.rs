@@ -1,28 +1,49 @@
 use std::any::Any;
 use std::fmt;
 
+/// Stable categories for operation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorClass {
+    /// A write outcome could not be confirmed.
     NotSettled,
+    /// A write failed.
     Failed,
+    /// Authentication failed.
     Auth,
+    /// Token cache or TOTP marker is unavailable.
     TokenCache,
+    /// A service request failed.
     Api,
+    /// A resource was not found.
     NotFound,
+    /// Access was denied.
     PermissionDenied,
+    /// The service rate-limited the request.
     RateLimited,
+    /// Project discovery found no project in the region.
     ProjectNotFound,
+    /// Project discovery found multiple matching projects.
     ProjectAmbiguous,
+    /// A required project identifier is missing.
     MissingProjectId,
+    /// Configuration is invalid.
     InvalidConfig,
+    /// Operation input is invalid.
     InvalidInput,
+    /// No credentials were found; also classified as invalid configuration.
     NoCredentials,
+    /// The credentials file could not be used; also classified as invalid configuration.
     CredentialsFile,
+    /// History completeness could not be confirmed.
     HistoryIncomplete,
+    /// The quote exceeded the allowed price; nothing was ordered.
     PriceAboveMax,
+    /// The paid resource quote was zero; nothing was ordered.
     Unpriced,
+    /// The operation was cancelled.
     Cancelled,
+    /// The operation deadline was reached.
     DeadlineExceeded,
 }
 
@@ -55,6 +76,7 @@ impl SafeText {
     }
 }
 
+/// Sanitized details of a failed service request.
 pub struct ApiError {
     operation: &'static str,
     status: Option<u16>,
@@ -97,18 +119,23 @@ impl ApiError {
             retryable,
         }
     }
+    /// Returns the operation identifier.
     pub fn operation(&self) -> &'static str {
         self.operation
     }
+    /// Returns the HTTP status when a response was received.
     pub fn status(&self) -> Option<u16> {
         self.status
     }
+    /// Returns the sanitized service code or a status-derived fallback, possibly empty.
     pub fn code(&self) -> &str {
         &self.code
     }
+    /// Returns the sanitized service message, possibly empty.
     pub fn message(&self) -> &str {
         &self.message
     }
+    /// Reports whether the service failure is marked retryable.
     pub fn retryable(&self) -> bool {
         self.retryable
     }
@@ -124,6 +151,7 @@ impl fmt::Debug for ApiError {
     }
 }
 
+/// Safe details of an IAM user login failure.
 pub struct LoginError {
     reason: &'static str,
     status: Option<u16>,
@@ -138,12 +166,15 @@ impl LoginError {
             captcha_suspected,
         }
     }
+    /// Returns fixed text identifying the failed step.
     pub fn reason(&self) -> &'static str {
         self.reason
     }
+    /// Returns the HTTP status when a response was received.
     pub fn status(&self) -> Option<u16> {
         self.status
     }
+    /// Reports a redisplayed sign-in form, which may indicate a CAPTCHA or wrong credentials.
     pub fn captcha_suspected(&self) -> bool {
         self.captcha_suspected
     }
@@ -157,6 +188,7 @@ impl fmt::Debug for LoginError {
     }
 }
 
+/// Safe details of a service-account token exchange failure.
 pub struct ServiceAccountLoginError {
     reason: &'static str,
     status: Option<u16>,
@@ -166,9 +198,11 @@ impl ServiceAccountLoginError {
     pub(crate) fn new(reason: &'static str, status: Option<u16>) -> Self {
         Self { reason, status }
     }
+    /// Returns fixed text identifying the failed step.
     pub fn reason(&self) -> &'static str {
         self.reason
     }
+    /// Returns the HTTP status when a response was received.
     pub fn status(&self) -> Option<u16> {
         self.status
     }
@@ -181,6 +215,7 @@ impl fmt::Debug for ServiceAccountLoginError {
     }
 }
 
+/// A categorized failure with optional typed details and a cause chain.
 pub struct Error {
     class: ErrorClass,
     identity: bool,
@@ -193,6 +228,7 @@ pub struct Error {
 
 #[allow(dead_code)]
 impl Error {
+    /// Creates an authentication failure for a custom credential provider.
     pub fn provider_failed() -> Self {
         Self::new(ErrorClass::Auth)
     }
@@ -258,9 +294,11 @@ impl Error {
         self.detail = Some(Box::new(detail));
         self
     }
+    /// Returns the outermost category.
     pub fn class(&self) -> ErrorClass {
         self.class
     }
+    /// Checks the cause chain and maps HTTP 401, 403, 404 and 429 to their categories; any API error also matches `Api`.
     pub fn has_class(&self, class: ErrorClass) -> bool {
         self.has_identity(class)
             || self.api_error().is_some_and(|api| match class {
@@ -272,6 +310,7 @@ impl Error {
                 _ => false,
             })
     }
+    /// Checks explicit category identities in the cause chain without HTTP status mapping.
     pub fn has_identity(&self, class: ErrorClass) -> bool {
         (self.identity && self.class == class)
             || self
@@ -279,16 +318,19 @@ impl Error {
                 .as_ref()
                 .is_some_and(|cause| cause.has_identity(class))
     }
+    /// Returns the first service error in the cause chain, if present.
     pub fn api_error(&self) -> Option<&ApiError> {
         self.api
             .as_ref()
             .or_else(|| self.cause.as_ref().and_then(|cause| cause.api_error()))
     }
+    /// Returns the first IAM login detail in the cause chain, if present.
     pub fn login_error(&self) -> Option<&LoginError> {
         self.login
             .as_ref()
             .or_else(|| self.cause.as_ref().and_then(|cause| cause.login_error()))
     }
+    /// Returns the first service-account login detail in the cause chain, if present.
     pub fn service_account_login_error(&self) -> Option<&ServiceAccountLoginError> {
         self.service_login.as_ref().or_else(|| {
             self.cause
@@ -296,6 +338,7 @@ impl Error {
                 .and_then(|cause| cause.service_account_login_error())
         })
     }
+    /// Returns the first matching typed detail in the cause chain, if present.
     pub fn detail<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.detail
             .as_ref()
@@ -326,13 +369,18 @@ impl fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
+/// Whether a failed operation may have dispatched a write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WriteDispatch {
+    /// No write was attempted.
     NotAWrite,
+    /// The write was not sent.
     NotSent,
+    /// The write may have reached the service; its outcome is uncertain.
     MayHaveBeenSent,
 }
 
+/// A failure that may retain partial output and write-dispatch state.
 pub struct Failure<T> {
     error: Error,
     partial: Option<T>,
@@ -361,15 +409,19 @@ impl<T> Failure<T> {
         };
         Self::new(error.with_cause(inner.error), partial, dispatch)
     }
+    /// Returns the categorized error.
     pub fn error(&self) -> &Error {
         &self.error
     }
+    /// Returns partial output when the operation produced it before failing.
     pub fn partial(&self) -> Option<&T> {
         self.partial.as_ref()
     }
+    /// Reports whether a write may have been sent.
     pub fn write_dispatch(&self) -> WriteDispatch {
         self.dispatch
     }
+    /// Consumes the failure and returns its error, partial output, and dispatch state.
     pub fn into_parts(self) -> (Error, Option<T>, WriteDispatch) {
         (self.error, self.partial, self.dispatch)
     }

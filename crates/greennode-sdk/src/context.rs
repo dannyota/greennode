@@ -7,12 +7,16 @@ use tokio::{sync::watch, time::Instant};
 
 use crate::Clock;
 
+/// Reason an operation should stop.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContextEnd {
+    /// Cancellation was requested.
     Cancelled,
+    /// The monotonic deadline was reached.
     DeadlineExceeded,
 }
 
+/// Shared cancellation state and an optional monotonic deadline.
 #[derive(Clone)]
 pub struct RequestContext {
     cancelled: watch::Receiver<bool>,
@@ -20,18 +24,21 @@ pub struct RequestContext {
     deadline: Option<Instant>,
 }
 
+/// A handle that cancels the associated context and its children.
 #[derive(Clone)]
 pub struct CancelHandle {
     cancelled: watch::Sender<bool>,
 }
 
 impl CancelHandle {
+    /// Signals cancellation to all contexts sharing this handle.
     pub fn cancel(&self) {
         self.cancelled.send_replace(true);
     }
 }
 
 impl RequestContext {
+    /// Creates an uncancelled context without a deadline and its cancellation handle.
     pub fn new() -> (Self, CancelHandle) {
         let (cancelled, receiver) = watch::channel(false);
         (
@@ -44,6 +51,7 @@ impl RequestContext {
         )
     }
 
+    /// Shares cancellation and uses the earlier of the parent and supplied deadlines.
     pub fn child_with_deadline(&self, deadline: Instant) -> Self {
         Self {
             cancelled: self.cancelled.clone(),
@@ -55,10 +63,12 @@ impl RequestContext {
         }
     }
 
+    /// Returns the effective monotonic deadline, if any.
     pub fn deadline(&self) -> Option<Instant> {
         self.deadline
     }
 
+    /// Checks cancellation before the deadline; returns `None` while active.
     pub fn check(&self, clock: &dyn Clock) -> Option<ContextEnd> {
         if *self.cancelled.borrow() {
             Some(ContextEnd::Cancelled)
@@ -72,6 +82,7 @@ impl RequestContext {
         }
     }
 
+    /// Waits until cancelled or the deadline is reached. Cancellation takes precedence when both apply.
     pub async fn wait(&self, clock: &dyn Clock) -> ContextEnd {
         let mut cancelled = self.cancelled.clone();
         let mut sleep = self.deadline.map(|deadline| clock.sleep_until(deadline));
