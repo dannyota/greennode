@@ -29,12 +29,12 @@ const GZIP_ABC: &[u8] = &[
     31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 75, 76, 74, 6, 0, 194, 65, 36, 53, 3, 0, 0, 0,
 ];
 
-#[tokio::test]
-async fn gzip_deadline_precedes_decoded_overflow() {
+async fn deadline_during_decode(body: &[u8], threshold: usize) -> Result<send::Reply, Error> {
+    let length = body.len().to_string();
     let server = Server::start(vec![response(
         "401 Unauthorized",
-        &[("Content-Encoding", "gzip"), ("Content-Length", "23")],
-        GZIP_ABC,
+        &[("Content-Encoding", "gzip"), ("Content-Length", &length)],
+        body,
     )]);
     let client = client(&server);
     let start = tokio::time::Instant::now();
@@ -42,9 +42,9 @@ async fn gzip_deadline_precedes_decoded_overflow() {
         start,
         sleeps: AtomicUsize::new(0),
         checks: AtomicUsize::new(0),
-        threshold: 6,
+        threshold,
     };
-    let result = send::once(
+    send::once(
         &client,
         req(Method::GET, &server.origin),
         2,
@@ -52,7 +52,22 @@ async fn gzip_deadline_precedes_decoded_overflow() {
         &clock,
         start + Duration::from_secs(1),
     )
-    .await;
+    .await
+}
+
+#[tokio::test]
+async fn gzip_deadline_precedes_write_overflow() {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&vec![0; 100_000]).unwrap();
+    let body = encoder.finish().unwrap();
+    let result = deadline_during_decode(&body, 6).await;
+    assert!(matches!(result, Err(e) if e.kind() == &Error::Deadline && e.observed().is_some()));
+}
+
+#[tokio::test]
+async fn gzip_deadline_precedes_finish_overflow() {
+    let result = deadline_during_decode(GZIP_ABC, 9).await;
     assert!(matches!(result, Err(e) if e.kind() == &Error::Deadline && e.observed().is_some()));
 }
 
