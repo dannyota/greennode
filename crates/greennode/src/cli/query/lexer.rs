@@ -44,7 +44,7 @@ pub(super) struct Token {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct SyntaxError {
+pub(crate) struct SyntaxError {
     pub(super) offset: usize,
 }
 

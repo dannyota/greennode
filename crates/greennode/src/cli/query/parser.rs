@@ -1,6 +1,8 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
 use super::lexer::{self, Kind, SyntaxError, Token};
+use super::literal;
+use crate::cli::render::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NodeKind {
@@ -36,6 +38,7 @@ pub(super) enum NodeValue {
     Index(i64),
     Slice([Option<i64>; 3]),
     Comparator(Kind),
+    Literal(Value),
 }
 
 #[derive(Debug, PartialEq)]
@@ -175,6 +178,24 @@ impl Parser {
         depth: usize,
     ) -> Result<Node, SyntaxError> {
         match kind {
+            Kind::JsonLiteral => {
+                let value = literal::parse(&value, offset)?;
+                self.make(NodeKind::Literal, NodeValue::Literal(value), vec![])
+            }
+            Kind::StringLiteral => self.make(
+                NodeKind::Literal,
+                NodeValue::Literal(Value::String(value)),
+                vec![],
+            ),
+            Kind::Expref => {
+                let child = self.descend(binding(Kind::Expref), depth)?;
+                self.make(NodeKind::ExpRef, NodeValue::None, vec![child])
+            }
+            Kind::Filter => {
+                let identity = self.identity()?;
+                self.filter(identity, depth)
+            }
+            Kind::Lbrace => self.multi_hash(depth),
             Kind::UnquotedIdentifier | Kind::QuotedIdentifier => {
                 if kind == Kind::QuotedIdentifier && self.current() == Kind::Lparen {
                     return Err(SyntaxError { offset });
@@ -222,7 +243,7 @@ impl Parser {
                     let right = self.projection_rhs(binding(Kind::Star), depth)?;
                     self.make(NodeKind::Projection, NodeValue::None, vec![left, right])
                 } else {
-                    Err(self.error())
+                    self.multi_list(depth)
                 }
             }
             _ => Err(SyntaxError { offset }),
@@ -230,6 +251,18 @@ impl Parser {
     }
     fn led(&mut self, kind: Kind, left: Node, depth: usize) -> Result<Node, SyntaxError> {
         match kind {
+            Kind::Filter => self.filter(left, depth),
+            Kind::Lparen => {
+                let mut args = Vec::new();
+                while self.current() != Kind::Rparen {
+                    args.push(self.descend(0, depth)?);
+                    if self.current() == Kind::Comma {
+                        self.advance();
+                    }
+                }
+                self.take(Kind::Rparen)?;
+                self.make(NodeKind::FunctionExpression, left.value, args)
+            }
             Kind::Dot => {
                 if self.current() == Kind::Star {
                     self.advance();
@@ -281,12 +314,70 @@ impl Parser {
             _ => Err(self.error()),
         }
     }
+    fn filter(&mut self, left: Node, depth: usize) -> Result<Node, SyntaxError> {
+        let condition = self.descend(0, depth)?;
+        self.take(Kind::Rbracket)?;
+        let right = if self.current() == Kind::Flatten {
+            self.identity()?
+        } else {
+            self.projection_rhs(binding(Kind::Filter), depth)?
+        };
+        self.make(
+            NodeKind::FilterProjection,
+            NodeValue::None,
+            vec![left, right, condition],
+        )
+    }
+    fn multi_list(&mut self, depth: usize) -> Result<Node, SyntaxError> {
+        let mut children = Vec::new();
+        loop {
+            children.push(self.descend(0, depth)?);
+            if self.current() == Kind::Rbracket {
+                break;
+            }
+            self.take(Kind::Comma)?;
+        }
+        self.take(Kind::Rbracket)?;
+        self.make(NodeKind::MultiSelectList, NodeValue::None, children)
+    }
+    fn multi_hash(&mut self, depth: usize) -> Result<Node, SyntaxError> {
+        let mut children = Vec::new();
+        loop {
+            if !matches!(
+                self.current(),
+                Kind::UnquotedIdentifier | Kind::QuotedIdentifier
+            ) {
+                return Err(self.error());
+            }
+            let key = self
+                .tokens
+                .get(self.index)
+                .map_or_else(String::new, |t| t.value.clone());
+            self.advance();
+            self.take(Kind::Colon)?;
+            let value = self.descend(0, depth)?;
+            children.push(self.make(NodeKind::KeyValPair, NodeValue::Text(key), vec![value])?);
+            if self.current() == Kind::Comma {
+                self.advance();
+            } else if self.current() == Kind::Rbrace {
+                self.advance();
+                break;
+            }
+        }
+        self.make(NodeKind::MultiSelectHash, NodeValue::None, children)
+    }
     fn dot_rhs(&mut self, bp: u8, depth: usize) -> Result<Node, SyntaxError> {
         if matches!(
             self.current(),
             Kind::QuotedIdentifier | Kind::UnquotedIdentifier | Kind::Star
         ) {
             self.descend(bp, depth)
+        } else if self.current() == Kind::Lbracket {
+            self.advance();
+            self.multi_list(depth)
+        } else if self.current() == Kind::Lbrace {
+            self.advance();
+            self.multi_hash(depth)
         } else {
             Err(self.error())
         }
@@ -465,9 +556,62 @@ mod tests {
     }
 
     #[test]
-    fn later_forms_are_rejected() {
-        for input in ["[?foo]", "{a:b}", "[a,b]", "f(a)", "`1`", "'x'", "&a"] {
+    fn json_literal_depth_and_surrogates() {
+        let expression = |n| format!("`{}0{}`", "[".repeat(n), "]".repeat(n));
+        assert!(parse(&expression(64)).is_ok());
+        assert!(parse(&expression(65)).is_err());
+        assert_eq!(
+            parse(r#"`"\ud800"`"#).unwrap().value,
+            NodeValue::Literal(Value::String("�".into()))
+        );
+        assert!(parse(r#"`"\q"`"#).is_err());
+        assert_eq!(
+            parse("`9007199254740993`").unwrap().value,
+            NodeValue::Literal(Value::Number(9007199254740992.0))
+        );
+    }
+
+    #[test]
+    fn filter_and_multiselect_shapes() {
+        let root = parse("a[?b<=c]").unwrap();
+        assert_eq!(root.kind, NodeKind::FilterProjection);
+        assert_eq!(root.children[2].kind, NodeKind::Comparator);
+        assert_eq!(root.children[2].value, NodeValue::Comparator(Kind::Lte));
+        let root = parse("{a:b,c:d}").unwrap();
+        assert_eq!(root.kind, NodeKind::MultiSelectHash);
+        assert_eq!(root.children[0].value, NodeValue::Text("a".into()));
+        assert_eq!(parse("[a,b]").unwrap().kind, NodeKind::MultiSelectList);
+        assert_eq!(parse("f(@,)").unwrap().children.len(), 1);
+        assert_eq!(parse("&a").unwrap().kind, NodeKind::ExpRef);
+    }
+
+    #[test]
+    fn remaining_upstream_parser_errors() {
+        for input in [
+            "[foo",
+            "{foo: bar",
+            "{foo bar}",
+            "[foo bar]",
+            "&&&&&&&&&&&&t(",
+        ] {
             assert!(parse(input).is_err(), "{input}");
         }
+    }
+
+    #[test]
+    fn remaining_forms_compile() {
+        for input in [
+            "[?foo]",
+            "{a:b}",
+            "[a,b]",
+            "f(a)",
+            "`1`",
+            "'x'",
+            "&a",
+            "length(@,)",
+        ] {
+            assert!(parse(input).is_ok(), "{input}");
+        }
+        assert!(parse("[a b]").is_err());
     }
 }
