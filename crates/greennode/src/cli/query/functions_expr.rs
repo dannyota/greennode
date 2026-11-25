@@ -1,7 +1,7 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
 use super::{
-    interpreter::{EvaluationError, check, execute},
+    interpreter::{EvaluationError, WorkBudget, check, execute},
     parser::{Node, NodeKind},
 };
 use crate::cli::render::Value;
@@ -11,19 +11,25 @@ enum Argument<'a> {
     Reference(&'a Node),
 }
 
-pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, EvaluationError> {
+pub(super) fn call(
+    name: &str,
+    nodes: &[Node],
+    input: &Value,
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
     let mut arguments = Vec::with_capacity(nodes.len());
     for node in nodes {
         if node.kind == NodeKind::ExpRef {
+            budget.charge(1)?;
             arguments.push(Argument::Reference(
                 node.children.first().ok_or(EvaluationError::InvalidNode)?,
             ));
         } else {
-            arguments.push(Argument::Value(execute(node, input)?));
+            arguments.push(Argument::Value(execute(node, input, budget)?));
         }
     }
     if !matches!(name, "map" | "sort_by" | "max_by" | "min_by") {
-        return call_regular(name, &arguments);
+        return call_regular(name, &arguments, budget);
     }
     let [first, second] = arguments.as_slice() else {
         return Err(EvaluationError::FunctionArity);
@@ -47,7 +53,7 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         let mut result = Vec::with_capacity(values.len());
         let mut ordinary = None;
         for value in values {
-            match execute(reference, value).and_then(|item| {
+            match execute(reference, value, budget).and_then(|item| {
                 check(&item, 1)?;
                 Ok(item)
             }) {
@@ -71,7 +77,7 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     let mut numeric = None;
     let mut keys = Vec::with_capacity(values.len());
     for (index, value) in values.iter().enumerate() {
-        match execute(reference, value) {
+        match execute(reference, value, budget) {
             Ok(key) => {
                 if index == 0 {
                     numeric = match key {
@@ -185,7 +191,11 @@ fn comparison_error(error: EvaluationError) -> EvaluationError {
     }
 }
 
-fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, EvaluationError> {
+fn call_regular(
+    name: &str,
+    arguments: &[Argument<'_>],
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
     use super::functions::{self, Type};
     let signature = functions::signature(name).ok_or(EvaluationError::UnknownFunction)?;
     if signature.variadic {
@@ -217,7 +227,7 @@ fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, Evaluat
                 _ => None,
             })
             .collect::<Vec<_>>();
-        return functions::call(name, &values);
+        return functions::call_budgeted(name, &values, budget);
     }
     match (name, arguments) {
         (

@@ -2,7 +2,7 @@
 
 use crate::cli::render::Value;
 
-use super::interpreter::{EvaluationError, check};
+use super::interpreter::{EvaluationError, WorkBudget, check};
 
 #[derive(Clone, Copy)]
 pub(super) enum Type {
@@ -268,7 +268,16 @@ fn parse_go_float(value: &str) -> Option<f64> {
     Some(f64::from_bits(sign | bits))
 }
 
-pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
+#[cfg(test)]
+fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
+    call_budgeted(name, arguments, &mut WorkBudget::new())
+}
+
+pub(super) fn call_budgeted(
+    name: &str,
+    arguments: &[Value],
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
     let signature = signature(name).ok_or(EvaluationError::UnknownFunction)?;
     if signature.variadic {
         if arguments.len() < signature.arguments.len() {
@@ -305,6 +314,7 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
         )),
         ("contains", [Value::Array(values), needle]) => {
             for value in values {
+                budget.charge(1)?;
                 if matches!(
                     (value, needle),
                     (Value::Array(_), Value::Array(_)) | (Value::Object(_), Value::Object(_))
@@ -477,6 +487,17 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn contains_charges_each_scanned_element() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_998).unwrap();
+        let haystack = Value::Array(vec![Value::Number(0.0); 3]);
+        assert_eq!(
+            call_budgeted("contains", &[haystack, Value::Number(1.0)], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
 
     #[test]
     fn sort_rejects_nonfinite_numbers() {
