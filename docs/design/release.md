@@ -341,25 +341,25 @@ the approved bytes. A version with different bytes needs a new shared tag.
 
 ## Implementation boundary
 
-- Port duolane's build matrix, checks, smoke test, release notes, pins, assets
-  and safety gates, including exact-run checks and protected owner approval.
-- Add workspace and archive checks, shipped-command comparison, staging and
-  immutable receipt, checksum credential provider and per-crate recovery.
-- Test clean targets, bad manifests, changed receipts, wrong hashes, token
-  redaction, registry disagreement, ambiguous uploads and SDK-only recovery.
+Port duolane's build matrix, checks, smoke test, notes, pins, assets, exact-run
+checks and owner approval. Add the workspace, archive, and shipped-command
+checks, the receipt, the checksum provider, and per-crate recovery, each tested.
 
 ## Unverified
 
-- The rendered crates.io guide was unavailable. Its official source and the
-  token form source confirm the fields. The owner checks the deployed forms.
+- The crates.io forms come from their source, not the rendered guide; the owner
+  checks the deployed forms.
+- Accepted limits of the registry check: crates.io's not-found bodies were
+  observed on 2026-11-25, not documented; a reset during the response head and a
+  TLS timeout behind a proxy are not retried precisely.
 - Before any release, test two toy crates on a loopback registry with Cargo
   1.100.0 on macOS and Ubuntu. From empty paths, check dry-run staging, equality
   with the individual publish operation's checksums before and after the SDK is
   indexed, and no upload on mismatch. Test both secret sources. Cargo rebuilds
   the packaged lockfile, so byte equality is not guaranteed. A mismatch blocks
   release; do not weaken the gate.
-- The GitHub environment and Trusted Publishers remain untested. The owner
-  checks preflight and approval before the first Actions publish.
+- The GitHub environment and Trusted Publishers are untested until the first
+  Actions publish.
 
 [duolane]:
   https://github.com/dannyota/duolane/blob/master/docs/design/release.md
