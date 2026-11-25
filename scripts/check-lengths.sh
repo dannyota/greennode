@@ -82,11 +82,6 @@ while IFS= read -r -d '' file; do
       if [[ "$file" =~ ^crates/[^/]+/tests/(support/.*|[^/]+)$ ]]; then
         continue
       fi
-      case "$file" in
-        tests/support/*) continue ;;
-        tests/*/*) ;;
-        tests/*) continue ;;
-      esac
       limit=$RUST_MAX
       if [[ "$file" == *.rs ]] && ((exclude_tests)) && [[ -f "$file" ]] &&
         grep -q -e '^#\[cfg(test)\]' -- "$file" &&

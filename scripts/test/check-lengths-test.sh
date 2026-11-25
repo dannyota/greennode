@@ -84,6 +84,10 @@ printf '701 src/a=b.rs\n' >"$REPO/scripts/lengths-baseline.txt"
 expect 'equals sign in a baseline path' 0
 
 fresh_repo
+lines_file tests/stray.rs 701
+expect 'root test file counted' 1 'tests/stray.rs: 701 lines (limit 700)'
+
+fresh_repo
 lines_file crates/x/tests/cli.rs 701
 lines_file crates/x/tests/support/helper.rs 701
 expect 'crate test roots exempt' 0
