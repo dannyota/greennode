@@ -2,7 +2,9 @@
 
 use crate::cli::render::Value;
 
-use super::interpreter::{EvaluationError, check};
+use super::interpreter::{
+    EvaluationError, WorkBudget, check, compare_numbers, compare_strings, stable_order,
+};
 
 #[derive(Clone, Copy)]
 pub(super) enum Type {
@@ -47,26 +49,108 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
     })
 }
 
-pub(super) fn matches_type(value: &Value, kind: Type) -> bool {
-    match kind {
+pub(super) fn matches_type(
+    value: &Value,
+    kind: Type,
+    budget: &mut WorkBudget,
+) -> Result<bool, EvaluationError> {
+    let matches = match kind {
         Type::Number => matches!(value, Value::Number(_)),
         Type::String => matches!(value, Value::String(_)),
         Type::Array => matches!(value, Value::Array(_)),
         Type::Object => matches!(value, Value::Object(_)),
-        Type::ArrayNumber => {
-            matches!(value, Value::Array(items) if items.iter().all(|item| matches!(item, Value::Number(_))))
-        }
-        Type::ArrayString => {
-            matches!(value, Value::Array(items) if items.iter().all(|item| matches!(item, Value::String(_))))
+        Type::ArrayNumber | Type::ArrayString => {
+            let Value::Array(items) = value else {
+                return Ok(false);
+            };
+            for item in items {
+                budget.charge(1)?;
+                if !matches!(
+                    (kind, item),
+                    (Type::ArrayNumber, Value::Number(_)) | (Type::ArrayString, Value::String(_))
+                ) {
+                    return Ok(false);
+                }
+            }
+            true
         }
         Type::Expref => false,
         Type::Any => true,
+    };
+    Ok(matches)
+}
+
+fn json_string_size(value: &str, budget: &mut WorkBudget) -> Result<usize, EvaluationError> {
+    let mut size = 2usize;
+    for ch in value.chars() {
+        budget.charge(1)?;
+        let bytes = match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            '\0'..='\u{1f}' | '<' | '>' | '&' | '\u{2028}' | '\u{2029}' => 6,
+            _ => ch.len_utf8(),
+        };
+        size = size.checked_add(bytes).ok_or(EvaluationError::WorkBudget)?;
+    }
+    Ok(size)
+}
+
+fn json_size(
+    value: &Value,
+    budget: &mut WorkBudget,
+    depth: usize,
+) -> Result<usize, EvaluationError> {
+    if depth > 128 {
+        return Err(EvaluationError::Depth);
+    }
+    budget.charge(1)?;
+    match value {
+        Value::Null => Ok(4),
+        Value::Bool(value) => Ok(if *value { 4 } else { 5 }),
+        Value::Number(value) => Ok(crate::cli::render::query_json_float(*value)
+            .map_err(|_| EvaluationError::NonFinite)?
+            .len()),
+        Value::String(value) => json_string_size(value, budget),
+        Value::Array(values) => {
+            if depth >= 128 {
+                return Err(EvaluationError::Depth);
+            }
+            let mut size = 2usize;
+            for (index, value) in values.iter().enumerate() {
+                let element_size = json_size(value, budget, depth + 1)?;
+                size = size
+                    .checked_add(usize::from(index > 0))
+                    .and_then(|n| n.checked_add(element_size))
+                    .ok_or(EvaluationError::WorkBudget)?;
+            }
+            Ok(size)
+        }
+        Value::Object(values) => {
+            if depth >= 128 {
+                return Err(EvaluationError::Depth);
+            }
+            let mut size = 2usize;
+            for (index, (key, value)) in values.iter().enumerate() {
+                let key_size = json_string_size(key, budget)?;
+                let value_size = json_size(value, budget, depth + 1)?;
+                size = size
+                    .checked_add(usize::from(index > 0) + 1)
+                    .and_then(|n| n.checked_add(key_size))
+                    .and_then(|n| n.checked_add(value_size))
+                    .ok_or(EvaluationError::WorkBudget)?;
+            }
+            Ok(size)
+        }
     }
 }
 
-fn json_string(output: &mut String, value: &str) {
+fn json_string(
+    output: &mut String,
+    value: &str,
+    budget: &mut WorkBudget,
+) -> Result<(), EvaluationError> {
     output.push('"');
     for ch in value.chars() {
+        budget.charge(1)?;
         match ch {
             '"' => output.push_str("\\\""),
             '\\' => output.push_str("\\\\"),
@@ -82,9 +166,16 @@ fn json_string(output: &mut String, value: &str) {
         }
     }
     output.push('"');
+    Ok(())
 }
 
-fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), EvaluationError> {
+fn compact_json(
+    value: &Value,
+    output: &mut String,
+    depth: usize,
+    budget: &mut WorkBudget,
+) -> Result<(), EvaluationError> {
+    budget.charge(1)?;
     if depth > 128 {
         return Err(EvaluationError::Depth);
     }
@@ -95,7 +186,7 @@ fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), 
             &crate::cli::render::query_json_float(*value)
                 .map_err(|_| EvaluationError::NonFinite)?,
         ),
-        Value::String(value) => json_string(output, value),
+        Value::String(value) => json_string(output, value, budget)?,
         Value::Array(values) => {
             if depth >= 128 {
                 return Err(EvaluationError::Depth);
@@ -105,7 +196,7 @@ fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), 
                 if index > 0 {
                     output.push(',');
                 }
-                compact_json(value, output, depth + 1)?;
+                compact_json(value, output, depth + 1, budget)?;
             }
             output.push(']');
         }
@@ -118,9 +209,9 @@ fn compact_json(value: &Value, output: &mut String, depth: usize) -> Result<(), 
                 if index > 0 {
                     output.push(',');
                 }
-                json_string(output, key);
+                json_string(output, key, budget)?;
                 output.push(':');
-                compact_json(value, output, depth + 1)?;
+                compact_json(value, output, depth + 1, budget)?;
             }
             output.push('}');
         }
@@ -268,7 +359,30 @@ fn parse_go_float(value: &str) -> Option<f64> {
     Some(f64::from_bits(sign | bits))
 }
 
-pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
+fn bytes_equal(
+    left: &[u8],
+    right: &[u8],
+    budget: &mut WorkBudget,
+) -> Result<bool, EvaluationError> {
+    for (a, b) in left.iter().zip(right) {
+        budget.charge(1)?;
+        if a != b {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationError> {
+    call_budgeted(name, arguments, &mut WorkBudget::new())
+}
+
+pub(super) fn call_budgeted(
+    name: &str,
+    arguments: &[Value],
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
     let signature = signature(name).ok_or(EvaluationError::UnknownFunction)?;
     if signature.variadic {
         if arguments.len() < signature.arguments.len() {
@@ -279,32 +393,78 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             return Err(EvaluationError::FunctionArity);
         }
         for (argument, allowed) in arguments.iter().zip(signature.arguments) {
-            if !allowed.iter().any(|kind| matches_type(argument, *kind)) {
+            let mut valid = false;
+            for kind in *allowed {
+                if matches_type(argument, *kind, budget)? {
+                    valid = true;
+                    break;
+                }
+            }
+            if !valid {
                 return Err(EvaluationError::FunctionType);
             }
         }
     }
     match (name, arguments) {
-        ("keys", [Value::Object(values)]) => Ok(Value::Array(
-            values.keys().cloned().map(Value::String).collect(),
-        )),
-        ("values", [Value::Object(values)]) => {
-            for value in values.values() {
-                check(value, 1)?;
+        ("keys", [Value::Object(values)]) => {
+            budget.charge(1)?;
+            let mut result = Vec::new();
+            for key in values.keys() {
+                budget.charge(2)?;
+                budget.charge_bytes(key)?;
+                result.push(Value::String(key.clone()));
             }
-            Ok(Value::Array(values.values().cloned().collect()))
+            Ok(Value::Array(result))
+        }
+        ("values", [Value::Object(values)]) => {
+            budget.charge(1)?;
+            let mut result = Vec::new();
+            for value in values.values() {
+                budget.charge(1)?;
+                check(value, 1, budget)?;
+                budget.charge_value(value)?;
+                result.push(value.clone());
+            }
+            Ok(Value::Array(result))
         }
         ("starts_with", [Value::String(value), Value::String(prefix)]) => {
-            Ok(Value::Bool(value.starts_with(prefix)))
+            if prefix.len() > value.len() {
+                return Ok(Value::Bool(false));
+            }
+            Ok(Value::Bool(bytes_equal(
+                &value.as_bytes()[..prefix.len()],
+                prefix.as_bytes(),
+                budget,
+            )?))
         }
         ("ends_with", [Value::String(value), Value::String(suffix)]) => {
-            Ok(Value::Bool(value.ends_with(suffix)))
+            if suffix.len() > value.len() {
+                return Ok(Value::Bool(false));
+            }
+            Ok(Value::Bool(bytes_equal(
+                &value.as_bytes()[value.len() - suffix.len()..],
+                suffix.as_bytes(),
+                budget,
+            )?))
         }
-        ("contains", [Value::String(value), needle]) => Ok(Value::Bool(
-            matches!(needle, Value::String(needle) if value.contains(needle)),
-        )),
+        ("contains", [Value::String(value), Value::String(needle)]) => {
+            if needle.len() > value.len() {
+                return Ok(Value::Bool(false));
+            }
+            let bytes = value
+                .len()
+                .checked_add(needle.len())
+                .ok_or(EvaluationError::WorkBudget)?;
+            budget.charge(u64::try_from(bytes).map_err(|_| EvaluationError::WorkBudget)?)?;
+            Ok(Value::Bool(value.contains(needle)))
+        }
+        ("contains", [Value::String(_), _]) => Ok(Value::Bool(false)),
         ("contains", [Value::Array(values), needle]) => {
             for value in values {
+                budget.charge(1)?;
+                if let (Value::String(left), Value::String(right)) = (value, needle) {
+                    budget.charge_compare_bytes(left, right)?;
+                }
                 if matches!(
                     (value, needle),
                     (Value::Array(_), Value::Array(_)) | (Value::Object(_), Value::Object(_))
@@ -318,36 +478,64 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             Ok(Value::Bool(false))
         }
         ("join", [Value::String(separator), Value::Array(values)]) => {
-            let mut parts = Vec::with_capacity(values.len());
+            let mut parts = Vec::new();
+            let mut bytes = 0usize;
             for value in values {
+                budget.charge(1)?;
                 let Value::String(value) = value else {
                     return Err(EvaluationError::FunctionType);
                 };
+                if !parts.is_empty() {
+                    bytes = bytes
+                        .checked_add(separator.len())
+                        .ok_or(EvaluationError::WorkBudget)?;
+                }
+                bytes = bytes
+                    .checked_add(value.len())
+                    .ok_or(EvaluationError::WorkBudget)?;
                 parts.push(value.as_str());
             }
+            budget.charge(u64::try_from(bytes).map_err(|_| EvaluationError::WorkBudget)?)?;
             Ok(Value::String(parts.join(separator)))
         }
-        ("to_array", [Value::Array(values)]) => Ok(Value::Array(values.clone())),
+        ("to_array", [Value::Array(values)]) => {
+            budget.charge(1)?;
+            for value in values {
+                budget.charge_value(value)?;
+            }
+            Ok(Value::Array(values.clone()))
+        }
         ("to_array", [value]) => {
-            check(value, 1)?;
+            budget.charge(1)?;
+            check(value, 1, budget)?;
+            budget.charge_value(value)?;
             Ok(Value::Array(vec![value.clone()]))
         }
-        ("to_string", [Value::String(value)]) => Ok(Value::String(value.clone())),
+        ("to_string", [Value::String(value)]) => {
+            budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+            Ok(Value::String(value.clone()))
+        }
         ("to_string", [value]) => {
-            let mut output = String::new();
-            compact_json(value, &mut output, 0)?;
+            let size = json_size(value, budget, 0)?;
+            budget.charge(u64::try_from(size).map_err(|_| EvaluationError::WorkBudget)?)?;
+            let mut output = String::with_capacity(size);
+            compact_json(value, &mut output, 0, budget)?;
             Ok(Value::String(output))
         }
         ("to_number", [Value::Number(value)]) => Ok(Value::Number(*value)),
-        ("to_number", [Value::String(value)]) => match parse_go_float(value) {
-            Some(value) if value.is_finite() => Ok(Value::Number(value)),
-            Some(_) => Err(EvaluationError::NonFinite),
-            None => Ok(Value::Null),
-        },
+        ("to_number", [Value::String(value)]) => {
+            budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+            match parse_go_float(value) {
+                Some(value) if value.is_finite() => Ok(Value::Number(value)),
+                Some(_) => Err(EvaluationError::NonFinite),
+                None => Ok(Value::Null),
+            }
+        }
         ("to_number", [_]) => Ok(Value::Null),
         ("sum", [Value::Array(values)]) => {
             let mut sum = 0.0;
             for value in values {
+                budget.charge(1)?;
                 let Value::Number(number) = value else {
                     return Err(EvaluationError::FunctionType);
                 };
@@ -363,11 +551,16 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             let Some(first) = values.first() else {
                 return Ok(Value::Null);
             };
+            budget.charge(1)?;
             let mut best = first;
             for value in &values[1..] {
+                budget.charge(1)?;
                 let ordering = match (value, best) {
                     (Value::Number(a), Value::Number(b)) => a.partial_cmp(b),
-                    (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+                    (Value::String(a), Value::String(b)) => {
+                        budget.charge_compare_bytes(a, b)?;
+                        Some(a.cmp(b))
+                    }
                     _ => return Err(EvaluationError::FunctionType),
                 };
                 if (name == "max" && ordering == Some(std::cmp::Ordering::Greater))
@@ -376,49 +569,43 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
                     best = value;
                 }
             }
+            budget.charge_value(best)?;
             Ok(best.clone())
         }
         ("sort", [Value::Array(values)]) => {
-            if values.iter().all(|value| matches!(value, Value::Number(_))) {
-                let mut numbers = values
-                    .iter()
-                    .map(|value| match value {
-                        Value::Number(number) if number.is_finite() => Ok(*number),
-                        Value::Number(_) => Err(EvaluationError::NonFinite),
-                        _ => Err(EvaluationError::FunctionType),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                numbers.sort_by(|a, b| {
-                    if a == b {
-                        std::cmp::Ordering::Equal
-                    } else {
-                        a.total_cmp(b)
-                    }
-                });
-                Ok(Value::Array(
-                    numbers.into_iter().map(Value::Number).collect(),
-                ))
-            } else {
-                let mut strings = values
-                    .iter()
-                    .map(|value| match value {
-                        Value::String(string) => Ok(string.clone()),
-                        _ => Err(EvaluationError::FunctionType),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                strings.sort();
-                Ok(Value::Array(
-                    strings.into_iter().map(Value::String).collect(),
-                ))
+            budget.charge(1)?;
+            for value in values {
+                budget.charge(1)?;
+                if matches!(value, Value::Number(number) if !number.is_finite()) {
+                    return Err(EvaluationError::NonFinite);
+                }
             }
+            let order = stable_order(values, budget, |a, b, budget| match (a, b) {
+                (Value::Number(a), Value::Number(b)) => compare_numbers(a, b, budget),
+                (Value::String(a), Value::String(b)) => compare_strings(a, b, budget),
+                _ => Err(EvaluationError::FunctionType),
+            })?;
+            let mut result = Vec::new();
+            for index in order {
+                budget.charge_value(&values[index])?;
+                result.push(values[index].clone());
+            }
+            Ok(Value::Array(result))
         }
         ("merge", values) => {
+            budget.charge(1)?;
             let mut merged = std::collections::BTreeMap::new();
             for value in values {
                 let Value::Object(map) = value else {
                     return Err(EvaluationError::FunctionPanic);
                 };
-                merged.extend(map.clone());
+                for (key, value) in map {
+                    budget.charge(1)?;
+                    budget.charge_bytes(key)?;
+                    budget.charge_value(value)?;
+                    budget.charge_merge_key(key, merged.len())?;
+                    merged.insert(key.clone(), value.clone());
+                }
             }
             Ok(Value::Object(merged))
         }
@@ -428,6 +615,7 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
         ("avg", [Value::Array(values)]) => {
             let mut sum = 0.0;
             for value in values {
+                budget.charge(1)?;
                 let Value::Number(value) = value else {
                     return Err(EvaluationError::FunctionType);
                 };
@@ -451,18 +639,43 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             }
             .into(),
         )),
-        ("not_null", values) => Ok(values
-            .iter()
-            .find(|value| **value != Value::Null)
-            .cloned()
-            .unwrap_or(Value::Null)),
-        ("reverse", [Value::String(value)]) => Ok(Value::String(value.chars().rev().collect())),
+        ("not_null", values) => {
+            for value in values {
+                budget.charge(1)?;
+                if *value != Value::Null {
+                    budget.charge_value(value)?;
+                    return Ok(value.clone());
+                }
+            }
+            Ok(Value::Null)
+        }
+        ("reverse", [Value::String(value)]) => {
+            for _ in value.chars() {
+                budget.charge(1)?;
+            }
+            budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+            Ok(Value::String(value.chars().rev().collect()))
+        }
         ("reverse", [Value::Array(values)]) => {
-            Ok(Value::Array(values.iter().rev().cloned().collect()))
+            budget.charge(1)?;
+            let mut result = Vec::new();
+            for value in values.iter().rev() {
+                budget.charge(1)?;
+                budget.charge_value(value)?;
+                result.push(value.clone());
+            }
+            Ok(Value::Array(result))
         }
         ("length", [value]) => {
             let length = match value {
-                Value::String(value) => value.chars().count(),
+                Value::String(value) => {
+                    let mut length = 0;
+                    for _ in value.chars() {
+                        budget.charge(1)?;
+                        length += 1;
+                    }
+                    length
+                }
                 Value::Array(value) => value.len(),
                 Value::Object(value) => value.len(),
                 _ => return Err(EvaluationError::FunctionType),
@@ -477,6 +690,349 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn merge_charges_key_comparisons() {
+        let prefix = "x".repeat(1_024);
+        let left = Value::Object(BTreeMap::from([(format!("{prefix}a"), Value::Null)]));
+        let right = Value::Object(BTreeMap::from([(format!("{prefix}b"), Value::Null)]));
+        let mut budget = WorkBudget::new();
+        budget.charge(9_997_500).unwrap();
+        assert_eq!(
+            call_budgeted("merge", &[left, right], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn contains_long_repeated_strings_uses_linear_work() {
+        let input = Value::String("a".repeat(1024 * 1024));
+        let needle = Value::String(format!("{}b", "a".repeat(32 * 1024)));
+        let mut budget = WorkBudget::new();
+        budget.charge(8_000_000).unwrap();
+        assert_eq!(
+            call_budgeted("contains", &[input, needle], &mut budget),
+            Ok(Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn extrema_and_sort_charge_string_comparison_bytes() {
+        let prefix = "x".repeat(1_024);
+        let input = Value::Array(vec![
+            Value::String(format!("{prefix}a")),
+            Value::String(format!("{prefix}b")),
+        ]);
+        for (name, used) in [("min", 9_998_500), ("max", 9_998_500), ("sort", 9_997_500)] {
+            let mut budget = WorkBudget::new();
+            budget.charge(used).unwrap();
+            assert_eq!(
+                call_budgeted(name, std::slice::from_ref(&input), &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn contains_charges_long_string_comparisons() {
+        let prefix = "x".repeat(64 * 1024);
+        let haystack = Value::Array(vec![Value::String(format!("{prefix}a")); 64]);
+        let needle = Value::String(format!("{prefix}b"));
+        let args = [haystack, needle];
+        let mut budget = WorkBudget::new();
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Ok(Value::Bool(false))
+        );
+        assert_eq!(
+            call_budgeted("contains", &args, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn sorted_strings_do_not_pay_worst_case_sort_budget() {
+        let prefix = "x".repeat(256);
+        let input = Value::Array(
+            (0..999)
+                .map(|n| Value::String(format!("{prefix}{n:04}")))
+                .collect(),
+        );
+        assert!(matches!(call("sort", &[input]), Ok(Value::Array(values)) if values.len() == 999));
+    }
+
+    #[test]
+    fn descending_string_sort_stops_at_budget() {
+        let prefix = "x".repeat(80);
+        let input = Value::Array(
+            (0..80_000)
+                .rev()
+                .map(|n| Value::String(format!("{prefix}{n:05}")))
+                .collect(),
+        );
+        assert!(matches!(
+            call("sort", &[input]),
+            Err(EvaluationError::WorkBudget)
+        ));
+    }
+
+    #[test]
+    fn merge_two_thousand_keys_stays_within_budget() {
+        let input = Value::Object(
+            (0..2_000)
+                .map(|n| (format!("key{n:05}"), Value::Null))
+                .collect(),
+        );
+        assert!(
+            matches!(call("merge", &[input]), Ok(Value::Object(values)) if values.len() == 2_000)
+        );
+    }
+
+    #[test]
+    fn standalone_key_copies_consume_byte_budget() {
+        for name in ["keys", "merge"] {
+            let input = Value::Object(BTreeMap::from([("x".repeat(1_024), Value::Null)]));
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            assert_eq!(
+                call_budgeted(name, &[input], &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn exhausted_sort_comparison_returns_error() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_999).unwrap();
+        assert_eq!(
+            compare_strings("a", "b", &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+        assert_eq!(
+            compare_numbers(&1.0, &2.0, &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn sort_comparisons_count_comparisons_and_bytes() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_996).unwrap();
+        assert_eq!(
+            compare_numbers(&1.0, &2.0, &mut budget),
+            Ok(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            compare_strings("ab", "ab", &mut budget),
+            Ok(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(budget.charge(1), Err(EvaluationError::WorkBudget));
+    }
+
+    #[test]
+    fn number_parsing_charges_input_bytes() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_998).unwrap();
+        assert_eq!(
+            call_budgeted("to_number", &[Value::String("123".into())], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn empty_function_output_charges_container() {
+        let mut budget = WorkBudget::new();
+        budget.charge(10_000_000).unwrap();
+        assert_eq!(
+            call_budgeted("keys", &[Value::Object(BTreeMap::new())], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn string_searches_charge_examined_bytes() {
+        for (name, value, needle) in [
+            ("starts_with", "abc", "abc"),
+            ("ends_with", "abc", "abc"),
+            ("contains", "abc", "bc"),
+        ] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_999).unwrap();
+            assert_eq!(
+                call_budgeted(
+                    name,
+                    &[Value::String(value.into()), Value::String(needle.into())],
+                    &mut budget
+                ),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_strings_and_not_null_charge_scans() {
+        let mut nulls = vec![Value::Null; 1_000];
+        nulls.push(Value::Number(1.0));
+        for (name, args) in [
+            ("reverse", vec![Value::String("a".repeat(1_000))]),
+            ("not_null", nulls),
+        ] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            assert_eq!(
+                call_budgeted(name, &args, &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sort_charges_comparisons() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_996_000).unwrap();
+        let input = Value::Array((0..1_024).rev().map(|n| Value::Number(n as f64)).collect());
+        assert_eq!(
+            call_budgeted("sort", &[input], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn array_type_checks_charge_examined_elements() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_998).unwrap();
+        let input = Value::Array(vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::String("x".into()),
+        ]);
+        assert_eq!(
+            call_budgeted("avg", &[input], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn to_string_charges_emission_scan() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_988).unwrap();
+        let input = Value::Array(vec![Value::String("abc".into())]);
+        assert_eq!(
+            call_budgeted("to_string", &[input], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn to_string_charges_output_bytes() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_998).unwrap();
+        assert_eq!(
+            call_budgeted("to_string", &[Value::Number(1.0)], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn string_outputs_are_charged_before_allocation() {
+        for (name, arguments) in [
+            (
+                "join",
+                vec![
+                    Value::String("-".into()),
+                    Value::Array(vec![Value::String("abc".into())]),
+                ],
+            ),
+            (
+                "to_string",
+                vec![Value::Array(vec![Value::String("abc".into())])],
+            ),
+        ] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_998).unwrap();
+            assert_eq!(
+                call_budgeted(name, &arguments, &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_scans_charge_elements() {
+        for name in ["sum", "avg", "min", "max"] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_998_501).unwrap();
+            let input = Value::Array(vec![Value::Number(1.0); 1_000]);
+            assert_eq!(
+                call_budgeted(name, &[input], &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn object_output_charges_elements() {
+        for name in ["keys", "values", "merge"] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            let input = Value::Object(
+                (0..1_000)
+                    .map(|index| (index.to_string(), Value::Null))
+                    .collect(),
+            );
+            assert_eq!(
+                call_budgeted(name, &[input], &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_and_to_array_charge_produced_values() {
+        for name in ["reverse", "to_array"] {
+            let mut budget = WorkBudget::new();
+            budget.charge(9_999_500).unwrap();
+            let input = Value::Array(vec![Value::Null; 1_000]);
+            assert_eq!(
+                call_budgeted(name, &[input], &mut budget),
+                Err(EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn string_length_charges_characters() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_500).unwrap();
+        assert_eq!(
+            call_budgeted("length", &[Value::String("🌿".repeat(1_000))], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn contains_charges_each_scanned_element() {
+        let mut budget = WorkBudget::new();
+        budget.charge(9_999_998).unwrap();
+        let haystack = Value::Array(vec![Value::Number(0.0); 3]);
+        assert_eq!(
+            call_budgeted("contains", &[haystack, Value::Number(1.0)], &mut budget),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
 
     #[test]
     fn sort_rejects_nonfinite_numbers() {

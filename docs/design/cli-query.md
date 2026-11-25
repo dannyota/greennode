@@ -74,16 +74,19 @@ than replacing the value silently. Evaluation also has a work budget, because
 depth alone does not bound it: a few `[@,@]` steps joined by pipes double the
 result each time. Count one unit for every AST node visited, every value element
 produced, and every element a built-in function or a recursive comparison
-examines, and stop at 10,000,000 units. Track the expanded size of the result as
-it is built, counting shared subtrees once per use, and stop at 64 MiB, the
-table limit. Both checks run before the allocation they guard. Exceeding either
-is `QueryFailed`, with the after-write wording when a write succeeded. A second
-test runs a filter that calls `contains` on a long array for each row and
-produces almost nothing, and asserts the budget stops it. A test runs one
-mutation, then a doubling query, and asserts exactly one mutation request and
-the no-retry message. For `*` on an object and for `keys` and `values`, traverse
-by UTF-8 key bytes in ascending order. Go's map iteration does not promise an
-order. Keep array ordering and all other specified ordering unchanged.
+examines, and stop at 10,000,000 units. A sort charges its worst-case comparison
+count before sorting; a new scalar result and `to_number`'s internal scans ride
+on the charge for the node or input byte that produced them. Track the expanded
+size of the result as it is built, counting shared subtrees once per use, and
+stop at 64 MiB, the table limit. Both checks run before the allocation they
+guard. Exceeding either is `QueryFailed`, with the after-write wording when a
+write succeeded. A second test runs a filter that calls `contains` on a long
+array for each row and produces almost nothing, and asserts the budget stops it.
+A test runs one mutation, then a doubling query, and asserts exactly one
+mutation request and the no-retry message. For `*` on an object and for `keys`
+and `values`, traverse by UTF-8 key bytes in ascending order. Go's map iteration
+does not promise an order. Keep array ordering and all other specified ordering
+unchanged.
 
 ## Oracle and tests
 

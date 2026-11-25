@@ -1,7 +1,7 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
 use super::{
-    interpreter::{EvaluationError, check, execute},
+    interpreter::{EvaluationError, WorkBudget, check, execute},
     parser::{Node, NodeKind},
 };
 use crate::cli::render::Value;
@@ -11,19 +11,25 @@ enum Argument<'a> {
     Reference(&'a Node),
 }
 
-pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, EvaluationError> {
-    let mut arguments = Vec::with_capacity(nodes.len());
+pub(super) fn call(
+    name: &str,
+    nodes: &[Node],
+    input: &Value,
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
+    let mut arguments = Vec::new();
     for node in nodes {
         if node.kind == NodeKind::ExpRef {
+            budget.charge(1)?;
             arguments.push(Argument::Reference(
                 node.children.first().ok_or(EvaluationError::InvalidNode)?,
             ));
         } else {
-            arguments.push(Argument::Value(execute(node, input)?));
+            arguments.push(Argument::Value(execute(node, input, budget)?));
         }
     }
     if !matches!(name, "map" | "sort_by" | "max_by" | "min_by") {
-        return call_regular(name, &arguments);
+        return call_regular(name, &arguments, budget);
     }
     let [first, second] = arguments.as_slice() else {
         return Err(EvaluationError::FunctionArity);
@@ -44,14 +50,19 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         }
     };
     if name == "map" {
-        let mut result = Vec::with_capacity(values.len());
+        budget.charge(1)?;
+        let mut result = Vec::new();
         let mut ordinary = None;
         for value in values {
-            match execute(reference, value).and_then(|item| {
-                check(&item, 1)?;
+            budget.charge(1)?;
+            match execute(reference, value, budget).and_then(|item| {
+                check(&item, 1, budget)?;
                 Ok(item)
             }) {
-                Ok(item) => result.push(item),
+                Ok(item) => {
+                    budget.charge(1)?;
+                    result.push(item);
+                }
                 Err(error) => record_error(error, &mut ordinary)?,
             }
         }
@@ -61,7 +72,11 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         return Ok(Value::Array(result));
     }
     if values.len() < 2 {
+        if let Some(value) = values.first() {
+            budget.charge_value(value)?;
+        }
         return if name == "sort_by" {
+            budget.charge(1)?;
             Ok(Value::Array(values.clone()))
         } else {
             Ok(values.first().cloned().unwrap_or(Value::Null))
@@ -69,9 +84,10 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     }
     let mut ordinary = None;
     let mut numeric = None;
-    let mut keys = Vec::with_capacity(values.len());
+    let mut keys = Vec::new();
     for (index, value) in values.iter().enumerate() {
-        match execute(reference, value) {
+        budget.charge(1)?;
+        match execute(reference, value, budget) {
             Ok(key) => {
                 if index == 0 {
                     numeric = match key {
@@ -114,16 +130,22 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
     if name != "sort_by" {
         let mut best = 0;
         for index in 1..keys.len() {
+            budget.charge(2)?;
+            if let (Value::String(left), Value::String(right)) = (&keys[index], &keys[best]) {
+                budget.charge_compare_bytes(left, right)?;
+            }
             let ordering = compare_keys(&keys[index], &keys[best], numeric)
                 .ok_or(EvaluationError::FunctionType)?;
             if (name == "max_by" && ordering.is_gt()) || (name == "min_by" && ordering.is_lt()) {
                 best = index;
             }
         }
+        budget.charge_value(&values[best])?;
         return Ok(values[best].clone());
     }
+    budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
     if numeric {
-        let mut indexed = keys
+        let indexed = keys
             .into_iter()
             .zip(values.iter())
             .map(|(key, value)| match key {
@@ -132,21 +154,20 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        indexed.sort_by(|(a, _), (b, _)| {
-            if a == b {
-                std::cmp::Ordering::Equal
-            } else {
-                a.total_cmp(b)
-            }
-        });
-        Ok(Value::Array(
-            indexed
-                .into_iter()
-                .map(|(_, value)| value.clone())
-                .collect(),
-        ))
+        let order =
+            super::interpreter::stable_order(&indexed, budget, |(a, _), (b, _), budget| {
+                super::interpreter::compare_numbers(a, b, budget)
+            })?;
+        budget.charge(1)?;
+        let mut output = Vec::new();
+        for index in order {
+            let value = indexed[index].1;
+            budget.charge_value(value)?;
+            output.push(value.clone());
+        }
+        Ok(Value::Array(output))
     } else {
-        let mut indexed = keys
+        let indexed = keys
             .into_iter()
             .zip(values.iter())
             .map(|(key, value)| match key {
@@ -154,13 +175,18 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
                 _ => Err(EvaluationError::FunctionComparison),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
-        Ok(Value::Array(
-            indexed
-                .into_iter()
-                .map(|(_, value)| value.clone())
-                .collect(),
-        ))
+        let order =
+            super::interpreter::stable_order(&indexed, budget, |(a, _), (b, _), budget| {
+                super::interpreter::compare_strings(a, b, budget)
+            })?;
+        budget.charge(1)?;
+        let mut output = Vec::new();
+        for index in order {
+            let value = indexed[index].1;
+            budget.charge_value(value)?;
+            output.push(value.clone());
+        }
+        Ok(Value::Array(output))
     }
 }
 
@@ -185,7 +211,11 @@ fn comparison_error(error: EvaluationError) -> EvaluationError {
     }
 }
 
-fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, EvaluationError> {
+fn call_regular(
+    name: &str,
+    arguments: &[Argument<'_>],
+    budget: &mut WorkBudget,
+) -> Result<Value, EvaluationError> {
     use super::functions::{self, Type};
     let signature = functions::signature(name).ok_or(EvaluationError::UnknownFunction)?;
     if signature.variadic {
@@ -197,10 +227,17 @@ fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, Evaluat
             return Err(EvaluationError::FunctionArity);
         }
         for (arg, allowed) in arguments.iter().zip(signature.arguments) {
-            let valid = allowed.iter().any(|kind| match arg {
-                Argument::Value(value) => functions::matches_type(value, *kind),
-                Argument::Reference(_) => matches!(kind, Type::Any | Type::Expref),
-            });
+            let mut valid = false;
+            for kind in *allowed {
+                let matches = match arg {
+                    Argument::Value(value) => functions::matches_type(value, *kind, budget)?,
+                    Argument::Reference(_) => matches!(kind, Type::Any | Type::Expref),
+                };
+                if matches {
+                    valid = true;
+                    break;
+                }
+            }
             if !valid {
                 return Err(EvaluationError::FunctionType);
             }
@@ -210,29 +247,42 @@ fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, Evaluat
         .iter()
         .all(|arg| matches!(arg, Argument::Value(_)))
     {
-        let values = arguments
-            .iter()
-            .filter_map(|arg| match arg {
-                Argument::Value(value) => Some(value.clone()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        return functions::call(name, &values);
+        let mut values = Vec::new();
+        for argument in arguments {
+            if let Argument::Value(value) = argument {
+                budget.charge_value(value)?;
+                values.push(value.clone());
+            }
+        }
+        return functions::call_budgeted(name, &values, budget);
     }
     match (name, arguments) {
+        ("contains", [Argument::Value(Value::String(_)), Argument::Reference(_)]) => {
+            Ok(Value::Bool(false))
+        }
         (
             "contains",
             [
-                Argument::Value(Value::String(_) | Value::Array(_)),
+                Argument::Value(Value::Array(values)),
                 Argument::Reference(_),
             ],
-        ) => Ok(Value::Bool(false)),
-        ("to_string", [Argument::Reference(_)]) => Ok(Value::String("{}".into())),
+        ) => {
+            budget.charge(u64::try_from(values.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+            Ok(Value::Bool(false))
+        }
+        ("to_string", [Argument::Reference(_)]) => {
+            budget.charge(2)?;
+            Ok(Value::String("{}".into()))
+        }
         ("not_null", values) => {
             for value in values {
+                budget.charge(1)?;
                 match value {
                     Argument::Value(Value::Null) => {}
-                    Argument::Value(value) => return Ok(value.clone()),
+                    Argument::Value(value) => {
+                        budget.charge_value(value)?;
+                        return Ok(value.clone());
+                    }
                     Argument::Reference(_) => return Err(EvaluationError::Unsupported),
                 }
             }
@@ -256,6 +306,93 @@ fn compare_keys(a: &Value, b: &Value, numeric: bool) -> Option<std::cmp::Orderin
 mod tests {
     use super::super::{compile, evaluate};
     use crate::cli::render::Value;
+
+    #[test]
+    fn sorted_by_strings_stay_within_budget() {
+        let prefix = "x".repeat(256);
+        let input = Value::Array(
+            (0..999)
+                .map(|n| Value::String(format!("{prefix}{n:04}")))
+                .collect(),
+        );
+        assert!(
+            matches!(evaluate(&compile("sort_by(@, &@)").unwrap(), &input), Ok(Value::Array(values)) if values.len() == 999)
+        );
+    }
+
+    #[test]
+    fn by_functions_charge_string_key_comparisons() {
+        let prefix = "x".repeat(1_024);
+        let input = Value::Array(vec![
+            Value::String(format!("{prefix}a")),
+            Value::String(format!("{prefix}b")),
+        ]);
+        for (name, used) in [
+            ("max_by", 9_994_500),
+            ("min_by", 9_994_500),
+            ("sort_by", 9_993_300),
+        ] {
+            let query = compile(&format!("{name}(@, &@)")).unwrap();
+            let mut budget = super::WorkBudget::new();
+            budget.charge(used).unwrap();
+            assert_eq!(
+                super::call(name, &query.0.children, &input, &mut budget),
+                Err(super::EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn contains_reference_charges_array_scan() {
+        let query = compile("contains(@, &foo)").unwrap();
+        let input = Value::Array(vec![Value::Number(1.0); 1_000]);
+        let mut budget = super::WorkBudget::new();
+        budget.charge(9_998_500).unwrap();
+        assert_eq!(
+            super::call("contains", &query.0.children, &input, &mut budget),
+            Err(super::EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn extremum_by_charges_key_comparisons() {
+        let input = Value::Array((0..1_000).rev().map(|n| Value::Number(n as f64)).collect());
+        for name in ["max_by", "min_by"] {
+            let query = compile(&format!("{name}(@, &@)")).unwrap();
+            let mut budget = super::WorkBudget::new();
+            budget.charge(9_995_000).unwrap();
+            assert_eq!(
+                super::call(name, &query.0.children, &input, &mut budget),
+                Err(super::EvaluationError::WorkBudget),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn sort_by_charges_keys_comparisons_and_output() {
+        let query = compile("sort_by(@, &@)").unwrap();
+        let input = Value::Array((0..1_000).rev().map(|n| Value::Number(n as f64)).collect());
+        let mut budget = super::WorkBudget::new();
+        budget.charge(9_991_500).unwrap();
+        assert_eq!(
+            super::call("sort_by", &query.0.children, &input, &mut budget),
+            Err(super::EvaluationError::WorkBudget)
+        );
+    }
+
+    #[test]
+    fn map_charges_examined_and_produced_elements() {
+        let query = compile("map(&@, @)").unwrap();
+        let input = Value::Array(vec![Value::Number(1.0); 1_000]);
+        let mut budget = super::WorkBudget::new();
+        budget.charge(9_996_800).unwrap();
+        assert_eq!(
+            super::call("map", &query.0.children, &input, &mut budget),
+            Err(super::EvaluationError::WorkBudget)
+        );
+    }
 
     #[test]
     fn direct_references_reach_any_function() {
