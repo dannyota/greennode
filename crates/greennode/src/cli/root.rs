@@ -18,22 +18,27 @@ fn command() -> Command {
         .subcommand(Command::new("version").about("Print the greennode version"))
         .subcommand(Command::new("__command-inventory").hide(true));
     for &name in crate::services::GLOBAL_FLAGS {
-        let action = if matches!(name, "yes" | "read-only" | "debug") {
-            ArgAction::SetTrue
+        let arg = Arg::new(name).long(name).global(true);
+        let arg = if matches!(name, "yes" | "read-only" | "debug") {
+            arg.action(ArgAction::Set)
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("true")
+                .value_parser(clap::value_parser!(bool))
         } else {
-            ArgAction::Set
+            arg.action(ArgAction::Set)
         };
-        root = root.arg(Arg::new(name).long(name).global(true).action(action));
+        root = root.arg(arg);
     }
     root
 }
 
-fn command_with_registry(registry: &crate::services::Registry) -> Command {
+pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
     let mut root = command();
     for service in registry.services() {
         let mut service_command = Command::new(service.name);
         for operation in service.operations {
-            let mut operation_command = Command::new(operation.name);
+            let mut operation_command = Command::new(operation.name).about(operation.short_help);
             for flag in operation.flags.iter().chain(operation.extra_flags) {
                 operation_command = operation_command.arg(Arg::new(flag.name).long(flag.name));
             }
@@ -42,6 +47,14 @@ fn command_with_registry(registry: &crate::services::Registry) -> Command {
         root = root.subcommand(service_command);
     }
     root
+}
+
+fn collect_command_paths(command: &Command, parent: &str, paths: &mut Vec<String>) {
+    let path = format!("{parent} {}", command.get_name());
+    paths.push(path.clone());
+    for child in command.get_subcommands().filter(|c| !c.is_hide_set()) {
+        collect_command_paths(child, &path, paths);
+    }
 }
 
 fn inventory(registry: &crate::services::Registry) -> String {
@@ -56,10 +69,12 @@ fn inventory(registry: &crate::services::Registry) -> String {
     ]
     .map(str::to_owned)
     .to_vec();
-    for service in registry.services() {
-        for operation in service.operations {
-            paths.push(format!("greennode {} {}", service.name, operation.name));
-        }
+    let root = command_with_registry(registry);
+    for service in root
+        .get_subcommands()
+        .filter(|c| !c.is_hide_set() && c.get_name() != "version")
+    {
+        collect_command_paths(service, "greennode", &mut paths);
     }
     paths.sort();
     let mut output = String::from("[\n");
@@ -124,16 +139,58 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let matches = match command_with_registry(registry).try_get_matches_from(args) {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    if args.iter().any(|arg| arg == "__command-inventory")
+        && args
+            .iter()
+            .skip(1)
+            .any(|arg| arg == "help" || arg == "--help" || arg == "-h")
+    {
+        let _ = writeln!(
+            stderr,
+            "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"unknown command\"}}}}"
+        );
+        return ExitCode::from(2);
+    }
+    let mut after_separator = false;
+    let mut without_help = Vec::new();
+    let mut has_help = false;
+    for arg in &args {
+        if !after_separator && (arg == "--help" || arg == "-h") {
+            has_help = true;
+        } else {
+            if arg == "--" {
+                after_separator = true;
+            }
+            without_help.push(arg.clone());
+        }
+    }
+    let parsed = if has_help {
+        match command_with_registry(registry).try_get_matches_from(&without_help) {
+            Err(error) if error.use_stderr() => Err(error),
+            _ => command_with_registry(registry).try_get_matches_from(&args),
+        }
+    } else {
+        command_with_registry(registry).try_get_matches_from(&args)
+    };
+    let matches = match parsed {
         Ok(matches) => matches,
         Err(error) => {
-            let rendered = error.render();
-            let _ = if error.use_stderr() {
-                write!(stderr, "{rendered}")
-            } else {
-                write!(stdout, "{rendered}")
+            if !error.use_stderr() {
+                let _ = write!(stdout, "{}", error.render());
+                return ExitCode::SUCCESS;
+            }
+            let message = match error.kind() {
+                clap::error::ErrorKind::InvalidSubcommand => "unknown command",
+                clap::error::ErrorKind::UnknownArgument => "unknown argument or flag",
+                clap::error::ErrorKind::InvalidValue => "invalid flag value",
+                _ => "invalid command usage",
             };
-            return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(1));
+            let _ = writeln!(
+                stderr,
+                "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"{message}\"}}}}"
+            );
+            return ExitCode::from(2);
         }
     };
     if matches.get_flag("version-flag") || matches.subcommand_name() == Some("version") {
@@ -162,6 +219,11 @@ mod tests {
     fn service_without_operation_prints_help() {
         const OP: Operation = Operation {
             name: "inspect",
+            sdk_operation: "Inspect",
+            short_help: "Inspect",
+            example: None,
+            presence_required_fields: &[],
+            inherited_bindings: &[],
             kind: Kind::Read,
             flags: &[],
             json_fields: &[],
@@ -184,6 +246,11 @@ mod tests {
     fn registered_service_is_in_help_and_parser() {
         const OP: Operation = Operation {
             name: "inspect",
+            sdk_operation: "Inspect",
+            short_help: "Inspect",
+            example: None,
+            presence_required_fields: &[],
+            inherited_bindings: &[],
             kind: Kind::Read,
             flags: &[],
             json_fields: &[],
@@ -195,6 +262,7 @@ mod tests {
             operations: &[OP],
         }])
         .unwrap();
+        assert!(super::inventory(&registry).contains("\"greennode toy\""));
         assert!(super::inventory(&registry).contains("\"greennode toy inspect\""));
         assert_ne!(
             super::inventory(&registry),
@@ -214,6 +282,23 @@ mod tests {
             matches.subcommand_matches("toy").unwrap().subcommand_name(),
             Some("inspect")
         );
+    }
+
+    #[test]
+    fn boolean_values_are_preserved() {
+        for value in ["true", "false"] {
+            let arg = format!("--read-only={value}");
+            for args in [
+                vec!["greennode", arg.as_str(), "version"],
+                vec!["greennode", "version", arg.as_str()],
+            ] {
+                let matches = command().try_get_matches_from(args).unwrap();
+                assert_eq!(
+                    matches.get_one::<bool>("read-only"),
+                    Some(&(value == "true"))
+                );
+            }
+        }
     }
 
     #[test]

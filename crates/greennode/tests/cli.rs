@@ -48,12 +48,42 @@ fn unknown_command_exits_2_and_keeps_stdout_empty() {
         &["no-such-command"][..],
         &["version", "--nope"],
         &["version", "extra"],
+        &["--read-only=private-canary", "version"],
     ] {
         let output = greennode(args);
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
-        assert!(!output.stderr.is_empty());
+        let doc: serde_json::Value =
+            serde_json::from_slice(&output.stderr).expect("one JSON error");
+        assert_eq!(doc["error"]["code"], "InvalidUsage");
+        assert!(
+            doc["error"]["message"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
+        assert_eq!(output.stderr.iter().filter(|&&c| c == b'\n').count(), 1);
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        for secret in ["no-such-command", "--nope", "extra", "private-canary"] {
+            assert!(!stderr.contains(secret));
+        }
+        assert!(stderr.starts_with("{\"error\":{\"code\":\"InvalidUsage\",\"message\":"));
     }
+}
+
+#[test]
+fn hidden_inventory_has_no_public_help() {
+    for args in [
+        &["help", "__command-inventory"][..],
+        &["__command-inventory", "--help"],
+    ] {
+        let output = greennode(args);
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("__command-inventory"));
+    }
+    let output = greennode(&["--help"]);
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("__command-inventory"));
 }
 
 #[test]
@@ -73,6 +103,43 @@ fn no_arguments_print_help() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Command-line access to GreenNode"));
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn boolean_global_flags_accept_optional_equals_values() {
+    for flag in ["yes", "read-only", "debug"] {
+        for value in ["", "=true", "=false"] {
+            let arg = format!("--{flag}{value}");
+            for args in [vec![arg.as_str(), "version"], vec!["version", arg.as_str()]] {
+                assert!(greennode(&args).status.success(), "{args:?}");
+            }
+        }
+        for args in [
+            vec![format!("--{flag}=invalid"), "version".into()],
+            vec!["version".into(), format!("--{flag}=invalid")],
+            vec![format!("--{flag}"), "false".into(), "version".into()],
+            vec!["version".into(), format!("--{flag}"), "false".into()],
+        ] {
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let output = greennode(&refs);
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty());
+        }
+    }
+}
+
+#[test]
+fn unknown_flags_are_rejected_even_with_help() {
+    for args in [
+        &["--help", "--nope"][..],
+        &["--nope", "--help"],
+        &["version", "--help", "----nope"],
+        &["version", "--nope", "--help"],
+    ] {
+        let output = greennode(args);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]

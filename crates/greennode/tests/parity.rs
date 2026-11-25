@@ -1,4 +1,4 @@
-use greennode::cli::op::{Field, Kind, Operation, Service};
+use greennode::cli::op::{Field, InheritedBinding, Kind, Operation, Service};
 use greennode::services::Registry;
 use serde::Deserialize;
 
@@ -63,7 +63,16 @@ fn compare(registry: &Registry, baseline: &Baseline) -> Result<(), String> {
             if kind != expected.kind {
                 return Err(format!("kind mismatch {} {}", service.name, operation.name));
             }
-            let actual_flags = operation.flags.iter().chain(operation.extra_flags.iter());
+            let actual_flags = operation
+                .flags
+                .iter()
+                .chain(operation.extra_flags.iter())
+                .chain(
+                    operation
+                        .inherited_bindings
+                        .iter()
+                        .map(|binding| &binding.flag),
+                );
             if !fields_match(actual_flags, &expected.flags)
                 || !fields_match(operation.json_fields.iter(), &expected.json_fields)
             {
@@ -99,9 +108,168 @@ fn fields_match<'a>(actual: impl Iterator<Item = &'a Field>, expected: &[Baselin
 }
 
 #[test]
+fn inherited_project_binding_matches_storage_baseline() {
+    const USER: Field = Field {
+        name: "user-key-id",
+        go_type: "string",
+        required: true,
+    };
+    const ACCOUNT: Field = Field {
+        name: "service-account-id",
+        go_type: "string",
+        required: true,
+    };
+    const REGION: Field = Field {
+        name: "Region",
+        go_type: "string",
+        required: false,
+    };
+    const PROJECT: InheritedBinding = InheritedBinding {
+        flag: Field {
+            name: "project-id",
+            go_type: "string",
+            required: true,
+        },
+        input_field: "ProjectID",
+    };
+    const ATTACH: Operation = Operation {
+        name: "attach-s3-key",
+        sdk_operation: "AttachS3Key",
+        short_help: "Attach an S3 key",
+        example: Some("storage attach-s3-key"),
+        presence_required_fields: &["ProjectID"],
+        inherited_bindings: &[PROJECT],
+        kind: Kind::DestructiveWrite,
+        flags: &[USER, ACCOUNT],
+        json_fields: &[REGION],
+        extra_flags: &[],
+        notes: &[],
+    };
+    let registry = Registry::new(&[Service {
+        name: "storage",
+        operations: &[ATTACH],
+    }])
+    .unwrap();
+    let baseline: Baseline = serde_json::from_str(include_str!("parity/commands.json")).unwrap();
+    assert!(compare(&registry, &baseline).is_ok());
+    let mut tree = greennode::cli::command_with_registry(&registry);
+    tree.build();
+    assert!(compare_tree(&registry, &baseline, &tree).is_ok());
+}
+
+fn compare_tree(
+    registry: &Registry,
+    baseline: &Baseline,
+    tree: &clap::Command,
+) -> Result<(), String> {
+    compare(registry, baseline)?;
+    let mut seen_services = std::collections::BTreeSet::new();
+    for service_command in tree
+        .get_subcommands()
+        .filter(|c| !c.is_hide_set() && !["version", "help"].contains(&c.get_name()))
+    {
+        let name = service_command.get_name();
+        if !seen_services.insert(name) {
+            return Err(format!("duplicate command {name}"));
+        }
+        let service = registry
+            .services()
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("extra service {name}"))?;
+        if service.operations.is_empty() {
+            return Err(format!("empty service {name}"));
+        }
+        let mut seen_operations = std::collections::BTreeSet::new();
+        for child in service_command
+            .get_subcommands()
+            .filter(|c| c.get_name() != "help" && !c.is_hide_set())
+        {
+            let op_name = child.get_name();
+            if !seen_operations.insert(op_name) {
+                return Err(format!("duplicate command {name} {op_name}"));
+            }
+            let operation = service
+                .operations
+                .iter()
+                .find(|o| o.name == op_name)
+                .ok_or_else(|| format!("extra operation {name} {op_name}"))?;
+            let expected: std::collections::BTreeSet<_> = operation
+                .flags
+                .iter()
+                .chain(operation.extra_flags)
+                .map(|f| f.name)
+                .collect();
+            let mut actual = std::collections::BTreeSet::new();
+            for arg in child.get_arguments() {
+                if let Some(flag) = arg.get_long() {
+                    if flag == "help" || greennode::services::GLOBAL_FLAGS.contains(&flag) {
+                        continue;
+                    }
+                    if !actual.insert(flag) {
+                        return Err(format!("duplicate flag {name} {op_name}"));
+                    }
+                }
+            }
+            if actual != expected {
+                return Err(format!("clap flags mismatch {name} {op_name}"));
+            }
+            for binding in operation.inherited_bindings {
+                if !tree
+                    .get_arguments()
+                    .any(|arg| arg.get_long() == Some(binding.flag.name) && arg.is_global_set())
+                {
+                    return Err(format!("missing inherited flag {name} {op_name}"));
+                }
+            }
+        }
+        if seen_operations.len() != service.operations.len() {
+            return Err(format!("missing operation in {name}"));
+        }
+    }
+    if seen_services.len() != registry.services().len() {
+        return Err("missing service".into());
+    }
+    Ok(())
+}
+
+#[test]
+fn comparison_rejects_missing_clap_flag() {
+    let tree = clap::Command::new("greennode")
+        .subcommand(clap::Command::new("toy").subcommand(clap::Command::new("inspect")));
+    assert!(compare_tree(&toy(), &baseline(), &tree).is_err());
+}
+
+#[test]
+fn comparison_rejects_extra_clap_flag() {
+    let tree = clap::Command::new("greennode").subcommand(
+        clap::Command::new("toy").subcommand(
+            clap::Command::new("inspect")
+                .arg(clap::Arg::new("name").long("name"))
+                .arg(clap::Arg::new("extra").long("extra")),
+        ),
+    );
+    assert!(compare_tree(&toy(), &baseline(), &tree).is_err());
+}
+
+#[test]
+fn comparison_rejects_empty_registered_service() {
+    let registry = Registry::new(&[Service {
+        name: "toy",
+        operations: &[],
+    }])
+    .unwrap();
+    let tree = clap::Command::new("greennode").subcommand(clap::Command::new("toy"));
+    assert!(compare_tree(&registry, &baseline(), &tree).is_err());
+}
+
+#[test]
 fn registered_operations_match_baseline() {
     let baseline: Baseline = serde_json::from_str(include_str!("parity/commands.json")).unwrap();
-    compare(&greennode::services::registered().unwrap(), &baseline).unwrap();
+    let registry = greennode::services::registered().unwrap();
+    let mut tree = greennode::cli::command_with_registry(&registry);
+    tree.build();
+    compare_tree(&registry, &baseline, &tree).unwrap();
 }
 
 const FLAG: Field = Field {
@@ -116,6 +284,11 @@ const JSON: Field = Field {
 };
 const OP: Operation = Operation {
     name: "inspect",
+    sdk_operation: "Inspect",
+    short_help: "Inspect",
+    example: None,
+    presence_required_fields: &[],
+    inherited_bindings: &[],
     kind: Kind::Read,
     flags: &[FLAG],
     json_fields: &[JSON],
@@ -133,6 +306,23 @@ fn toy() -> Registry {
 
 fn baseline() -> Baseline {
     serde_json::from_str(r#"{"services":[{"name":"toy","operations":[{"name":"inspect","kind":"Read","flags":[{"name":"name","type":"string","required":true}],"json_fields":[{"name":"Items","type":"[]string","required":false}]}]}]}"#).unwrap()
+}
+
+#[test]
+fn comparison_rejects_duplicate_baseline_operation() {
+    let mut input = baseline();
+    assert!(compare(&toy(), &input).is_ok());
+    let op = input.services[0].operations[0].clone();
+    input.services[0].operations.push(op);
+    assert!(compare(&toy(), &input).is_err());
+}
+
+#[test]
+fn comparison_rejects_unknown_registered_operation() {
+    let mut input = baseline();
+    assert!(compare(&toy(), &input).is_ok());
+    input.services[0].operations.clear();
+    assert!(compare(&toy(), &input).is_err());
 }
 
 #[test]
