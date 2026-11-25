@@ -4,6 +4,17 @@ use serde::Serialize;
 use serde::ser::{SerializeSeq, SerializeStruct};
 use std::path::Path;
 
+fn write_json<W: std::io::Write, T: ?Sized + Serialize>(
+    w: &mut W,
+    value: &T,
+) -> Result<(), render::Error> {
+    render::write_json(w, &render::project(value)?)
+}
+
+fn normalize<T: ?Sized + Serialize>(value: &T) -> Result<render::Value, render::Error> {
+    render::project(value)?.for_query()
+}
+
 struct Ordered(&'static serde_json::Value);
 
 impl Serialize for Ordered {
@@ -53,7 +64,7 @@ fn json_goldens_round_trip() {
     });
     for (name, bytes, value) in goldens {
         let mut actual = Vec::new();
-        render::write_json(&mut actual, &Ordered(value)).unwrap();
+        write_json(&mut actual, &Ordered(value)).unwrap();
         if actual != *bytes {
             let offset = actual
                 .iter()
@@ -96,23 +107,50 @@ fn depth_limits_on_default_stack() {
         for depth in [128, 129] {
             let value = nested_json(depth);
             let mut out = Vec::new();
-            let result = render::write_json(&mut out, &value);
+            let result = write_json(&mut out, &value);
             check_depth_result(result, depth);
-            let result = render::normalize(&value);
+            let result = normalize(&value);
             check_depth_result(result, depth);
-            let mut tree = nested_tree(depth);
+            let tree = nested_tree(depth);
             let mut out = Vec::new();
             let result = render::write_text(&mut out, &tree);
             check_depth_result(result, depth);
             let mut out = Vec::new();
             let result = render::write_table(&mut out, &tree);
             check_depth_result(result, depth);
-            let result = render::redact_dynamic(&mut tree);
-            check_depth_result(result, depth);
         }
     })
     .join()
     .unwrap();
+}
+
+#[test]
+fn tuple_variant_depth_counts_both_containers() {
+    struct Nested(usize);
+    impl Serialize for Nested {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeTupleVariant;
+            if self.0 == 0 {
+                return serializer.serialize_unit();
+            }
+            let mut variant = serializer.serialize_tuple_variant("Nested", 0, "Next", 1)?;
+            variant.serialize_field(&Nested(self.0 - 1))?;
+            variant.end()
+        }
+    }
+    let mut out = Vec::new();
+    assert!(write_json(&mut out, &Nested(64)).is_ok());
+    let tree = normalize(&Nested(64)).unwrap();
+    assert!(render::write_text(&mut Vec::new(), &tree).is_ok());
+    assert!(render::write_table(&mut Vec::new(), &tree).is_ok());
+    assert!(matches!(
+        write_json(&mut Vec::new(), &Nested(65)),
+        Err(render::Error::DepthLimit)
+    ));
+    assert!(matches!(
+        normalize(&Nested(65)),
+        Err(render::Error::DepthLimit)
+    ));
 }
 
 #[test]
@@ -129,7 +167,7 @@ fn rejects_map_key_without_value() {
         }
     }
     let mut out = Vec::new();
-    assert!(render::write_json(&mut out, &Bad).is_err());
+    assert!(write_json(&mut out, &Bad).is_err());
     assert!(out.is_empty());
 }
 
@@ -144,7 +182,7 @@ fn rejects_invalid_json_number_adapter() {
         }
     }
     let mut out = Vec::new();
-    assert!(render::write_json(&mut out, &Bad).is_err());
+    assert!(write_json(&mut out, &Bad).is_err());
     assert!(out.is_empty());
 }
 
@@ -166,7 +204,7 @@ fn nil_and_empty_slices_and_maps() {
         empty_map: std::collections::BTreeMap::new(),
     };
     let mut out = Vec::new();
-    render::write_json(&mut out, &projection).unwrap();
+    write_json(&mut out, &projection).unwrap();
     assert_eq!(out, b"{\n  \"nil_slice\": [],\n  \"nil_slice_pointer\": null,\n  \"empty_slice_pointer\": [],\n  \"nil_map\": null,\n  \"empty_map\": {}\n}\n");
 }
 
@@ -202,7 +240,7 @@ fn embedded_fields_flatten_in_declaration_order() {
         (None, "{\n  \"before\": 1,\n  \"after\": 4\n}\n"),
     ] {
         let mut out = Vec::new();
-        render::write_json(
+        write_json(
             &mut out,
             &Record {
                 before: 1,
@@ -222,12 +260,12 @@ fn exact_integer_and_nonfinite_float() {
         (u64::MAX, "18446744073709551615\n"),
     ] {
         let mut out = Vec::new();
-        render::write_json(&mut out, &number).unwrap();
+        write_json(&mut out, &number).unwrap();
         assert_eq!(out, expected.as_bytes());
     }
     for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         let mut out = Vec::new();
-        assert!(render::write_json(&mut out, &number).is_err());
+        assert!(write_json(&mut out, &number).is_err());
         assert!(out.is_empty());
     }
 }
@@ -256,9 +294,9 @@ fn oracle_equal(case: &str, actual: &[u8], expected: &[u8]) {
 
 fn compare_float<T: Serialize>(case: &str, value: T, json: &str, fixed: &str, key: &str) {
     let mut out = Vec::new();
-    render::write_json(&mut out, &value).unwrap();
+    write_json(&mut out, &value).unwrap();
     oracle_equal(case, &out, format!("{json}\n").as_bytes());
-    let tree = render::normalize(&value).unwrap();
+    let tree = normalize(&value).unwrap();
     out.clear();
     render::write_text(&mut out, &tree).unwrap();
     oracle_equal(case, &out, format!("{fixed}\n").as_bytes());
@@ -273,7 +311,7 @@ fn compare_float<T: Serialize>(case: &str, value: T, json: &str, fixed: &str, ke
     render::write_table(&mut out, &tree).unwrap();
     oracle_equal(case, &out, expected.as_bytes());
     out.clear();
-    render::write_json(&mut out, &FloatKey(value)).unwrap();
+    write_json(&mut out, &FloatKey(value)).unwrap();
     oracle_equal(case, &out, format!("{{\n  \"{key}\": 0\n}}\n").as_bytes());
 }
 
@@ -315,10 +353,10 @@ fn floats_match_go_oracle() {
 #[test]
 fn float_ties_and_map_key_regressions() {
     let mut out = Vec::new();
-    render::write_json(&mut out, &f64::from_bits(0x42d8_b5e7_eb11_7e68)).unwrap();
+    write_json(&mut out, &f64::from_bits(0x42d8_b5e7_eb11_7e68)).unwrap();
     oracle_equal("float-tie", &out, b"108678236358137.62\n");
     out.clear();
-    render::write_json(&mut out, &FloatKey(1e-5_f64)).unwrap();
+    write_json(&mut out, &FloatKey(1e-5_f64)).unwrap();
     oracle_equal("float-map-key", &out, b"{\n  \"1e-05\": 0\n}\n");
 }
 
@@ -332,7 +370,7 @@ fn float_notation_boundaries() {
         (-0.0, "-0\n"),
     ] {
         let mut bytes = Vec::new();
-        render::write_json(&mut bytes, &n).unwrap();
+        write_json(&mut bytes, &n).unwrap();
         assert_eq!(bytes, expected.as_bytes());
     }
 }
@@ -390,7 +428,7 @@ fn text_goldens() {
         }
         let bytes = std::fs::read(&path).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let tree = render::normalize(&value).unwrap();
+        let tree = normalize(&value).unwrap();
         let expected = std::fs::read(text_path).unwrap();
         let mut actual = Vec::new();
         render::write_text(&mut actual, &tree).unwrap();
@@ -430,7 +468,7 @@ fn table_goldens() {
         }
         let bytes = std::fs::read(&path).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let tree = render::normalize(&value).unwrap();
+        let tree = normalize(&value).unwrap();
         let expected = std::fs::read(table_path).unwrap();
         let mut actual = Vec::new();
         render::write_table(&mut actual, &tree).unwrap();
@@ -449,9 +487,66 @@ fn table_goldens() {
 }
 
 #[test]
+fn projection_redacts_only_marked_dynamic_maps() {
+    #[derive(Serialize)]
+    struct Record {
+        dynamic: render::DynamicMap<std::collections::BTreeMap<&'static str, &'static str>>,
+        typed: std::collections::BTreeMap<&'static str, &'static str>,
+    }
+    let input = Record {
+        dynamic: render::DynamicMap(std::collections::BTreeMap::from([(
+            "token",
+            "dynamic-secret",
+        )])),
+        typed: std::collections::BTreeMap::from([("token", "typed-value")]),
+    };
+    let projected = render::project(&input).unwrap();
+    let mut out = Vec::new();
+    render::write_json(&mut out, &projected).unwrap();
+    assert!(!out.windows(14).any(|w| w == b"dynamic-secret"));
+    assert!(out.windows(11).any(|w| w == b"typed-value"));
+    let tree = projected.for_query().unwrap();
+    let render::Value::Object(fields) = &tree else {
+        panic!("expected object");
+    };
+    assert!(
+        matches!(fields.get("dynamic"), Some(render::Value::Object(map)) if matches!(map.get("token"), Some(render::Value::String(s)) if s == "<redacted>"))
+    );
+    assert!(
+        matches!(fields.get("typed"), Some(render::Value::Object(map)) if matches!(map.get("token"), Some(render::Value::String(s)) if s == "typed-value"))
+    );
+    out.clear();
+    render::write_text(&mut out, &tree).unwrap();
+    assert!(!out.windows(14).any(|w| w == b"dynamic-secret"));
+    assert!(out.windows(11).any(|w| w == b"typed-value"));
+    assert!(out.windows(8).any(|w| w == b"redacted"));
+    out.clear();
+    render::write_table(&mut out, &tree).unwrap();
+    assert!(!out.windows(14).any(|w| w == b"dynamic-secret"));
+    assert!(out.windows(11).any(|w| w == b"typed-value"));
+}
+
+#[test]
+fn projection_redacts_nested_dynamic_objects_and_arrays() {
+    let input = render::DynamicMap(serde_json::json!({
+        "nested": {"secret": "canary-one", "name": "safe"},
+        "items": [{"token": "canary-two", "name": "safe"}]
+    }));
+    let projected = render::project(&input).unwrap();
+    let mut out = Vec::new();
+    render::write_json(&mut out, &projected).unwrap();
+    assert!(!out.windows(6).any(|w| w == b"canary"));
+    assert!(out.windows(8).filter(|w| *w == b"redacted").count() == 2);
+    let query = projected.for_query().unwrap();
+    out.clear();
+    render::write_text(&mut out, &query).unwrap();
+    assert!(!out.windows(6).any(|w| w == b"canary"));
+    assert!(out.windows(8).filter(|w| *w == b"redacted").count() == 2);
+}
+
+#[test]
 fn redaction_unicode_keys() {
-    let mut value = render::normalize(&serde_json::json!({"pass\u{345}word": "x", "toKen": "x", "pass密word": "x", "author": "keep"})).unwrap();
-    render::redact_dynamic(&mut value).unwrap();
+    let value = normalize(&render::DynamicMap(serde_json::json!({"pass\u{345}word": "x", "toKen": "x", "pass密word": "x", "author": "keep"}))).unwrap();
     let render::Value::Object(map) = value else {
         panic!("expected object");
     };
@@ -469,10 +564,10 @@ fn redaction_unicode_keys() {
 
 #[test]
 fn redacts_dynamic_maps_at_depth() {
-    let mut value =
-        render::normalize(&serde_json::json!({"safe": [{"API-Key": "secret", "author": "name"}]}))
-            .unwrap();
-    render::redact_dynamic(&mut value).unwrap();
+    let value = normalize(&render::DynamicMap(
+        serde_json::json!({"safe": [{"API-Key": "secret", "author": "name"}]}),
+    ))
+    .unwrap();
     let mut out = Vec::new();
     render::write_text(&mut out, &value).unwrap();
     assert!(!out.windows(6).any(|s| s == b"secret"));
@@ -522,7 +617,7 @@ fn table_rejects_projected_bytes_before_writing() {
 #[test]
 fn table_renders_heterogeneous_rows() {
     let value = serde_json::json!([{"a": "first"}, {"b": "second"}]);
-    let tree = render::normalize(&value).unwrap();
+    let tree = normalize(&value).unwrap();
     let mut bytes = Vec::new();
     render::write_table(&mut bytes, &tree).unwrap();
     assert_eq!(bytes, b"+-------+--------+\n| a     | b      |\n+-------+--------+\n| first |        |\n|       | second |\n+-------+--------+\n");
@@ -532,7 +627,7 @@ fn table_renders_heterogeneous_rows() {
 fn text_renders_sorted_cells_and_items() {
     let value =
         serde_json::json!({"Items": [{"z": 7, "a": "hello\nthere"}, {"z": false, "a": null}]});
-    let tree = render::normalize(&value).unwrap();
+    let tree = normalize(&value).unwrap();
     let mut bytes = Vec::new();
     render::write_text(&mut bytes, &tree).unwrap();
     assert_eq!(bytes, b"hello\\nthere\t7\n\tfalse\n");
@@ -542,7 +637,7 @@ fn text_renders_sorted_cells_and_items() {
 fn escapes_json_keys_and_values() {
     let value = std::collections::BTreeMap::from([("a\u{009b}\u{202e}", "x\n<&\u{7f}\u{2028}")]);
     let mut out = Vec::new();
-    render::write_json(&mut out, &value).unwrap();
+    write_json(&mut out, &value).unwrap();
     let expected = b"{\n  \"a\\u009b\\u202e\": \"x\\n\\u003c\\u0026\\u007f\\u2028\"\n}\n";
     if out != expected {
         let offset = out
@@ -556,8 +651,7 @@ fn escapes_json_keys_and_values() {
 
 #[test]
 fn escapes_table_headers_and_cells() {
-    let value =
-        render::normalize(&serde_json::json!({"a\n\u{009b}": "x\t\u{001b}\u{202e}"})).unwrap();
+    let value = normalize(&serde_json::json!({"a\n\u{009b}": "x\t\u{001b}\u{202e}"})).unwrap();
     let mut out = Vec::new();
     render::write_table(&mut out, &value).unwrap();
     let rendered = String::from_utf8(out).unwrap();
@@ -570,10 +664,10 @@ fn escapes_table_headers_and_cells() {
 fn sorted_map_and_nonfinite_rejection() {
     let value = std::collections::HashMap::from([("z", 1), ("a", 2)]);
     let mut out = Vec::new();
-    render::write_json(&mut out, &value).unwrap();
+    write_json(&mut out, &value).unwrap();
     assert_eq!(out, b"{\n  \"a\": 2,\n  \"z\": 1\n}\n");
     out.clear();
-    assert!(render::write_json(&mut out, &f64::INFINITY).is_err());
+    assert!(write_json(&mut out, &f64::INFINITY).is_err());
     assert!(out.is_empty());
 }
 
@@ -585,7 +679,7 @@ fn json_preserves_struct_order_and_integer_precision() {
         a: &'static str,
     }
     let mut output = Vec::new();
-    render::write_json(
+    write_json(
         &mut output,
         &Record {
             z: u64::MAX,

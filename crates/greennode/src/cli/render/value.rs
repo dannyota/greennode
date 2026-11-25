@@ -1,9 +1,27 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use serde::Serialize;
+use super::{Error, MAX_DEPTH, Node};
 
-use super::{Encoder, Error, MAX_DEPTH, Node};
+#[cfg(test)]
+mod tests {
+    use super::super::{project, write_json};
+    use super::*;
+
+    #[test]
+    fn query_value_can_be_written_as_sorted_json() {
+        let result = Value::Object(BTreeMap::from([
+            ("z".into(), Value::Number(2.0)),
+            ("a".into(), Value::Number(1.0)),
+        ]));
+        let mut output = Vec::new();
+        write_json(&mut output, &project(&result).unwrap()).unwrap();
+        assert!(
+            output == b"{\n  \"a\": 1,\n  \"z\": 2\n}\n",
+            "query JSON differs"
+        );
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -15,10 +33,23 @@ pub enum Value {
     Object(BTreeMap<String, Value>),
 }
 
-fn convert(value: Node) -> Result<Value, Error> {
+impl serde::Serialize for Value {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Null => serializer.serialize_unit(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Number(value) => serializer.serialize_f64(*value),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Array(value) => serde::Serialize::serialize(value, serializer),
+            Self::Object(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+
+pub(super) fn convert(value: &Node) -> Result<Value, Error> {
     match value {
         Node::Null => Ok(Value::Null),
-        Node::Bool(v) => Ok(Value::Bool(v)),
+        Node::Bool(v) => Ok(Value::Bool(*v)),
         Node::Number(v) => {
             let n: f64 = v
                 .parse()
@@ -29,64 +60,65 @@ fn convert(value: Node) -> Result<Value, Error> {
             Ok(Value::Number(n))
         }
         Node::Float32(v) => {
-            let text = super::float::f32(v, super::float::Style::Json)?;
+            let text = super::float::f32(*v, super::float::Style::Json)?;
             let number = text
                 .parse()
                 .map_err(|_| Error::Invalid("invalid number".into()))?;
             Ok(Value::Number(number))
         }
-        Node::Float64(v) => Ok(Value::Number(v)),
-        Node::String(v) => Ok(Value::String(v)),
+        Node::Float64(v) => Ok(Value::Number(*v)),
+        Node::Raw(v) => super::raw::query(v),
+        Node::String(v) => Ok(Value::String(v.clone())),
         Node::Array(v) => Ok(Value::Array(
-            v.into_iter().map(convert).collect::<Result<_, _>>()?,
+            v.iter().map(convert).collect::<Result<_, _>>()?,
         )),
         Node::Object(v) => Ok(Value::Object(
-            v.into_iter()
-                .map(|(k, v)| Ok((k, convert(v)?)))
+            v.iter()
+                .map(|(k, v)| Ok((k.clone(), convert(v)?)))
                 .collect::<Result<_, Error>>()?,
         )),
     }
 }
 
-pub fn normalize<T: ?Sized + Serialize>(value: &T) -> Result<Value, Error> {
-    convert(value.serialize(Encoder(0))?)
-}
-
 pub(super) fn check_depth(value: &Value) -> Result<(), Error> {
-    let mut pending = vec![(value, 0_usize)];
-    while let Some((item, depth)) = pending.pop() {
-        match item {
+    fn visit(value: &Value, depth: usize) -> Result<(), Error> {
+        match value {
             Value::Array(items) => {
                 let next = depth.checked_add(1).ok_or(Error::DepthLimit)?;
                 if next > MAX_DEPTH {
                     return Err(Error::DepthLimit);
                 }
-                pending.extend(items.iter().map(|v| (v, next)));
+                for item in items {
+                    visit(item, next)?;
+                }
             }
             Value::Object(items) => {
                 let next = depth.checked_add(1).ok_or(Error::DepthLimit)?;
                 if next > MAX_DEPTH {
                     return Err(Error::DepthLimit);
                 }
-                pending.extend(items.values().map(|v| (v, next)));
+                for item in items.values() {
+                    visit(item, next)?;
+                }
             }
             _ => {}
         }
+        Ok(())
     }
-    Ok(())
+    visit(value, 0)
 }
 
-pub(super) fn rows(value: &Value) -> Vec<&Value> {
+pub(super) fn rows(value: &Value) -> &[Value] {
     let source = match value {
         Value::Object(map) => match map.get("Items") {
-            Some(Value::Array(items)) => return items.iter().collect(),
+            Some(Value::Array(items)) => return items,
             _ => value,
         },
         _ => value,
     };
     match source {
-        Value::Array(items) => items.iter().collect(),
-        _ => vec![source],
+        Value::Array(items) => items,
+        _ => std::slice::from_ref(source),
     }
 }
 
@@ -139,6 +171,39 @@ fn compact<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
             }
             write!(w, "}}")?;
         }
+    }
+    Ok(())
+}
+
+pub(super) fn escape_write<W: Write>(w: &mut W, s: &str) -> Result<(), Error> {
+    for c in s.chars() {
+        match c {
+            '\t' => write!(w, "\\t")?,
+            '\n' => write!(w, "\\n")?,
+            '\r' => write!(w, "\\r")?,
+            '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}' => write!(w, "\\x{:02x}", u32::from(c))?,
+            '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => write!(w, "\\u{:04x}", u32::from(c))?,
+            _ => write!(w, "{c}")?,
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn write_cell<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
+    match value {
+        Value::Null => {}
+        Value::Bool(value) => write!(w, "{value}")?,
+        Value::Number(value) => write!(
+            w,
+            "{}",
+            super::float::f64(*value, super::float::Style::Fixed)?
+        )?,
+        Value::String(value) => escape_write(w, value)?,
+        _ => compact(w, value)?,
     }
     Ok(())
 }

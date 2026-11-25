@@ -1,10 +1,12 @@
 mod float;
+mod raw;
 mod redaction;
+pub use raw::RawJson;
 mod table;
 mod value;
-pub use redaction::redact_dynamic;
+pub use redaction::DynamicMap;
 pub use table::write_table;
-pub use value::{Value, normalize, write_text};
+pub use value::{Value, write_text};
 
 use std::fmt;
 use std::io::{self, Write};
@@ -53,6 +55,7 @@ enum Node {
     Number(String),
     Float32(f32),
     Float64(f64),
+    Raw(String),
     String(String),
     Array(Vec<Node>),
     Object(Vec<(String, Node)>),
@@ -60,7 +63,7 @@ enum Node {
 
 const MAX_DEPTH: usize = 128;
 
-struct Encoder(usize);
+struct Encoder(usize, bool);
 
 impl Encoder {
     fn descend(&self) -> Result<usize, Error> {
@@ -161,10 +164,26 @@ impl ser::Serializer for Encoder {
     }
     fn serialize_newtype_struct<T: ?Sized + Serialize>(
         self,
-        _: &'static str,
+        name: &'static str,
         v: &T,
     ) -> Result<Node, Error> {
-        v.serialize(Encoder(self.descend()?))
+        if name == redaction::MARKER {
+            let map = v.serialize(Encoder(self.0, true))?;
+            if !matches!(map, Node::Object(_)) {
+                return Err(Error::Invalid("dynamic value must be a map".into()));
+            }
+            return Ok(map);
+        }
+        if name == raw::MARKER {
+            if self.1 {
+                return Err(Error::Invalid("raw JSON inside a dynamic map".into()));
+            }
+            return match v.serialize(Encoder(self.0, false))? {
+                Node::String(raw) => Ok(Node::Raw(raw::validate(&raw, self.0)?)),
+                _ => Err(Error::Invalid("invalid raw JSON".into())),
+            };
+        }
+        v.serialize(Encoder(self.descend()?, self.1))
     }
     fn serialize_newtype_variant<T: ?Sized + Serialize>(
         self,
@@ -175,17 +194,17 @@ impl ser::Serializer for Encoder {
     ) -> Result<Node, Error> {
         Ok(Node::Object(vec![(
             variant.into(),
-            value.serialize(Encoder(self.descend()?))?,
+            value.serialize(Encoder(self.descend()?, self.1))?,
         )]))
     }
     fn serialize_seq(self, _: Option<usize>) -> Result<Seq, Error> {
-        Ok(Seq(Vec::new(), self.descend()?))
+        Ok(Seq(Vec::new(), self.descend()?, self.1))
     }
     fn serialize_tuple(self, _: usize) -> Result<Seq, Error> {
-        Ok(Seq(Vec::new(), self.descend()?))
+        Ok(Seq(Vec::new(), self.descend()?, self.1))
     }
     fn serialize_tuple_struct(self, _: &'static str, _: usize) -> Result<Seq, Error> {
-        Ok(Seq(Vec::new(), self.descend()?))
+        Ok(Seq(Vec::new(), self.descend()?, self.1))
     }
     fn serialize_tuple_variant(
         self,
@@ -194,7 +213,12 @@ impl ser::Serializer for Encoder {
         variant: &'static str,
         _: usize,
     ) -> Result<VariantSeq, Error> {
-        Ok(VariantSeq(variant.into(), Vec::new(), self.descend()?))
+        Ok(VariantSeq(
+            variant.into(),
+            Vec::new(),
+            Encoder(self.descend()?, self.1).descend()?,
+            self.1,
+        ))
     }
     fn serialize_map(self, _: Option<usize>) -> Result<Map, Error> {
         Ok(Map {
@@ -203,6 +227,7 @@ impl ser::Serializer for Encoder {
             sort: true,
             number: false,
             depth: self.descend()?,
+            dynamic: self.1,
         })
     }
     fn serialize_struct(self, name: &'static str, _: usize) -> Result<Map, Error> {
@@ -211,6 +236,7 @@ impl ser::Serializer for Encoder {
             key: None,
             sort: false,
             number: name == "$serde_json::private::Number",
+            dynamic: self.1,
             depth: if name == "$serde_json::private::Number" {
                 self.0
             } else {
@@ -225,16 +251,21 @@ impl ser::Serializer for Encoder {
         variant: &'static str,
         _: usize,
     ) -> Result<VariantMap, Error> {
-        Ok(VariantMap(variant.into(), Vec::new(), self.descend()?))
+        Ok(VariantMap(
+            variant.into(),
+            Vec::new(),
+            Encoder(self.descend()?, self.1).descend()?,
+            self.1,
+        ))
     }
 }
 
-struct Seq(Vec<Node>, usize);
+struct Seq(Vec<Node>, usize, bool);
 impl SerializeSeq for Seq {
     type Ok = Node;
     type Error = Error;
     fn serialize_element<T: ?Sized + Serialize>(&mut self, v: &T) -> Result<(), Error> {
-        self.0.push(v.serialize(Encoder(self.1))?);
+        self.0.push(v.serialize(Encoder(self.1, self.2))?);
         Ok(())
     }
     fn end(self) -> Result<Node, Error> {
@@ -261,12 +292,12 @@ impl SerializeTupleStruct for Seq {
         SerializeSeq::end(self)
     }
 }
-struct VariantSeq(String, Vec<Node>, usize);
+struct VariantSeq(String, Vec<Node>, usize, bool);
 impl SerializeTupleVariant for VariantSeq {
     type Ok = Node;
     type Error = Error;
     fn serialize_field<T: ?Sized + Serialize>(&mut self, v: &T) -> Result<(), Error> {
-        self.1.push(v.serialize(Encoder(self.2))?);
+        self.1.push(v.serialize(Encoder(self.2, self.3))?);
         Ok(())
     }
     fn end(self) -> Result<Node, Error> {
@@ -279,6 +310,7 @@ struct Map {
     sort: bool,
     number: bool,
     depth: usize,
+    dynamic: bool,
 }
 impl SerializeMap for Map {
     type Ok = Node;
@@ -287,7 +319,7 @@ impl SerializeMap for Map {
         if self.key.is_some() {
             return Err(Error::Invalid("missing map value".into()));
         }
-        self.key = Some(match key.serialize(Encoder(self.depth))? {
+        self.key = Some(match key.serialize(Encoder(self.depth, false))? {
             Node::String(s) | Node::Number(s) => s,
             Node::Float32(n) => float::f32(n, float::Style::Key)?,
             Node::Float64(n) => float::f64(n, float::Style::Key)?,
@@ -301,7 +333,12 @@ impl SerializeMap for Map {
             .key
             .take()
             .ok_or_else(|| Error::Invalid("missing map key".into()))?;
-        self.fields.push((key, v.serialize(Encoder(self.depth))?));
+        let value = if self.dynamic && redaction::sensitive(&key) {
+            Node::String("<redacted>".into())
+        } else {
+            v.serialize(Encoder(self.depth, self.dynamic))?
+        };
+        self.fields.push((key, value));
         Ok(())
     }
     fn end(mut self) -> Result<Node, Error> {
@@ -332,15 +369,19 @@ impl SerializeStruct for Map {
         key: &'static str,
         v: &T,
     ) -> Result<(), Error> {
-        self.fields
-            .push((key.into(), v.serialize(Encoder(self.depth))?));
+        let value = if self.dynamic && redaction::sensitive(key) {
+            Node::String("<redacted>".into())
+        } else {
+            v.serialize(Encoder(self.depth, self.dynamic))?
+        };
+        self.fields.push((key.into(), value));
         Ok(())
     }
     fn end(self) -> Result<Node, Error> {
         SerializeMap::end(self)
     }
 }
-struct VariantMap(String, Vec<(String, Node)>, usize);
+struct VariantMap(String, Vec<(String, Node)>, usize, bool);
 impl SerializeStructVariant for VariantMap {
     type Ok = Node;
     type Error = Error;
@@ -349,7 +390,12 @@ impl SerializeStructVariant for VariantMap {
         key: &'static str,
         v: &T,
     ) -> Result<(), Error> {
-        self.1.push((key.into(), v.serialize(Encoder(self.2))?));
+        let value = if self.3 && redaction::sensitive(key) {
+            Node::String("<redacted>".into())
+        } else {
+            v.serialize(Encoder(self.2, self.3))?
+        };
+        self.1.push((key.into(), value));
         Ok(())
     }
     fn end(self) -> Result<Node, Error> {
@@ -388,7 +434,7 @@ fn emit<W: Write>(w: &mut W, n: &Node, depth: usize) -> Result<(), Error> {
     match n {
         Node::Null => write!(w, "null")?,
         Node::Bool(v) => write!(w, "{v}")?,
-        Node::Number(v) => write!(w, "{v}")?,
+        Node::Number(v) | Node::Raw(v) => write!(w, "{v}")?,
         Node::Float32(v) => write!(w, "{}", float::f32(*v, float::Style::Json)?)?,
         Node::Float64(v) => write!(w, "{}", float::f64(*v, float::Style::Json)?)?,
         Node::String(v) => string(w, v)?,
@@ -431,9 +477,20 @@ fn emit<W: Write>(w: &mut W, n: &Node, depth: usize) -> Result<(), Error> {
     }
     Ok(())
 }
-pub fn write_json<W: Write, T: ?Sized + Serialize>(w: &mut W, value: &T) -> Result<(), Error> {
-    let n = value.serialize(Encoder(0))?;
-    emit(w, &n, 0)?;
+pub struct Projected(Node);
+
+pub fn project<T: ?Sized + Serialize>(value: &T) -> Result<Projected, Error> {
+    Ok(Projected(value.serialize(Encoder(0, false))?))
+}
+
+impl Projected {
+    pub fn for_query(&self) -> Result<Value, Error> {
+        value::convert(&self.0)
+    }
+}
+
+pub fn write_json<W: Write>(w: &mut W, value: &Projected) -> Result<(), Error> {
+    emit(w, &value.0, 0)?;
     writeln!(w)?;
     Ok(())
 }

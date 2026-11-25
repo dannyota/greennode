@@ -1,29 +1,107 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use super::value::{cell, check_depth, escape, rows};
+use super::value::{cell, check_depth, escape, escape_write, rows, write_cell};
 use super::{Error, Value};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renderers_refuse_deep_tuple_variant_tree() {
+        let mut value = Value::Null;
+        for _ in 0..65 {
+            value = Value::Object(BTreeMap::from([("Next".into(), Value::Array(vec![value]))]));
+        }
+        assert!(matches!(
+            write_table(&mut Vec::new(), &value),
+            Err(Error::DepthLimit)
+        ));
+        assert!(matches!(
+            super::super::write_text(&mut Vec::new(), &value),
+            Err(Error::DepthLimit)
+        ));
+    }
+
+    #[test]
+    fn preflight_refuses_large_escaped_cell() {
+        let input = Value::String("\0".repeat(32 * 1024 * 1024));
+        assert!(matches!(measure_cell(&input), Err(Error::TableLimit)));
+        assert!(matches!(
+            write_table(&mut Vec::new(), &input),
+            Err(Error::TableLimit)
+        ));
+    }
+}
+
+#[derive(Default)]
+struct Counter {
+    bytes: usize,
+    width: usize,
+    exceeded: bool,
+}
+
+impl Write for Counter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let bytes = self
+            .bytes
+            .checked_add(data.len())
+            .ok_or_else(|| std::io::Error::other("limit"))?;
+        if bytes > 64 * 1024 * 1024 {
+            self.exceeded = true;
+            return Err(std::io::Error::other("limit"));
+        }
+        let text = std::str::from_utf8(data).map_err(|_| std::io::Error::other("invalid UTF-8"))?;
+        self.width = self
+            .width
+            .checked_add(text.chars().count())
+            .ok_or_else(|| std::io::Error::other("limit"))?;
+        self.bytes = bytes;
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn measure_cell(value: &Value) -> Result<(usize, usize), Error> {
+    let mut counter = Counter::default();
+    let result = write_cell(&mut counter, value);
+    if counter.exceeded {
+        return Err(Error::TableLimit);
+    }
+    result?;
+    Ok((
+        counter.width,
+        counter
+            .bytes
+            .checked_sub(counter.width)
+            .ok_or(Error::TableLimit)?,
+    ))
+}
 
 fn measure(
     sizes: &mut BTreeMap<String, (usize, usize)>,
     key: &str,
     value: &Value,
 ) -> Result<(), Error> {
-    let header = escape(key);
-    let header_width = header.chars().count();
+    let mut header = Counter::default();
+    let result = escape_write(&mut header, key);
+    if header.exceeded {
+        return Err(Error::TableLimit);
+    }
+    result?;
     let header_extra = header
-        .len()
-        .checked_sub(header_width)
+        .bytes
+        .checked_sub(header.width)
         .ok_or(Error::TableLimit)?;
+    let (width, extra) = measure_cell(value)?;
     let size = sizes
         .entry(key.to_owned())
-        .or_insert((header_width, header_extra));
-    let text = cell(value)?;
-    let width = text.chars().count();
+        .or_insert((header.width, header_extra));
     size.0 = size.0.max(width);
-    size.1 = size
-        .1
-        .max(text.len().checked_sub(width).ok_or(Error::TableLimit)?);
+    size.1 = size.1.max(extra);
     if sizes.len() > 100 {
         return Err(Error::TableLimit);
     }
@@ -56,7 +134,7 @@ pub fn write_table<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
     check_depth(value)?;
     let items = rows(value);
     let mut sizes = BTreeMap::new();
-    for item in &items {
+    for item in items {
         match item {
             Value::Object(map) => {
                 for (key, value) in map {
