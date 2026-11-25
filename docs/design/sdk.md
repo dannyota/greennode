@@ -225,9 +225,13 @@ retained, typed causes. Accessors expose optional `ApiError`, `LoginError`, and
 `ServiceAccountLoginError` data from the error or its causes, outermost first.
 `ApiError` holds a static operation ID, optional HTTP status, safe code and
 message, and the baseline's retryability hint. Login diagnostics hold a fixed
-reason and optional status; only IAM-user login has a captcha hint. Preserve
-status when the operation contract says it is observed. No raw HTTP, decode,
-filesystem, or caller-provider error is reachable through `source()` or debug.
+reason and optional status; only IAM-user login has a captcha hint. A
+configuration file failure attaches a public `FileDiagnostic` with `slot()`
+(`FileSlot::Config` or `FileSlot::Credentials`), `source()` (the fixed
+value-free label), `reason()` (a fixed `&'static str`) and `line()`
+(`Option<u32>`); it never holds a path or value. Preserve status when the
+operation contract says it is observed. No raw HTTP, decode, filesystem, or
+caller-provider error is reachable through `source()` or debug.
 
 | Baseline identity                                                    | Rust class or diagnostic                                                                                                                                                         |
 | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
