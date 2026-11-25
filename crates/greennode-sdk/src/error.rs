@@ -119,6 +119,21 @@ impl ApiError {
             retryable,
         }
     }
+    pub(crate) fn without_fallback(
+        operation: &'static str,
+        status: Option<u16>,
+        code: SafeText,
+        message: SafeText,
+        retryable: bool,
+    ) -> Self {
+        Self {
+            operation,
+            status,
+            code: code.0,
+            message: message.0,
+            retryable,
+        }
+    }
     /// Returns the operation identifier.
     pub fn operation(&self) -> &'static str {
         self.operation
