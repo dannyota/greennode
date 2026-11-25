@@ -1,6 +1,7 @@
 //! Unofficial Rust SDK for GreenNode, formerly VNG Cloud. No API is implemented yet.
 
 mod clock;
+mod config;
 mod context;
 mod endpoint;
 mod error;

@@ -339,6 +339,15 @@ paths, override paths, file contents, or raw filesystem errors.
   is manual. Keep a separate default disk cache and check cache paths against
   that tree when home is known.
 - Use fixed, value-free source labels in diagnostics and debug provenance.
+- On Windows, open selected files with identification-only security quality of
+  service and refuse a handle that is not a disk file before reading, so a named
+  pipe at a selected path can neither impersonate the caller nor stall a read.
+
+Known limits: two distinct ReFS files can share the identity `same-file` reads,
+which refuses the configuration as an alias rather than reading the wrong file;
+closing it needs unsafe Windows calls the project forbids. Keys, not section
+names, are lowercased, with Rust's Unicode mapping, which differs from Go's for
+a few non-ASCII characters; no recognized key is non-ASCII.
 
 ## Tests
 
