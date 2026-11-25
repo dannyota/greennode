@@ -25,19 +25,101 @@ impl std::ops::DerefMut for Ini {
     }
 }
 
-pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
-    let slot = slot.label();
-    let mut bytes = Vec::new();
-    input
-        .take(1_048_577)
-        .read_to_end(&mut bytes)
-        .map_err(|_| format!("{slot}:1: read failed"))?;
-    if bytes.len() > 1_048_576 {
-        return Err(format!("{slot}:1: file too large"));
+#[derive(Default)]
+pub(super) struct SecretsIni(pub BTreeMap<String, BTreeMap<String, crate::Secret>>);
+
+impl std::fmt::Debug for SecretsIni {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretsIni([REDACTED])")
     }
+}
+
+fn read_limited(
+    mut input: impl Read,
+    slot: Slot,
+) -> Result<(zeroize::Zeroizing<Vec<u8>>, usize), String> {
+    let mut bytes = zeroize::Zeroizing::new(vec![0; 1_048_577]);
+    let mut used = 0;
+    while used < bytes.len() {
+        match input.read(&mut bytes[used..]) {
+            Ok(0) => break,
+            Ok(count) => used += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(format!("{}:1: read failed", slot.label())),
+        }
+    }
+    if used > 1_048_576 {
+        return Err(format!("{}:1: file too large", slot.label()));
+    }
+    Ok((bytes, used))
+}
+
+pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
+    let (bytes, used) = read_limited(input, Slot::Credentials)?;
+    let mut result = SecretsIni::default();
+    let mut section: Option<String> = None;
+    for (index, raw) in bytes[..used]
+        .split_inclusive(|byte| *byte == b'\n')
+        .enumerate()
+    {
+        let number = index + 1;
+        let error = |reason| format!("credentials:{number}: {reason}");
+        if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
+            return Err(error("line too long"));
+        }
+        let line = std::str::from_utf8(raw).map_err(|_| error("invalid UTF-8"))?;
+        let line = if index == 0 {
+            line.strip_prefix('\u{feff}').unwrap_or(line)
+        } else {
+            line
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(header) = trimmed.strip_prefix('[') {
+            let name = header
+                .strip_suffix(']')
+                .ok_or_else(|| error("unclosed section header"))?
+                .trim()
+                .to_owned();
+            result.0.entry(name.clone()).or_default();
+            section = Some(name);
+        } else {
+            let (key, value) = line
+                .split_once('=')
+                .ok_or_else(|| error("line has no '='"))?;
+            let current = section
+                .as_ref()
+                .ok_or_else(|| error("key before any section"))?;
+            let key: String = key
+                .trim()
+                .chars()
+                .map(|ch| ch.to_lowercase().next().unwrap_or(ch))
+                .collect();
+            if key.is_empty() {
+                return Err(error("empty key"));
+            }
+            result
+                .0
+                .entry(current.clone())
+                .or_default()
+                .insert(key, crate::Secret::new(value.trim().to_owned()));
+        }
+    }
+    Ok(result)
+}
+
+pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
+    let config = matches!(slot, Slot::Config);
+    let (bytes, used) = read_limited(input, slot)?;
+    let slot = slot.label();
     let mut result = Ini::default();
     let mut section: Option<String> = None;
-    for (index, raw) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
+    for (index, raw) in bytes[..used]
+        .split_inclusive(|byte| *byte == b'\n')
+        .enumerate()
+    {
         let number = index + 1;
         let error = |reason| format!("{slot}:{number}: {reason}");
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
@@ -76,10 +158,19 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
             if key.is_empty() {
                 return Err(error("empty key"));
             }
+            let value = if config && matches!(key.as_str(), "client_id" | "client_secret") {
+                if value.trim().is_empty() {
+                    String::new()
+                } else {
+                    "1".to_owned()
+                }
+            } else {
+                value.trim().to_owned()
+            };
             result
                 .entry(current.clone())
                 .or_default()
-                .insert(key, value.trim().to_owned());
+                .insert(key, value);
         }
     }
     Ok(result)
@@ -88,6 +179,84 @@ pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
 #[cfg(test)]
 mod tests {
     use super::{Slot, parse};
+
+    #[test]
+    fn credential_parser_reads_directly_into_one_large_buffer() {
+        struct Input {
+            read: usize,
+            base: Option<usize>,
+        }
+        impl std::io::Read for Input {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                if output.len() < 1024 {
+                    return Err(std::io::ErrorKind::InvalidInput.into());
+                }
+                let base = output.as_ptr() as usize - self.read;
+                if self.base.is_some_and(|initial| initial != base) {
+                    return Err(std::io::ErrorKind::InvalidInput.into());
+                }
+                self.base = Some(base);
+                let data = b"[default]\npassword=toy\n";
+                let size = (data.len() - self.read).min(3);
+                output[..size].copy_from_slice(&data[self.read..self.read + size]);
+                self.read += size;
+                Ok(size)
+            }
+        }
+        let result = super::parse_secrets(Input {
+            read: 0,
+            base: None,
+        });
+        assert!(result.is_ok());
+        let result = parse(
+            Slot::Config,
+            Input {
+                read: 0,
+                base: None,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn config_parser_masks_reserved_secrets_without_disclosure() {
+        let input = b"[default]\nregion=x\nclient_secret=toy-canary\n";
+        let parsed = parse(Slot::Config, input.as_slice()).unwrap();
+        assert!(!parsed["default"]["client_secret"].is_empty());
+        assert!(!parsed["default"]["client_secret"].contains("toy-canary"));
+        assert!(!format!("{parsed:?}").contains("toy-canary"));
+        let empty = parse(Slot::Config, b"[default]\nclient_secret=  \n".as_slice()).unwrap();
+        assert!(empty["default"]["client_secret"].is_empty());
+    }
+
+    #[test]
+    fn credential_parser_preserves_baseline_grammar_and_bounds() {
+        let input = "\u{feff}[default]\nPassword=first\n[other]\nx=y\n[default]\nPASSWORD=last\n";
+        let parsed = super::parse_secrets(input.as_bytes()).unwrap();
+        assert!(parsed.0["default"]["password"].expose_secret() == "last");
+        let valid = format!("[x]\nk={}\n", "a".repeat(65533));
+        let invalid = format!("[x]\nk={}\n", "a".repeat(65534));
+        assert!(super::parse_secrets(valid.as_bytes()).is_ok());
+        assert!(super::parse_secrets(invalid.as_bytes()).is_err());
+        let line = format!("#{}\n", "a".repeat(65534));
+        let exact = line.repeat(16);
+        assert!(super::parse_secrets(exact.as_bytes()).is_ok());
+        assert!(super::parse_secrets(format!("{exact}\n").as_bytes()).is_err());
+    }
+
+    #[test]
+    fn credential_parser_redacts_values_and_errors() {
+        let parsed = super::parse_secrets(b"[default]\npassword=toy-canary\n".as_slice());
+        assert!(parsed.is_ok());
+        let parsed = parsed.unwrap();
+        assert!(parsed.0["default"]["password"].expose_secret() == "toy-canary");
+        assert!(!format!("{parsed:?}").contains("toy-canary"));
+        let error = super::parse_secrets(b"[default]\nx=ok\ntoy-canary\n".as_slice())
+            .err()
+            .unwrap();
+        assert!(error.starts_with("credentials:3:"));
+        assert!(!error.contains("toy-canary"));
+    }
 
     #[test]
     fn parses_baseline_sections_and_values() {

@@ -50,7 +50,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0 so far: lexer, parser, `compile`, core evaluation; its license and compliance suite|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
-|`crates/greennode-sdk/src/config/`|Configuration loading so far: INI reader, safe file opening, mode and path selection, settings resolution (crate-private)|
+|`crates/greennode-sdk/src/config/`|Configuration loading so far: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection (crate-private)|
 |`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
 |`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step, and the loopback TLS test server (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
