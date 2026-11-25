@@ -182,7 +182,7 @@ jobs:
           mkdir "$stage"
           git ls-files --stage -z > "$root/index"
           python3 -I - "$root/index" <<'PYTHON'
-          import pathlib, sys
+          import pathlib, sys, tomllib
           entries = pathlib.Path(sys.argv[1]).read_bytes().split(b'\0')
           required = {b'README.md', b'LICENSE', b'crates/greennode-sdk/README.md'}
           found = set()
@@ -198,6 +198,10 @@ jobs:
                   found.add(path)
           if found != required:
               raise ValueError('missing tracked release input')
+          for name, readme in (('greennode-sdk', 'README.md'), ('greennode', '../../README.md')):
+              with open(pathlib.Path('crates') / name / 'Cargo.toml', 'rb') as stream:
+                  if tomllib.load(stream)['package'].get('readme') != readme:
+                      raise ValueError('unexpected package readme')
           PYTHON
           if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
             exit 1

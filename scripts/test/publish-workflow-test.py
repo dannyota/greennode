@@ -57,7 +57,11 @@ def validate(w):
                 forbidden(child)
     forbidden(w)
     assert 'GH_TOKEN' not in w.get('env', {}) and 'GH_TOKEN' not in job.get('env', {}), 'token scope'
-    assert not re.search(r'github\s*\.\s*token', json.dumps([w.get('env', {}), job.get('env', {})]), re.I), 'token scope'
+    assert not re.search(r'github\s*\.\s*token|secrets\s*[.\[]', json.dumps([w.get('env', {}), job.get('env', {}), package.get('env', {})]), re.I), 'token scope'
+    for candidate in (job, package):
+        assert 'continue-on-error' not in candidate, 'continue on error'
+        for step in candidate['steps']:
+            assert 'continue-on-error' not in step, 'continue on error'
     for step in job['steps'] + package['steps']:
         uses = step.get('uses', '')
         if uses:
@@ -134,6 +138,11 @@ printf 404
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             files = ['README.md', 'LICENSE', 'crates/greennode-sdk/README.md']
+            manifests = {'crates/greennode-sdk/Cargo.toml': 'README.md', 'crates/greennode/Cargo.toml': '../../README.md'}
+            for name, readme in manifests.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f'[package]\nreadme = "{readme}"\n')
             for name in files:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +152,11 @@ printf 404
                 index.write_bytes(b''.join(b'100644 ' + b'a' * 40 + b' 0\t' + name.encode() + b'\0' for name in entries))
                 return subprocess.run([shutil.which('python3'), '-I', '-', str(index)], cwd=root, input=script, capture_output=True, text=True).returncode
             self.assertEqual(run(files), 0)
+            for name, readme in manifests.items():
+                path = root / name
+                path.write_text('[package]\nreadme = "other.md"\n')
+                self.assertNotEqual(run(files), 0, name)
+                path.write_text(f'[package]\nreadme = "{readme}"\n')
             self.assertNotEqual(run(files[:-1]), 0)
             (root / 'README.md').unlink()
             (root / 'README.md').symlink_to(root / 'LICENSE')
@@ -187,6 +201,12 @@ printf 404
             assert old in step['run']
             step['run'] = step['run'].replace(old, new, 1)
         mutations = [
+            ('continue on error', lambda w: w['jobs']['verify']['steps'][0].update({'continue-on-error': True})),
+            ('continue on error', lambda w: w['jobs']['package'].update({'continue-on-error': False})),
+            ('token scope', lambda w: w['jobs']['verify'].update(env={'ALIAS': '${{ secrets.ALIAS }}'})),
+            ('token scope', lambda w: w.update(env={'ALIAS': '${{ secrets.ALIAS }}'})),
+            ('token scope', lambda w: w.update(env={'ALIAS': '${{ github.token }}'})),
+            ('token scope', lambda w: w['jobs']['verify'].update(env={'ALIAS': '${{ github.token }}'})),
             ('job timeout', lambda w: w['jobs']['verify'].pop('timeout-minutes')),
             ('job timeout', lambda w: w['jobs']['package'].pop('timeout-minutes')),
             ('owners bounds', lambda w: change_run(w, 'verify', 'Gather owners', '--max-time 30', '')),
