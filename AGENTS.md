@@ -43,6 +43,8 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/src/main.rs`|Process entry: passes arguments and streams to `cli::run`|
 |`crates/greennode/src/cli.rs`|Root command and `version`|
 |`crates/greennode/tests/cli.rs`|Process tests of the built binary|
+|`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
+|`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|

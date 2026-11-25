@@ -1,0 +1,14 @@
+{
+  "User": {
+    "ID": "user-2",
+    "Username": "new-user",
+    "CreatedAt": 0,
+    "Enabled": false,
+    "From": "iam",
+    "LastUse": 0,
+    "MFA": null
+  },
+  "Password": "[redacted]",
+  "CreatedID": "user-2",
+  "CandidateID": ""
+}

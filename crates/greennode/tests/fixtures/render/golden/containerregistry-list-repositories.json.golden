@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "ID": "repo-1",
+      "Name": "app-test",
+      "BackendName": "app-test",
+      "AccessLevel": "PRIVATE",
+      "RegistryURL": "\u003chostname\u003e/app-test",
+      "QuotaLimitGB": 1,
+      "QuotaUsed": 0,
+      "ImageCount": 0,
+      "AttachedUsers": 0,
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 25,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

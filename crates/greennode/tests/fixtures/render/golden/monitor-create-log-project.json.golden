@@ -1,0 +1,12 @@
+{
+  "LogProject": {
+    "ID": "proj-1",
+    "ProjectName": "app",
+    "ProjectDescription": "app logs",
+    "Status": "ACTIVE",
+    "BillingStatus": "PAID",
+    "ProjectType": "LOG",
+    "CreatedAt": "Jan 1, 2026, 12:00:00 AM"
+  },
+  "OrderID": "order-1"
+}

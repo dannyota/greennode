@@ -1,0 +1,17 @@
+{
+  "Items": [
+    {
+      "ID": "proj-1",
+      "ProjectName": "app",
+      "ProjectDescription": "app logs",
+      "Status": "ACTIVE",
+      "BillingStatus": "PAID",
+      "ProjectType": "LOG",
+      "CreatedAt": "Jan 1, 2026, 12:00:00 AM"
+    }
+  ],
+  "Page": 0,
+  "PageSize": 100,
+  "TotalPage": 1,
+  "TotalItem": 1
+}
