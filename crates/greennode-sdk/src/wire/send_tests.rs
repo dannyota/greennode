@@ -118,6 +118,8 @@ async fn send(
     .await
 }
 
+mod gzip_tests;
+
 #[tokio::test]
 async fn body_cap_accepts_exact_and_refuses_one_more() {
     let server = Server::start(vec![
