@@ -252,3 +252,46 @@ async fn explicit_profile_consults_only_eligible_settings_once() {
     expected.sort();
     assert_eq!(actual, expected);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ambiguous_explicit_config_has_public_diagnostic() {
+    let dir = Dir::new();
+    let parent = dir.0.join("not-a-directory");
+    std::fs::write(&parent, "toy").unwrap();
+    let options = ConfigOptions::default().with_config_file(parent.join("config"));
+    let (ctx, _) = RequestContext::new();
+    let error = Config::resolve_profile(&ctx, &options, &Source::default())
+        .await
+        .unwrap_err();
+    assert_eq!(error.class(), ErrorClass::InvalidConfig);
+    assert!(error.detail::<FileDiagnostic>().is_some());
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.slot(), FileSlot::Config);
+    assert_eq!(detail.source(), "option");
+    assert_eq!(detail.reason(), "lookup failed");
+    assert_eq!(detail.line(), None);
+}
+
+#[tokio::test]
+async fn file_decoding_errors_have_no_line_but_parse_errors_do() {
+    let dir = Dir::new();
+    let path = dir.0.join("config");
+    let options = ConfigOptions::default().with_config_file(path.clone());
+    let source = Source::default();
+    let (ctx, _) = RequestContext::new();
+    std::fs::write(&path, [0xff]).unwrap();
+    let error = Config::resolve_profile(&ctx, &options, &source)
+        .await
+        .unwrap_err();
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.reason(), "invalid UTF-8");
+    assert_eq!(detail.line(), None);
+    std::fs::write(&path, "[default]\ninvalid line\n").unwrap();
+    let error = Config::resolve_profile(&ctx, &options, &source)
+        .await
+        .unwrap_err();
+    let detail = error.detail::<FileDiagnostic>().unwrap();
+    assert_eq!(detail.reason(), "line has no '='");
+    assert_eq!(detail.line(), Some(2));
+}

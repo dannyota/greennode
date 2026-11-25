@@ -54,6 +54,7 @@ impl FileDiagnostic {
         };
         let reason = match value {
             "lookup failed" => "lookup failed",
+            "invalid path" => "invalid path",
             "not found" => "not found",
             "open failed" => "open failed",
             "metadata failed" => "metadata failed",

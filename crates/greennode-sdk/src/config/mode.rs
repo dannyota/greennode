@@ -131,6 +131,13 @@ pub(super) fn select(
     let invalid = |slot: ConfigSlot| {
         Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(slot))
     };
+    let selected_error = |slot, source, reason: &'static str| {
+        Box::new(
+            crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(
+                crate::FileDiagnostic::from_text(slot, source, &format!("file: {reason}")),
+            ),
+        )
+    };
     let credentials_error = |source, reason: &'static str| {
         Box::new(
             crate::Error::new(crate::ErrorClass::CredentialsFile).with_detail(
@@ -234,9 +241,9 @@ pub(super) fn select(
             && !path.is_absolute()
         {
             let slot = if i == 0 {
-                ConfigSlot::Config
+                crate::FileSlot::Config
             } else {
-                ConfigSlot::Credentials
+                crate::FileSlot::Credentials
             };
             #[cfg(windows)]
             if path.has_root()
@@ -245,14 +252,14 @@ pub(super) fn select(
                     Some(std::path::Component::Prefix(_))
                 )
             {
-                return Err(invalid(slot));
+                return Err(selected_error(slot, labels[i], "invalid path"));
             }
             let base = cwd
                 .filter(|p| p.is_absolute())
-                .ok_or_else(|| invalid(slot))?;
+                .ok_or_else(|| selected_error(slot, labels[i], "invalid path"))?;
             *path = base.join(&*path);
             if !path.is_absolute() {
-                return Err(invalid(slot));
+                return Err(selected_error(slot, labels[i], "invalid path"));
             }
         }
     }
@@ -267,13 +274,17 @@ pub(super) fn select(
         cached.map_or_else(|| presence(&chosen[i]), |states| states[i])
     });
     if states[0] == Presence::Ambiguous {
-        return Err(invalid(ConfigSlot::Config));
+        return Err(selected_error(
+            crate::FileSlot::Config,
+            labels[0],
+            "lookup failed",
+        ));
     }
     if states[1] == Presence::Ambiguous {
         return Err(if named[1] {
             credentials_error(labels[1], "lookup failed")
         } else {
-            invalid(ConfigSlot::Credentials)
+            selected_error(crate::FileSlot::Credentials, labels[1], "lookup failed")
         });
     }
     if mode == Mode::Greennode
