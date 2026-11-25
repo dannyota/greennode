@@ -186,23 +186,12 @@ pub(crate) async fn once(
     let values = head.headers.get_all(header::CONTENT_ENCODING);
     let mut values = values.iter();
     let first = values.next();
-    let gzip = matches!(encoding, Encoding::Gzip)
-        && first.is_some_and(|v| {
-            v.to_str()
-                .is_ok_and(|s| s.trim().eq_ignore_ascii_case("gzip"))
-        })
-        && values.next().is_none();
-    if !gzip
-        && head
-            .headers
-            .get_all(header::CONTENT_ENCODING)
-            .iter()
-            .any(|value| {
-                value.to_str().map_or(true, |s| {
-                    s.split(',')
-                        .any(|token| !token.trim().eq_ignore_ascii_case("identity"))
-                })
-            })
+    let second = values.next();
+    let token = first.and_then(|v| v.to_str().ok()).map(str::trim);
+    let gzip =
+        matches!(encoding, Encoding::Gzip) && token.is_some_and(|s| s.eq_ignore_ascii_case("gzip"));
+    if second.is_some()
+        || (first.is_some() && !gzip && !token.is_some_and(|s| s.eq_ignore_ascii_case("identity")))
     {
         return Err(Error::Encoding.with_head(head));
     }
@@ -251,7 +240,11 @@ pub(crate) async fn once(
                         if clock.monotonic_now() >= deadline {
                             return Err(Error::Deadline);
                         }
-                        match decoder.write(remaining) {
+                        let result = decoder.write(&remaining[..remaining.len().min(4096)]);
+                        if clock.monotonic_now() >= deadline {
+                            return Err(Error::Deadline);
+                        }
+                        match result {
                             Ok(0) => return Err(Error::Body),
                             Ok(n) => remaining = &remaining[n..],
                             Err(_) if decoder.get_ref().overflow => {
@@ -266,7 +259,14 @@ pub(crate) async fn once(
             }
         }
         if let Some(mut decoder) = decoder {
-            if decoder.try_finish().is_err() {
+            if clock.monotonic_now() >= deadline {
+                return Err(Error::Deadline);
+            }
+            let result = decoder.try_finish();
+            if clock.monotonic_now() >= deadline {
+                return Err(Error::Deadline);
+            }
+            if result.is_err() {
                 return Err(if decoder.get_ref().overflow {
                     Error::BodyTooLarge
                 } else {
