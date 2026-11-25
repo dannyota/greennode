@@ -185,9 +185,47 @@ pub(super) fn select(
     source: &dyn ConfigSource,
     file: Option<File>,
 ) -> Result<Selected, Box<Error>> {
+    select_checked(
+        selection,
+        settings,
+        settings_options,
+        options,
+        source,
+        file,
+        &|| None,
+    )
+}
+
+struct CheckedReader<'a> {
+    file: File,
+    check: &'a dyn Fn() -> Option<crate::ContextEnd>,
+}
+
+impl std::io::Read for CheckedReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.check)().is_some() {
+            return Err(std::io::ErrorKind::Other.into());
+        }
+        std::io::Read::read(&mut self.file, buffer)
+    }
+}
+
+pub(super) fn select_checked(
+    selection: &Selection,
+    settings: &Settings,
+    settings_options: &SettingsOptions,
+    options: &Options,
+    source: &dyn ConfigSource,
+    file: Option<File>,
+    check: &dyn Fn() -> Option<crate::ContextEnd>,
+) -> Result<Selected, Box<Error>> {
     let mut ini = if selection.credentials_present {
         let file = file.ok_or_else(|| failure(crate::ErrorClass::NoCredentials))?;
-        super::ini::parse_secrets(file).map_err(|diagnostic| {
+        let parsed = super::ini::parse_secrets(CheckedReader { file, check });
+        if let Some(end) = check() {
+            return Err(Box::new(end.into()));
+        }
+        parsed.map_err(|diagnostic| {
             Box::new(Error::new(crate::ErrorClass::CredentialsFile).with_detail(
                 FileDiagnostic::from_text(
                     crate::FileSlot::Credentials,

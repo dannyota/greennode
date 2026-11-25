@@ -113,6 +113,23 @@ pub(super) struct Pair {
 }
 
 pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<crate::Error>> {
+    open_pair_checked(selection, || None)
+}
+
+pub(super) fn open_pair_checked(
+    selection: &super::mode::Selection,
+    check: impl Fn() -> Option<crate::ContextEnd>,
+) -> Result<Pair, Box<crate::Error>> {
+    open_pair_guarded(selection, check, || {}, || {})
+}
+
+fn open_pair_guarded(
+    selection: &super::mode::Selection,
+    check: impl Fn() -> Option<crate::ContextEnd>,
+    before_credentials: impl FnOnce(),
+    on_credentials: impl FnOnce(),
+) -> Result<Pair, Box<crate::Error>> {
+    let guard = || check().map_or(Ok(()), |end| Err(Box::new(crate::Error::from(end))));
     use super::mode::ConfigSlot;
     let error = |slot| {
         let class = if slot == ConfigSlot::Credentials {
@@ -149,7 +166,10 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
             .config
             .as_ref()
             .ok_or_else(|| error(ConfigSlot::Config))?;
-        Some(open(path, Slot::Config).map_err(&config_file_error)?)
+        guard()?;
+        let opened = open_without_permissions_checked(path, Slot::Config, &|| check().is_some());
+        guard()?;
+        Some(opened.map_err(&config_file_error)?)
     } else {
         if selection.config_named {
             return Err(config_file_error("config: not found".to_owned()));
@@ -161,20 +181,42 @@ pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<
             .credentials
             .as_ref()
             .ok_or_else(|| error(ConfigSlot::Credentials))?;
-        Some(open_without_permissions(path, Slot::Credentials).map_err(&file_error)?)
+        before_credentials();
+        guard()?;
+        on_credentials();
+        let opened =
+            open_without_permissions_checked(path, Slot::Credentials, &|| check().is_some());
+        guard()?;
+        Some(opened.map_err(&file_error)?)
     } else {
         if selection.credentials_named {
             return Err(error(ConfigSlot::Credentials));
         }
         None
     };
-    if let (Some(config), Some(credentials)) = (&config, &credentials)
-        && same(config, credentials).map_err(|_| error(ConfigSlot::Config))?
-    {
-        return Err(error(ConfigSlot::Config));
+    if let (Some(config), Some(credentials)) = (&config, &credentials) {
+        guard()?;
+        let first = config.try_clone();
+        guard()?;
+        let first = first.map_err(|_| error(ConfigSlot::Config))?;
+        let first = same_file::Handle::from_file(first);
+        guard()?;
+        let first = first.map_err(|_| error(ConfigSlot::Config))?;
+        let second = credentials.try_clone();
+        guard()?;
+        let second = second.map_err(|_| error(ConfigSlot::Config))?;
+        let second = same_file::Handle::from_file(second);
+        guard()?;
+        let second = second.map_err(|_| error(ConfigSlot::Config))?;
+        if first == second {
+            return Err(error(ConfigSlot::Config));
+        }
     }
     if let Some(credentials) = &credentials {
-        check_credentials_permissions(credentials).map_err(&file_error)?;
+        guard()?;
+        let permissions = check_credentials_permissions(credentials);
+        guard()?;
+        permissions.map_err(&file_error)?;
     }
     Ok(Pair {
         config,

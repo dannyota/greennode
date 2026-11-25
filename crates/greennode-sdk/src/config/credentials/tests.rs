@@ -1,4 +1,5 @@
 mod diagnostics;
+mod worker;
 
 use super::*;
 use crate::config::mode::{Mode, Paths};

@@ -117,6 +117,80 @@ fn config_open_error_keeps_safe_source_and_reason() {
 }
 
 #[test]
+fn ended_workers_stop_before_credentials_open() {
+    use crate::config::mode::{Mode, Paths, Selection};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    let credentials = dir.0.join("credentials");
+    std::fs::write(&config, "[default]\n").unwrap();
+    std::fs::write(&credentials, "[default]\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let selection = Selection {
+        paths: Paths {
+            mode: Mode::Greennode,
+            config: Some(config),
+            credentials: Some(credentials),
+            config_named: true,
+            credentials_named: true,
+        },
+        config_present: true,
+        credentials_present: true,
+        config_source: Some("option"),
+        credentials_source: Some("option"),
+    };
+    for state in [2, 0, 1, 3] {
+        let (ctx, cancel) = crate::RequestContext::new();
+        let expired = ctx.child_with_deadline(tokio::time::Instant::now());
+        let dropped = AtomicBool::new(false);
+        let started = Cell::new(false);
+        let opens = Cell::new(0);
+        let result = open_pair_guarded(
+            &selection,
+            || {
+                if state == 1 && started.get() {
+                    expired.check(&crate::SystemClock)
+                } else {
+                    ctx.check(&crate::SystemClock)
+                }
+                .or_else(|| {
+                    dropped
+                        .load(Ordering::Acquire)
+                        .then_some(crate::ContextEnd::Cancelled)
+                })
+            },
+            || {
+                started.set(true);
+                if state == 0 {
+                    cancel.cancel();
+                }
+                if state == 2 {
+                    dropped.store(true, Ordering::Release);
+                }
+            },
+            || opens.set(opens.get() + 1),
+        );
+        if state == 3 {
+            assert!(result.is_ok());
+            assert_eq!(opens.get(), 1);
+        } else {
+            let expected = if state == 1 {
+                crate::ErrorClass::DeadlineExceeded
+            } else {
+                crate::ErrorClass::Cancelled
+            };
+            assert!(matches!(result, Err(error) if error.class() == expected));
+            assert_eq!(opens.get(), 0);
+        }
+    }
+}
+
+#[test]
 fn opened_pair_rejects_hard_link_alias() {
     use crate::config::mode::{Mode, Paths, Selection};
     let dir = Dir::new();
