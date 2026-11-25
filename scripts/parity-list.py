@@ -2,6 +2,7 @@
 # Usage: python3 -I scripts/parity-list.py <baseline-dir> --tag <tag> --commit <commit> [--check]
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -103,8 +104,12 @@ def parse_page(path, text=None):
                 if found_fields:
                     if found_example or line != "```sh":
                         fail(opening, "unrecognized section after fields")
-                    matches = [re.match(r"vngcloud (" + NAME + r") (" + NAME + r")(?:\s|$)", x) for x in block]
-                    matches = [m.group(1) for m in matches if m]
+                    commands = [x.lstrip() for j, x in enumerate(block)
+                                if (j == 0 or not block[j - 1].rstrip().endswith("\\")) and x.lstrip().startswith("vngcloud ")]
+                    matches = [re.match(r"vngcloud (" + NAME + r") (" + NAME + r")(?:\s|$)", x) for x in commands]
+                    if any(match is None for match in matches):
+                        fail(opening, "invalid operation example")
+                    matches = [match.group(1) for match in matches]
                     if not matches or len(set(matches)) != 1 or matches[0] != expected_service or (service is not None and service != matches[0]):
                         fail(opening, "invalid operation example")
                     service = matches[0]
@@ -123,6 +128,23 @@ def parse_page(path, text=None):
     return {"name": service, "operations": operations}
 
 
+class GitBaseline:
+    def __init__(self, directory):
+        self.command = ["git", "-C", str(directory)]
+        self.env = {key: value for key, value in os.environ.items()
+                    if key not in {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"}}
+
+    def head(self):
+        return subprocess.check_output(self.command + ["rev-parse", "HEAD"], env=self.env).decode("utf-8").strip()
+
+    def pages(self, commit):
+        entries = subprocess.check_output(self.command + ["ls-tree", "-rz", "--name-only", commit, "--", "docs/wiki"], env=self.env)
+        paths = sorted(path for path in entries.decode("utf-8").split("\0")
+                       if re.fullmatch(r"docs/wiki/CLI-[^/]+\.md", path))
+        return [(Path(path), subprocess.check_output(self.command + ["show", f"{commit}:{path}"], env=self.env).decode("utf-8"))
+                for path in paths]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("baseline", type=Path)
@@ -131,17 +153,14 @@ def main():
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     try:
-        commit = subprocess.check_output(["git", "-C", str(args.baseline), "rev-parse", "HEAD"], text=True).strip()
+        baseline = GitBaseline(args.baseline)
+        commit = baseline.head()
         if commit != args.commit:
             raise ValueError(f"baseline HEAD is {commit}, expected {args.commit}")
-        git = ["git", "-C", str(args.baseline)]
-        entries = subprocess.check_output(git + ["ls-tree", "-rz", "--name-only", commit, "--", "docs/wiki"])
-        paths = sorted(path for path in entries.decode("utf-8").split("\0")
-                       if re.fullmatch(r"docs/wiki/CLI-[^/]+\.md", path))
-        if not paths:
+        pages = baseline.pages(commit)
+        if not pages:
             raise ValueError("no baseline service pages")
-        services = sorted((parse_page(Path(path), subprocess.check_output(git + ["show", f"{commit}:{path}"]).decode("utf-8"))
-                           for path in paths), key=lambda service: service["name"])
+        services = sorted((parse_page(path, text) for path, text in pages), key=lambda service: service["name"])
         if len({service["name"] for service in services}) != len(services):
             raise ValueError("duplicate service name")
         data = (json.dumps({"tag": args.tag, "commit": args.commit, "services": services}, indent=2) + "\n").encode("utf-8")

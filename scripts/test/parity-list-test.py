@@ -1,8 +1,9 @@
 #!/usr/bin/env -S python3 -I
 # Usage: python3 -I scripts/test/parity-list-test.py
+import contextlib
 import importlib.util
+import io
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -31,10 +32,16 @@ class Parity(unittest.TestCase):
             return module.parse_page(path)
 
     def test_baseline_identity_required(self):
-        result = subprocess.run([sys.executable, "-I", str(SCRIPT), "/missing"], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("--tag", result.stderr)
-        self.assertIn("--commit", result.stderr)
+        spec = importlib.util.spec_from_file_location("parity_list", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        errors = io.StringIO()
+        with patch.object(sys, "argv", [str(SCRIPT), "/missing"]), contextlib.redirect_stderr(errors):
+            with self.assertRaises(SystemExit) as result:
+                module.main()
+        self.assertNotEqual(result.exception.code, 0)
+        self.assertIn("--tag", errors.getvalue())
+        self.assertIn("--commit", errors.getvalue())
 
     def test_read_with_flags(self):
         service = self.parse(page())
@@ -75,6 +82,15 @@ class Parity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid operation example"):
             self.parse(page().replace("vngcloud things", "vngcloud other"))
 
+    def test_indented_wrong_service(self):
+        text = page().replace("vngcloud things list-things", "  vngcloud wrong list-things\nvngcloud things list-things")
+        with self.assertRaisesRegex(ValueError, "invalid operation example"):
+            self.parse(text)
+
+    def test_example_continuation(self):
+        text = page().replace("vngcloud things list-things", "vngcloud things list-things \\\n  --name value")
+        self.assertEqual(self.parse(text)["name"], "things")
+
     def test_json_only_field(self):
         operation = self.parse(page(fields="| `Config` (via `--cli-input-json` only) | `string` | yes |"))["operations"][0]
         self.assertEqual(operation["flags"], [])
@@ -85,33 +101,45 @@ class Parity(unittest.TestCase):
             self.parse(page() + "\n```json\n{}\n```\n")
 
 
-class GitSource(unittest.TestCase):
+class PageSource(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.repo = self.root / "repo"
-        self.repo.mkdir()
-        self.git("-c", "init.templateDir=", "init", "-q")
         self.wiki = self.repo / "docs/wiki"
         self.wiki.mkdir(parents=True)
-        (self.wiki / "CLI-Things.md").write_text(page(), encoding="utf-8")
-        (self.wiki / "CLI-Other.md").write_text(page().replace("Things", "Other").replace("things", "other"), encoding="utf-8")
-        self.git("add", "docs/wiki")
-        self.git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
-        self.commit = self.git("rev-parse", "HEAD").strip()
+        self.pages = [(Path("docs/wiki/CLI-Things.md"), page()),
+                      (Path("docs/wiki/CLI-Other.md"), page().replace("Things", "Other").replace("things", "other"))]
+        for path, text in self.pages:
+            (self.repo / path).write_text(text, encoding="utf-8")
+        self.commit = "a" * 40
         spec = importlib.util.spec_from_file_location("parity_list", SCRIPT)
         self.module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.module)
         self.output = self.root / "commands.json"
 
-    def git(self, *args):
-        return subprocess.check_output(["git", "-C", str(self.repo), *args], text=True)
+    def head(self):
+        return self.commit
+
+    def source_pages(self, commit):
+        self.assertEqual(commit, self.commit)
+        return self.pages
 
     def run_list(self, *args, commit=None):
         argv = [str(SCRIPT), str(self.repo), "--tag", "test", "--commit", commit or self.commit, *args]
-        with patch.object(sys, "argv", argv), patch.object(self.module, "OUTPUT", self.output):
+        with patch.object(sys, "argv", argv), patch.object(self.module, "OUTPUT", self.output), \
+             patch.object(self.module, "GitBaseline") as source:
+            source.return_value.head.side_effect = self.head
+            source.return_value.pages.side_effect = self.source_pages
             return self.module.main()
+
+    def test_git_environment_isolated(self):
+        hostile = {"GIT_DIR": "/wrong", "GIT_WORK_TREE": "/wrong", "GIT_INDEX_FILE": "/wrong"}
+        with patch.dict(self.module.os.environ, hostile):
+            source = self.module.GitBaseline(self.repo)
+        for key in hostile:
+            self.assertFalse(key in source.env, key)
 
     def test_commit_mismatch(self):
         self.assertEqual(self.run_list(commit="0" * 40), 1)
