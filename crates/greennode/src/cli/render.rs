@@ -1,3 +1,4 @@
+mod float;
 mod redaction;
 mod table;
 mod value;
@@ -50,16 +51,11 @@ enum Node {
     Null,
     Bool(bool),
     Number(String),
+    Float32(f32),
+    Float64(f64),
     String(String),
     Array(Vec<Node>),
     Object(Vec<(String, Node)>),
-}
-
-fn exponent(s: String) -> String {
-    match s.split_once('e') {
-        Some((mantissa, exp)) if !exp.starts_with('-') => format!("{mantissa}e+{exp}"),
-        _ => s,
-    }
 }
 
 const MAX_DEPTH: usize = 128;
@@ -123,23 +119,13 @@ impl ser::Serializer for Encoder {
         if !v.is_finite() {
             return Err(Error::Invalid("nonfinite float".into()));
         }
-        let n = if v != 0.0 && (v.abs() < 1e-6 || v.abs() >= 1e21) {
-            exponent(format!("{v:e}"))
-        } else {
-            v.to_string()
-        };
-        Ok(Node::Number(n))
+        Ok(Node::Float32(v))
     }
     fn serialize_f64(self, v: f64) -> Result<Node, Error> {
         if !v.is_finite() {
             return Err(Error::Invalid("nonfinite float".into()));
         }
-        let n = if v != 0.0 && (v.abs() < 1e-6 || v.abs() >= 1e21) {
-            exponent(format!("{v:e}"))
-        } else {
-            v.to_string()
-        };
-        Ok(Node::Number(n))
+        Ok(Node::Float64(v))
     }
     fn serialize_char(self, v: char) -> Result<Node, Error> {
         self.serialize_str(&v.to_string())
@@ -303,6 +289,8 @@ impl SerializeMap for Map {
         }
         self.key = Some(match key.serialize(Encoder(self.depth))? {
             Node::String(s) | Node::Number(s) => s,
+            Node::Float32(n) => float::f32(n, float::Style::Key)?,
+            Node::Float64(n) => float::f64(n, float::Style::Key)?,
             Node::Bool(b) => b.to_string(),
             _ => return Err(Error::Invalid("invalid map key".into())),
         });
@@ -401,6 +389,8 @@ fn emit<W: Write>(w: &mut W, n: &Node, depth: usize) -> Result<(), Error> {
         Node::Null => write!(w, "null")?,
         Node::Bool(v) => write!(w, "{v}")?,
         Node::Number(v) => write!(w, "{v}")?,
+        Node::Float32(v) => write!(w, "{}", float::f32(*v, float::Style::Json)?)?,
+        Node::Float64(v) => write!(w, "{}", float::f64(*v, float::Style::Json)?)?,
         Node::String(v) => string(w, v)?,
         Node::Array(values) => {
             write!(w, "[")?;

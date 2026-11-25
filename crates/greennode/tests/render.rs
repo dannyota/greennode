@@ -232,6 +232,96 @@ fn exact_integer_and_nonfinite_float() {
     }
 }
 
+struct FloatKey<T>(T);
+
+impl<T: Serialize> Serialize for FloatKey<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry(&self.0, &0)?;
+        map.end()
+    }
+}
+
+fn oracle_equal(case: &str, actual: &[u8], expected: &[u8]) {
+    if actual != expected {
+        let offset = actual
+            .iter()
+            .zip(expected)
+            .position(|(a, b)| a != b)
+            .unwrap_or(actual.len().min(expected.len()));
+        panic!("{case}: byte {offset}");
+    }
+}
+
+fn compare_float<T: Serialize>(case: &str, value: T, json: &str, fixed: &str, key: &str) {
+    let mut out = Vec::new();
+    render::write_json(&mut out, &value).unwrap();
+    oracle_equal(case, &out, format!("{json}\n").as_bytes());
+    let tree = render::normalize(&value).unwrap();
+    out.clear();
+    render::write_text(&mut out, &tree).unwrap();
+    oracle_equal(case, &out, format!("{fixed}\n").as_bytes());
+    let width = fixed.chars().count().max(5);
+    let border = format!("+{}+\n", "-".repeat(width + 2));
+    let expected = format!(
+        "{border}| Value{} |\n{border}| {fixed}{} |\n{border}",
+        " ".repeat(width - 5),
+        " ".repeat(width - fixed.len())
+    );
+    out.clear();
+    render::write_table(&mut out, &tree).unwrap();
+    oracle_equal(case, &out, expected.as_bytes());
+    out.clear();
+    render::write_json(&mut out, &FloatKey(value)).unwrap();
+    oracle_equal(case, &out, format!("{{\n  \"{key}\": 0\n}}\n").as_bytes());
+}
+
+#[test]
+fn floats_match_go_oracle() {
+    let corpus = include_str!("fixtures/render/floats.tsv");
+    let mut count = 0;
+    for line in corpus.lines() {
+        let mut fields = line.split('\t');
+        let id = fields.next().unwrap();
+        let json = fields.next().unwrap();
+        let fixed = fields.next().unwrap();
+        let key = fields.next().unwrap();
+        assert!(fields.next().is_none());
+        if let Some(bits) = id.strip_prefix("64:") {
+            compare_float(
+                id,
+                f64::from_bits(u64::from_str_radix(bits, 16).unwrap()),
+                json,
+                fixed,
+                key,
+            );
+        } else if let Some(bits) = id.strip_prefix("32:") {
+            compare_float(
+                id,
+                f32::from_bits(u32::from_str_radix(bits, 16).unwrap()),
+                json,
+                fixed,
+                key,
+            );
+        } else {
+            panic!("invalid oracle case");
+        }
+        count += 1;
+    }
+    assert_eq!(count, 27611);
+}
+
+#[test]
+fn float_ties_and_map_key_regressions() {
+    let mut out = Vec::new();
+    render::write_json(&mut out, &f64::from_bits(0x42d8_b5e7_eb11_7e68)).unwrap();
+    oracle_equal("float-tie", &out, b"108678236358137.62\n");
+    out.clear();
+    render::write_json(&mut out, &FloatKey(1e-5_f64)).unwrap();
+    oracle_equal("float-map-key", &out, b"{\n  \"1e-05\": 0\n}\n");
+}
+
 #[test]
 fn float_notation_boundaries() {
     for (n, expected) in [

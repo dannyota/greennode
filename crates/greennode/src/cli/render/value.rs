@@ -28,6 +28,14 @@ fn convert(value: Node) -> Result<Value, Error> {
             }
             Ok(Value::Number(n))
         }
+        Node::Float32(v) => {
+            let text = super::float::f32(v, super::float::Style::Json)?;
+            let number = text
+                .parse()
+                .map_err(|_| Error::Invalid("invalid number".into()))?;
+            Ok(Value::Number(number))
+        }
+        Node::Float64(v) => Ok(Value::Number(v)),
         Node::String(v) => Ok(Value::String(v)),
         Node::Array(v) => Ok(Value::Array(
             v.into_iter().map(convert).collect::<Result<_, _>>()?,
@@ -107,17 +115,7 @@ fn compact<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
     match value {
         Value::Null => write!(w, "null")?,
         Value::Bool(b) => write!(w, "{b}")?,
-        Value::Number(n) => {
-            if !n.is_finite() {
-                return Err(Error::Invalid("nonfinite float".into()));
-            }
-            let text = if *n != 0.0 && (n.abs() < 1e-6 || n.abs() >= 1e21) {
-                super::exponent(format!("{n:e}"))
-            } else {
-                n.to_string()
-            };
-            write!(w, "{text}")?;
-        }
+        Value::Number(n) => write!(w, "{}", super::float::f64(*n, super::float::Style::Json)?)?,
         Value::String(s) => super::string(w, s)?,
         Value::Array(items) => {
             write!(w, "[")?;
@@ -149,8 +147,7 @@ pub(super) fn cell(value: &Value) -> Result<String, Error> {
     match value {
         Value::Null => Ok(String::new()),
         Value::Bool(b) => Ok(b.to_string()),
-        Value::Number(n) if n.is_finite() => Ok(n.to_string()),
-        Value::Number(_) => Err(Error::Invalid("nonfinite float".into())),
+        Value::Number(n) => super::float::f64(*n, super::float::Style::Fixed),
         Value::String(s) => Ok(escape(s)),
         _ => {
             let mut bytes = Vec::new();
