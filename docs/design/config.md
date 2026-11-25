@@ -339,6 +339,10 @@ paths, override paths, file contents, or raw filesystem errors.
   is manual. Keep a separate default disk cache and check cache paths against
   that tree when home is known.
 - Use fixed, value-free source labels in diagnostics and debug provenance.
+- Treat a relative home directory as no home, and anchor every relative path
+  override to the caller's working directory before probing; refuse a
+  drive-relative or root-relative Windows path (`C:config`, `\config`). On
+  Windows only file-not-found and path-not-found count as absent.
 - On Windows, open selected files with identification-only security quality of
   service and refuse a handle that is not a disk file before reading, so a named
   pipe at a selected path can neither impersonate the caller nor stall a read.
