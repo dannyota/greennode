@@ -295,6 +295,33 @@ fn slice(items: &[Value], parts: [Option<i64>; 3]) -> Result<Value, EvaluationEr
 mod tests {
     use super::*;
     #[test]
+    fn filter_suppresses_source_error_but_propagates_predicate_error() {
+        let numbers = Value::Array(vec![
+            Value::Number(1.0),
+            Value::Number(2.0),
+            Value::Number(3.0),
+        ]);
+        let nested = Value::Array(vec![
+            Value::Array(vec![Value::Number(0.0)]),
+            Value::Array(vec![Value::Number(1.0)]),
+        ]);
+        assert_eq!(
+            evaluate(&super::super::compile("(@[::0])[?@]").unwrap(), &numbers),
+            Ok(Value::Null)
+        );
+        assert_eq!(
+            evaluate(&super::super::compile("[?@[::0]]").unwrap(), &nested),
+            Err(EvaluationError::InvalidSlice)
+        );
+    }
+    #[test]
+    fn filter_checks_result_depth_before_comparison() {
+        let nested = |count| (0..count).fold(Value::Null, |value, _| Value::Array(vec![value]));
+        let query = super::super::compile("([?`true`].[@]) == `[]`").unwrap();
+        assert_eq!(evaluate(&query, &nested(127)), Ok(Value::Bool(false)));
+        assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
+    }
+    #[test]
     fn filter_drops_null_results_and_false_predicates() {
         let input = crate::cli::render::project(&serde_json::json!([
             {"keep": true, "name": "yes"}, {"keep": true}, {"keep": false, "name": "no"}
