@@ -80,7 +80,7 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         return Ok(best.clone());
     }
     let mut sorted = values.clone();
-    let mut failed = false;
+    let mut failed = None;
     sorted.sort_by(|a, b| {
         let result = execute(reference, a).and_then(|ka| {
             execute(reference, b)
@@ -88,14 +88,27 @@ pub(super) fn call(name: &str, nodes: &[Node], input: &Value) -> Result<Value, E
         });
         match result {
             Ok(order) => order,
-            Err(_) => {
-                failed = true;
+            Err(error) => {
+                if matches!(
+                    error,
+                    EvaluationError::Depth
+                        | EvaluationError::SliceOverflow
+                        | EvaluationError::NonFinite
+                        | EvaluationError::Uncomparable
+                        | EvaluationError::FunctionPanic
+                        | EvaluationError::Unsupported
+                        | EvaluationError::InvalidNode
+                ) {
+                    failed = Some(error);
+                } else if failed.is_none() {
+                    failed = Some(EvaluationError::FunctionComparison);
+                }
                 std::cmp::Ordering::Equal
             }
         }
     });
-    if failed {
-        return Err(EvaluationError::FunctionComparison);
+    if let Some(error) = failed {
+        return Err(error);
     }
     Ok(Value::Array(sorted))
 }
@@ -153,6 +166,7 @@ fn call_regular(name: &str, arguments: &[Argument<'_>]) -> Result<Value, Evaluat
             }
             Ok(Value::Null)
         }
+        ("merge", _) => Err(EvaluationError::FunctionPanic),
         ("to_array", [Argument::Reference(_)]) => Err(EvaluationError::Unsupported),
         _ => Err(EvaluationError::FunctionType),
     }

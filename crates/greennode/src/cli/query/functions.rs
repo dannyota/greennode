@@ -2,7 +2,7 @@
 
 use crate::cli::render::Value;
 
-use super::interpreter::EvaluationError;
+use super::interpreter::{EvaluationError, check};
 
 #[derive(Clone, Copy)]
 pub(super) enum Type {
@@ -168,10 +168,14 @@ fn parse_go_float(value: &str) -> Option<f64> {
         if digits.is_empty() || !valid_digits(digits, 10) {
             return None;
         }
-        let magnitude = digits
-            .bytes()
-            .filter(|b| *b != b'_')
-            .fold(0i64, |n, b| (n * 10 + i64::from(b - b'0')).min(100_000));
+        let clean = digits.replace('_', "");
+        let significant = clean.trim_start_matches('0');
+        let prefix = &significant[..significant.len().min(5)];
+        let magnitude = if prefix.is_empty() {
+            0
+        } else {
+            prefix.parse::<i64>().ok()?
+        };
         if neg { -magnitude } else { magnitude }
     } else {
         0
@@ -194,7 +198,11 @@ fn parse_go_float(value: &str) -> Option<f64> {
         return None;
     }
     if !hex {
-        let clean = value.replace('_', "");
+        let clean = format!(
+            "{}{}e{exponent}",
+            if negative { "-" } else { "" },
+            significand.replace('_', "")
+        );
         let parsed = clean.parse::<f64>().ok()?;
         return parsed.is_finite().then_some(parsed);
     }
@@ -280,7 +288,12 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
         ("keys", [Value::Object(values)]) => Ok(Value::Array(
             values.keys().cloned().map(Value::String).collect(),
         )),
-        ("values", [Value::Object(values)]) => Ok(Value::Array(values.values().cloned().collect())),
+        ("values", [Value::Object(values)]) => {
+            for value in values.values() {
+                check(value, 1)?;
+            }
+            Ok(Value::Array(values.values().cloned().collect()))
+        }
         ("starts_with", [Value::String(value), Value::String(prefix)]) => {
             Ok(Value::Bool(value.starts_with(prefix)))
         }
@@ -315,7 +328,10 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             Ok(Value::String(parts.join(separator)))
         }
         ("to_array", [Value::Array(values)]) => Ok(Value::Array(values.clone())),
-        ("to_array", [value]) => Ok(Value::Array(vec![value.clone()])),
+        ("to_array", [value]) => {
+            check(value, 1)?;
+            Ok(Value::Array(vec![value.clone()]))
+        }
         ("to_string", [Value::String(value)]) => Ok(Value::String(value.clone())),
         ("to_string", [value]) => {
             let mut output = String::new();
@@ -377,7 +393,7 @@ pub(super) fn call(name: &str, arguments: &[Value]) -> Result<Value, EvaluationE
             let mut merged = std::collections::BTreeMap::new();
             for value in values {
                 let Value::Object(map) = value else {
-                    return Err(EvaluationError::FunctionType);
+                    return Err(EvaluationError::FunctionPanic);
                 };
                 merged.extend(map.clone());
             }
@@ -487,7 +503,22 @@ mod tests {
         let a = Value::Object(BTreeMap::from([("x".into(), n(1.0))]));
         let b = Value::Object(BTreeMap::from([("x".into(), n(2.0))]));
         assert_eq!(call("merge", &[a, b.clone()]), Ok(b));
-        assert_eq!(call("merge", &[n(1.0)]), Err(EvaluationError::FunctionType));
+        assert_eq!(
+            call("merge", &[n(1.0)]),
+            Err(EvaluationError::FunctionPanic)
+        );
+    }
+
+    #[test]
+    fn to_number_limits_exponent_accumulation_like_go() {
+        let hex = format!("0x1{}p-100000", "0".repeat(2500));
+        let decimal = format!("0.{}1e100000", "0".repeat(9999));
+        for text in [hex, decimal] {
+            assert_eq!(
+                call("to_number", &[Value::String(text)]),
+                Ok(Value::Number(1.0))
+            );
+        }
     }
 
     #[test]

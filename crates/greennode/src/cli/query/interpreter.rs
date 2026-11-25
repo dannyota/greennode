@@ -24,6 +24,7 @@ pub(in crate::cli) enum EvaluationError {
     UnknownFunction,
     Uncomparable,
     FunctionComparison,
+    FunctionPanic,
 }
 
 pub(super) fn check(value: &Value, depth: usize) -> Result<(), EvaluationError> {
@@ -81,7 +82,14 @@ fn push(items: &mut Vec<Value>, value: Value) -> Result<(), EvaluationError> {
 
 fn source(node: &Node, input: &Value) -> Result<Value, EvaluationError> {
     match execute(node, input) {
-        Err(EvaluationError::InvalidSlice) => Ok(Value::Null),
+        Err(
+            EvaluationError::InvalidSlice
+            | EvaluationError::FunctionArity
+            | EvaluationError::FunctionVariadicArity
+            | EvaluationError::FunctionType
+            | EvaluationError::UnknownFunction
+            | EvaluationError::FunctionComparison,
+        ) => Ok(Value::Null),
         other => other,
     }
 }
@@ -366,7 +374,7 @@ mod tests {
             ("ceil(`1`, `2`)", "FunctionArity"),
             ("ceil('1')", "FunctionType"),
             ("merge()", "FunctionVariadicArity"),
-            ("merge(`false`)", "FunctionType"),
+            ("merge(`false`)", "FunctionPanic"),
             ("not_null()", "FunctionVariadicArity"),
             ("unknown(`1`)", "UnknownFunction"),
         ] {
@@ -624,10 +632,50 @@ mod tests {
                 Err(EvaluationError::SliceOverflow)
             );
         }
-        assert_eq!(
-            evaluate(&super::super::compile("(foo(@)).*").unwrap(), &input),
-            Err(EvaluationError::UnknownFunction)
-        );
+        for expression in [
+            "(foo(@)).*",
+            "(length(`null`)).*",
+            "(length(`null`))[]",
+            "(length(`null`))[?@]",
+        ] {
+            assert_eq!(
+                evaluate(&super::super::compile(expression).unwrap(), &input),
+                Ok(Value::Null)
+            );
+        }
+        for expression in [
+            "(contains(`[[]]`, `[]`)).*",
+            "(merge(`false`)).*",
+            "(&foo).*",
+            "(avg(`[]`)).*",
+        ] {
+            assert!(evaluate(&super::super::compile(expression).unwrap(), &input).is_err());
+        }
+    }
+
+    #[test]
+    fn sorting_does_not_hide_depth_errors_in_source() {
+        let deep = (0..126).fold(Value::Null, |value, _| {
+            Value::Object(BTreeMap::from([("x".into(), value)]))
+        });
+        let input = Value::Array(vec![
+            Value::Object(BTreeMap::from([("key".into(), Value::Number(1.0))])),
+            Value::Object(BTreeMap::from([("deep".into(), deep)])),
+        ]);
+        let query = super::super::compile("(sort_by(@, &(key || length([[[deep]]])))).*").unwrap();
+        assert_eq!(evaluate(&query, &input), Err(EvaluationError::Depth));
+    }
+
+    #[test]
+    fn function_wrapping_checks_depth_before_outer_function() {
+        let nested = |count| {
+            (0..count).fold(Value::Null, |value, _| {
+                Value::Object(BTreeMap::from([("x".into(), value)]))
+            })
+        };
+        let query = super::super::compile("length(to_array(@))").unwrap();
+        assert_eq!(evaluate(&query, &nested(127)), Ok(Value::Number(1.0)));
+        assert_eq!(evaluate(&query, &nested(128)), Err(EvaluationError::Depth));
     }
 
     #[test]
