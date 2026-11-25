@@ -1,3 +1,5 @@
+mod diagnostics;
+
 use super::*;
 use crate::config::mode::{Mode, Paths};
 use std::collections::HashMap;
@@ -80,6 +82,7 @@ fn settings(profile: &str) -> Settings {
         file_read_only: None,
         output: "json".into(),
         section_present: false,
+        profile_settings: Default::default(),
     }
 }
 

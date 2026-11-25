@@ -38,6 +38,7 @@ pub(super) struct Settings {
     pub file_read_only: Option<String>,
     pub output: String,
     pub section_present: bool,
+    pub profile_settings: std::collections::BTreeMap<String, String>,
 }
 
 impl std::fmt::Debug for Settings {
@@ -192,6 +193,12 @@ pub(super) fn resolve(
         file_read_only: file_latch,
         output,
         section_present: section.is_some(),
+        profile_settings: section
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .filter(|(key, _)| !matches!(key.as_str(), "client_id" | "client_secret"))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     })
 }
 
@@ -814,5 +821,26 @@ mod tests {
                     | "VNGCLOUD_READ_ONLY"
             ));
         }
+    }
+    #[test]
+    fn selected_section_preserves_only_safe_settings() {
+        let fixture = Fixture::new(
+            "[default]\nREGION=  RegionValue  \nclient_id=\nclient_secret=\n[profile other]\nother_key=other-value\n",
+        );
+        let settings = resolve(
+            &fixture.paths(),
+            &Options::default(),
+            &Source::default(),
+            Policy::Read,
+        )
+        .unwrap();
+        assert_eq!(
+            settings.profile_settings.get("region").map(String::as_str),
+            Some("RegionValue")
+        );
+        assert!(!settings.profile_settings.contains_key("client_id"));
+        assert!(!settings.profile_settings.contains_key("client_secret"));
+        assert!(!settings.profile_settings.contains_key("other_key"));
+        assert!(!format!("{settings:?}").contains("RegionValue"));
     }
 }
