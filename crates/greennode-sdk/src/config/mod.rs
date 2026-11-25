@@ -3,6 +3,7 @@
 mod file;
 mod ini;
 mod mode;
+mod settings;
 
 #[derive(Clone, Copy)]
 enum Slot {
