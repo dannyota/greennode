@@ -152,19 +152,21 @@ tool. Never widen one token or automatically yank the old SDK.
 
 ## Release workflow
 
-`.github/workflows/release.yml` runs on `v*` tag pushes. Validate the tag,
-workspace manifests, lockfile, dependency policy and workspace tests using
-pinned Rust and CI tools. Build only the tool with
-`cargo build --locked --release --package greennode --target TARGET`. Check its
-version against the tag and smoke-test the extracted Windows archive.
+`.github/workflows/release.yml` runs on `v*` tag pushes, one run at a time. Its
+first job fails unless the tag's commit is in protected `master`'s history;
+later jobs check out that SHA, and no step that runs tagged code holds a token.
+Validate the tag, manifests, lockfile, dependency policy and tests with pinned
+tools. Build only the tool with
+`cargo build --locked --release --package greennode --target TARGET`, check its
+version against the tag, and smoke-test the extracted Windows archive.
 
-Export the built candidate's list with its hidden `__command-inventory` command
-and run `check-crate-release.py shipped CANDIDATE COMMITTED PREVIOUS`, or
-`--first` in place of `PREVIOUS` for the first release. It blocks the Release
-unless the export matches `crates/greennode/tests/parity/shipped-commands.json`
-at the tag and contains every entry of the preceding published tag's list, even
-if crates.io publication was incomplete. The [CLI design](cli.md) owns the
-format.
+Each matrix job exports its binary's list with the hidden `__command-inventory`
+command; all four must match. Run
+`check-crate-release.py shipped CANDIDATE COMMITTED PREVIOUS`, or `--first` for
+the first release. It blocks the Release unless the export matches
+`crates/greennode/tests/parity/shipped-commands.json` at the tag and contains
+every entry of the preceding published tag's list, even if crates.io publication
+was incomplete. The [CLI design](cli.md) owns the format.
 
 | Target                      | Archive                         |
 | --------------------------- | ------------------------------- |
@@ -174,15 +176,15 @@ format.
 | `x86_64-pc-windows-msvc`    | `greennode-windows-amd64.zip`   |
 
 Each archive holds the executable, `LICENSE`, and
-`licenses/go-jmespath-LICENSE`; the release job extracts each archive and checks
-the two license files match the tagged sources and the executable matches its
-verified build artifact. Upload the archives, their `greennode-PLATFORM.sha256`
-files, and the `crate-checksums.json` an unprivileged Ubuntu 24.04 job builds
-from the staged packages as artifacts. Set `retention-days: 90` on every release
-run artifact that backs those assets. Stage all nine assets on a draft, then
-publish it to lock them and the tag ([GitHub immutable releases]). Only the
-Release job has `contents: write`; no release job has OIDC or registry write
-credentials.
+`licenses/go-jmespath-LICENSE`; the release job checks both license files
+against the tag and the executable against its build artifact. Upload the
+archives, their `greennode-PLATFORM.sha256` files, and the
+`crate-checksums.json` an unprivileged Ubuntu 24.04 job builds from the staged
+packages, each with `retention-days: 90`. Stage all nine assets on a draft.
+Publish it to lock them and the tag ([GitHub immutable releases]) only while the
+live tag names the verified commit and the preceding published tag is unchanged.
+Only the Release job has `contents: write`, and it runs no script from the tag;
+no release job has OIDC or registry write credentials.
 
 ### Release evidence
 
@@ -327,9 +329,10 @@ the approved bytes. A version with different bytes needs a new shared tag.
 ## One-time setup
 
 - Enable immutable GitHub Releases, allow 90-day artifact retention, and protect
-  `master`. Create environment `crates-io`, restrict it to `master`, require the
-  owner and disallow bypass. Allow self-review while the owner is the only
-  reviewer. Allow the pinned workflow actions, including
+  `master`. Add a tag ruleset on `v*` that blocks updates and deletions and lets
+  only the owner create tags. Create environment `crates-io`, restrict it to
+  `master`, require the owner and disallow bypass. Allow self-review while the
+  owner is the only reviewer. Allow the pinned workflow actions, including
   `softprops/action-gh-release` and `rust-lang/crates-io-auth-action` at
   `3268eb413133e2960fa4ae0e963ca76380c54cd9`.
 - Only the owner adds both crates' Trusted Publishers after initial publication
@@ -338,12 +341,6 @@ the approved bytes. A version with different bytes needs a new shared tag.
   workflow `publish-crates.yml` and environment `crates-io`.
 - Never put a crates.io API token in GitHub secrets. The bootstrap token stays
   local; later jobs use OIDC.
-
-## Implementation boundary
-
-Port duolane's build matrix, checks, smoke test, notes, pins, assets, exact-run
-checks and owner approval. Add the workspace, archive, and shipped-command
-checks, the receipt, the checksum provider, and per-crate recovery, each tested.
 
 ## Unverified
 

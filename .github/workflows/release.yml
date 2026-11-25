@@ -6,8 +6,36 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: verify
+        env:
+          TAG: ${{ github.ref_name }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+          commit="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          test "$commit" = "$(git rev-parse --verify "$EVENT_SHA^{commit}")"
+          git merge-base --is-ancestor "$commit" origin/master
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -16,6 +44,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
       - name: Validate tag and manifests
         env:
           TAG: ${{ github.ref_name }}
@@ -42,7 +76,7 @@ jobs:
       - run: cargo nextest run --workspace --locked
 
   build:
-    needs: checks
+    needs: [verify, checks]
     permissions:
       contents: read
     strategy:
@@ -81,6 +115,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
       - name: Install pinned Rust
         shell: bash
         run: |
@@ -97,6 +137,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/licenses binary
+          "target/$TARGET/release/greennode$EXT" __command-inventory > binary/inventory.json
           cp "target/$TARGET/release/greennode$EXT" "dist/greennode$EXT"
           cp "dist/greennode$EXT" "binary/greennode$EXT"
           cp LICENSE dist/LICENSE
@@ -119,46 +160,67 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.platform }}-binary
-          path: binary/greennode${{ matrix.ext }}
+          path: binary/
           if-no-files-found: error
           retention-days: 90
 
   inventory:
-    needs: checks
+    needs: [verify, checks, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      previous: ${{ steps.previous.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install pinned Rust
-        run: |
-          version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
-          test -n "$version"
-          rustup toolchain install "$version" --profile minimal
-          test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
-      - name: Check shipped commands
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+      - name: Find preceding release
+        id: previous
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          cargo build --locked --release --package greennode
-          target/release/greennode __command-inventory > "$RUNNER_TEMP/candidate.json"
           gh api --paginate "repos/$REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft == false) | [.published_at, .tag_name] | @tsv' > "$RUNNER_TEMP/releases"
           previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | head -n 1)"
+          if [ -n "$previous" ]; then
+            [[ "$previous" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          fi
+          echo "tag=$previous" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '*-binary'
+          path: inventories
+      - name: Check shipped commands
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+        run: |
+          candidate="inventories/darwin-arm64-binary/inventory.json"
+          test -f "$candidate"
+          for platform in linux-amd64 linux-arm64 windows-amd64; do
+            other="inventories/$platform-binary/inventory.json"
+            test -f "$other"
+            cmp "$candidate" "$other"
+          done
+          previous="$PREVIOUS"
           committed=crates/greennode/tests/parity/shipped-commands.json
           if [ -n "$previous" ]; then
             git show "refs/tags/$previous:$committed" > "$RUNNER_TEMP/previous.json"
-            python3 -I scripts/check-crate-release.py shipped "$RUNNER_TEMP/candidate.json" "$committed" "$RUNNER_TEMP/previous.json"
+            python3 -I scripts/check-crate-release.py shipped "$candidate" "$committed" "$RUNNER_TEMP/previous.json"
           else
-            python3 -I scripts/check-crate-release.py shipped "$RUNNER_TEMP/candidate.json" "$committed" --first
+            python3 -I scripts/check-crate-release.py shipped "$candidate" "$committed" --first
           fi
 
   receipt:
-    needs: checks
+    needs: [verify, checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -167,6 +229,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
       - name: Install pinned Rust
         run: |
           version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
@@ -176,12 +244,14 @@ jobs:
       - name: Package workspace and create receipt
         env:
           TAG: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
         run: |
           root="$(mktemp -d)"
           stage="$(mktemp -d)"
           test -z "$(git ls-files --stage | grep '^120000 ' || true)"
-          test ! -e .cargo/config && test ! -e .cargo/config.toml
+          if [ -e .cargo/config ] || [ -L .cargo/config ] || [ -e .cargo/config.toml ] || [ -L .cargo/config.toml ]; then
+            exit 1
+          fi
           export CARGO_HOME="$root/cargo" CARGO_TARGET_DIR="$root/target" CARGO_BUILD_BUILD_DIR="$root/build"
           cargo package --list --locked --registry crates-io -p greennode-sdk
           cargo package --list --locked --registry crates-io -p greennode
@@ -208,12 +278,21 @@ jobs:
           retention-days: 90
 
   smoke-windows:
-    needs: build
+    needs: [verify, build]
     runs-on: windows-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-amd64
@@ -225,8 +304,51 @@ jobs:
           $actual = & .\extracted\greennode.exe --version
           if ($actual -ne "greennode $($env:TAG.Substring(1)) windows/amd64") { exit 1 }
 
+  notes:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
+      - name: Fetch release note data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/notes-body"
+          compare="$(grep -o "https://github.com/$REPOSITORY/compare/[^ ]*" "$RUNNER_TEMP/notes-body" || true)"
+          if [ -n "$compare" ]; then
+            gh api "repos/$REPOSITORY/compare/${compare##*/}" > "$RUNNER_TEMP/notes-compare"
+          fi
+      - name: Generate release notes without credentials
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir "$RUNNER_TEMP/notes-bin"
+          # shellcheck disable=SC2016
+          printf '%s\n' '#!/usr/bin/env bash' 'set -eu' 'if [[ "$2" == */releases/generate-notes ]]; then' '  /bin/cat "$RUNNER_TEMP/notes-body"' 'else' '  /bin/cat "$RUNNER_TEMP/notes-compare"' 'fi' > "$RUNNER_TEMP/notes-bin/gh"
+          chmod +x "$RUNNER_TEMP/notes-bin/gh"
+          PATH="$RUNNER_TEMP/notes-bin:$PATH" scripts/release-notes.sh "$TAG" > notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: notes.md
+          if-no-files-found: error
+          retention-days: 90
+
   release:
-    needs: [build, inventory, receipt, smoke-windows]
+    needs: [verify, build, inventory, receipt, smoke-windows, notes]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -235,9 +357,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Verify checkout
+        shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$COMMIT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
@@ -271,11 +396,30 @@ jobs:
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           draft: true
-          body_path: notes.md
+          body_path: artifacts/release-notes/notes.md
           fail_on_unmatched_files: true
           files: assets/*
       - name: Publish draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release edit "$TAG" --draft=false
+          COMMIT: ${{ needs.verify.outputs.commit }}
+          EXPECTED_PREVIOUS: ${{ needs.inventory.outputs.previous }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api --paginate "repos/$REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft == false) | [.published_at, .tag_name] | @tsv' > "$RUNNER_TEMP/releases"
+          previous="$(sort -r "$RUNNER_TEMP/releases" | cut -f 2 | head -n 1)"
+          test "$previous" = "$EXPECTED_PREVIOUS"
+          object="$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq '.object | [.type, .sha] | @tsv')"
+          for _ in {1..8}; do
+            IFS=$'\t' read -r type sha <<< "$object"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            if [ "$type" = commit ]; then
+              break
+            fi
+            test "$type" = tag
+            object="$(gh api "repos/$REPOSITORY/git/tags/$sha" --jq '.object | [.type, .sha] | @tsv')"
+          done
+          test "$type" = commit
+          test "$sha" = "$COMMIT"
+          gh release edit "$TAG" --draft=false
