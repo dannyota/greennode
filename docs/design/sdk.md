@@ -126,8 +126,11 @@ call with one options value and one source, opening each selected file once, as
 the [configuration design](config.md) specifies. Never reuse a settings-only
 result to construct a management config.
 
-`resolve_profile` returns an opaque `ResolvedProfile` with name, safe settings,
-file selection and provenance, without requiring a region or credentials. It
+`resolve_profile` returns an opaque `ResolvedProfile` with `name()`,
+`profile_setting(key)` (the same rules as on `Config`), and `config_source()`
+and `credentials_source()`, each the fixed value-free label of the selected file
+or `None`, without requiring a region or credentials. The CLI reads the profile
+latch as `profile_setting("read_only")` and validates it; `load` does not. It
 never signs in, opens the credentials file for content, or reads credential
 values from the environment. `configure`, standalone discovery, and S3 object
 commands may use this result without loading management credentials.
