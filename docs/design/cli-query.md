@@ -112,6 +112,14 @@ Mark translated sources as changed under [Apache-2.0 section 4][apache-license];
 keep the pinned source and fixture provenance with the port. The existing
 project license does not replace the upstream copyright notice.
 
+Concretely: copy the upstream license unchanged to
+`crates/greennode/licenses/go-jmespath-LICENSE`, which the published package
+includes. Each translated source file starts with one line,
+`// Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.`,
+which the [engineering standard](../standards/engineering.md#code-comments)
+allows as a license notice. Copied fixtures carry a `PROVENANCE.md` naming the
+same source and license.
+
 [go-jmespath]: https://github.com/jmespath/go-jmespath/tree/v0.4.0
 [go-license]: https://github.com/jmespath/go-jmespath/blob/v0.4.0/LICENSE
 [apache-license]: https://www.apache.org/licenses/LICENSE-2.0#redistribution

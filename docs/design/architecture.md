@@ -19,7 +19,8 @@ part has its own design:
 | [SDK](sdk.md)                           | The public interface of `greennode-sdk`, results, errors, and outputs       |
 | [SDK request policies](sdk-requests.md) | The three kinds of request, their limits, and the SDK's crates              |
 | [Command line](cli.md)                  | Command declarations, guards, dispatch, errors, exit codes, and `configure` |
-| [CLI output](cli-output.md)             | The JSON projection, `--query`, table, and text                             |
+| [CLI output](cli-output.md)             | The JSON projection, table, and text                                        |
+| [CLI query](cli-query.md)               | The `--query` engine, a port of go-jmespath v0.4.0                          |
 | [Security](security.md)                 | Trust boundaries, secure defaults, and threats                              |
 | [Release publishing](release.md)        | GitHub Releases and crates.io publishing                                    |
 
@@ -197,9 +198,8 @@ Each crate is added by the work that needs it, after the checks in
 [security](../../instructions/security.md#dependencies). The vetted choices and
 their reasons are in the [SDK request policies](sdk-requests.md#dependencies),
 the [CLI design](cli.md#debug-and-dependencies), and the
-[CLI output design](cli-output.md#dependencies-and-compatibility). The SDK
-depends on nothing a caller of the API does not need: no argument parser, no
-query language, and no terminal handling.
+[CLI query design](cli-query.md). The SDK depends on nothing a caller of the API
+does not need: no argument parser, no query language, and no terminal handling.
 
 ## Versions
 

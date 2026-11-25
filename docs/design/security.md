@@ -85,7 +85,7 @@ each of these through concrete code paths:
 
 Every read fed by a response or a file has a bound. The
 [request policies](sdk-requests.md#contract) set the response bounds, the
-[configuration design](config.md#offline-stages-and-file-safety) the file
+[configuration design](config.md#offline-resolution-and-file-safety) the file
 bounds, and the [CLI design](cli.md#input-json) the input bounds. A ported
 operation keeps the baseline's bound for that operation.
 

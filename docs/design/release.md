@@ -159,12 +159,12 @@ pinned Rust and CI tools. Build only the tool with
 `cargo build --locked --release --package greennode --target TARGET`. Check its
 version against the tag and smoke-test the extracted Windows archive.
 
-Before publishing the Release, compare the candidate binary's inventory to
-`crates/greennode/tests/parity/shipped-commands.json` at the tag. Require exact
-equality. The [CLI design](cli.md) owns this sorted list of registered command
-paths, including built-ins and the version and help aliases. Require the
-preceding published tag's committed list to be a subset, even if that tag did
-not finish publishing to crates.io. On the first release, check equality only.
+Use the built candidate's hidden `gen-docs <dir> --command-inventory <path>`
+export. Block the Release unless the export exactly matches
+`crates/greennode/tests/parity/shipped-commands.json` at the tag. The
+[CLI design](cli.md) owns the sorted paths, built-ins and version/help aliases.
+Require the preceding published tag's list to be a subset, even if crates.io
+publication was incomplete. On the first release, check equality only.
 
 | Target                      | Archive                         |
 | --------------------------- | ------------------------------- |
@@ -179,7 +179,7 @@ artifacts. An unprivileged packaging job on Ubuntu 24.04 produces
 ninth asset's build artifact. Set `retention-days: 90` on every release run
 artifact that backs those assets. Stage all nine assets on a draft, then publish
 it to lock them and the tag ([GitHub immutable releases]). Only the Release job
-has `contents: write`; no release job has OIDC or registry access.
+has `contents: write`; no release job has OIDC or registry write credentials.
 
 ### Release evidence
 
@@ -189,10 +189,10 @@ commit. Compare each expected uploaded asset's SHA-256 with the corresponding
 downloaded build artifact from that run. No missing artifacts, expired artifacts
 or digest mismatches pass. Bootstrap, dispatch and recovery must run while those
 artifacts exist; [GitHub artifact retention] is bounded. After expiration this
-tag cannot be published or completed. Cut a new shared version and tag and
-publish both crates at the new version. A lone SDK version stays published. The
-immutable Release receipt retains the old checksums but is not a substitute for
-the exact-run evidence.
+tag cannot be published or completed. Do not rerun the build for new evidence.
+Cut a new shared version and tag and publish both crates at the new version. A
+lone SDK version stays published. The immutable Release receipt preserves the
+checksums but cannot replace the exact-run evidence.
 
 ### Workspace packaging
 
@@ -323,11 +323,11 @@ the approved bytes. A version with different bytes needs a new shared tag.
 
 ## One-time setup
 
-- Enable immutable GitHub Releases and protect `master`. Create environment
-  `crates-io`, restrict it to `master`, require the owner, and disallow bypass.
-  Allow self-review while the owner is the only reviewer. Allow the pinned
-  workflow actions, including `softprops/action-gh-release` and
-  `rust-lang/crates-io-auth-action` at
+- Enable immutable GitHub Releases, allow 90-day artifact retention, and protect
+  `master`. Create environment `crates-io`, restrict it to `master`, require the
+  owner and disallow bypass. Allow self-review while the owner is the only
+  reviewer. Allow the pinned workflow actions, including
+  `softprops/action-gh-release` and `rust-lang/crates-io-auth-action` at
   `3268eb413133e2960fa4ae0e963ca76380c54cd9`.
 - Only the owner adds both crates' Trusted Publishers after initial publication
   ([RFC 3691], [crates.io guide source]). In each crate's Settings → Trusted

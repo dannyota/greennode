@@ -38,9 +38,11 @@ on their own after every plan is gone.
 Design documents, not code comments, hold decisions and explanations. Comments
 drift from the code and mislead agents (owner, 2026-11-18).
 
-- Code has no comments, with two exceptions: tool directives and generated-code
-  markers, and one line on why for a behavior of an external tool or service
-  that no design document owns, naming its source.
+- Code has no comments, with three exceptions: tool directives and
+  generated-code markers; one line on why for a behavior of an external tool or
+  service that no design document owns, naming its source; and the one-line
+  license notice a third-party license requires in a file translated from its
+  source, in the form the owning design states.
 - A public item of the SDK crate has a `///` doc comment that tells a caller
   what the signature does not: units, limits, errors, and what a write changes.
   The SDK's crate root and public modules have a `//!` summary. These comments

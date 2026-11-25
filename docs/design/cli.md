@@ -139,15 +139,15 @@ The ordinary runner uses these phases, in order:
 1. **Before input.** Parse argv and run argv/source guards such as a refusal of
    literal passwords before decoding JSON. No files open here.
 2. **Merge and input guards.** Read only ordinary `--cli-input-json file://` if
-   given, then merge typed flags and the global project binding. Run input shape
-   guards and any `--yes` check declared here. `network add-route` and
-   `remove-route` need `--yes` here even though not destructive. With
+   given, then merge flags and the global project binding. Run input guards,
+   including a Synthetic quota mutation's query prohibition. `network add-route`
+   and `remove-route` need `--yes` here even though not destructive. With
    `--read-only` and no `--yes`, `add-route` returns `InvalidUsage`, not
-   `ReadOnly`. No config, credential, secret or transfer file opens here.
+   `ReadOnly`. Check dedicated file flag shape here without opening its path.
 3. **Local checks.** Refuse a write on flag or environment read-only. Then check
-   required input, enforce the operation's query policy, compile `--query` once,
-   validate explicit output, and enforce destructive `--yes`, in that order. No
-   files open here. False never clears another latch.
+   required input, compile permitted `--query` once, validate explicit output,
+   and enforce destructive `--yes`, in that order. No files open here. False
+   never clears another latch.
 4. **Offline settings.** Open only the selected configuration and management
    credentials files via `Config::load`. A load error wins over the profile
    latch. Resolve the output format and then enforce the latch from the loaded
@@ -164,10 +164,10 @@ never a management client built from those settings. Native S3 checks
 flag/environment read-only before accessing profile files on writes; it reads
 only the config settings, never management credentials. Follow the
 [policy-only profile rules](config.md#offline-resolution-and-file-safety): a
-named config section must exist and malformed `read_only` fails even on reads.
-Check both before opening S3 credentials or transfer input. Explicit management
-region/project flags are refused. `get-object` is a read; replacing a local file
-still needs `--replace --yes`.
+non-default profile must have a config section and malformed `read_only` fails
+even on reads. Check both before opening S3 credentials or transfer input.
+Explicit management region/project flags are refused. `get-object` is a read;
+replacing a local file still needs `--replace --yes`.
 
 All local refusals send zero requests, including sign-in. A paid operation's SDK
 method may then authenticate and get a quote, even by POST. An over-cap or
@@ -224,10 +224,10 @@ For exit status, first match wins:
 | 2    | Usage, local read-only, invalid input, invalid config or ambiguous project. Keep the API code when a server-side error carries invalid-input identity.                                                                                                                                                                                                                                                                                                                                                                                   |
 | 1    | Everything else, including token cache, noncancelled query execution and ordinary render failures                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-Use the first API detail in preorder (outer error, then children in SDK cause
-order) for status, operation and API code. Match semantic identities and
-cancellation across the entire tree separately. Status-only `500` then `404` is
-exit 1, not 4; with a nested not-found identity it is 4, absent an outranking
+Use SDK `api_error()` for the first API detail in preorder (outer error, then
+children in cause order). Use `has_identity` for typed facts anywhere in the
+tree, not classes derived only from HTTP status. A status-only `500` then `404`
+is exit 1, not 4; with a nested not-found identity it is 4, absent an outranking
 fact. HTTP 401 checks only the first API detail too.
 
 `errors.rs` owns this algorithm. Service descriptors supply typed rules; match
@@ -248,20 +248,20 @@ error.
 
 Keep the baseline's four command forms, key file/section mapping, prompt order,
 blank-to-keep behavior, stdin limit and masks. On Unix `configure` requires
-terminal stdin and reads secrets without echo. Windows interactive `configure`
-refuses with `InvalidUsage`/2 and names `configure set <key> -`; that
-noninteractive form works on Windows. `configure set <key> -` requires
-nonterminal stdin, reads at most 4096 bytes plus one, strips one final LF or
-CRLF, and rejects an empty value or embedded newline. Never accept literal
-`password`, `totp_secret`, `vcdn_api_key` or `client_secret`. None of the
-commands authenticate. `get <key>` prints the stored value and `list` prints the
-stored keys in fixed order, with `****` for nonempty secrets. Both ignore
-output/query selection and remain available under read-only and in legacy mode.
-Keep the missing-region hint on stderr, using the selected paths and prefixes.
-Escape terminal controls in displayed settings.
+terminal stdin, prompts on stdout, and reads secrets without echo. Windows
+interactive `configure` refuses with `InvalidUsage`/2 and names
+`configure set <key> -`; that noninteractive form works on Windows.
+`configure set <key> -` requires nonterminal stdin, reads at most 4096 bytes
+plus one, strips one final LF or CRLF, and rejects an empty value or embedded
+newline. Never accept literal `password`, `totp_secret`, `vcdn_api_key` or
+`client_secret`. None of the commands authenticate. `get <key>` prints the
+stored value and `list` prints the stored keys in fixed order, with `****` for
+nonempty secrets. Both ignore output/query selection and remain available under
+read-only and in legacy mode. Keep the missing-region hint on stderr, using the
+selected paths and prefixes. Escape terminal controls in displayed settings.
 
-Resolve paths once with the configuration design's profile-only reader. A write
-checks the effective read-only latch and refuses legacy mode (exit 2, with
+Resolve initial paths with the configuration design's profile-only reader. A
+write checks the effective read-only latch and refuses legacy mode (exit 2, with
 manual copy instructions owned by [Configuration](config.md)) before reading
 stdin, prompting or creating files. There is no migration or write under the
 legacy tree, including through an alias or path override. Hold locks through
@@ -289,7 +289,8 @@ These add to the names and paths in the
   Command names, flag names, and the stream and exit code of each help or usage
   path do not.
 - A usage error names the flag and a safe reason. It never repeats a supplied
-  value or a raw parser diagnostic.
+  value or a raw parser diagnostic. Dedicated file contents are checked after
+  read-only; ordinary `--cli-input-json file://` retains its earlier phase.
 - `configure get` and `list` escape terminal control characters in displayed
   settings.
 - Any output failure after a confirmed write, not only a query failure or a
@@ -323,12 +324,11 @@ records verbatim.
 On Unix use the injected stdin handle, keep normal line editing, turn echo alone
 off during secret input and restore the mode on every exit. Wait on stdin
 readiness with a cancellation wakeup. `rpassword` has [blocking TTY
-APIs][password], not the required cancellable terminal contract. On Windows read
-redirected stdin with the bounded noninteractive reader, without changing
-console mode or using unsafe FFI. A blocked Windows pipe reader must not prevent
-process exit or publish an edit after cancellation. Use standard [file
-locks][file-lock] where supported. Run license, dependency and crate-age checks
-on the locked graph.
+APIs][password], not the required cancellable terminal contract. On Windows a
+plain process-owned reader thread sends at most 4097 bytes to the runner. It
+never edits files. On cancellation, drop the receiver and exit without joining a
+blocked read. Do not use a Tokio blocking task or console FFI. Use standard
+[file locks][file-lock] where supported. Run dependency and crate-age checks.
 
 ## Layout, parity and tests
 
@@ -361,10 +361,10 @@ leaf, implicit flag presence/absence, empty input, real parser types, defaults
 `configure` syntax and behavior tests, including all key positions and masking.
 Generate `crates/greennode/tests/parity/shipped-commands.json` with the built
 candidate's hidden `gen-docs <dir> --command-inventory <path>` option. Commit
-its sorted command paths, built-ins and version/help aliases. The Rust
-`shipped_commands_match_registry` test compares a fresh export byte for byte and
-fails on a stale file. The [release gate](release.md) also checks the preceding
-published tag's inventory is a subset of the candidate.
+its JSON array of sorted command paths, including built-ins and version/help
+aliases. The Rust `shipped_commands_match_registry` test compares a fresh export
+byte for byte and fails on a stale file. The [release gate](release.md) also
+checks the preceding published tag's inventory is a subset of the candidate.
 
 Use injected streams, sources, terminal and clock in frame tests. Use temp homes
 and loopback HTTP in service tests. Assert exact stdout, stderr and exit

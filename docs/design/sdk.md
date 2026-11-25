@@ -135,9 +135,10 @@ values from the environment. `configure`, standalone discovery, and S3 object
 commands may use this result without loading management credentials.
 
 For a management write, the CLI first checks the flag and environment read-only
-guards without reading files. It then calls `load`. A load error wins over a
-profile read-only refusal. If load succeeds, check the profile latch on that
-`Config` before building a service client.
+guards without reading a configuration, credentials, secret, or transfer file; a
+`file://` input argument keeps its baseline place. It then calls `load`. A load
+error wins over a profile read-only refusal. If load succeeds, check the profile
+latch on that `Config` before building a service client.
 
 `RequestContext` carries a cloneable cancellation signal and optional monotonic
 deadline. A separate handle cancels the request. A child deadline cannot extend
@@ -239,7 +240,12 @@ filesystem, or caller-provider error is reachable through `source()` or debug.
 | `context.Canceled`, `context.DeadlineExceeded`                       | `Cancelled`, `DeadlineExceeded`. A per-attempt timeout is not the caller's deadline.                                                                                             |
 
 `IsNotFound`, `IsPermissionDenied`, `IsRateLimited`, `IsProjectNotFound`, and
-`IsProjectAmbiguous` become class checks. `IsRetryable` and `ErrorCode` use the
+`IsProjectAmbiguous` become class checks. A class records its origin: a typed
+identity the SDK attached (the Go sentinel's equivalent) or one derived only
+from the status of the first `ApiError`, as Go derives it. `has_identity`
+matches the first kind anywhere in the causes; `api_error()` returns the first
+API detail. The CLI uses the two separately, so a status-only 500 followed by a
+status-only 404 is not a not-found result. `IsRetryable` and `ErrorCode` use the
 API detail accessor, not string matching. Match the outer class first for
 workflow outcomes; checking a nested 404 alone does not classify an unconfirmed
 write as not found. `detail::<service::ErrorDetail>()` returns typed local
