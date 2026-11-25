@@ -119,6 +119,86 @@ async fn send(
 }
 
 mod gzip_tests;
+mod policy_tests;
+
+#[test]
+fn send_errors_map_to_retry_outcomes() {
+    use super::product::retry::{Outcome, SendFailure};
+    assert!(matches!(
+        Error::Transport(SendFailure::FailedDial).retry_outcome(),
+        Some(Outcome::Send(SendFailure::FailedDial))
+    ));
+    assert!(matches!(
+        Error::Transport(SendFailure::PossiblySent).retry_outcome(),
+        Some(Outcome::Send(SendFailure::PossiblySent))
+    ));
+    assert!(Error::Deadline.retry_outcome().is_none());
+}
+
+#[tokio::test]
+async fn refused_port_is_proven_dial_failure() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let client = connection::client(false, HeadLimit::Api, Trust::webpki()).unwrap();
+    let result = send(
+        &client,
+        req(Method::GET, &format!("https://{address}/")),
+        10,
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(Error::Transport(
+            super::product::retry::SendFailure::FailedDial
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn untrusted_tls_is_possibly_sent() {
+    let server = Server::start(vec![]);
+    let client = connection::client(false, HeadLimit::Api, Trust::webpki()).unwrap();
+    let result = send(&client, req(Method::GET, &server.origin), 10).await;
+    assert!(matches!(
+        result,
+        Err(Error::Transport(
+            super::product::retry::SendFailure::PossiblySent
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn close_after_head_is_possibly_sent() {
+    let server = Server::start(vec![Response::Close]);
+    let result = send(&client(&server), req(Method::GET, &server.origin), 10).await;
+    assert!(matches!(
+        result,
+        Err(Error::Transport(
+            super::product::retry::SendFailure::PossiblySent
+        ))
+    ));
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn reset_during_request_body_is_possibly_sent() {
+    let (seen, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::ResetMidBody(seen)]);
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(&server.origin)
+        .body(Full::new(Bytes::from(vec![b'x'; 8 * 1024 * 1024])))
+        .unwrap();
+    let result = send(&client(&server), request, 10).await;
+    assert!(received.await.is_ok());
+    assert!(matches!(
+        result,
+        Err(Error::Transport(
+            super::product::retry::SendFailure::PossiblySent
+        ))
+    ));
+}
 
 #[tokio::test]
 async fn body_cap_accepts_exact_and_refuses_one_more() {

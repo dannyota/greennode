@@ -6,9 +6,53 @@ use hyper_util::{
     rt::{TokioExecutor, TokioTimer},
 };
 use rustls::{ClientConfig, RootCertStore};
-use std::{sync::Arc, time::Duration};
+use std::{
+    error::Error,
+    fmt,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tower_service::Service;
 
-pub(crate) type Client = HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>;
+#[derive(Clone)]
+pub(crate) struct DialConnector(HttpConnector);
+
+pub(crate) struct DialFailure(Box<dyn Error + Send + Sync>);
+
+impl fmt::Debug for DialFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DialFailure")
+    }
+}
+impl fmt::Display for DialFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("dial failed")
+    }
+}
+impl Error for DialFailure {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+impl Service<http::Uri> for DialConnector {
+    type Response = <HttpConnector as Service<http::Uri>>::Response;
+    type Error = DialFailure;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx).map_err(|e| DialFailure(Box::new(e)))
+    }
+
+    fn call(&mut self, uri: http::Uri) -> Self::Future {
+        let future = self.0.call(uri);
+        Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
+    }
+}
+
+pub(crate) type Client = HyperClient<HttpsConnector<DialConnector>, Full<Bytes>>;
 
 #[derive(Clone, Copy)]
 pub(crate) enum HeadLimit {
@@ -50,7 +94,7 @@ pub(crate) fn client(
         .with_tls_config(tls)
         .https_only()
         .enable_http1()
-        .wrap_connector(http);
+        .wrap_connector(DialConnector(http));
     let mut builder = HyperClient::builder(TokioExecutor::new());
     builder
         .retry_canceled_requests(false)

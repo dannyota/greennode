@@ -1,6 +1,7 @@
 use super::redirect::Retry;
 use std::time::{Duration, SystemTime};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SendFailure {
     FailedDial,
     PossiblySent,

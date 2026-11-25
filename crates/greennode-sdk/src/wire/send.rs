@@ -1,4 +1,7 @@
-use super::connection::Client;
+use super::{
+    connection::{Client, DialFailure},
+    product::retry::{Outcome, SendFailure},
+};
 use crate::Clock;
 use bytes::Bytes;
 use http::{HeaderMap, Method, Request, StatusCode, header};
@@ -50,7 +53,7 @@ pub(crate) enum Error {
     Deadline,
     SwitchingProtocols,
     Encoding,
-    Transport,
+    Transport(SendFailure),
     Body,
     AfterHead { reason: Box<Error>, head: Observed },
 }
@@ -70,6 +73,13 @@ impl fmt::Debug for Observed {
 }
 
 impl Error {
+    pub(crate) fn retry_outcome(&self) -> Option<Outcome<'static>> {
+        match self {
+            Self::Transport(failure) => Some(Outcome::Send(*failure)),
+            Self::AfterHead { .. } => Some(Outcome::Body),
+            _ => None,
+        }
+    }
     pub(crate) fn observed(&self) -> Option<&Observed> {
         match self {
             Self::AfterHead { head, .. } => Some(head),
@@ -129,6 +139,17 @@ async fn timed<T>(
     .await
 }
 
+fn transport_failure(error: &hyper_util::client::legacy::Error) -> SendFailure {
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        if error.is_connect() && current.is::<DialFailure>() {
+            return SendFailure::FailedDial;
+        }
+        cause = current.source();
+    }
+    SendFailure::PossiblySent
+}
+
 pub(crate) async fn once(
     client: &Client,
     mut request: Request<Full<Bytes>>,
@@ -171,7 +192,7 @@ pub(crate) async fn once(
     let is_head = request.method() == Method::HEAD;
     let response = timed(clock, deadline, client.request(request))
         .await?
-        .map_err(|_| Error::Transport)?;
+        .map_err(|error| Error::Transport(transport_failure(&error)))?;
     let (parts, mut body) = response.into_parts();
     let head = Observed {
         status: parts.status,
