@@ -167,3 +167,88 @@ async fn refuses_config_credentials_alias() {
     );
     source.assert_no_credential_reads();
 }
+
+#[tokio::test]
+async fn reports_profile_section_presence() {
+    let dir = Dir::new();
+    let config = dir.0.join("config");
+    std::fs::write(&config, "[profile selected]\n").unwrap();
+    let source = Source::default();
+    let (ctx, _) = RequestContext::new();
+    let options = ConfigOptions::default()
+        .with_profile("selected".into())
+        .with_config_file(config.clone());
+    assert!(
+        Config::resolve_profile(&ctx, &options, &source)
+            .await
+            .unwrap()
+            .section_present()
+    );
+    let options = ConfigOptions::default()
+        .with_profile("absent".into())
+        .with_config_file(config);
+    assert!(
+        !Config::resolve_profile(&ctx, &options, &source)
+            .await
+            .unwrap()
+            .section_present()
+    );
+    let options = ConfigOptions::default().with_profile("absent".into());
+    assert!(
+        !Config::resolve_profile(&ctx, &options, &source)
+            .await
+            .unwrap()
+            .section_present()
+    );
+}
+
+#[tokio::test]
+async fn expired_or_cancelled_context_refuses_before_source_access() {
+    let source = Source::default();
+    let options = ConfigOptions::default();
+    let (ctx, handle) = RequestContext::new();
+    handle.cancel();
+    assert!(
+        matches!(Config::resolve_profile(&ctx, &options, &source).await, Err(error) if error.class() == ErrorClass::Cancelled)
+    );
+    let (ctx, _) = RequestContext::new();
+    let expired =
+        ctx.child_with_deadline(tokio::time::Instant::now() - std::time::Duration::from_secs(1));
+    assert!(
+        matches!(Config::resolve_profile(&expired, &options, &source).await, Err(error) if error.class() == ErrorClass::DeadlineExceeded)
+    );
+    assert!(source.reads.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_profile_consults_only_eligible_settings_once() {
+    let source = Source::default();
+    let options = ConfigOptions::default().with_profile("chosen".into());
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        Config::resolve_profile(&ctx, &options, &source)
+            .await
+            .is_ok()
+    );
+    let mut actual: Vec<_> = source
+        .reads
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    actual.sort();
+    let mut expected = vec![
+        "GREENNODE_CONFIG_FILE",
+        "GREENNODE_SHARED_CREDENTIALS_FILE",
+        "VNGCLOUD_CONFIG_FILE",
+        "VNGCLOUD_SHARED_CREDENTIALS_FILE",
+        "GREENNODE_READ_ONLY",
+        "VNGCLOUD_READ_ONLY",
+        "GREENNODE_REGION",
+        "VNGCLOUD_REGION",
+        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+    ];
+    expected.sort();
+    assert_eq!(actual, expected);
+}
