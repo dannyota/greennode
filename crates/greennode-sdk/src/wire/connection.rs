@@ -63,3 +63,15 @@ pub(crate) fn client(
         .pool_max_idle_per_host(if pooled { 2 } else { 0 });
     Ok(builder.build(connector))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Trust;
+
+    #[test]
+    fn webpki_trust_uses_bundled_roots() {
+        let roots = Trust::webpki().0;
+        assert!(!roots.is_empty());
+        assert_eq!(roots.len(), webpki_roots::TLS_SERVER_ROOTS.len());
+    }
+}

@@ -34,6 +34,7 @@ async fn scripted_https_response_is_served_and_counted() {
         tls.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
             .await
             .unwrap();
+        tls.flush().await.unwrap();
         let mut bytes = vec![0; b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".len()];
         tls.read_exact(&mut bytes).await.unwrap();
         assert_eq!(bytes, b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
