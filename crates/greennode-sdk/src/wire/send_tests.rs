@@ -119,6 +119,7 @@ async fn send(
 }
 
 mod gzip_tests;
+mod policy_tests;
 
 #[test]
 fn send_errors_map_to_retry_outcomes() {
@@ -155,14 +156,14 @@ async fn refused_port_is_proven_dial_failure() {
 }
 
 #[tokio::test]
-async fn untrusted_tls_is_proven_dial_failure() {
+async fn untrusted_tls_is_possibly_sent() {
     let server = Server::start(vec![]);
     let client = connection::client(false, HeadLimit::Api, Trust::webpki()).unwrap();
     let result = send(&client, req(Method::GET, &server.origin), 10).await;
     assert!(matches!(
         result,
         Err(Error::Transport(
-            super::product::retry::SendFailure::FailedDial
+            super::product::retry::SendFailure::PossiblySent
         ))
     ));
 }

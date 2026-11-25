@@ -1,5 +1,5 @@
 use super::{
-    connection::Client,
+    connection::{Client, DialFailure},
     product::retry::{Outcome, SendFailure},
 };
 use crate::Clock;
@@ -142,7 +142,7 @@ async fn timed<T>(
 fn transport_failure(error: &hyper_util::client::legacy::Error) -> SendFailure {
     let mut cause = std::error::Error::source(error);
     while let Some(current) = cause {
-        if error.is_connect() && (current.is::<io::Error>() || current.is::<rustls::Error>()) {
+        if error.is_connect() && current.is::<DialFailure>() {
             return SendFailure::FailedDial;
         }
         cause = current.source();

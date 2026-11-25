@@ -88,6 +88,47 @@ mod tests {
         )
     }
     #[test]
+    fn nonidempotent_recovery() {
+        let token = Secret::new("toy");
+        let allowed = check(
+            bearer(&token, Duration::seconds(30), true),
+            Retry::NonIdempotent,
+            true,
+            false,
+            false,
+        );
+        assert!(allowed.resend);
+        let disabled = check(
+            bearer(&token, Duration::seconds(30), true),
+            Retry::NonIdempotent,
+            false,
+            false,
+            false,
+        );
+        assert!(!disabled.resend);
+    }
+    #[test]
+    fn zero_age_keeps_builtin_token() {
+        let token = Secret::new("toy");
+        let fresh = check(
+            bearer(&token, Duration::ZERO, true),
+            Retry::Repeatable,
+            true,
+            false,
+            false,
+        );
+        assert!(fresh.invalidate.is_none());
+        assert!(fresh.resend);
+        let expired = check(
+            bearer(&token, Duration::seconds(30), true),
+            Retry::Repeatable,
+            true,
+            false,
+            false,
+        );
+        assert!(expired.invalidate.is_some());
+    }
+    #[test]
     fn bearer_exact() {
         let token = Secret::new("canary-one");
         let other = Secret::new("canary-two");
