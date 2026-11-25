@@ -9,6 +9,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn text_streams_large_escaped_cell() {
+        #[derive(Default)]
+        struct Probe {
+            largest: usize,
+            bytes: usize,
+        }
+        impl Write for Probe {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.largest = self.largest.max(data.len());
+                self.bytes += data.len();
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let value = Value::String("\0".repeat(32 * 1024 * 1024));
+        let mut writer = Probe::default();
+        write_text(&mut writer, &value).unwrap();
+        assert!(writer.largest <= 4);
+        assert_eq!(writer.bytes, 128 * 1024 * 1024 + 1);
+    }
+
+    #[test]
     fn query_value_can_be_written_as_sorted_json() {
         let result = Value::Object(BTreeMap::from([
             ("z".into(), Value::Number(2.0)),
@@ -231,10 +255,10 @@ pub fn write_text<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
                     if i != 0 {
                         write!(w, "\t")?;
                     }
-                    write!(w, "{}", cell(item)?)?;
+                    write_cell(w, item)?;
                 }
             }
-            _ => write!(w, "{}", cell(row)?)?,
+            _ => write_cell(w, row)?,
         }
         writeln!(w)?;
     }

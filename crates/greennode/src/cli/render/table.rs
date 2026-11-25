@@ -25,6 +25,15 @@ mod tests {
     }
 
     #[test]
+    fn preflight_borrows_headers() {
+        let key = "header".repeat(10000);
+        let mut sizes = BTreeMap::new();
+        measure(&mut sizes, &key, &Value::Null).unwrap();
+        let stored = sizes.keys().next().unwrap();
+        assert!(std::ptr::eq(stored.as_ptr(), key.as_ptr()));
+    }
+
+    #[test]
     fn preflight_refuses_large_escaped_cell() {
         let input = Value::String("\0".repeat(32 * 1024 * 1024));
         assert!(matches!(measure_cell(&input), Err(Error::TableLimit)));
@@ -81,9 +90,9 @@ fn measure_cell(value: &Value) -> Result<(usize, usize), Error> {
     ))
 }
 
-fn measure(
-    sizes: &mut BTreeMap<String, (usize, usize)>,
-    key: &str,
+fn measure<'a>(
+    sizes: &mut BTreeMap<&'a str, (usize, usize)>,
+    key: &'a str,
     value: &Value,
 ) -> Result<(), Error> {
     let mut header = Counter::default();
@@ -97,9 +106,7 @@ fn measure(
         .checked_sub(header.width)
         .ok_or(Error::TableLimit)?;
     let (width, extra) = measure_cell(value)?;
-    let size = sizes
-        .entry(key.to_owned())
-        .or_insert((header.width, header_extra));
+    let size = sizes.entry(key).or_insert((header.width, header_extra));
     size.0 = size.0.max(width);
     size.1 = size.1.max(extra);
     if sizes.len() > 100 {
@@ -108,7 +115,7 @@ fn measure(
     Ok(())
 }
 
-fn border<W: Write>(w: &mut W, sizes: &BTreeMap<String, (usize, usize)>) -> Result<(), Error> {
+fn border<W: Write>(w: &mut W, sizes: &BTreeMap<&str, (usize, usize)>) -> Result<(), Error> {
     write!(w, "+")?;
     for (width, _) in sizes.values() {
         let length = width.checked_add(2).ok_or(Error::TableLimit)?;
@@ -183,11 +190,11 @@ pub fn write_table<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
         let mut cells = Vec::new();
         for (key, (width, _)) in &sizes {
             let text = match item {
-                Value::Object(map) => match map.get(key) {
+                Value::Object(map) => match map.get(*key) {
                     Some(v) => cell(v)?,
                     None => String::new(),
                 },
-                _ if key == "Value" => cell(item)?,
+                _ if *key == "Value" => cell(item)?,
                 _ => String::new(),
             };
             cells.push((text, *width));
