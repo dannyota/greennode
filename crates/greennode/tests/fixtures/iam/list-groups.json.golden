@@ -1,0 +1,9 @@
+{
+  "Items": [
+    {
+      "ID": "group-1",
+      "Name": "readers",
+      "CreatedAt": 123
+    }
+  ]
+}

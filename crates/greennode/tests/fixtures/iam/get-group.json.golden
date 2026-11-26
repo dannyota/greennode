@@ -1,0 +1,16 @@
+{
+  "Group": {
+    "ID": "group-1",
+    "Name": "readers",
+    "Description": "toy",
+    "Mode": "iam",
+    "Root": "12",
+    "UserIDs": [
+      "user-1"
+    ],
+    "PolicyIDs": [
+      "policy-1"
+    ],
+    "CreatedAt": 123
+  }
+}

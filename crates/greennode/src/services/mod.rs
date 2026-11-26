@@ -5,6 +5,7 @@ mod containerregistry;
 mod database;
 mod dns;
 mod globalloadbalancer;
+mod iam;
 mod portal;
 mod pricing;
 mod project;
@@ -163,6 +164,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         database::SERVICE,
         dns::SERVICE,
         globalloadbalancer::SERVICE,
+        iam::SERVICE,
         portal::SERVICE,
         pricing::SERVICE,
         project::SERVICE,

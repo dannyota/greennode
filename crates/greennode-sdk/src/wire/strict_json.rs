@@ -16,13 +16,46 @@ pub(crate) struct ShapeField<'a> {
     pub(crate) name: &'a str,
     pub(crate) shape: Shape<'a>,
 }
+#[derive(Clone, Copy)]
+enum FieldShape {
+    Folded,
+    Exact,
+    DuplicatesOnly,
+}
+
 pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>, limit: usize) -> Result<(), Error> {
+    validate_fields(body, shape, limit, FieldShape::Folded)
+}
+
+pub(crate) fn validate_exact_shape(
+    body: &[u8],
+    shape: &Shape<'_>,
+    limit: usize,
+) -> Result<(), Error> {
+    validate_fields(body, shape, limit, FieldShape::Exact)
+}
+
+fn validate_fields(
+    body: &[u8],
+    shape: &Shape<'_>,
+    limit: usize,
+    fields: FieldShape,
+) -> Result<(), Error> {
     validate(body, &[], limit)?;
     let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
-    shape_value(raw, shape)
+    shape_value(raw, shape, fields)
 }
-fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
+
+fn shape_value(raw: &RawValue, shape: &Shape<'_>, mode: FieldShape) -> Result<(), Error> {
     if raw.get() == "null" {
+        return Ok(());
+    }
+    if matches!(mode, FieldShape::DuplicatesOnly)
+        && !matches!(
+            (shape, raw.get().as_bytes().first()),
+            (Shape::Object(_), Some(b'{')) | (Shape::Array(_), Some(b'['))
+        )
+    {
         return Ok(());
     }
     match shape {
@@ -45,7 +78,13 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
                         return Err(Error);
                     }
                     if let Some(field) = fields.get(index) {
-                        shape_value(value, &field.shape)?;
+                        let child_mode = if matches!(mode, FieldShape::Exact) && field.name != name
+                        {
+                            FieldShape::DuplicatesOnly
+                        } else {
+                            mode
+                        };
+                        shape_value(value, &field.shape, child_mode)?;
                     }
                 }
             }
@@ -54,7 +93,7 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
         Shape::Array(item) => {
             let values: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(|_| Error)?;
             for value in values {
-                shape_value(value, item)?;
+                shape_value(value, item, mode)?;
             }
             Ok(())
         }

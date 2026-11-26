@@ -1,0 +1,1 @@
+[{"id":"group-1","name":"readers","createdAt":123,"description":"toy","mode":"iam","root":"12","iamUsers":["user-1"],"policies":["policy-1"]}]

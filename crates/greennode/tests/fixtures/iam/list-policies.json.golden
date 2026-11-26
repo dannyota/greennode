@@ -1,0 +1,13 @@
+{
+  "Items": [
+    {
+      "ID": "policy-1",
+      "Name": "reader",
+      "CreatedAt": 123
+    }
+  ],
+  "PageNumber": 0,
+  "PageSize": 10000,
+  "TotalItems": 1,
+  "TotalPages": 1
+}

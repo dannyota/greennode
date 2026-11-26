@@ -1,0 +1,1 @@
+{"CreatedAt":1735689600000,"Enabled":true,"From":"iam","ID":"user-1","LastUse":17,"MFA":{"Email":{"Enabled":null,"Verified":true},"GoogleAuthenticator":{"Enabled":false,"Verified":null}},"Username":"acct-1"}

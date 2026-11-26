@@ -1,0 +1,1 @@
+{"error":{"code":"BadRequest","message":"toy refusal","status":400,"operation":"iam.GetUser"}}

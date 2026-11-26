@@ -1,0 +1,15 @@
+{
+  "Groups": [
+    {
+      "ID": "group-1",
+      "Name": "readers",
+      "CreatedAt": 123
+    }
+  ],
+  "UserIDs": [
+    "user-1"
+  ],
+  "ServiceAccountIDs": [
+    "sa-1"
+  ]
+}

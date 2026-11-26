@@ -1,0 +1,11 @@
+{
+  "Items": [
+    {
+      "Action": "ListUsers",
+      "Label": "List",
+      "Resources": [
+        "*"
+      ]
+    }
+  ]
+}

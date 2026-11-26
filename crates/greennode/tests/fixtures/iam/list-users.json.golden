@@ -1,0 +1,13 @@
+{
+  "Items": [
+    {
+      "ID": "user-1",
+      "Username": "acct-1",
+      "CreatedAt": "2025-01-01T00:00:00Z"
+    }
+  ],
+  "PageNumber": 0,
+  "PageSize": 10000,
+  "TotalItems": 1,
+  "TotalPages": 1
+}
