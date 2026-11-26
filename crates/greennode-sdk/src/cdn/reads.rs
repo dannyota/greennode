@@ -2,6 +2,7 @@ use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 use super::models::{flex_id, nullable};
 use super::wire::{Call, convert, list, read_failure};
@@ -10,7 +11,7 @@ use crate::wire::{
     product::options::PathIds,
     strict_json::{Shape, ShapeField, validate_shape},
 };
-use crate::{Failure, List, RequestContext, Secret};
+use crate::{Error, ErrorClass, Failure, List, RequestContext, Secret};
 
 const LIST_WEB: Call = Call::get("cdn.ListWebAccelerators", "v1/cdn/list");
 const GET_WEB: Call = Call {
@@ -252,18 +253,25 @@ impl Client {
         let key = self
             .session
             .cdn_key()
-            .ok_or_else(|| read_failure(crate::Error::new(crate::ErrorClass::NoCredentials)))?;
-        let expected = key_tag(key.expose_secret())
-            .ok_or_else(|| read_failure(LIST_KEYS.unexpected(200)))?
-            .finalize()
-            .into_bytes();
+            .ok_or_else(|| read_failure(Error::new(ErrorClass::NoCredentials)))?;
+        let comparator = {
+            let mut comparison_key = Zeroizing::new([0; 32]);
+            getrandom::fill(comparison_key.as_mut())
+                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?;
+            Hmac::<Sha256>::new_from_slice(comparison_key.as_ref())
+                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?
+        };
+        let mut expected = comparator.clone();
+        expected.update(key.expose_secret().as_bytes());
+        let expected = expected.finalize().into_bytes();
         let mut items = Vec::with_capacity(rows.len());
         for row in rows {
             let mut metadata = row.metadata;
             let token = Secret::new(row.token);
-            metadata.current = !token.expose_secret().is_empty()
-                && key_tag(token.expose_secret())
-                    .is_some_and(|tag| tag.verify_slice(&expected).is_ok());
+            let mut tag = comparator.clone();
+            tag.update(token.expose_secret().as_bytes());
+            metadata.current =
+                !token.expose_secret().is_empty() && tag.verify_slice(&expected).is_ok();
             answer.evidence.add_secret(&token);
             items.push(metadata);
         }
@@ -272,10 +280,4 @@ impl Client {
         }
         Ok(List { items })
     }
-}
-
-fn key_tag(value: &str) -> Option<Hmac<Sha256>> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(b"greennode-vcdn-key-comparison").ok()?;
-    mac.update(value.as_bytes());
-    Some(mac)
 }
