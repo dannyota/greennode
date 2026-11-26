@@ -19,6 +19,8 @@ use tokio::sync::Mutex;
 #[derive(Default)]
 pub(crate) struct Discovery {
     selected: Mutex<Option<Project>>,
+    #[cfg(test)]
+    before_publish: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Discovery {
@@ -30,6 +32,8 @@ impl Discovery {
         });
         Self {
             selected: Mutex::new(selected),
+            #[cfg(test)]
+            before_publish: None,
         }
     }
 
@@ -40,7 +44,8 @@ impl Discovery {
         source: &dyn BearerSource,
         region: &str,
     ) -> Result<Project, Box<Error>> {
-        let ctx = runtime.ctx;
+        let effective = runtime.ctx.child_with_deadline(runtime.deadline);
+        let ctx = &effective;
         let clock = runtime.clock;
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
@@ -95,6 +100,10 @@ impl Discovery {
             return Err(invalid_response());
         }
         let selected = select(projects, region)?;
+        #[cfg(test)]
+        if let Some(hook) = &self.before_publish {
+            hook();
+        }
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
         }

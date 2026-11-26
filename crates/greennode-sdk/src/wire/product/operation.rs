@@ -211,19 +211,37 @@ pub(crate) async fn execute<T: Output>(
 }
 
 fn reflects_json(body: &[u8], credentials: &sender::SentCredentials) -> bool {
-    fn contains(value: &serde_json::Value, credentials: &sender::SentCredentials) -> bool {
-        match value {
-            serde_json::Value::String(text) => credentials.reflects(text.as_bytes()),
-            serde_json::Value::Array(items) => items.iter().any(|item| contains(item, credentials)),
-            serde_json::Value::Object(fields) => fields.iter().any(|(key, value)| {
-                credentials.reflects(key.as_bytes()) || contains(value, credentials)
-            }),
-            _ => false,
-        }
+    if credentials.reflects(body)
+        || serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err()
+    {
+        return true;
     }
-    credentials.reflects(body)
-        || serde_json::from_slice::<serde_json::Value>(body)
-            .is_ok_and(|value| contains(&value, credentials))
+    let mut index = 0;
+    while index < body.len() {
+        if body[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < body.len() && body[index] != b'"' {
+            if body[index] == b'\\' {
+                index += 1;
+            }
+            index += 1;
+        }
+        if index >= body.len() {
+            return true;
+        }
+        let Ok(value) = serde_json::from_slice::<String>(&body[start..=index]) else {
+            return true;
+        };
+        if credentials.reflects(value.as_bytes()) {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -643,6 +661,26 @@ mod tests {
         }
         let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
         assert!(call(&server, &declaration(), &["one"]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejects_escaped_bearer_with_invalid_ignored_string() {
+        let body = format!(
+            r#"{{"id":"one","ignored":"{}ud800","name":"toy{}u002dtoken"}}"#,
+            char::from(92),
+            char::from(92)
+        );
+        assert!(serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err());
+        let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+        let mut op = declaration();
+        op.reject_reflected_credentials = true;
+        op.no_output = true;
+        assert!(call(&server, &op, &["one"]).await.is_err());
+        let server = Server::start(vec![response(
+            "200 OK",
+            br#"{"id":"one","ignored":1e1000}"#,
+        )]);
+        assert!(call(&server, &op, &["one"]).await.is_ok());
     }
 
     #[tokio::test]

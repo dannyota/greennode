@@ -47,6 +47,23 @@ async fn call(
     server: &Server,
     ctx: &RequestContext,
 ) -> Result<Project, Box<Error>> {
+    call_at(
+        discovery,
+        server,
+        ctx,
+        &SystemClock,
+        SystemClock.monotonic_now() + Duration::from_secs(5),
+    )
+    .await
+}
+
+async fn call_at(
+    discovery: &Discovery,
+    server: &Server,
+    ctx: &RequestContext,
+    clock: &dyn Clock,
+    deadline: tokio::time::Instant,
+) -> Result<Project, Box<Error>> {
     let clients = sender::Clients {
         pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
         one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
@@ -57,8 +74,8 @@ async fn call(
             Runtime {
                 client: &clients,
                 ctx,
-                clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                clock,
+                deadline,
                 sleeper: &Sleeper,
                 jitter: &mut || 0,
             },
@@ -195,6 +212,48 @@ async fn canceled_holder_allows_waiter_to_take_over() {
     assert_eq!(first.unwrap_err().class(), ErrorClass::Cancelled);
     assert_eq!(second.unwrap().id, "two");
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn runtime_deadline_expires_while_waiting_for_gate() {
+    let server = Server::start(vec![]);
+    let discovery = Discovery::default();
+    let guard = discovery.selected.lock().await;
+    let (ctx, _) = RequestContext::new();
+    let clock = crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+    let deadline = clock.monotonic_now() + Duration::from_secs(1);
+    let future = call_at(&discovery, &server, &ctx, &clock, deadline);
+    tokio::pin!(future);
+    tokio::select! { _ = &mut future => panic!("waiter finished early"), _ = tokio::task::yield_now() => {} }
+    clock.advance(Duration::from_secs(1));
+    let result = tokio::time::timeout(Duration::from_secs(1), future).await;
+    assert!(result.is_ok(), "waiter did not honor deadline");
+    assert_eq!(
+        result.unwrap().unwrap_err().class(),
+        ErrorClass::DeadlineExceeded
+    );
+    drop(guard);
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn runtime_deadline_crossed_before_publish_leaves_cache_empty() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projects":[{"projectId":"one"}]}"#,
+    )]);
+    let clock = crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+    let deadline = clock.monotonic_now() + Duration::from_secs(1);
+    let advanced = clock.clone();
+    let discovery = Discovery {
+        selected: Mutex::new(None),
+        before_publish: Some(Box::new(move || advanced.advance(Duration::from_secs(1)))),
+    };
+    let (ctx, _) = RequestContext::new();
+    let result = call_at(&discovery, &server, &ctx, &clock, deadline).await;
+    assert_eq!(result.unwrap_err().class(), ErrorClass::DeadlineExceeded);
+    assert!(discovery.selected.lock().await.is_none());
+    assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]
