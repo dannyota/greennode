@@ -426,3 +426,218 @@ async fn delete_server_checks_confirmation_and_read_only_before_network() {
     }
     assert_eq!(server.requests(), 0);
 }
+
+#[tokio::test]
+async fn server_writes_match_go_goldens() {
+    type Route<'a> = (&'a str, &'a str, &'a str);
+    const ACTIVE: Route<'_> = (
+        "GET /v2/proj-1/servers/server-1 ",
+        "200 OK",
+        "server-action-active",
+    );
+    const STOPPED: Route<'_> = (
+        "GET /v2/proj-1/servers/server-1 ",
+        "200 OK",
+        "server-action-stopped",
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (command, flags, routes) in [
+        (
+            "start-server",
+            &["--no-wait"][..],
+            &[
+                STOPPED,
+                ("PUT /v2/proj-1/servers/server-1/start ", "202 Accepted", ""),
+            ][..],
+        ),
+        (
+            "stop-server",
+            &["--no-wait", "--yes"],
+            &[
+                ACTIVE,
+                ("PUT /v2/proj-1/servers/server-1/stop ", "202 Accepted", ""),
+            ],
+        ),
+        (
+            "reboot-server",
+            &["--no-wait", "--yes"],
+            &[
+                ACTIVE,
+                (
+                    "PUT /v2/proj-1/servers/server-1/reboot ",
+                    "202 Accepted",
+                    "",
+                ),
+            ],
+        ),
+        (
+            "rename-server",
+            &["--name", "renamed"],
+            &[(
+                "PUT /v2/proj-1/servers/server-1/rename ",
+                "200 OK",
+                "server-action-renamed",
+            )],
+        ),
+        (
+            "resize-server",
+            &["--flavor-id", "flavor-2", "--no-wait", "--yes"],
+            &[
+                ACTIVE,
+                ("POST /portal/v1/price ", "200 OK", "server-resize-quote"),
+                (
+                    "PUT /v2/proj-1/servers/server-1/resize ",
+                    "202 Accepted",
+                    "",
+                ),
+            ],
+        ),
+        (
+            "create-server-group",
+            &[
+                "--name",
+                "example",
+                "--policy-id",
+                "policy-1",
+                "--description",
+                "toy",
+            ],
+            &[(
+                "POST /v2/proj-1/serverGroups ",
+                "201 Created",
+                "group-result",
+            )],
+        ),
+        (
+            "update-server-group",
+            &["--server-group-id", "group-1", "--description", "toy"],
+            &[
+                (
+                    "GET /v2/proj-1/serverGroups/group-1 ",
+                    "200 OK",
+                    "group-current",
+                ),
+                ("PUT /v2/proj-1/serverGroups/group-1 ", "200 OK", ""),
+                (
+                    "GET /v2/proj-1/serverGroups/group-1 ",
+                    "200 OK",
+                    "group-result",
+                ),
+            ],
+        ),
+        (
+            "delete-server-group",
+            &["--server-group-id", "group-1", "--yes"],
+            &[
+                (
+                    "GET /v2/proj-1/serverGroups?limit=10000&name=&offset=0 ",
+                    "200 OK",
+                    "group-empty-inventory",
+                ),
+                (
+                    "DELETE /v2/proj-1/serverGroups/group-1 ",
+                    "204 No Content",
+                    "",
+                ),
+            ],
+        ),
+    ] {
+        for format in ["json", "table", "text"] {
+            let server = Server::start(
+                routes
+                    .iter()
+                    .map(|(_, status, body)| {
+                        let body = if body.is_empty() {
+                            String::new()
+                        } else {
+                            std::fs::read_to_string(root.join(format!(
+                                "../greennode-sdk/tests/fixtures/compute/{body}.json"
+                            )))
+                            .unwrap()
+                        };
+                        response(status, &body)
+                    })
+                    .collect(),
+            );
+            let mut args = vec![command, "--project-id", "proj-1", "--output", format];
+            if !command.ends_with("-group") {
+                args.extend(["--server-id", "server-1"]);
+            }
+            args.extend_from_slice(flags);
+            let (status, stdout, stderr) = invoke(&server, &args, false).await;
+            assert_eq!(status, ExitCode::SUCCESS, "{command}/{format}");
+            assert!(stderr.is_empty());
+            let golden = root.join(format!("tests/fixtures/compute/{command}.{format}.golden"));
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                std::fs::read_to_string(golden).unwrap(),
+                "{command}/{format}"
+            );
+            let heads = server.heads();
+            assert_eq!(heads.len(), routes.len());
+            assert!(
+                heads
+                    .iter()
+                    .zip(routes)
+                    .all(|(head, (route, _, _))| head.starts_with(route.as_bytes()))
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn disruptive_server_actions_require_confirmation_and_refuse_read_only() {
+    let server = Server::start(vec![]);
+    for (command, flags) in [
+        ("stop-server", &[][..]),
+        ("reboot-server", &[]),
+        ("resize-server", &["--flavor-id", "flavor-2"]),
+    ] {
+        for guard in [&[][..], &["--yes", "--read-only"]] {
+            let args = [
+                &[command, "--project-id", "proj-1", "--server-id", "server-1"],
+                flags,
+                guard,
+            ]
+            .concat();
+            let (status, stdout, _) = invoke(&server, &args, false).await;
+            assert_eq!(status, ExitCode::from(2));
+            assert!(stdout.is_empty());
+        }
+    }
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn lifecycle_preflight_refusals_use_service_identities_without_http_metadata() {
+    for (command, flags, body, code) in [
+        (
+            "start-server",
+            &["--server-id", "server-1"][..],
+            r#"{"data":{"uuid":"server-1","status":"CREATING"}}"#,
+            "UnexpectedStatus",
+        ),
+        (
+            "delete-server-group",
+            &["--server-group-id", "group-1", "--yes"],
+            r#"{"listData":[{"uuid":"group-1","servers":[{"uuid":"server-1"}]}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
+            "ServerGroupInUse",
+        ),
+    ] {
+        let server = Server::start(vec![response("200 OK", body)]);
+        let args = [&[command, "--project-id", "proj-1"][..], flags].concat();
+        let (exit, stdout, stderr) = invoke(&server, &args, false).await;
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let envelope: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        let error = envelope["error"].as_object().unwrap();
+        assert_eq!(error["code"], code);
+        assert_eq!(error.len(), 2);
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
+        assert_eq!(server.requests(), 1);
+    }
+}

@@ -60,6 +60,9 @@ macro_rules! required_id {
     };
 }
 
+mod server_actions;
+mod server_groups;
+
 macro_rules! int_field {
     ($field:ident, $flag:ident, $name:literal) => {
         InputField {
@@ -167,12 +170,24 @@ const SIZE: Field = flag("size", "int", false);
 
 pub(super) const SERVICE: Service = Service {
     name: "compute",
-    error_rules: &prices::ERROR_RULES,
+    error_rules: &[
+        prices::ERROR_RULES[0],
+        server_actions::UNEXPECTED_STATUS,
+        server_groups::GROUP_IN_USE,
+    ],
     operations: &[
         server_commands::CREATE_SERVER,
         server_commands::DELETE_SERVER,
         server_commands::QUOTE_CREATE_SERVER,
         server_commands::QUOTE_RESIZE_SERVER,
+        server_actions::START,
+        server_actions::STOP,
+        server_actions::REBOOT,
+        server_actions::RENAME,
+        server_actions::RESIZE,
+        server_groups::CREATE,
+        server_groups::UPDATE,
+        server_groups::DELETE,
         operation!(
             GetServerInput, || sdk::GetServerInput::new(""), get_server, "get-server", "GetServer",
             "Get server", &[SERVER_NOTE], false, [

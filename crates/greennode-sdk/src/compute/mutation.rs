@@ -12,7 +12,9 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     response, retry,
 };
-use crate::{ApiError, ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{
+    ApiError, ContextEnd, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch,
+};
 
 use super::wire::api;
 use super::{Client, Server};
@@ -22,11 +24,31 @@ pub(super) struct Mutation {
     pub(super) template: &'static str,
     pub(super) method: Method,
     pub(super) retry: Retry,
+    pub(super) success: &'static [StatusCode],
 }
 
-pub(super) enum Settlement {
+pub(super) enum Settlement<'a> {
     Created,
     Deleted,
+    Status(&'static str),
+    Rebooted(tokio::time::Instant),
+    Resized(&'a str),
+}
+
+impl Settlement<'_> {
+    pub(super) fn matches(&self, server: &Server, now: tokio::time::Instant) -> bool {
+        let has_status = |status| server.status.eq_ignore_ascii_case(status);
+        match self {
+            Self::Created => has_status("ACTIVE"),
+            Self::Deleted => has_status("DELETED"),
+            Self::Status(status) => has_status(status),
+            Self::Rebooted(earliest) => has_status("ACTIVE") && now >= *earliest,
+            Self::Resized(flavor) => {
+                server.flavor.flavor_id == *flavor
+                    && (has_status("ACTIVE") || has_status("STOPPED"))
+            }
+        }
+    }
 }
 
 #[expect(
@@ -39,7 +61,7 @@ impl Client {
         ctx: &RequestContext,
         mutation: &Mutation,
         ids: &[&str],
-        body: &Value,
+        body: Option<&Value>,
         sensitive: bool,
         evidence: &mut Evidence,
     ) -> Result<Bytes, Failure<O>> {
@@ -51,9 +73,11 @@ impl Client {
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(ids.iter().copied())
             .collect();
-        let body = serde_json::to_vec(body)
-            .map(Bytes::from)
-            .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
+        let body = body
+            .map(serde_json::to_vec)
+            .transpose()
+            .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?
+            .map_or_else(Bytes::new, Bytes::from);
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -65,23 +89,23 @@ impl Client {
             .vserver
             .as_ref()
             .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
-        let repeatable = matches!(mutation.retry, Retry::Repeatable);
+        let once = matches!(mutation.retry, Retry::Once);
         let operation = Operation {
             id: mutation.id,
             template: mutation.template,
             method: mutation.method.clone(),
             class: Classification::Write,
             retry: mutation.retry,
-            success: &[StatusCode::ACCEPTED],
+            success: mutation.success,
             cap: 8 << 20,
-            allow_recovery: repeatable,
+            allow_recovery: !once,
             allow_empty: true,
             no_output: false,
             keep_status: true,
-            overflow_overrides_status: !repeatable,
+            overflow_overrides_status: once,
             sensitive,
             reject_reflected_credentials: false,
-            no_redirect: !repeatable,
+            no_redirect: true,
             retry_config: retry::Config::default(),
         };
         let reply = operation::execute_raw(
@@ -125,14 +149,15 @@ impl Client {
         &self,
         ctx: &RequestContext,
         id: &str,
-        mode: Settlement,
+        mode: Settlement<'_>,
         latest: &mut Server,
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
         let minutes = match mode {
-            Settlement::Created => 15,
+            Settlement::Created | Settlement::Resized(_) => 15,
             Settlement::Deleted => 10,
+            Settlement::Status(_) | Settlement::Rebooted(_) => 5,
         };
         let wait =
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
@@ -147,8 +172,10 @@ impl Client {
                             api.operation() == "compute.GetServer" && api.status() == Some(404)
                         }) =>
                 {
-                    if matches!(mode, Settlement::Deleted) {
-                        return Ok(());
+                    match mode {
+                        Settlement::Deleted => return Ok(()),
+                        Settlement::Created => {}
+                        _ => return Err(Box::new(error.into_parts().0)),
                     }
                 }
                 Err(error) => return Err(Box::new(error.into_parts().0)),
@@ -162,18 +189,17 @@ impl Client {
                             evidence,
                         ))
                     };
-                    if evidence.reflected_in(&json!([server.uuid, server.status])) {
+                    if evidence.reflected_in(&json!([server.uuid, server.status]))
+                        || (matches!(mode, Settlement::Resized(_))
+                            && evidence.text_reflects(&server.flavor.flavor_id))
+                    {
                         return Err(invalid(evidence));
                     }
                     *latest = server;
                     if latest.status.eq_ignore_ascii_case("ERROR") {
                         return Err(Box::new(Error::new(ErrorClass::Failed)));
                     }
-                    let status = match mode {
-                        Settlement::Created => "ACTIVE",
-                        Settlement::Deleted => "DELETED",
-                    };
-                    if latest.status.eq_ignore_ascii_case(status) {
+                    if mode.matches(latest, clock.monotonic_now()) {
                         return Ok(());
                     }
                 }
@@ -223,18 +249,46 @@ pub(super) fn settlement_error(
     } else {
         ErrorClass::NotSettled
     };
+    let reason = error
+        .api_error()
+        .map(ApiError::message)
+        .filter(|message| !message.is_empty())
+        .unwrap_or(match error.class() {
+            ErrorClass::Failed => "server reached ERROR",
+            ErrorClass::Cancelled => "context canceled",
+            ErrorClass::DeadlineExceeded => "context deadline exceeded",
+            _ => "",
+        });
+    let advice = if reason.is_empty() {
+        format!("{operation}: {message}")
+    } else {
+        format!("{operation}: {message}: {reason}")
+    };
     let code = if class == ErrorClass::Failed {
         "WriteFailed"
     } else {
         "NotSettled"
     };
-    Error::new(class).with_cause(error).with_cause(api(
+    let error = Error::new(class).with_cause(error).with_cause(api(
         "",
         None,
         code,
         &format!("{operation}: {message}"),
         evidence,
-    ))
+    ));
+    with_screened_advice(error, &advice, evidence)
+}
+
+pub(super) fn with_screened_advice(error: Error, message: &str, evidence: &Evidence) -> Error {
+    let advice = RecoveryAdvice::new(message);
+    if advice.message().is_empty()
+        || evidence.text_reflects(message)
+        || evidence.text_reflects(advice.message())
+    {
+        error
+    } else {
+        error.with_detail(advice)
+    }
 }
 
 pub(super) fn status(error: &Error) -> Option<u16> {
@@ -246,4 +300,57 @@ pub(super) fn status(error: &Error) -> Option<u16> {
 
 pub(super) fn safe_server(mut server: Server, evidence: &Evidence) -> Option<Server> {
     (evidence.can_retain_partial() && server.redact(evidence)).then_some(server)
+}
+
+pub(super) fn decode_data<T: WireField>(
+    body: &[u8],
+    mutation: &Mutation,
+    evidence: &Evidence,
+) -> Result<T, Box<Error>> {
+    use crate::model::wire::{Field, go_json};
+    use crate::wire::strict_json;
+
+    #[derive(serde::Deserialize)]
+    struct Envelope<'a> {
+        #[serde(borrow)]
+        data: Option<&'a serde_json::value::RawValue>,
+    }
+
+    let text = go_json(body);
+    let invalid = || Box::new(invalid_mutation_response(mutation, evidence));
+    let raw: &serde_json::value::RawValue = serde_json::from_str(&text).map_err(|_| {
+        Box::new(api(
+            mutation.id,
+            None,
+            "",
+            "response failed to decode; body withheld",
+            evidence,
+        ))
+    })?;
+    strict_json::validate(
+        text.as_bytes(),
+        &[strict_json::Field {
+            name: "data",
+            children: &[],
+        }],
+        8 << 20,
+    )
+    .map_err(|_| invalid())?;
+    let envelope: Option<Envelope<'_>> = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
+    let Some(data) = envelope.and_then(|envelope| envelope.data) else {
+        return Ok(T::default());
+    };
+    serde_json::from_str::<Field<T>>(data.get())
+        .map(|field| field.0)
+        .map_err(|_| invalid())
+}
+
+pub(super) fn invalid_mutation_response(mutation: &Mutation, evidence: &Evidence) -> Error {
+    api(
+        mutation.id,
+        mutation.success.first().map(StatusCode::as_u16),
+        "InvalidResponse",
+        "invalid server response; body withheld",
+        evidence,
+    )
 }

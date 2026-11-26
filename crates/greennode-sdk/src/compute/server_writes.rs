@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use http::Method;
+use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -22,12 +22,14 @@ const CREATE: Mutation = Mutation {
     template: "v2/{}/servers",
     method: Method::POST,
     retry: Retry::Once,
+    success: &[StatusCode::ACCEPTED],
 };
 const DELETE: Mutation = Mutation {
     id: "compute.DeleteServer",
     template: "v2/{}/servers/{}",
     method: Method::DELETE,
     retry: Retry::Repeatable,
+    success: &[StatusCode::ACCEPTED],
 };
 const DISK_ADVICE: &str = "a 400 can mean a disk type is not offered in ZoneID; list the zone's types with volume.ListVolumeTypes and ZoneID";
 const USER_DATA_WITHHELD: &str = "server message withheld: it may quote user data";
@@ -117,14 +119,14 @@ impl Client {
             .create_quote(ctx, &input, info, &mut evidence)
             .await
             .map_err(|error| not_sent(*error))?;
-        check_price(quote.optimum_price, input.max_price, &evidence)
+        check_price(CREATE.id, quote.optimum_price, input.max_price, &evidence)
             .map_err(|error| not_sent(*error))?;
         let sensitive = input
             .user_data
             .as_ref()
             .is_some_and(|data| !data.expose_secret().is_empty());
         let body = self
-            .send_mutation(ctx, &CREATE, &[], &body, sensitive, &mut evidence)
+            .send_mutation(ctx, &CREATE, &[], Some(&body), sensitive, &mut evidence)
             .await
             .map_err(|failed| create_error(failed, sensitive, &evidence))?;
         let id = create_id(&body, &evidence)
@@ -214,7 +216,7 @@ impl Client {
                 ids.push(id);
             }
         }
-        self.send_mutation(ctx, &DELETE, &[id], &body, false, &mut evidence)
+        self.send_mutation(ctx, &DELETE, &[id], Some(&body), false, &mut evidence)
             .await?;
         if !input.no_wait {
             if let Err(error) = self
@@ -548,7 +550,12 @@ fn delete_output(
     })
 }
 
-fn check_price(quoted: f64, cap: f64, evidence: &Evidence) -> Result<(), Box<Error>> {
+pub(super) fn check_price(
+    op: &str,
+    quoted: f64,
+    cap: f64,
+    evidence: &Evidence,
+) -> Result<(), Box<Error>> {
     if evidence.reflected_in(&json!([quoted, cap]))
         || evidence.text_reflects(&format!("{quoted:.0} {cap:.0}"))
         || evidence.reflects_fixed_two(quoted)
@@ -561,13 +568,12 @@ fn check_price(quoted: f64, cap: f64, evidence: &Evidence) -> Result<(), Box<Err
             evidence,
         )));
     }
-    let (class, code, message) = if quoted <= 0.0 {
+    let (class, code, message) = if quoted == 0.0 {
         (
             ErrorClass::Unpriced,
             "Unpriced",
             format!(
-                "vngcloud: quote priced the order at 0; refusing to order an unpriced paid resource: {}: quote {quoted} VND",
-                CREATE.id
+                "vngcloud: quote priced the order at 0; refusing to order an unpriced paid resource: {op}: quote {quoted} VND"
             ),
         )
     } else if quoted > cap {
@@ -575,8 +581,7 @@ fn check_price(quoted: f64, cap: f64, evidence: &Evidence) -> Result<(), Box<Err
             ErrorClass::PriceAboveMax,
             "PriceAboveMax",
             format!(
-                "vngcloud: quoted price is above MaxPrice: {}: quote {quoted:.0} VND exceeds MaxPrice {cap:.0} VND",
-                CREATE.id
+                "vngcloud: quoted price is above MaxPrice: {op}: quote {quoted:.0} VND exceeds MaxPrice {cap:.0} VND"
             ),
         )
     } else {
