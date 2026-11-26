@@ -1,0 +1,30 @@
+{
+  "Pool": {
+    "UUID": "pool-1",
+    "Name": "web",
+    "Protocol": "HTTP",
+    "Description": "",
+    "LoadBalanceMethod": "LEAST_CONNECTIONS",
+    "DisplayStatus": "",
+    "ProgressStatus": "CREATED",
+    "Stickiness": false,
+    "TLSEncryption": false,
+    "Members": [],
+    "HealthMonitor": {
+      "Timeout": 5,
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DomainName": "example.test",
+      "HTTPVersion": "1.1",
+      "HealthCheckProtocol": "HTTP",
+      "Interval": 30,
+      "HealthyThreshold": 4,
+      "UnhealthyThreshold": 5,
+      "HealthCheckMethod": "GET",
+      "HealthCheckPath": "/",
+      "SuccessCode": "200",
+      "ProgressStatus": "",
+      "DisplayStatus": ""
+    }
+  }
+}

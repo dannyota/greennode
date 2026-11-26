@@ -2,10 +2,13 @@
 
 mod certificate_import;
 mod child_deletes;
+mod child_writes;
 mod deletes;
 mod guard;
 mod models;
 mod paid;
+mod pool_output;
+mod pool_writes;
 mod quotes;
 mod types;
 mod wire;
@@ -26,6 +29,7 @@ pub use child_deletes::*;
 pub use deletes::*;
 pub use models::*;
 pub use paid::*;
+pub use pool_writes::*;
 pub use quotes::{CreateLoadBalancerInput, ResizeLoadBalancerInput};
 pub use types::*;
 pub use wire::DecodeError;

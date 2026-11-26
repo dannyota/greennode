@@ -24,6 +24,38 @@ up to 20 minutes for creation unless `--no-wait` is set.
 greennode loadbalancer create-load-balancer --name <name> --type 'Layer 4' --scheme Internal --subnet-id <subnet-id> --zone-id <zone-id> --package-id <package-id> --max-price <monthly-vnd>
 ```
 
+## create-pool
+
+Kind: Write.
+
+Defaults to `ROUND_ROBIN` and health checks with thresholds 3 and 3, a 30-second
+interval, and a 5-second timeout. HTTP health check fields require HTTP or
+HTTPS. Use `--no-wait` to return submitted settings.
+
+| Flag                          | Type     | Required |
+| ----------------------------- | -------- | -------- |
+| `--load-balancer-id`          | `string` | yes      |
+| `--name`                      | `string` | yes      |
+| `--protocol`                  | `string` | yes      |
+| `--algorithm`                 | `string` |          |
+| `--stickiness`                | `*bool`  |          |
+| `--tls-encryption`            | `*bool`  |          |
+| `--health-check-protocol`     | `string` | yes      |
+| `--health-check-path`         | `string` |          |
+| `--health-check-method`       | `string` |          |
+| `--health-check-http-version` | `string` |          |
+| `--health-check-domain-name`  | `string` |          |
+| `--health-check-success-code` | `string` |          |
+| `--healthy-threshold`         | `int`    |          |
+| `--unhealthy-threshold`       | `int`    |          |
+| `--health-check-interval`     | `int`    |          |
+| `--health-check-timeout`      | `int`    |          |
+| `--no-wait`                   | `bool`   |          |
+
+```sh
+greennode loadbalancer create-pool --load-balancer-id <load-balancer-id> --name <name> --protocol <protocol> --health-check-protocol <health-check-protocol>
+```
+
 ## delete-certificate
 
 Kind: Write, destructive.
@@ -370,4 +402,34 @@ unless `--no-wait` is set.
 
 ```sh
 greennode loadbalancer resize-load-balancer --load-balancer-id <load-balancer-id> --package-id <package-id> --max-price <vnd>
+```
+
+## update-pool
+
+Kind: Write.
+
+Reads and merges the pool and its health monitor. Supply at least one setting.
+The health check protocol stays fixed. Use `--no-wait` to return submitted
+settings.
+
+| Flag                          | Type      | Required |
+| ----------------------------- | --------- | -------- |
+| `--load-balancer-id`          | `string`  | yes      |
+| `--pool-id`                   | `string`  | yes      |
+| `--algorithm`                 | `*string` |          |
+| `--stickiness`                | `*bool`   |          |
+| `--tls-encryption`            | `*bool`   |          |
+| `--health-check-path`         | `*string` |          |
+| `--health-check-method`       | `*string` |          |
+| `--health-check-http-version` | `*string` |          |
+| `--health-check-domain-name`  | `*string` |          |
+| `--health-check-success-code` | `*string` |          |
+| `--healthy-threshold`         | `*int`    |          |
+| `--unhealthy-threshold`       | `*int`    |          |
+| `--health-check-interval`     | `*int`    |          |
+| `--health-check-timeout`      | `*int`    |          |
+| `--no-wait`                   | `bool`    |          |
+
+```sh
+greennode loadbalancer update-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --algorithm <algorithm>
 ```

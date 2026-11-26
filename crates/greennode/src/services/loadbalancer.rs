@@ -155,6 +155,8 @@ macro_rules! optional_bool {
     };
 }
 
+mod pool_writes;
+
 const NO_WAIT: Field = flag("no-wait", "bool", false);
 
 const CERTIFICATE_ID: Field = flag("certificate-id", "string", true);
@@ -212,6 +214,8 @@ pub(super) const SERVICE: Service = Service {
         paid::CREATE,
         paid::RESIZE,
         certificate_import::IMPORT,
+        pool_writes::CREATE_POOL,
+        pool_writes::UPDATE_POOL,
         operation!(
             @kind Kind::DestructiveWrite,
             DeleteCertificateInput, delete_certificate, "delete-certificate", "DeleteCertificate",

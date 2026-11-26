@@ -18,6 +18,8 @@ macro_rules! shape {
     };
 }
 
+pub(super) use shape;
+
 const NODE: Shape<'_> = shape!("status", "zoneId", "zoneName", "subnetId";);
 const ZONE: Shape<'_> = shape!("uuid";);
 pub(super) const LOAD_BALANCER: Shape<'_> = shape!(
@@ -34,13 +36,22 @@ pub(super) fn parse<T: WireField>(
     shape: &Shape<'_>,
     evidence: &Evidence,
 ) -> Result<T, Box<Error>> {
-    let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
-    validate_exact_shape(body.as_bytes(), shape, body.len()).map_err(|_| invalid())?;
-    let canonical = canonical_json(body, shape).ok_or_else(invalid)?;
+    let canonical = canonical_json(read, body, shape, evidence)?;
     read.parse(&canonical, evidence)
 }
 
-fn canonical_json(raw: &str, shape: &Shape<'_>) -> Option<String> {
+pub(super) fn canonical_json(
+    read: &Read,
+    body: &str,
+    shape: &Shape<'_>,
+    evidence: &Evidence,
+) -> Result<String, Box<Error>> {
+    let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
+    validate_exact_shape(body.as_bytes(), shape, body.len()).map_err(|_| invalid())?;
+    canonical_value(body, shape).ok_or_else(invalid)
+}
+
+fn canonical_value(raw: &str, shape: &Shape<'_>) -> Option<String> {
     Some(match shape {
         Shape::Any => raw.to_owned(),
         _ if raw == "null" => raw.to_owned(),
@@ -49,7 +60,7 @@ fn canonical_json(raw: &str, shape: &Shape<'_>) -> Option<String> {
             let mut result = Vec::with_capacity(fields.len().min(values.len()));
             for field in *fields {
                 if let Some(value) = values.get(field.name) {
-                    let value = canonical_json(value.get(), &field.shape)?;
+                    let value = canonical_value(value.get(), &field.shape)?;
                     result.push(format!(
                         "{}:{value}",
                         serde_json::to_string(field.name).ok()?
@@ -62,7 +73,7 @@ fn canonical_json(raw: &str, shape: &Shape<'_>) -> Option<String> {
             let values: Vec<&RawValue> = serde_json::from_str(raw).ok()?;
             let rows: Vec<_> = values
                 .iter()
-                .map(|value| canonical_json(value.get(), item))
+                .map(|value| canonical_value(value.get(), item))
                 .collect::<Option<_>>()?;
             format!("[{}]", rows.join(","))
         }
