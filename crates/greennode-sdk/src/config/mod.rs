@@ -9,7 +9,11 @@ mod file;
 mod ini;
 mod load;
 mod mode;
+mod profile_file;
 mod settings;
+
+pub use mode::{Mode, Paths, Selection};
+pub use profile_file::{ProfileFile, read_slot, select};
 
 #[derive(Clone, Copy)]
 enum Slot {

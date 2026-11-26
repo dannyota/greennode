@@ -53,6 +53,7 @@ impl Fixture {
             },
             config_present: false,
             credentials_present: true,
+            lookup_failed: [false; 2],
             config_source: None,
             credentials_source: Some(if mode == Mode::Greennode {
                 "~/.greennode"

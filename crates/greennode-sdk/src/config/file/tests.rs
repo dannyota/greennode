@@ -84,6 +84,7 @@ fn config_open_error_keeps_safe_source_and_reason() {
         },
         config_present: true,
         credentials_present: false,
+        lookup_failed: [false; 2],
         config_source: Some("GREENNODE_CONFIG_FILE"),
         credentials_source: None,
     };
@@ -141,6 +142,7 @@ fn ended_workers_stop_before_credentials_open() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
@@ -213,6 +215,7 @@ fn opened_pair_rejects_hard_link_alias() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
@@ -251,6 +254,7 @@ fn unsafe_credentials_report_source_and_permission_guidance() {
         },
         config_present: false,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: None,
         credentials_source: Some("VNGCLOUD_SHARED_CREDENTIALS_FILE"),
     };
@@ -292,6 +296,7 @@ fn opened_pair_rejects_distinct_symlink_aliases() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
@@ -388,6 +393,7 @@ fn settings_only_validates_credentials_without_content_open() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
@@ -442,6 +448,7 @@ fn settings_only_refuses_credentials_swapped_after_snapshot() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };
@@ -471,6 +478,7 @@ fn absent_credentials_cannot_appear_as_config_alias() {
         },
         config_present: true,
         credentials_present: false,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("~/.greennode"),
     };
@@ -506,6 +514,7 @@ fn cancelled_before_open_never_opens_config() {
         },
         config_present: true,
         credentials_present: false,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: None,
     };
@@ -539,6 +548,7 @@ fn changed_config_identity_has_safe_diagnostic() {
         },
         config_present: true,
         credentials_present: true,
+        lookup_failed: [false; 2],
         config_source: Some("option"),
         credentials_source: Some("option"),
     };

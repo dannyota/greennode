@@ -48,7 +48,7 @@ impl std::fmt::Debug for Settings {
     }
 }
 
-fn parse_latch(value: Option<&str>, validate: bool) -> Result<bool, SettingsError> {
+pub(super) fn parse_latch(value: Option<&str>, validate: bool) -> Result<bool, SettingsError> {
     match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
         "" | "0" | "false" => Ok(false),
         "1" | "true" => Ok(true),
@@ -364,6 +364,7 @@ mod tests {
                 },
                 config_present: true,
                 credentials_present: false,
+                lookup_failed: [false; 2],
                 config_source: Some("~/.greennode"),
                 credentials_source: Some("~/.greennode"),
             }

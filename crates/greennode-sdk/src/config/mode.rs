@@ -10,8 +10,11 @@ pub(super) enum Presence {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Mode {
+/// The selected configuration family.
+pub enum Mode {
+    /// GreenNode configuration.
     Greennode,
+    /// Legacy VNG Cloud configuration.
     Legacy,
 }
 
@@ -22,21 +25,39 @@ pub(super) enum ConfigSlot {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct Paths {
+/// Selected paths and their origins.
+pub struct Paths {
+    /// Selected configuration family.
     pub mode: Mode,
+    /// Configuration file path, if a home or override was supplied.
     pub config: Option<PathBuf>,
+    /// Credentials file path, if a home or override was supplied.
     pub credentials: Option<PathBuf>,
+    /// Whether the configuration path was explicitly supplied.
     pub config_named: bool,
+    /// Whether the credentials path was explicitly supplied.
     pub credentials_named: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct Selection {
-    pub paths: Paths,
-    pub config_present: bool,
-    pub credentials_present: bool,
-    pub config_source: Option<&'static str>,
-    pub credentials_source: Option<&'static str>,
+/// A snapshot of the selected paths and their observed presence.
+pub struct Selection {
+    pub(super) paths: Paths,
+    pub(super) config_present: bool,
+    pub(super) credentials_present: bool,
+    pub(super) lookup_failed: [bool; 2],
+    pub(super) config_source: Option<&'static str>,
+    pub(super) credentials_source: Option<&'static str>,
+}
+
+impl Selection {
+    /// Reports whether the selected slot was present when selection ran.
+    pub fn present(&self, slot: crate::FileSlot) -> bool {
+        match slot {
+            crate::FileSlot::Config => self.config_present,
+            crate::FileSlot::Credentials => self.credentials_present,
+        }
+    }
 }
 
 impl std::ops::Deref for Selection {
@@ -164,6 +185,27 @@ pub(super) fn select(
     source: &dyn ConfigSource,
     cwd: Option<&Path>,
     probe: impl Fn(&Path) -> Presence,
+) -> Result<Selection, Box<crate::Error>> {
+    select_inner(config, credentials, source, cwd, probe, false)
+}
+
+pub(super) fn select_for_configure(
+    config: Option<&Path>,
+    credentials: Option<&Path>,
+    source: &dyn ConfigSource,
+    cwd: Option<&Path>,
+    probe: impl Fn(&Path) -> Presence,
+) -> Result<Selection, Box<crate::Error>> {
+    select_inner(config, credentials, source, cwd, probe, true)
+}
+
+fn select_inner(
+    config: Option<&Path>,
+    credentials: Option<&Path>,
+    source: &dyn ConfigSource,
+    cwd: Option<&Path>,
+    probe: impl Fn(&Path) -> Presence,
+    defer_legacy_missing: bool,
 ) -> Result<Selection, Box<crate::Error>> {
     let invalid = |slot: ConfigSlot| {
         Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(slot))
@@ -310,14 +352,14 @@ pub(super) fn select(
         };
         cached.map_or_else(|| presence(&chosen[i]), |states| states[i])
     });
-    if states[0] == Presence::Ambiguous {
+    if states[0] == Presence::Ambiguous && !(defer_legacy_missing && mode == Mode::Legacy) {
         return Err(selected_error(
             crate::FileSlot::Config,
             labels[0],
             "lookup failed",
         ));
     }
-    if states[1] == Presence::Ambiguous {
+    if states[1] == Presence::Ambiguous && !(defer_legacy_missing && mode == Mode::Legacy) {
         return Err(if named[1] {
             credentials_error(labels[1], "lookup failed")
         } else {
@@ -335,7 +377,8 @@ pub(super) fn select(
             ConfigSlot::Credentials
         }));
     }
-    if named[1] && states[1] == Presence::Absent {
+    if named[1] && states[1] == Presence::Absent && !(defer_legacy_missing && mode == Mode::Legacy)
+    {
         return Err(credentials_error(labels[1], "not found"));
     }
     Ok(Selection {
@@ -348,6 +391,7 @@ pub(super) fn select(
         },
         config_present: states[0] == Presence::Present,
         credentials_present: states[1] == Presence::Present,
+        lookup_failed: states.map(|state| state == Presence::Ambiguous),
         config_source: labels[0],
         credentials_source: labels[1],
     })
