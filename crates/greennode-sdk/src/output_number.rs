@@ -115,6 +115,11 @@ pub fn f64(value: f64, style: Style) -> Option<String> {
     format(&shortest, json_scientific(value), style)
 }
 
+/// Formats a price to two decimal places for CLI estimates.
+pub fn fixed_two(value: f64) -> String {
+    format!("{value:.2}")
+}
+
 pub(crate) fn reflects(
     value: f64,
     credentials: &crate::wire::product::sender::SentCredentials,

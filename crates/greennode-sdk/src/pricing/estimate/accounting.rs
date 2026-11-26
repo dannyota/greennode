@@ -7,6 +7,7 @@ use crate::model::pricing::{
 };
 use crate::pricing::{EstimateCharge, EstimateCoverage, EstimateTotal};
 use crate::quote::request::decode::Quote;
+use crate::wire::product::evidence::Evidence;
 use crate::{Error, ErrorClass};
 use std::sync::Arc;
 use time::OffsetDateTime;
@@ -143,6 +144,22 @@ pub(super) fn initialize(
     }
 }
 
+pub(super) fn table_amounts(output: &EstimateOutput) -> impl Iterator<Item = f64> + '_ {
+    output
+        .items
+        .iter()
+        .flat_map(|item| {
+            [item.price.monthly_price, item.monthly_amount]
+                .into_iter()
+                .chain(item.breakdown.iter().map(|charge| charge.monthly_price))
+        })
+        .chain([
+            output.total.known_monthly_subtotal,
+            output.total.requested_monthly_total,
+        ])
+        .flatten()
+}
+
 fn cover(topic: &str, scope: &str, status: &str, reason: &str) -> EstimateCoverage {
     EstimateCoverage {
         topic: topic.into(),
@@ -152,12 +169,18 @@ fn cover(topic: &str, scope: &str, status: &str, reason: &str) -> EstimateCovera
     }
 }
 
-fn overflow(stage: &'static str, item_key: &str) -> Arc<Error> {
+pub(super) fn screened_item_key(item_key: &str, evidence: &Evidence) -> String {
+    if evidence.text_reflects(item_key) {
+        "<redacted>".into()
+    } else {
+        item_key.into()
+    }
+}
+
+fn overflow(stage: &'static str, item_key: String) -> Arc<Error> {
     Arc::new(
-        Error::new(ErrorClass::EstimateOverflow).with_detail(EstimateArithmeticError {
-            stage,
-            item_key: item_key.into(),
-        }),
+        Error::new(ErrorClass::EstimateOverflow)
+            .with_detail(EstimateArithmeticError { stage, item_key }),
     )
 }
 
@@ -165,11 +188,15 @@ pub(super) fn account(
     item: &mut EstimateItem,
     quote: &Quote,
     notes: &mut Vec<PricingNote>,
+    evidence: &Evidence,
 ) -> Shared<()> {
     let amount = quote.price.monthly_price.unwrap_or_default()
         * f64::from(u16::try_from(item.quantity).unwrap_or_default());
     if !amount.is_finite() {
-        return Err(overflow("multiplication", &item.key));
+        return Err(overflow(
+            "multiplication",
+            screened_item_key(&item.key, evidence),
+        ));
     }
     item.price = quote.price.clone();
     item.monthly_amount = Some(amount);
@@ -234,7 +261,7 @@ impl Run<'_> {
             }
         }
         if !sum.is_finite() {
-            self.handle("", overflow("subtotal", ""))?;
+            self.handle("", overflow("subtotal", String::new()))?;
         } else if quoted > 0 {
             self.output.total.known_monthly_subtotal = Some(sum);
         }

@@ -25,16 +25,27 @@ fn client(server: &Server) -> Client {
 }
 
 fn client_with_project(server: &Server, known: bool) -> Client {
+    Client::new(&config_with_project(server, known, None))
+}
+
+fn config_with_project(
+    server: &Server,
+    known: bool,
+    provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
+) -> Config {
     let endpoint = format!("{}/", server.origin);
     let mut options = ConfigOptions::default()
         .with_region("hcm-3".into())
-        .with_static_token(Secret::new(CANARY))
         .with_endpoint_overrides(EndpointOverrides {
             portal: Some(endpoint.clone()),
             storage: Some(endpoint.clone()),
             vserver: Some(endpoint),
             ..EndpointOverrides::default()
         });
+    options = match provider {
+        Some(provider) => options.with_credentials_provider(provider),
+        None => options.with_static_token(Secret::new(CANARY)),
+    };
     if known {
         options = options.with_project_id("project-1".into());
     }
@@ -42,7 +53,7 @@ fn client_with_project(server: &Server, known: bool) -> Client {
     config
         .session()
         .set_test_product_root(server.root_der.clone());
-    Client::new(&config)
+    config
 }
 
 #[tokio::test]
@@ -401,4 +412,168 @@ async fn multiplication_overflow_preserves_unknown_rows_without_a_subtotal() {
         partial.metadata.failures[0].code,
         "EstimateMultiplicationOverflow"
     );
+}
+
+#[tokio::test]
+async fn pricing_screens_encoded_property_names_and_descriptions() {
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![
+        response(
+            OK,
+            r#"{"optimumPrice":10,"propertiesPrice":[{"name":"DISK","description":"estimate%25252dcanary"}]}"#,
+        ),
+        response(
+            OK,
+            r#"{"optimumPrice":10,"propertiesPrice":[{"name":"estimate%252dcanary","monthlyPrice":10}]}"#,
+        ),
+        response(
+            OK,
+            r#"{"optimumPrice":10,"propertiesPrice":[{"name":"DISK","description":"GiB / tháng"}]}"#,
+        ),
+    ]);
+    let client = client(&server);
+    let quote = client
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await;
+    assert!(quote.is_err());
+    let setup = EstimateInput {
+        allow_partial: true,
+        public_ips: vec![
+            EstimatePublicIp::new("unknown", "reservation", "", 1),
+            EstimatePublicIp::new("ip", "public-vip", "public", 1),
+        ],
+        ..Default::default()
+    };
+    let Err(failure) = client.estimate(&ctx, setup).await else {
+        panic!("encoded property returned");
+    };
+    assert_eq!(failure.error().class(), ErrorClass::DiscoveryIncomplete);
+    assert!(
+        failure
+            .partial()
+            .is_some_and(|partial| partial.items.iter().all(|item| item.breakdown.is_empty()))
+    );
+    let output = client
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await
+        .unwrap();
+    assert_eq!(output.properties[0].description, "GiB / tháng");
+}
+
+#[tokio::test]
+async fn pricing_screens_overflow_item_key_before_returning_error() {
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![
+        response(OK, r#"{"optimumPrice":1e308}"#),
+        response(OK, r#"{"optimumPrice":1e308}"#),
+    ]);
+    let client = client(&server);
+    for key in [CANARY, "disk"] {
+        let setup = EstimateInput {
+            public_ips: vec![EstimatePublicIp::new(key, "public-vip", "public", 2)],
+            ..Default::default()
+        };
+        let failure = client.estimate(&ctx, setup).await.unwrap_err();
+        let detail = failure.error().detail::<EstimateArithmeticError>().unwrap();
+        assert_eq!(detail.stage, "multiplication");
+        assert!(detail.item_key == if key == CANARY { "<redacted>" } else { key });
+    }
+}
+
+#[tokio::test]
+async fn pricing_rejects_object_valued_optimum_price_on_both_quote_paths() {
+    let (ctx, _) = RequestContext::new();
+    let object = r#"{"optimumPrice":{"$serde_json::private::Number":"10"}}"#;
+    let number = r#"{"optimumPrice":10,"artifactPrices":[{"amount":1e10000}]}"#;
+    let server = Server::start(vec![
+        response(OK, object),
+        response(OK, object),
+        response(OK, number),
+    ]);
+    let client = client(&server);
+    let quote = client
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await;
+    assert!(quote.is_err());
+    let setup = EstimateInput {
+        public_ips: vec![EstimatePublicIp::new("ip", "public-vip", "public", 1)],
+        ..Default::default()
+    };
+    let error = client.estimate(&ctx, setup).await.unwrap_err();
+    assert!(
+        error
+            .error()
+            .api_error()
+            .is_some_and(|api| api.code() == "InvalidResponse")
+    );
+    let output = client
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await
+        .unwrap();
+    assert_eq!(output.optimum_price, 10.0);
+}
+
+#[tokio::test]
+async fn pricing_refuses_malformed_inventory_error_without_retry() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct Provider(AtomicUsize);
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(crate::Token::new(Secret::new(CANARY), None)) })
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+        }
+    }
+    let (ctx, _) = RequestContext::new();
+    let setup = EstimateInput {
+        public_ips: vec![EstimatePublicIp::new("ip", "public-vip", "public", 1)],
+        ..Default::default()
+    };
+    let inventory = r#"{"projects":[{"projectId":"project-1","region":"hcm-3"}]}"#;
+    for (status, code) in [("503 Service Unavailable", 503), ("401 Unauthorized", 401)] {
+        let server = Server::start(vec![
+            response(status, "{"),
+            response(OK, inventory),
+            response(OK, r#"{"optimumPrice":10}"#),
+        ]);
+        let provider = Arc::new(Provider(AtomicUsize::new(0)));
+        let config = config_with_project(&server, false, Some(provider.clone()));
+        let Err(failure) = Client::new(&config).estimate(&ctx, setup.clone()).await else {
+            panic!("malformed inventory reply was retried");
+        };
+        assert_eq!(server.requests(), 1);
+        assert_eq!(provider.0.load(Ordering::Relaxed), 0);
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(code));
+        assert_eq!(api.code(), "InvalidResponse");
+        assert!(!api.retryable());
+        let ordinary = Server::start(vec![response(status, "{"), response(OK, inventory)]);
+        let config = config_with_project(&ordinary, false, Some(provider.clone()));
+        let result = crate::project::Client::new(&config)
+            .list_projects(&ctx, crate::project::ListProjectsInput::default())
+            .await
+            .unwrap();
+        assert_eq!(result.items[0].id, "project-1");
+        assert_eq!(ordinary.requests(), 2);
+        assert_eq!(provider.0.load(Ordering::Relaxed), usize::from(code == 401));
+    }
 }

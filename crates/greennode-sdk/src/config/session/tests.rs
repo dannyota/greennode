@@ -656,3 +656,5 @@ async fn billing_withholds_iam_secrets_and_signin_material_after_cached_login() 
     assert_eq!(signin.requests(), 4);
     assert_eq!(token.requests(), 1);
 }
+
+mod pricing;

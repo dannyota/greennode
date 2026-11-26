@@ -58,6 +58,7 @@ const ALLOWED_HEADERS: &[&str] = &["user-type", "region", "region_id"];
 pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
     pub(crate) pacing: Option<&'a Pacing>,
+    pub(crate) response_guard: Option<super::sender::ResponseGuard>,
     pub(crate) headers: &'a [(&'static str, &'a str)],
 }
 
@@ -65,6 +66,7 @@ impl Options<'_> {
     pub(crate) const DEFAULT: Self = Self {
         path_ids: PathIds::Strict,
         pacing: None,
+        response_guard: None,
         headers: &[],
     };
 

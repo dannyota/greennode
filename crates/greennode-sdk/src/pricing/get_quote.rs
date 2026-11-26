@@ -112,14 +112,7 @@ impl Client {
             None,
         )
         .await;
-        let numeric = evidence.credentials().values().iter().any(|secret| {
-            let text = secret.expose_secret().trim();
-            !text.is_empty()
-                && text.bytes().all(|byte| {
-                    byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.' | b'e' | b'E')
-                })
-                && text.parse::<f64>().is_ok()
-        });
+        let numeric = evidence.credentials().has_numeric_product_credential();
         match raw {
             Err(error) => {
                 let observed = error
@@ -136,7 +129,7 @@ impl Client {
             }
             Ok(_) if numeric => Err(failure(decode::invalid_quote(OP, Some(200)))),
             Ok(raw) => {
-                let output = serde_json::from_str(raw.get())
+                let output = crate::quote::catalog::value(OP, &raw)
                     .ok()
                     .and_then(|value| project(&value, action).ok());
                 let output = output.filter(|result| {

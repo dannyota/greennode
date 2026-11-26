@@ -62,6 +62,54 @@ pub(crate) fn invalid(operation: &'static str, status: u16) -> Box<Error> {
     ))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuoteProperties<'a> {
+    #[serde(borrow)]
+    properties_price: Option<Vec<Option<QuoteProperty<'a>>>>,
+}
+
+#[derive(Deserialize)]
+struct QuoteProperty<'a> {
+    #[serde(borrow)]
+    name: Option<&'a RawValue>,
+    #[serde(borrow)]
+    description: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+struct StorageQuote<'a> {
+    #[serde(borrow)]
+    data: Option<&'a RawValue>,
+}
+
+fn screen_properties(raw: &RawValue, evidence: &Evidence, storage: bool) -> bool {
+    let raw = if storage {
+        let Ok(StorageQuote { data: Some(data) }) = serde_json::from_str(raw.get()) else {
+            return false;
+        };
+        data
+    } else {
+        raw
+    };
+    serde_json::from_str::<QuoteProperties<'_>>(raw.get()).is_ok_and(|quote| {
+        quote
+            .properties_price
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|row| {
+                [row.name, row.description]
+                    .into_iter()
+                    .flatten()
+                    .any(|text| {
+                        serde_json::from_str::<String>(text.get())
+                            .is_ok_and(|text| evidence.text_reflects(&text))
+                    })
+            })
+    })
+}
+
 impl Output for Document {
     const SCHEMA: Shape<'static> = Shape::Any;
     const RESPONSE_GUARD: Option<sender::ResponseGuard> = Some(guard_discovery);
@@ -177,8 +225,13 @@ pub(crate) async fn exchange(
         evidence,
     )
     .await;
-    match result {
-        Ok((status, doc)) => doc.0.ok_or_else(|| invalid(req.operation, status.as_u16())),
-        Err(failure) => Err(Box::new(failure.into_parts().0)),
+    let (status, document) = result.map_err(|failure| Box::new(failure.into_parts().0))?;
+    let invalid = || invalid(req.operation, status.as_u16());
+    let raw = document.0.ok_or_else(invalid)?;
+    if req.body.is_some()
+        && screen_properties(&raw, evidence, matches!(req.product, Product::Storage(_)))
+    {
+        return Err(invalid());
     }
+    Ok(raw)
 }

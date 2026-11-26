@@ -41,7 +41,7 @@ fn label(value: &Value) -> Value {
 
 fn amount(value: &Value) -> String {
     match value {
-        Value::Number(value) => format!("{value:.2}"),
+        Value::Number(value) => greennode_sdk::output_number::fixed_two(*value),
         Value::String(value) => escape(value),
         _ => "unknown".into(),
     }

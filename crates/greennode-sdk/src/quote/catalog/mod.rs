@@ -206,7 +206,31 @@ pub(crate) struct Zone {
 }
 
 pub(crate) fn value(op: &'static str, raw: &RawValue) -> Result<Value, Box<Error>> {
-    serde_json::from_str(raw.get()).map_err(|_| request::invalid(op, 200))
+    fn token(raw: &RawValue) -> Result<Value, serde_json::Error> {
+        let text = raw.get();
+        match text.as_bytes().first() {
+            Some(b'{') => {
+                let entries: std::collections::BTreeMap<String, &RawValue> =
+                    serde_json::from_str(text)?;
+                entries
+                    .into_iter()
+                    .map(|(key, raw)| Ok((key, token(raw)?)))
+                    .collect::<Result<_, _>>()
+                    .map(Value::Object)
+            }
+            Some(b'[') => {
+                let items: Vec<&RawValue> = serde_json::from_str(text)?;
+                items
+                    .into_iter()
+                    .map(token)
+                    .collect::<Result<_, _>>()
+                    .map(Value::Array)
+            }
+            _ => serde_json::from_str(text),
+        }
+    }
+
+    token(raw).map_err(|_| request::invalid(op, 200))
 }
 
 fn unique<'a>(

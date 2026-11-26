@@ -181,6 +181,7 @@ async fn read_projects_with_evidence(
         &projects_operation(),
         &Options {
             pacing,
+            response_guard: pacing.map(|_| guard_estimate_project_response as _),
             ..Options::DEFAULT
         },
         &[],
@@ -377,4 +378,14 @@ fn guard_project_response(
 ) -> Option<Box<Error>> {
     operation::unsafe_json_response(body, known, sent, status.is_success())
         .then(|| invalid_response(status))
+}
+
+fn guard_estimate_project_response(
+    _: &'static str,
+    status: StatusCode,
+    body: &[u8],
+    known: &SentCredentials,
+    sent: &SentCredentials,
+) -> Option<Box<Error>> {
+    operation::unsafe_json_response(body, known, sent, true).then(|| invalid_response(status))
 }
