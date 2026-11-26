@@ -187,3 +187,129 @@ async fn pool_confirmation_keeps_submitted_or_read_state_on_failure() {
     assert_eq!(pool.load_balance_method, "ROUND_ROBIN");
     assert_eq!(server.requests(), 5);
 }
+
+#[tokio::test]
+async fn credential_marker_in_a_busy_reply_does_not_resend_the_create() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response(
+            "409 Conflict",
+            r#"{"message":"client_secret is not ready"}"#,
+        ),
+        response("200 OK", PARENT),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .create_pool(&ctx, create(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn layer_seven_alias_still_refuses_non_http_pools() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"lb-1","Type":"Layer 7","progressStatus":"CREATED"}}"#,
+        ),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = create(true);
+    input.protocol = "TCP".into();
+    let failure = client(&server, CANARY)
+        .create_pool(&ctx, input)
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::InvalidInput));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn pool_create_retries_a_complete_rate_limit_refusal() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response("429 Too Many Requests", r#"{"message":"slow down"}"#),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server, CANARY)
+        .create_pool(&ctx, create(true))
+        .await
+        .unwrap();
+    assert_eq!(output.pool.uuid, "pool-1");
+    assert_eq!(server.requests(), 3);
+    let bodies = server.bodies();
+    assert!(bodies[1] == bodies[2]);
+}
+
+#[tokio::test]
+async fn projected_pool_withholds_a_typed_value_when_the_replacement_reflects() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"lb-1","type":"Layer 4","progressStatus":"CREATED"}}"#,
+        ),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = create(true);
+    input.protocol = "TCP".into();
+    input.health_check_protocol = "TCP".into();
+    let failure = client(&server, "false")
+        .create_pool(&ctx, input)
+        .await
+        .unwrap_err();
+    assert!(failure.partial().is_none());
+    assert_eq!(
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::ReflectedCredential)
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn absent_parent_after_a_busy_refusal_preserves_the_read_error() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response(
+            "409 Conflict",
+            r#"{"message":"load balancer is not ready"}"#,
+        ),
+        response("404 Not Found", r#"{"message":"load balancer missing"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .create_pool(&ctx, create(true))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.operation(), "loadbalancer.GetLoadBalancer");
+    assert_eq!(api.status(), Some(404));
+    assert!(failure.error().detail::<crate::RecoveryAdvice>().is_none());
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn credential_like_resource_names_are_sent_when_they_contain_no_secret() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = create(true);
+    input.name = "client-secret-rotation".into();
+    let result = client(&server, CANARY)
+        .create_pool(&ctx, input)
+        .await
+        .unwrap();
+    assert_eq!(result.pool.name, "client-secret-rotation");
+    assert_eq!(server.requests(), 2);
+}

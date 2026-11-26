@@ -1,8 +1,9 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
 use http::{Method, StatusCode};
 use serde::Serialize;
+use serde_json::value::RawValue;
 
 use crate::model::wire::{WireField, go_json};
 use crate::wire::product::{
@@ -12,11 +13,13 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     response, retry,
 };
-use crate::wire::strict_json::Shape;
+use crate::wire::strict_json::{Shape, field_matches};
 use crate::{ApiError, ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::deletes::{context_error, local, safe_text};
-use super::wire::{DecodeError, Envelope, Read, invalid_input, screen_input, validate_ids};
+use super::wire::{
+    CompleteNotFound, DecodeError, Envelope, Read, invalid_input, screen_input, validate_ids,
+};
 use super::{Client, WriteError, ZonedLoadBalancer, guard};
 
 pub(super) const INTERVAL: Duration = Duration::from_secs(5);
@@ -171,7 +174,11 @@ impl<'a> ChildWriter<'a> {
             .await?;
         let ZonedLoadBalancer(parent) =
             guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, &self.evidence)?;
-        let lb_type = parent.r#type;
+        let lb_type = if parent.r#type.is_empty() && layer_seven_alias(&data) {
+            "Layer 7".into()
+        } else {
+            parent.r#type
+        };
         screen_input(&self.evidence, [lb_type.as_str()])?;
         Ok((
             progress(&LOAD_BALANCER, &data, self.lb_id, &self.evidence)?,
@@ -242,7 +249,7 @@ impl<'a> ChildWriter<'a> {
             method: method.clone(),
             class: Classification::Write,
             retry: if method == Method::POST {
-                Retry::Once
+                Retry::NonIdempotent
             } else {
                 Retry::Repeatable
             },
@@ -281,7 +288,12 @@ impl<'a> ChildWriter<'a> {
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
         let refusal = status.is_client_error();
-        let busy = refusal && response::inspect_error_message(&body, busy_message).unwrap_or(false);
+        let busy = refusal
+            && response::inspect_error_message(&body, |message| {
+                let safe = response::sanitize_error_text(message, self.evidence.credentials());
+                busy_message(safe.as_str())
+            })
+            .unwrap_or(false);
         let body = response::classify(
             op.id,
             status,
@@ -306,6 +318,7 @@ impl<'a> ChildWriter<'a> {
     pub(super) fn create_failure<O>(&self, failure: Failure<O>, list: &str) -> Failure<O> {
         if failure.write_dispatch() == WriteDispatch::NotSent
             || failure.error().detail::<CompleteRefusal>().is_some()
+            || failure.error().detail::<CompleteNotFound>().is_some()
         {
             return failure;
         }
@@ -440,6 +453,16 @@ pub(super) fn lb_busy(progress: &str) -> bool {
     progress == "CREATING-BILLING" || child_busy(progress)
 }
 
+fn layer_seven_alias(body: &str) -> bool {
+    serde_json::from_str::<BTreeMap<String, &RawValue>>(body).is_ok_and(|fields| {
+        fields.into_iter().any(|(name, value)| {
+            name != "type"
+                && field_matches("type", &name)
+                && serde_json::from_str::<String>(value.get()).is_ok_and(|kind| kind == "Layer 7")
+        })
+    })
+}
+
 fn busy_message(message: &str) -> bool {
     [
         b"is not ready".as_slice(),
@@ -476,12 +499,7 @@ pub(super) fn encode_body(body: &impl Serialize, evidence: &Evidence) -> Result<
 fn screen_body(body: &Bytes, evidence: &Evidence) -> Result<(), Box<Error>> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| invalid_input("cannot encode request body"))?;
-    if evidence.reflected_in(&value)
-        || response::reflects_credential_forms(
-            &String::from_utf8_lossy(body),
-            evidence.credentials(),
-        )
-    {
+    if evidence.reflected_in(&value) || evidence.text_reflects(&String::from_utf8_lossy(body)) {
         return Err(invalid_input("request contains credential material"));
     }
     Ok(())

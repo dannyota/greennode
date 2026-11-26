@@ -26,6 +26,10 @@ impl PoolProjection {
             return Err(());
         }
         scrub_pool(pool, evidence);
+        let typed = serde_json::to_value(&*pool).map_err(|_| ())?;
+        if evidence.reflected_in(&typed) {
+            return Err(());
+        }
         Ok(Some(Self(value)))
     }
 }
