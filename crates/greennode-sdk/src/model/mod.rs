@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn shared_server_keeps_wire_shapes_and_go_projection() {
-        let wire = r#"{"UUID":"server_1","secGroups":[],"serverGroupId":{"key":true},"flavor":{"cpu":-0},"internalInterfaces":[{"floatingIp":"::ffff:192.0.2.1"},{"floatingIp":"192.0.2.1"}]}"#;
+        let wire = r#"{"uuid":"server_1","secGroups":[],"serverGroupId":{"key":true},"flavor":{"cpu":-0},"internalInterfaces":[{"floatingIp":"::ffff:192.0.2.1"},{"floatingIp":"192.0.2.1"}]}"#;
         let server: crate::model::server::Server = serde_json::from_str(wire).unwrap();
         let output = serde_json::to_value(server).unwrap();
         assert_eq!(output["UUID"], "server_1");

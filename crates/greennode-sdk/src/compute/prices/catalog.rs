@@ -64,7 +64,17 @@ fn array<'a, T: Deserialize<'a>>(
     key: Option<&str>,
 ) -> Result<Vec<T>, Box<Error>> {
     let body = if let Some(key) = key {
-        let fields: HashMap<&str, &RawValue> =
+        let value = crate::quote::catalog::value(op, raw)?;
+        let object = value.as_object().ok_or_else(|| invalid(op, 200))?;
+        crate::quote::catalog::unpaged(op, object, false)?;
+        crate::quote::catalog::exact(op, object, &[key])?;
+        if object
+            .get("success")
+            .is_some_and(|value| value.as_bool() != Some(true))
+        {
+            return Err(invalid(op, 200));
+        }
+        let fields: HashMap<String, &RawValue> =
             serde_json::from_str(raw.get()).map_err(|_| invalid(op, 200))?;
         fields.get(key).ok_or_else(|| invalid(op, 200))?.get()
     } else {
@@ -248,6 +258,7 @@ impl Run<'_> {
     ) -> Result<(), Box<Error>> {
         let (family, family_name, platform) = scope;
         let entries = array::<&RawValue>(op, raw, key)?;
+        self.catalog.rows(entries.len())?;
         let mut identities = HashMap::new();
         let mut tuples = HashMap::new();
         let mut rows = Vec::new();
@@ -277,8 +288,32 @@ impl Run<'_> {
                 return Err(invalid(op, 200));
             }
             identities.insert(identity, comparable);
+            let tuple = format!(
+                "{}/{}/{}/{}/{}",
+                zone.id, f.flavor_zone_id, f.flavor_id, family, platform
+            );
+            if let Some(old) = self.tuples.get(&tuple).or_else(|| tuples.get(&tuple)) {
+                if old != &f {
+                    return Err(invalid(op, 200));
+                }
+                continue;
+            }
+            tuples.insert(tuple, f.clone());
+            if !matches_row(self.input, &f, family, platform) {
+                continue;
+            }
+            let retained_bytes = [
+                zone.id.len(),
+                zone.name.len(),
+                family.len(),
+                family_name.len(),
+                platform.len(),
+            ]
+            .into_iter()
+            .fold(0usize, usize::saturating_add);
+            self.catalog.rows_with_bytes(1, retained_bytes)?;
             let inapplicable = self.input.zone_id.is_empty() && zone.enabled == Some(false);
-            let row = FlavorPrice {
+            rows.push(FlavorPrice {
                 flavor: f,
                 zone_id: zone.id.clone(),
                 zone_name: zone.name.clone(),
@@ -307,20 +342,8 @@ impl Run<'_> {
                     source: "pricing.GetQuote".into(),
                     ..DiscoveryPrice::default()
                 },
-            };
-            let tuple = row.key();
-            if let Some(old) = self.tuples.get(&tuple).or_else(|| tuples.get(&tuple)) {
-                if old != &row.flavor {
-                    return Err(invalid(op, 200));
-                }
-                continue;
-            }
-            tuples.insert(tuple, row.flavor.clone());
-            if matches_row(self.input, &row) {
-                rows.push(row);
-            }
+            });
         }
-        self.catalog.rows(entries.len() + rows.len())?;
         self.identities.extend(identities);
         self.tuples.extend(tuples);
         self.output.items.extend(rows);
@@ -351,10 +374,9 @@ fn matches_filter(filter: &str, value: &str) -> bool {
     filter.is_empty() || filter == value
 }
 
-fn matches_row(input: &ListFlavorPricesInput, row: &FlavorPrice) -> bool {
-    let f = &row.flavor;
-    matches_filter(&input.family, &row.family)
-        && matches_filter(&input.platform, &row.platform)
+fn matches_row(input: &ListFlavorPricesInput, f: &Flavor, family: &str, platform: &str) -> bool {
+    matches_filter(&input.family, family)
+        && matches_filter(&input.platform, platform)
         && matches_filter(&input.name, &f.name)
         && f.memory >= input.min_ram
         && (input.max_ram == 0 || f.memory <= input.max_ram)

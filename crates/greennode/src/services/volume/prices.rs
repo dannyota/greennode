@@ -49,6 +49,7 @@ pub(super) const VIEW: OutputView = OutputView {
     table: None,
     withhold: None,
     custom: Some(render),
+    raw_text: None,
 };
 
 pub(super) fn guard(matches: &ArgMatches, json: Option<&str>) -> Result<(), InputError> {

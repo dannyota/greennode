@@ -312,8 +312,8 @@ macro_rules! model {
                             }
                             $(
                                 if $crate::wire::strict_json::field_matches($wire, &key) {
-                                    if key != $wire && !seen.insert($wire.into()) {
-                                        return Err(serde::de::Error::duplicate_field($wire));
+                                    if key != $wire {
+                                        return Err(serde::de::Error::custom("incorrect response field case"));
                                     }
                                     result.$field = map.next_value::<$crate::model::wire::Field<$type>>()?.0;
                                     continue;

@@ -214,10 +214,19 @@ impl Run<'_> {
             if row.zone_id != zone.id {
                 continue;
             }
-            self.catalog.preflight(0)?;
-            match reference(&row.flavor, &images, disks, custom) {
-                Ok(Some(reference)) => row.reference = Some(reference),
-                Ok(None) => {
+            let selected = reference(&row.flavor, &images, disks, custom, || {
+                self.catalog.preflight(0)
+            });
+            let selected = selected.and_then(|selection| {
+                if let Reference::Found(candidate) = &selection {
+                    self.catalog
+                        .rows_with_bytes(0, candidate.retained_bytes())?;
+                }
+                Ok(selection)
+            });
+            match selected {
+                Ok(Reference::Found(candidate)) => row.reference = Some(candidate.into_owned()),
+                Ok(Reference::Unavailable) => {
                     let key = row.key();
                     let message = if custom {
                         "No supported unlicensed Ubuntu image and bounded root disk pair is available."
@@ -226,7 +235,7 @@ impl Run<'_> {
                     };
                     self.note("reference-unavailable", &key, message);
                 }
-                Err(()) => {
+                Ok(Reference::OutsideBounds) => {
                     row.price.status = "inapplicable".into();
                     let key = row.key();
                     self.note(
@@ -234,6 +243,11 @@ impl Run<'_> {
                         &key,
                         "The reference root disk size exceeds the selected type's maximum.",
                     );
+                }
+                Err(error) => {
+                    let key = row.key();
+                    self.record(OP, &key, error)?;
+                    return Ok(());
                 }
             }
         }
@@ -367,16 +381,7 @@ impl Run<'_> {
     }
 
     fn safe_error(&self, error: Error) -> Error {
-        let Some(peer) = error.api_error() else {
-            return error;
-        };
-        api(
-            peer.operation(),
-            peer.status(),
-            peer.code(),
-            peer.message(),
-            &self.catalog.evidence,
-        )
+        error.screen_api(&|text| self.catalog.evidence.text_reflects(text))
     }
 
     #[expect(
@@ -458,21 +463,68 @@ struct ImageSupport {
     image_types: Vec<String>,
 }
 
-fn reference(
+enum Reference<'a> {
+    Found(ReferenceCandidate<'a>),
+    Unavailable,
+    OutsideBounds,
+}
+
+struct ReferenceCandidate<'a> {
+    image: &'a Image,
+    disk_type_id: &'a str,
+    size: i64,
+}
+
+impl ReferenceCandidate<'_> {
+    fn sort_key(&self) -> (i64, &str, &str, &str) {
+        (
+            self.size,
+            &self.image.image_version,
+            &self.image.id,
+            self.disk_type_id,
+        )
+    }
+
+    fn retained_bytes(&self) -> usize {
+        [
+            self.image.id.len(),
+            self.image.image_type.len(),
+            self.image.image_version.len(),
+            self.disk_type_id.len(),
+        ]
+        .into_iter()
+        .fold(0, usize::saturating_add)
+    }
+
+    fn into_owned(self) -> FlavorPriceReference {
+        FlavorPriceReference {
+            image_id: self.image.id.clone(),
+            image_type: self.image.image_type.clone(),
+            image_version: self.image.image_version.clone(),
+            root_disk_type_id: self.disk_type_id.into(),
+            root_disk_size_gb: self.size,
+        }
+    }
+}
+
+fn reference<'a>(
     flavor: &Flavor,
-    images: &[Image],
-    disks: &[VolumeType],
+    images: &'a [Image],
+    disks: &'a [VolumeType],
     custom: bool,
-) -> Result<Option<FlavorPriceReference>, ()> {
+    mut check: impl FnMut() -> Result<(), Box<Error>>,
+) -> Result<Reference<'a>, Box<Error>> {
+    check()?;
     let Ok(support) = serde_json::from_str::<ImageSupport>(&flavor.metadata) else {
-        return Ok(None);
+        return Ok(Reference::Unavailable);
     };
     if support.image_types.iter().any(String::is_empty) {
-        return Ok(None);
+        return Ok(Reference::Unavailable);
     }
-    let mut best: Option<FlavorPriceReference> = None;
+    let mut best: Option<ReferenceCandidate<'_>> = None;
     let mut out_of_bounds = false;
     for image in images {
+        check()?;
         if !support.image_types.contains(&image.image_type)
             || !image.unlicensed_ubuntu()
             || !image
@@ -487,40 +539,35 @@ fn reference(
         let Some(minimum) = image.root_minimum() else {
             continue;
         };
-        for disk in disks.iter().filter(|disk| custom || disk.iops == 3000) {
+        for disk in disks {
+            check()?;
+            if !custom && disk.iops != 3000 {
+                continue;
+            }
             let size = minimum.max(disk.min_size);
             if size > disk.max_size {
                 out_of_bounds = true;
                 continue;
             }
-            let key = (
+            let candidate = ReferenceCandidate {
+                image,
+                disk_type_id: disk.quote_id(),
                 size,
-                image.image_version.as_str(),
-                image.id.as_str(),
-                disk.quote_id(),
-            );
-            if best.as_ref().is_none_or(|row| {
-                key < (
-                    row.root_disk_size_gb,
-                    &row.image_version,
-                    &row.image_id,
-                    &row.root_disk_type_id,
-                )
-            }) {
-                best = Some(FlavorPriceReference {
-                    image_id: image.id.clone(),
-                    image_type: image.image_type.clone(),
-                    image_version: image.image_version.clone(),
-                    root_disk_type_id: disk.quote_id().into(),
-                    root_disk_size_gb: size,
-                });
+            };
+            if best
+                .as_ref()
+                .is_none_or(|best| candidate.sort_key() < best.sort_key())
+            {
+                best = Some(candidate);
             }
         }
     }
-    if best.is_none() && custom && out_of_bounds {
-        return Err(());
-    }
-    Ok(best)
+    check()?;
+    Ok(match best {
+        Some(reference) => Reference::Found(reference),
+        None if custom && out_of_bounds => Reference::OutsideBounds,
+        None => Reference::Unavailable,
+    })
 }
 
 fn valid_root_quote(value: &Value) -> bool {
@@ -545,5 +592,40 @@ fn status_code(status: Option<u16>) -> Option<&'static str> {
         Some(429) => Some("Throttled"),
         Some(500..=599) => Some("ServerError"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reference_checks_context_inside_the_disk_loop() {
+        let image = serde_json::from_str(r#"{"id":"image-1","imageType":"ubuntu","imageVersion":"1","licence":false,"packageLimit":{"cpu":1,"memory":1,"diskSize":10}}"#).unwrap();
+        let flavor = super::Flavor {
+            cpu: 2,
+            memory: 4,
+            metadata: r#"{"imageTypeSupport":["ubuntu"]}"#.into(),
+            ..Default::default()
+        };
+        let disks = vec![
+            super::VolumeType {
+                id: "disk-1".into(),
+                min_size: 10,
+                max_size: 20,
+                iops: 3000,
+                ..Default::default()
+            };
+            4
+        ];
+        let mut checks = 0;
+        let images = [image];
+        let result = super::reference(&flavor, &images, &disks, false, || {
+            checks += 1;
+            if checks < 3 {
+                Ok(())
+            } else {
+                Err(Box::new(crate::Error::new(crate::ErrorClass::Cancelled)))
+            }
+        });
+        assert!(matches!(result, Err(error) if error.has_class(crate::ErrorClass::Cancelled)));
     }
 }
