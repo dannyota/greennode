@@ -177,9 +177,11 @@ fn page_parts(mut rest: &str) -> impl Iterator<Item = Part<'_>> {
                 rest = comment.split_once("-->").map_or("", |(_, tail)| tail);
                 continue;
             }
-            if let Some(name @ ("script" | "style")) = hidden.last().copied()
-                && !starts_closing_tag(rest, name)
-            {
+            if let Some(name @ ("script" | "style")) = hidden.last().copied() {
+                if let Some(tail) = raw_element_end(rest, name) {
+                    rest = tail;
+                    hidden.pop();
+                }
                 continue;
             }
             let (tag, tail) = parse_tag(rest)?;
@@ -206,15 +208,14 @@ fn hidden_element(name: &str) -> Option<&'static str> {
         .find(|hidden| name.eq_ignore_ascii_case(hidden))
 }
 
-fn starts_closing_tag(rest: &str, name: &str) -> bool {
-    rest.strip_prefix('/').is_some_and(|tail| {
-        tail.get(..name.len())
-            .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
-            && tail
-                .as_bytes()
-                .get(name.len())
-                .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
-    })
+fn raw_element_end<'a>(rest: &'a str, name: &str) -> Option<&'a str> {
+    let content = rest.strip_prefix('/')?;
+    let (tag, end) = content.split_at_checked(name.len())?;
+    if !tag.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    end.trim_start_matches(|ch: char| ch.is_ascii_whitespace())
+        .strip_prefix('>')
 }
 
 fn parse_tag(rest: &str) -> Option<(Tag<'_>, &str)> {
@@ -232,14 +233,20 @@ fn parse_tag(rest: &str) -> Option<(Tag<'_>, &str)> {
         _ => false,
     })?;
     let raw = &rest[..end];
-    let name = raw
-        .trim_start_matches('/')
+    let closing = raw.starts_with('/');
+    let content = raw.strip_prefix('/').unwrap_or(raw);
+    let name = content
         .split(|ch: char| ch.is_ascii_whitespace() || ch == '/')
         .next()?;
+    let name = if closing && content.trim_end_matches(|ch: char| ch.is_ascii_whitespace()) != name {
+        ""
+    } else {
+        name
+    };
     Some((
         Tag {
             name,
-            closing: raw.starts_with('/'),
+            closing,
             self_closing: raw.ends_with('/'),
         },
         &rest[end + 1..],

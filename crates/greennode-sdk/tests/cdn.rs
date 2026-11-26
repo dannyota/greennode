@@ -413,3 +413,73 @@ async fn json_text_null_counts_are_preserved_as_null() {
         assert_eq!(result.unwrap(), serde_json::json!({"Counts": null}));
     }
 }
+
+#[tokio::test]
+async fn decoding_limit_withholds_reflections_and_refuses_request_values() {
+    let field_echo = r#"{"success":true,"data":[{"domainName":"toy%25252Dcdn%25252Dkey.example.test"},{"domainName":"100%"}]}"#;
+    let ok_counts = r#"{"success":true,"data":"[]"}"#;
+    let server = Server::start(vec![
+        response(field_echo, "application/json"),
+        response(ok_counts, "application/json"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let cdn = client(&server, Some(CDN_KEY));
+    let list = cdn
+        .list_web_accelerators(&ctx, ListWebAcceleratorsInput)
+        .await
+        .unwrap();
+    assert!(
+        list.items[0].domain_name == "<redacted>",
+        "decoder limit exposed a value"
+    );
+    assert_eq!(list.items[1].domain_name, "100%");
+    for encoded in [
+        "toy%25252Dmanagement%25252Dtoken",
+        r"toy\\\\u002dmanagement\\\\u002dtoken",
+    ] {
+        let result = cdn.get_cache_status(&ctx, analytics_range(encoded)).await;
+        assert_eq!(server.requests(), 1, "decoder limit allowed a request");
+        assert_eq!(
+            result.unwrap_err().error().class(),
+            ErrorClass::InvalidInput
+        );
+    }
+    cdn.get_cache_status(&ctx, analytics_range("100%"))
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 2);
+
+    let server = Server::start(vec![response("<html></html>", "text/html")]);
+    let cdn = client_with_docs_path(
+        &server,
+        Some(CDN_KEY),
+        "/faq/toy%25252Dmanagement%25252Dtoken",
+    );
+    let result = cdn.list_ip_ranges(&ctx, ListIpRangesInput).await;
+    assert_eq!(server.requests(), 0, "decoder limit allowed a docs request");
+    assert_eq!(
+        result.unwrap_err().error().class(),
+        ErrorClass::InvalidInput
+    );
+}
+
+#[tokio::test]
+async fn malformed_end_tags_cannot_expose_hidden_template_content() {
+    let (ctx, _) = RequestContext::new();
+    for forged_end in [
+        "<//template>",
+        "</template/>",
+        "</template attr='fake >'>",
+        "</ template>",
+    ] {
+        let section = format!(
+            "<h3>CDN IP range</h3><template>{forged_end}<p>203.0.113.0/24</p></TeMpLaTe \t><p>192.0.2.0/24</p><h3>Next</h3>"
+        );
+        let server = Server::start(vec![response(&section, "text/html")]);
+        let output = client(&server, None)
+            .list_ip_ranges(&ctx, ListIpRangesInput)
+            .await
+            .unwrap();
+        assert_eq!(output.items, ["192.0.2.0/24"], "{forged_end}");
+    }
+}

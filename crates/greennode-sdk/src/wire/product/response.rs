@@ -207,9 +207,6 @@ fn matches_forms(
     }
     state.visited.push((index, counts));
     for step in 0..3 {
-        if counts[step] == 2 {
-            continue;
-        }
         if !state.charge(input.len()) {
             return true;
         }
@@ -225,6 +222,9 @@ fn matches_forms(
             _ => Zeroizing::new(percent_decode(input)),
         };
         if next.as_slice() != input {
+            if counts[step] == 2 {
+                return true;
+            }
             let mut next_counts = counts;
             next_counts[step] += 1;
             if matches_forms(&next, needles, next_counts, state) {
