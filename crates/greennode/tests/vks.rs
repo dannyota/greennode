@@ -136,32 +136,62 @@ fn query_uses_baseline_keys_and_drops_unknown_response_fields() {
 }
 
 #[test]
-fn invalid_page_and_region_exit_two_without_requests() {
+fn reflected_bearer_is_redacted_in_every_output_format_and_query() {
+    let body =
+        format!(r#"[{{"version":"prefix {BEARER}","enable":false,"stage":"resource-canary"}}]"#);
+    let server = Server::start((0..4).map(|_| response("200 OK", &body)).collect());
+    for (format, query, redacted) in [
+        ("json", None, r"\u003credacted\u003e"),
+        (
+            "json",
+            Some("Items[].{Version:Version,Stage:Stage}"),
+            r"\u003credacted\u003e",
+        ),
+        ("table", None, "<redacted>"),
+        ("text", None, "<redacted>"),
+    ] {
+        let mut args = vec!["list-cluster-versions", "--output", format];
+        if let Some(query) = query {
+            args.extend(["--query", query]);
+        }
+        let (status, stdout, stderr) = invoke("hcm-3", &args, &server);
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        let stdout = String::from_utf8(stdout).unwrap();
+        assert!(stdout.contains(redacted));
+        assert!(stdout.contains("resource-canary"));
+    }
+}
+
+#[test]
+fn invalid_page_size_and_region_exit_two_without_requests() {
     let server = Server::start(vec![]);
     for (region, args, code, message) in [
         (
             "hcm-3",
             &["list-clusters", "--page", "-1"][..],
             "InvalidUsage",
-            "Page must be",
+            "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
+        ),
+        (
+            "hcm-3",
+            &["list-clusters", "--size", "2147483648"][..],
+            "InvalidUsage",
+            "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
         ),
         (
             "other",
             &["get-quota"][..],
             "InvalidConfig",
-            "VKS requires hcm-3 or han-1",
+            "greennode: invalid config: VKS requires hcm-3 or han-1",
         ),
     ] {
         let (status, stdout, stderr) = invoke(region, args, &server);
         assert_eq!(status, ExitCode::from(2));
         assert!(stdout.is_empty());
-        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
-        assert_eq!(error["error"]["code"], code);
-        assert!(
-            error["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains(message)
+        assert_eq!(
+            stderr,
+            format!("{{\"error\":{{\"code\":\"{code}\",\"message\":\"{message}\"}}}}\n").as_bytes(),
         );
     }
     assert_eq!(server.requests(), 0);

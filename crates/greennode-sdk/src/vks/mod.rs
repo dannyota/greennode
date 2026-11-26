@@ -15,7 +15,7 @@ use crate::wire::product::{
 };
 use crate::{
     ApiError, Config, Error, ErrorClass, Failure, List, LoginError, PagedList, RequestContext,
-    ServiceAccountLoginError, WriteDispatch,
+    WriteDispatch,
 };
 use http::{Method, StatusCode};
 use models::{ClusterPage, QuotaResponse, Versions};
@@ -83,23 +83,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListClustersInput,
     ) -> Result<ListClustersOutput, Failure<ListClustersOutput>> {
-        self.base(CLUSTERS)?;
+        self.base()?;
         let max = i64::from(i32::MAX);
         if !(0..=max).contains(&input.page) {
-            return Err(local_error(
-                CLUSTERS,
+            return Err(read_failure(local_error(
                 ErrorClass::InvalidInput,
                 "InvalidUsage",
-                "invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
-            ));
+                "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
+            )));
         }
         if !(0..=max).contains(&input.size) {
-            return Err(local_error(
-                CLUSTERS,
+            return Err(read_failure(local_error(
                 ErrorClass::InvalidInput,
                 "InvalidUsage",
-                "invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
-            ));
+                "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
+            )));
         }
         let page = input.page.to_string();
         let size = if input.size == 0 { 10 } else { input.size }.to_string();
@@ -150,19 +148,18 @@ impl Client {
         })
     }
 
-    fn base<O>(&self, operation: &'static str) -> Result<&crate::endpoint::Base, Failure<O>> {
+    fn base<O>(&self) -> Result<&crate::endpoint::Base, Failure<O>> {
         self.session
             .endpoints()
             .vks
             .as_ref()
             .filter(|_| self.supported_region)
             .ok_or_else(|| {
-                local_error(
-                    operation,
+                read_failure(local_error(
                     ErrorClass::InvalidConfig,
                     "InvalidConfig",
-                    "invalid config: VKS requires hcm-3 or han-1",
-                )
+                    "greennode: invalid config: VKS requires hcm-3 or han-1",
+                ))
             })
     }
 
@@ -172,7 +169,7 @@ impl Client {
         operation: &Operation,
         query: &[(&str, &str)],
     ) -> Result<T, Failure<O>> {
-        let base = self.base(operation.id)?;
+        let base = self.base()?;
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -205,10 +202,10 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reject_reflected_credentials: false,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }
@@ -218,19 +215,14 @@ fn read_failure<T>(error: Error) -> Failure<T> {
     Failure::new(error, None, WriteDispatch::NotAWrite)
 }
 
-fn local_error<T>(
-    operation: &'static str,
-    class: ErrorClass,
-    code: &'static str,
-    message: &'static str,
-) -> Failure<T> {
-    read_failure(Error::new(class).with_cause(Error::from_api(ApiError::new(
-        operation,
+fn local_error(class: ErrorClass, code: &str, message: &str) -> Error {
+    Error::new(class).with_cause(Error::from_api(ApiError::new(
+        "",
         None,
         SafeText::new(code, &[]),
         SafeText::new(message, &[]),
         false,
-    ))))
+    )))
 }
 
 fn api_error(
@@ -259,26 +251,28 @@ fn malformed(operation: &'static str) -> Error {
 
 fn safe_error(operation: &'static str, error: &Error) -> Error {
     let class = error.class();
-    const AUTH_FAILURE: &str = "VKS authentication failed; details withheld";
     if let Some(login) = error.login_error() {
-        return Error::new(class).with_login(LoginError::new(
-            AUTH_FAILURE,
+        const REASON: &str = "authentication failed; details withheld";
+        let mut message = format!("{operation}: {REASON}");
+        if let Some(status) = login.status() {
+            use std::fmt::Write as _;
+            let _ = write!(message, " (status {status})");
+        }
+        if login.captcha_suspected() {
+            message.push_str("; a captcha may be required");
+        }
+        return local_error(class, "LoginFailed", &message).with_login(LoginError::new(
+            REASON,
             login.status(),
             login.captcha_suspected(),
         ));
     }
-    if let Some(login) = error.service_account_login_error() {
-        return Error::new(class)
-            .with_service_login(ServiceAccountLoginError::new(AUTH_FAILURE, login.status()));
-    }
 
     let api = error.api_error();
-    let status = error
-        .detail::<StatusCode>()
-        .map(StatusCode::as_u16)
-        .or_else(|| api.and_then(ApiError::status));
-    let terminated = matches!(class, ErrorClass::Cancelled | ErrorClass::DeadlineExceeded);
-    if status == Some(200) && !terminated {
+    let status = api.and_then(ApiError::status);
+    if status == Some(200)
+        || (error.is_body_too_large() && error.detail::<StatusCode>() == Some(&StatusCode::OK))
+    {
         return malformed(operation);
     }
     let safe = api_error(

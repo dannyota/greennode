@@ -1,6 +1,6 @@
 use crate::wire::product::{
     operation::{self, Operation, Output},
-    sender::Response,
+    sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -119,7 +119,24 @@ impl Output for ClusterPage {
         operation: &Operation,
         response: &Response,
     ) -> Result<Self, Box<crate::Error>> {
-        decode_integer_projection(operation, response)
+        let mut page: Self = decode_integer_projection(operation, response)?;
+        for item in &mut page.items {
+            redact_strings(
+                [
+                    &mut item.id,
+                    &mut item.name,
+                    &mut item.description,
+                    &mut item.status,
+                    &mut item.release_channel,
+                    &mut item.version,
+                    &mut item.az_strategy,
+                    &mut item.created_at,
+                    &mut item.updated_at,
+                ],
+                &response.credentials,
+            );
+        }
+        Ok(page)
     }
 }
 
@@ -133,6 +150,20 @@ impl Output for Versions {
         scalar("stage"),
         scalar("deprecatedAt"),
     ]));
+
+    fn decode_response(
+        operation: &Operation,
+        response: &Response,
+    ) -> Result<Self, Box<crate::Error>> {
+        let mut versions: Self = decode(operation, response)?;
+        for item in &mut versions.0 {
+            redact_strings(
+                [&mut item.version, &mut item.stage, &mut item.deprecated_at],
+                &response.credentials,
+            );
+        }
+        Ok(versions)
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -169,7 +200,28 @@ fn decode_integer_projection<T: Output>(
     {
         return Err(Box::new(super::malformed(operation.id)));
     }
-    operation::decode_response(operation, response)
+    decode(operation, response)
+}
+
+fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Box<crate::Error>> {
+    operation::decode_response(operation, response).map_err(|error| {
+        if operation.success.contains(&response.status) {
+            Box::new(super::malformed(operation.id))
+        } else {
+            error
+        }
+    })
+}
+
+fn redact_strings<'a>(
+    values: impl IntoIterator<Item = &'a mut String>,
+    credentials: &SentCredentials,
+) {
+    for value in values {
+        if credentials.reflects(value.as_bytes()) {
+            *value = "<redacted>".into();
+        }
+    }
 }
 
 impl From<QuotaResponse> for Quota {

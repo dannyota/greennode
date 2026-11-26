@@ -223,11 +223,15 @@ fn assert_malformed<T>(failure: Failure<T>) {
 }
 
 #[tokio::test]
-async fn reflected_bearers_are_rejected_before_projection() {
+async fn reflected_bearers_in_strings_are_redacted_before_projection() {
     let server = Server::start(vec![
         response(
             "200 OK",
-            r#"[{"version":"synthetic-vks-\u0062earer-canary","enable":false,"stage":"STABLE"}]"#,
+            r#"[{"version":"prefix synthetic-vks-\u0062earer-canary","enable":false,"stage":"STABLE"}]"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"items":[{"name":"synthetic-vks-\u0062earer-canary","description":"resource-canary","numNodes":3}],"total":1,"page":0,"pageSize":10}"#,
         ),
         response(
             "200 OK",
@@ -235,12 +239,21 @@ async fn reflected_bearers_are_rejected_before_projection() {
         ),
     ]);
     let (ctx, _) = RequestContext::new();
-    assert_malformed(
-        test_client(&server, "hcm-3", BEARER)
-            .list_cluster_versions(&ctx, ListClusterVersionsInput)
-            .await
-            .unwrap_err(),
-    );
+    let client = test_client(&server, "hcm-3", BEARER);
+    let versions = client
+        .list_cluster_versions(&ctx, ListClusterVersionsInput)
+        .await
+        .unwrap();
+    assert!(versions.items[0].version == "<redacted>");
+    assert_eq!(versions.items[0].stage, "STABLE");
+    assert!(!versions.items[0].enable);
+    let clusters = client
+        .list_clusters(&ctx, ListClustersInput::default())
+        .await
+        .unwrap();
+    assert!(clusters.items[0].name == "<redacted>");
+    assert_eq!(clusters.items[0].description, "resource-canary");
+    assert_eq!(clusters.items[0].num_nodes, 3);
     assert_malformed(
         test_client(&server, "hcm-3", "+123")
             .get_quota(&ctx, GetQuotaInput)
@@ -362,8 +375,72 @@ async fn cross_origin_redirect_is_withheld_and_never_followed() {
         .await
         .unwrap_err();
     let api = failure.error().api_error().unwrap();
-    assert_eq!(api.status(), Some(302));
+    assert_eq!(api.status(), None);
     assert_eq!(api.message(), "request failed; response withheld");
     assert_eq!(server.requests(), 1);
     assert_eq!(other.connections(), 0);
+}
+
+#[test]
+fn sign_in_failures_keep_only_the_baseline_safe_details() {
+    let provider_marker = "synthetic-sign-in-provider-marker";
+    let exchange = Error::new(ErrorClass::Auth).with_service_login(
+        crate::ServiceAccountLoginError::new(provider_marker, Some(401)),
+    );
+    let error = safe_error(super::QUOTA, &exchange);
+    assert!(error.has_identity(ErrorClass::Auth));
+    assert!(error.service_account_login_error().is_none());
+    let api = error.api_error().unwrap();
+    assert_eq!(api.operation(), super::QUOTA);
+    assert_eq!(api.status(), None);
+    assert!(api.code().is_empty());
+    assert!(api.message() == "request failed; response withheld");
+
+    let login =
+        Error::new(ErrorClass::Auth).with_login(LoginError::new(provider_marker, Some(200), true));
+    let error = safe_error(super::VERSIONS, &login);
+    let login = error.login_error().unwrap();
+    assert_eq!(login.status(), Some(200));
+    assert!(login.captcha_suspected());
+    let api = error.api_error().unwrap();
+    assert_eq!(api.code(), "LoginFailed");
+    assert_eq!(api.operation(), "");
+    assert_eq!(api.status(), None);
+    assert!(
+        api.message()
+            == "vks.ListClusterVersions: authentication failed; details withheld (status 200); a captcha may be required"
+    );
+}
+
+#[tokio::test]
+async fn incomplete_responses_drop_status_except_for_baseline_overflows() {
+    let oversized = |status: &str| Response::Http {
+        status: status.into(),
+        headers: vec![("Content-Length".into(), ((8 << 20) + 1).to_string())],
+        body: vec![b' '; (8 << 20) + 1],
+    };
+    let server = Server::start(vec![
+        Response::RawClose(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n{}".to_vec()),
+        response("302 Found", ""),
+        oversized("200 OK"),
+        oversized("404 Not Found"),
+        oversized("302 Found"),
+    ]);
+    let client = test_client(&server, "hcm-3", BEARER);
+    let (ctx, _) = RequestContext::new();
+    for (status, code, message) in [
+        (None, "", "request failed; response withheld"),
+        (Some(302), "", "request failed; response withheld"),
+        (Some(200), "", "malformed response; body withheld"),
+        (Some(404), "NotFound", "request failed; response withheld"),
+        (None, "", "request failed; response withheld"),
+    ] {
+        let failure = client.get_quota(&ctx, GetQuotaInput).await.unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), status);
+        assert_eq!(api.code(), code);
+        assert_eq!(api.message(), message);
+        assert_eq!(api.operation(), super::QUOTA);
+    }
+    assert_eq!(server.requests(), 5);
 }
