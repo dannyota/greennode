@@ -7,8 +7,7 @@ use crate::{Clock, Error, ErrorClass, RequestContext, Secret, Token};
 use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
-pub(crate) type TotpProvider =
-    dyn Fn() -> Pin<Box<dyn Future<Output = Result<Secret, ()>> + Send>> + Send + Sync;
+pub(crate) type TotpProvider = dyn crate::config::TotpProvider;
 
 pub(crate) struct Options {
     pub(crate) root_email: String,
@@ -106,6 +105,14 @@ impl std::fmt::Debug for IamUser {
 }
 
 impl IamUser {
+    #[cfg(test)]
+    pub(crate) fn set_test_roots(
+        &mut self,
+        roots: Vec<rustls::pki_types::CertificateDer<'static>>,
+    ) {
+        self.roots = Some(roots);
+    }
+
     pub(crate) fn new(options: Options) -> Self {
         let Options {
             root_email,
@@ -379,7 +386,7 @@ impl IamUser {
                             .map_err(|_| totp::ProviderError::Failed)?;
                     };
                     let (code, step) = if let Some(provider) = &self.provider {
-                        let code = bounded(&bounded_ctx, clock, provider())
+                        let code = bounded(&bounded_ctx, clock, provider.code(&bounded_ctx))
                             .await
                             .map_err(|_| totp::ProviderError::Failed)?
                             .map_err(|_| totp::ProviderError::Failed)?;

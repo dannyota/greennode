@@ -12,13 +12,13 @@ pub(super) struct Options {
     pub cdn_key: Option<Secret>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct ServiceAccount {
     pub client_id: Secret,
     pub client_secret: Secret,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct IamUser {
     pub root_email: Secret,
     pub username: Secret,
@@ -71,6 +71,19 @@ fn present(value: &Option<Secret>) -> bool {
     value
         .as_ref()
         .is_some_and(|v| !v.expose_secret().is_empty())
+}
+
+pub(super) fn validate_cdn(value: Option<Secret>) -> Result<Option<Secret>, Box<Error>> {
+    let value = value.filter(|v| !v.expose_secret().is_empty());
+    if value.as_ref().is_some_and(|v| {
+        v.expose_secret().len() > 4096
+            || v.expose_secret()
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+    }) {
+        return Err(failure(crate::ErrorClass::InvalidConfig));
+    }
+    Ok(value)
 }
 
 fn failure(class: crate::ErrorClass) -> Box<Error> {
@@ -144,6 +157,30 @@ fn choose(fields: Fields) -> Result<Option<Kind>, Box<Error>> {
     Ok(None)
 }
 
+pub(super) fn select_options(options: &Options) -> Result<Option<Kind>, Box<Error>> {
+    if let Some(provider) = &options.provider {
+        Ok(Some(Kind::Provider(provider.clone())))
+    } else if present(&options.token) {
+        Ok(options.token.clone().map(Kind::StaticToken))
+    } else if let Some(value) = &options.service_account {
+        service_account(
+            Some(value.client_id.clone()),
+            Some(value.client_secret.clone()),
+        )
+        .map(|v| Some(Kind::ServiceAccount(v)))
+    } else if let Some(value) = &options.iam_user {
+        iam_user(
+            Some(value.root_email.clone()),
+            Some(value.username.clone()),
+            Some(value.password.clone()),
+            value.totp_secret.clone(),
+        )
+        .map(|v| Some(Kind::IamUser(v)))
+    } else {
+        Ok(None)
+    }
+}
+
 fn env_value(source: &dyn ConfigSource, name: &str) -> Result<Option<Secret>, Box<Error>> {
     source
         .var_os(std::ffi::OsStr::new(name))
@@ -182,6 +219,7 @@ fn env_fields(source: &dyn ConfigSource, names: [&str; 7]) -> Result<Fields, Box
     })
 }
 
+#[cfg(test)]
 pub(super) fn select(
     selection: &Selection,
     settings: &Settings,
@@ -267,34 +305,7 @@ pub(super) fn select_checked(
         .profile
         .as_ref()
         .is_some_and(|p| !p.is_empty());
-    let chosen = if let Some(provider) = &options.provider {
-        Some((Source::Options, Kind::Provider(provider.clone())))
-    } else if present(&options.token) {
-        options
-            .token
-            .clone()
-            .map(|v| (Source::Options, Kind::StaticToken(v)))
-    } else if let Some(value) = &options.service_account {
-        Some((
-            Source::Options,
-            Kind::ServiceAccount(service_account(
-                Some(value.client_id.clone()),
-                Some(value.client_secret.clone()),
-            )?),
-        ))
-    } else if let Some(value) = &options.iam_user {
-        Some((
-            Source::Options,
-            Kind::IamUser(iam_user(
-                Some(value.root_email.clone()),
-                Some(value.username.clone()),
-                Some(value.password.clone()),
-                value.totp_secret.clone(),
-            )?),
-        ))
-    } else {
-        None
-    };
+    let chosen = select_options(options)?.map(|kind| (Source::Options, kind));
     let chosen = if chosen.is_some() || explicit {
         chosen
     } else {
@@ -349,14 +360,7 @@ pub(super) fn select_checked(
     if cdn_key.is_none() {
         cdn_key = file_cdn.filter(|v| !v.expose_secret().is_empty());
     }
-    if cdn_key.as_ref().is_some_and(|v| {
-        v.expose_secret().len() > 4096
-            || v.expose_secret()
-                .chars()
-                .any(|c| c.is_whitespace() || c.is_control())
-    }) {
-        return Err(failure(crate::ErrorClass::InvalidConfig));
-    }
+    let cdn_key = validate_cdn(cdn_key)?;
     Ok(Selected {
         source: source_kind,
         kind,

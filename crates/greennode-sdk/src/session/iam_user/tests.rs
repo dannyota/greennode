@@ -304,11 +304,17 @@ async fn external_totp_provider_is_used() {
     let mut source = source(&signin, &token, None, Duration::from_secs(5));
     source.seed = None;
     let calls = Arc::new(AtomicUsize::new(0));
-    let counted = calls.clone();
-    source.provider = Some(Arc::new(move || {
-        counted.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async { Ok(Secret::new("123456")) })
-    }));
+    struct Provider(Arc<AtomicUsize>);
+    impl crate::config::TotpProvider for Provider {
+        fn code<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Secret, Error>> + Send + 'a>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Secret::new("123456")) })
+        }
+    }
+    source.provider = Some(Arc::new(Provider(calls.clone())));
     let (ctx, _) = RequestContext::new();
     assert!(source.token(&ctx).await.is_ok());
     assert_eq!(calls.load(Ordering::SeqCst), 1);

@@ -54,6 +54,7 @@ fn read_limited(
     Ok((bytes, used))
 }
 
+#[cfg(test)]
 pub(super) fn parse_secrets(input: impl Read) -> Result<SecretsIni, String> {
     parse_secrets_checked(input, &|| false)
 }
@@ -136,6 +137,7 @@ pub(super) fn credential_key(key: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(super) fn parse(slot: Slot, input: impl Read) -> Result<Ini, String> {
     parse_checked(slot, input, &|| false)
 }

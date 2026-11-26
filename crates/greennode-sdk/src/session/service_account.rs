@@ -90,6 +90,15 @@ impl std::fmt::Debug for ServiceAccount {
 }
 
 impl ServiceAccount {
+    #[cfg(test)]
+    pub(crate) fn set_test_endpoint(
+        &mut self,
+        origin: String,
+        root: rustls::pki_types::CertificateDer<'static>,
+    ) {
+        self.endpoint = Some((origin, root));
+    }
+
     pub(crate) fn new(
         id: String,
         secret: Secret,

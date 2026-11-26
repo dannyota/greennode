@@ -104,7 +104,9 @@ fn load_local(
         return Err(end.into());
     }
     let settings_options = settings::Options {
-        profile: options.profile,
+        profile: options.profile.clone(),
+        region: options.region.clone(),
+        project_id: options.project_id.clone(),
         ..Default::default()
     };
     settings::select_profile(&settings_options, &source)
@@ -149,10 +151,7 @@ fn load_local(
         .ok_or_else(|| crate::Error::new(crate::ErrorClass::InvalidConfig))?;
     crate::endpoint::defaults(region, Default::default())
         .map_err(|_| crate::Error::new(crate::ErrorClass::InvalidConfig))?;
-    let credentials_options = credentials::Options {
-        provider: options.provider,
-        ..Default::default()
-    };
+    let credentials_options = options.credential_options();
     let credentials = credentials::select_checked(
         &selection,
         &resolved,
@@ -166,12 +165,28 @@ fn load_local(
     if let Some(end) = check() {
         return Err(end.into());
     }
+    let session = super::session::Session::new(
+        credentials,
+        region,
+        resolved.profile,
+        resolved.project_id,
+        options.token_cache.map(|path| {
+            if path.is_relative() {
+                cwd.as_ref().map_or(path.clone(), |cwd| cwd.join(&path))
+            } else {
+                path
+            }
+        }),
+        source.home.filter(|path| path.is_absolute()),
+        options.iam_details,
+    )?;
+    if let Some(end) = check() {
+        return Err(end.into());
+    }
     Ok(Config {
         region: region.clone(),
-        profile: resolved.profile,
-        project_id: resolved.project_id,
         settings: resolved.profile_settings,
-        credentials: Arc::new(credentials),
+        session: Arc::new(session),
     })
 }
 
