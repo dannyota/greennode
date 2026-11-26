@@ -17,7 +17,10 @@ impl Output for Json {
     const SCHEMA: Shape<'static> = Shape::Any;
 }
 
-struct EvidenceSource(&'static str);
+enum EvidenceSource {
+    Token(&'static str),
+    FailedSignin,
+}
 
 impl sender::BearerSource for EvidenceSource {
     fn token<'a>(
@@ -25,9 +28,12 @@ impl sender::BearerSource for EvidenceSource {
         _: &'a crate::RequestContext,
     ) -> Pin<Box<dyn Future<Output = Result<sender::BearerToken, crate::Error>> + Send + 'a>> {
         Box::pin(async move {
+            let Self::Token(token) = self else {
+                return Err(crate::Error::new(ErrorClass::Auth));
+            };
             let signin = sender::SentCredentials::for_test(vec![Secret::new("toy-signin")]);
             Ok(sender::BearerToken {
-                token: crate::Token::new(Secret::new(self.0), None),
+                token: crate::Token::new(Secret::new(*token), None),
                 obtained_at: None,
                 signin_credentials: Some(Arc::new(signin)),
             })
@@ -53,6 +59,28 @@ async fn call_evidence(
     token: &'static str,
     evidence: &mut Evidence,
 ) -> Result<(StatusCode, Json), Failure<Json>> {
+    call_evidence_with(
+        server,
+        op,
+        options,
+        path,
+        &[],
+        EvidenceSource::Token(token),
+        evidence,
+    )
+    .await
+}
+
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+async fn call_evidence_with(
+    server: &Server,
+    op: &Operation,
+    options: &Options,
+    path: &str,
+    query: &[(&str, &str)],
+    source: EvidenceSource,
+    evidence: &mut Evidence,
+) -> Result<(StatusCode, Json), Failure<Json>> {
     let clients = sender::Clients {
         pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
         one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
@@ -75,8 +103,8 @@ async fn call_evidence(
         op,
         options,
         &[path],
-        &[],
-        &EvidenceSource(token),
+        query,
+        &source,
         bytes::Bytes::new(),
         evidence,
     )
@@ -261,4 +289,98 @@ async fn underscore_path_rule_is_opt_in_and_accepts_only_database_id_characters(
     );
     assert_eq!(server.requests(), 1);
     assert!(server.heads()[0].starts_with(b"GET /items/db_1-x "));
+}
+
+#[tokio::test]
+async fn failed_signin_withholds_partial_even_after_later_success() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"id":"one","untracked":"toy-otp"}"#),
+        response("200 OK", br#"{"id":"two"}"#),
+    ]);
+    let write = Operation {
+        method: Method::POST,
+        class: redirect::Classification::Write,
+        ..declaration()
+    };
+    let read = declaration();
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let (_, output) = call_evidence(&server, &write, &options, "one", "toy-first", &mut evidence)
+        .await
+        .unwrap();
+    let failure = call_evidence_with(
+        &server,
+        &read,
+        &options,
+        "two",
+        &[],
+        EvidenceSource::FailedSignin,
+        &mut evidence,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        call_evidence(&server, &read, &options, "two", "toy-second", &mut evidence)
+            .await
+            .is_ok()
+    );
+    let failure = evidence.with_partial(failure, output.0, WriteDispatch::MayHaveBeenSent);
+    assert_eq!(failure.error().class(), ErrorClass::Auth);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn route_inputs_cannot_reflect_prior_bearers_or_service_secrets() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"id":"one"}"#),
+        response("200 OK", br#"{"id":"two"}"#),
+        response("200 OK", br#"{"id":"three"}"#),
+        response("200 OK", br#"{"id":"four"}"#),
+    ]);
+    let op = declaration();
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    assert!(
+        call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
+            .await
+            .is_ok()
+    );
+    evidence.add_secret(&Secret::new("toy issued"));
+    let prior_bearer = call_evidence(
+        &server,
+        &op,
+        &options,
+        "toy-first",
+        "toy-second",
+        &mut evidence,
+    )
+    .await;
+    let query_secret = call_evidence_with(
+        &server,
+        &op,
+        &options,
+        "two",
+        &[("name", "copy toy issued")],
+        EvidenceSource::Token("toy-second"),
+        &mut evidence,
+    )
+    .await;
+    assert!(prior_bearer.is_err());
+    assert!(query_secret.is_err());
+    assert_eq!(server.requests(), 1);
+    evidence.add_secret(&Secret::new("items"));
+    let public = call_evidence_with(
+        &server,
+        &op,
+        &options,
+        "two",
+        &[("items", "public")],
+        EvidenceSource::Token("toy-second"),
+        &mut evidence,
+    )
+    .await;
+    assert!(public.is_ok());
+    assert_eq!(server.requests(), 2);
 }

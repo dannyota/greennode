@@ -55,19 +55,13 @@ impl Evidence {
             }
             Value::Array(items) => items.iter_mut().for_each(|item| self.redact(item)),
             Value::Object(map) => {
-                let mut redacted_entry = None;
                 map.retain(|key, item| {
-                    self.redact(item);
                     if self.text_reflects(key) {
-                        redacted_entry = Some(std::mem::take(item));
-                        false
-                    } else {
-                        true
+                        return false;
                     }
+                    self.redact(item);
+                    true
                 });
-                if let Some(item) = redacted_entry {
-                    map.entry(REDACTED).or_insert(item);
-                }
             }
             Value::Null | Value::Bool(_) => {}
         }
@@ -88,8 +82,11 @@ impl Evidence {
             (WriteDispatch::NotSent, _) | (_, WriteDispatch::NotSent) => WriteDispatch::NotSent,
             _ => WriteDispatch::NotAWrite,
         };
-        self.redact(&mut partial);
-        Failure::new(error, Some(partial), dispatch)
+        let partial = (!self.credentials.has_incomplete_signin()).then(|| {
+            self.redact(&mut partial);
+            partial
+        });
+        Failure::new(error, partial, dispatch)
     }
 
     fn text_reflects(&self, text: &str) -> bool {
@@ -153,11 +150,11 @@ mod tests {
     #[test]
     fn redacts_only_reflecting_values() {
         let evidence = evidence(&["toy-secret", "42"]);
-        let mut value = json!({"keep": "fine", "hit": "toy-secret", "n": 42, "m": 43, "k": {"toy-secret": "v"}});
+        let mut value = json!({"keep": "fine", "hit": "toy-secret", "n": 42, "m": 43, "k": {"toy-secret": "drop", "keep": "stay"}});
         evidence.redact(&mut value);
         assert_eq!(
             value,
-            json!({"keep": "fine", "hit": "<redacted>", "n": "<redacted>", "m": 43, "k": {"<redacted>": "v"}})
+            json!({"keep": "fine", "hit": "<redacted>", "n": "<redacted>", "m": 43, "k": {"keep": "stay"}})
         );
         assert!(!evidence.reflected_in(&value));
     }

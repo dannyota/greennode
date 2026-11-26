@@ -148,7 +148,14 @@ pub(crate) async fn execute_with_evidence<T: Output>(
             interval: operation.retry_config.interval,
         },
     };
-    let response = match sender::run(runtime, &policy, sender::Auth::Bearer(source), &request).await
+    let response = match sender::run(
+        runtime,
+        &policy,
+        sender::Auth::Bearer(source),
+        &request,
+        sender::RouteInputs { path, query },
+    )
+    .await
     {
         Ok(response) => response,
         Err(failure) => {
