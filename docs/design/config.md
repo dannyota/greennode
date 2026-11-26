@@ -317,6 +317,11 @@ token needs a JSON escape, or that is not valid UTF-8, is a miss, so token bytes
 stay in zeroizing storage; Go would accept both. This supplements, not replaces,
 the baseline's checks on the cache directory and entries.
 
+A refresh dropped by its caller stops before publishing at the last check before
+the rename, but a drop after that check can still publish the fresh token;
+dropping never blocks. Go cannot cancel the write at all, and the published
+token is valid, so this is accepted.
+
 Without a home, the tool has no default disk cache. `Config::load` with no home
 and `Config::new` have no legacy path to compare with; they use an explicit
 cache directory as given, with the normal cache checks. A caller in that case
