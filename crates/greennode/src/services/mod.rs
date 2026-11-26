@@ -40,7 +40,15 @@ impl Registry {
     pub fn new(services: &'static [Service]) -> Result<Self, RegistryError> {
         let mut service_names = std::collections::HashSet::new();
         for service in services {
-            if ["version", "help", "configure", "__command-inventory"].contains(&service.name) {
+            if [
+                "version",
+                "help",
+                "configure",
+                "gen-docs",
+                "__command-inventory",
+            ]
+            .contains(&service.name)
+            {
                 return Err(RegistryError::ReservedName(service.name));
             }
             if !valid_name(service.name) {
@@ -73,7 +81,7 @@ impl Registry {
                     }
                 }
                 for flag in operation.flags.iter().chain(operation.extra_flags) {
-                    if flag.name == "help" {
+                    if flag.name == "help" || flag.name == "cli-input-json" {
                         return Err(RegistryError::ReservedName(flag.name));
                     }
                     if !valid_name(flag.name) {
