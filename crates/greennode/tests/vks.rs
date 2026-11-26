@@ -218,6 +218,34 @@ fn not_found_exits_four_and_withholds_provider_text() {
 }
 
 #[test]
+fn delete_requires_confirmation_and_refuses_read_only_before_connecting() {
+    let server = Server::start(vec![]);
+    for (args, expected) in [
+        (
+            &["delete-cluster", "--cluster-id", "cluster-1"][..],
+            "vks delete-cluster is destructive; pass --yes to confirm",
+        ),
+        (
+            &[
+                "delete-cluster",
+                "--cluster-id",
+                "cluster-1",
+                "--yes",
+                "--read-only",
+            ][..],
+            "read-only: refused by --read-only",
+        ),
+    ] {
+        let (status, stdout, stderr) = invoke("hcm-3", args, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["message"], expected);
+    }
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
 fn help_describes_zero_based_pagination_without_sign_in() {
     let server = Server::start(vec![]);
     let (status, stdout, stderr) = invoke("other", &["list-clusters", "--help"], &server);

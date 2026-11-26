@@ -1,9 +1,11 @@
-//! Read Kubernetes cluster inventory, supported versions, and account quota.
+//! Read Kubernetes inventory, versions, and quota, and delete clusters.
 
+mod delete;
 mod models;
 #[cfg(test)]
 mod tests;
 
+pub use delete::{DeleteClusterInput, DeleteClusterOutput};
 pub use models::{Cluster, ClusterVersion, Quota};
 
 use crate::config::Session;

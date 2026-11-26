@@ -1,6 +1,7 @@
+mod local;
 mod output;
 
-use std::borrow::Cow;
+pub use local::LocalError;
 use std::ffi::OsStr;
 use std::future::Future;
 use std::io::Write;
@@ -35,37 +36,6 @@ impl Format {
     }
 }
 
-pub struct LocalError {
-    pub code: &'static str,
-    pub message: Cow<'static, str>,
-    pub exit: u8,
-}
-
-impl LocalError {
-    pub fn usage(message: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            code: "InvalidUsage",
-            message: message.into(),
-            exit: 2,
-        }
-    }
-    pub fn read_only(source: &'static str) -> Self {
-        Self {
-            code: "ReadOnly",
-            message: format!("read-only: write refused ({source})").into(),
-            exit: 2,
-        }
-    }
-
-    fn missing_input() -> Self {
-        Self {
-            code: "RequestFailed",
-            message: "operation input unavailable".into(),
-            exit: 1,
-        }
-    }
-}
-
 pub trait ParsedInput {
     fn before_input(&mut self) -> Result<(), LocalError>;
     fn merge(&mut self) -> FutureResult<'_, Result<(), LocalError>>;
@@ -73,6 +43,9 @@ pub trait ParsedInput {
     fn required(&self) -> Result<(), LocalError>;
     fn is_write(&self) -> bool;
     fn needs_confirmation(&self) -> bool;
+    fn confirmation_message(&self) -> Option<String> {
+        None
+    }
     fn yes(&self) -> bool;
     fn check_read_only(&self) -> Result<(), LocalError>;
     fn query(&self) -> Option<&str>;
@@ -137,6 +110,7 @@ struct ManagementInput<'a, T: 'static> {
     matches: &'a ArgMatches,
     source: &'a dyn ConfigSource,
     kind: Kind,
+    operation: &'static super::op::Operation,
     value: Option<ParsedOperationInput<T>>,
 }
 
@@ -242,6 +216,17 @@ impl<T: Send + 'static> ParsedInput for ManagementInput<'_, T> {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+
+    fn confirmation_message(&self) -> Option<String> {
+        if self.kind != Kind::DestructiveWrite {
+            return None;
+        }
+        let (service, _) = self.operation.sdk_operation.split_once('.')?;
+        Some(format!(
+            "{service} {} is destructive; pass --yes to confirm",
+            self.operation.name
+        ))
     }
 
     fn yes(&self) -> bool {
@@ -374,6 +359,7 @@ pub(crate) async fn management_with_view<T: Send + 'static>(
         matches,
         source: invocation.source,
         kind: operation.kind,
+        operation,
         value: None,
     };
     let mut adapter = ManagementAdapter {
@@ -547,7 +533,11 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
         return refuse(
             input,
             adapter,
-            LocalError::usage("confirmation requires --yes"),
+            LocalError::usage(
+                input
+                    .confirmation_message()
+                    .unwrap_or_else(|| "confirmation requires --yes".to_owned()),
+            ),
             stdout,
             stderr,
         );
@@ -684,7 +674,9 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                 );
             }
             let mut classified = errors::classify(&failure.error, adapter.rules());
-            if let Some(advice) = adapter.advice(&failure.error) {
+            if let Some(advice) = failure.error.detail::<String>() {
+                classified.envelope.message = advice;
+            } else if let Some(advice) = adapter.advice(&failure.error) {
                 classified.envelope.message = advice;
             }
             errors::write_error(stderr, &classified.envelope);

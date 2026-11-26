@@ -1,3 +1,5 @@
+mod delete;
+
 use clap::ArgMatches;
 use greennode_sdk::vks::{Client, GetQuotaInput, ListClusterVersionsInput, ListClustersInput};
 use greennode_sdk::{Config, RequestContext};
@@ -85,6 +87,7 @@ pub(super) const SERVICE: Service = Service {
     name: "vks",
     error_rules: &[],
     operations: &[
+        delete::DELETE_CLUSTER,
         Operation {
             name: "list-clusters",
             sdk_operation: "vks.ListClusters",

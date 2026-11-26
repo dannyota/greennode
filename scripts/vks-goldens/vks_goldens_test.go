@@ -6,7 +6,30 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
+	"danny.vn/vngcloud/vks"
 )
+
+func TestVKSDeleteGoldens(t *testing.T) {
+	for _, format := range []string{"json", "table", "text"} {
+		h := newFakeHarness(t)
+		op := Write[vks.Client, vks.DeleteClusterInput, vks.DeleteClusterOutput]("delete-cluster", (*vks.Client).DeleteCluster, Destructive())
+		op.call = func(_ *cobra.Command, _ *vks.Client, _ context.Context, _ any) (any, error) {
+			return &vks.DeleteClusterOutput{Deleted: true}, nil
+		}
+		root := newTestRoot(h.e)
+		root.AddCommand(Service(h.e, "vks", "test", vks.New, op))
+		root.SetArgs([]string{"--region", "hcm-3", "--yes", "--output", format, "vks", "delete-cluster", "--cluster-id", "cluster-1"})
+		if err := root.ExecuteContext(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(os.Getenv("VKS_GOLDEN_DIR"), "delete-cluster."+format+".golden")
+		if err := os.WriteFile(path, []byte(h.stdout.String()), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestVKSGoldens(t *testing.T) {
 	for _, tc := range []struct {

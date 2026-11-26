@@ -65,7 +65,10 @@ fn delete_budget_requires_confirmation_before_connecting() {
     assert!(stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["code"], "InvalidUsage");
-    assert_eq!(error["error"]["message"], "confirmation requires --yes");
+    assert_eq!(
+        error["error"]["message"],
+        "billing delete-budget is destructive; pass --yes to confirm"
+    );
     assert_eq!(server.connections(), 0);
 }
 
@@ -161,7 +164,7 @@ fn read_only_latches_refuse_writes_before_connecting() {
         assert_eq!(error["error"]["code"], "ReadOnly");
         assert_eq!(
             error["error"]["message"],
-            format!("read-only: write refused ({latch})")
+            format!("read-only: refused by {latch}")
         );
     }
     std::fs::remove_dir_all(home).unwrap();
@@ -339,7 +342,10 @@ fn delete_threshold_requires_confirmation_before_connecting() {
     assert!(stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["code"], "InvalidUsage");
-    assert_eq!(error["error"]["message"], "confirmation requires --yes");
+    assert_eq!(
+        error["error"]["message"],
+        "billing delete-budget-threshold is destructive; pass --yes to confirm"
+    );
     assert_eq!(server.connections(), 0);
 }
 
@@ -359,7 +365,7 @@ fn read_only_refuses_every_threshold_write_before_connecting() {
         assert_eq!(error["error"]["code"], "ReadOnly");
         assert_eq!(
             error["error"]["message"],
-            "read-only: write refused (--read-only)"
+            "read-only: refused by --read-only"
         );
         assert!(error["error"]["operation"].is_null());
     }
