@@ -2,6 +2,32 @@
 
 # CLI: LoadBalancer
 
+## add-pool-member
+
+Kind: Write.
+
+Reads the pool and its member list before replacing membership. An identical
+member returns `Changed: false`. A zero weight uses 1, and a zero monitor port
+uses the traffic port.
+
+Use `--no-wait` to return submitted values after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--pool-id`          | `string` | yes      |
+| `--address`          | `string` | yes      |
+| `--port`             | `int`    | yes      |
+| `--name`             | `string` |          |
+| `--weight`           | `int`    |          |
+| `--monitor-port`     | `int`    |          |
+| `--backup`           | `bool`   |          |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer add-pool-member --load-balancer-id <load-balancer-id> --pool-id <pool-id> --address <address> --port <port>
+```
+
 ## create-listener
 
 Kind: Write.
@@ -440,6 +466,27 @@ listing packages. Prices are in VND and include VAT.
 greennode loadbalancer quote-resize-load-balancer --load-balancer-id <load-balancer-id> --package-id <package-id>
 ```
 
+## remove-pool-member
+
+Kind: Write.
+
+Removes the member selected by address and port. Use `--yes` to confirm. The
+remaining members are kept.
+
+Use `--no-wait` to return submitted values after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--pool-id`          | `string` | yes      |
+| `--address`          | `string` | yes      |
+| `--port`             | `int`    | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer remove-pool-member --load-balancer-id <load-balancer-id> --pool-id <pool-id> --address <address> --port <port> --yes
+```
+
 ## resize-load-balancer
 
 Kind: Write.
@@ -539,4 +586,30 @@ settings.
 
 ```sh
 greennode loadbalancer update-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --algorithm <algorithm>
+```
+
+## update-pool-member
+
+Kind: Write.
+
+Updates the selected address and port while preserving other members. Supply at
+least one field. A zero weight uses 1, and a zero monitor port uses the traffic
+port.
+
+Use `--no-wait` to return submitted values after acceptance.
+
+| Flag                 | Type      | Required |
+| -------------------- | --------- | -------- |
+| `--load-balancer-id` | `string`  | yes      |
+| `--pool-id`          | `string`  | yes      |
+| `--address`          | `string`  | yes      |
+| `--port`             | `int`     | yes      |
+| `--name`             | `*string` |          |
+| `--weight`           | `*int`    |          |
+| `--monitor-port`     | `*int`    |          |
+| `--backup`           | `*bool`   |          |
+| `--no-wait`          | `bool`    |          |
+
+```sh
+greennode loadbalancer update-pool-member --load-balancer-id <load-balancer-id> --pool-id <pool-id> --address <address> --port <port>
 ```

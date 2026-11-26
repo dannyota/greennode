@@ -1,0 +1,34 @@
+{
+  "Pool": {
+    "UUID": "pool-1",
+    "Name": "backends",
+    "Protocol": "",
+    "Description": "",
+    "LoadBalanceMethod": "",
+    "DisplayStatus": "",
+    "ProgressStatus": "CREATED",
+    "Stickiness": false,
+    "TLSEncryption": false,
+    "Members": [
+      {
+        "UUID": "member-1",
+        "Address": "192.0.2.10",
+        "ProtocolPort": 80,
+        "Weight": 2,
+        "MonitorPort": 80,
+        "SubnetID": "",
+        "Name": "primary",
+        "PoolID": "",
+        "TypeCreate": "",
+        "Backup": false,
+        "DisplayStatus": "",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "CreatedBy": "",
+        "ProgressStatus": ""
+      }
+    ],
+    "HealthMonitor": null
+  },
+  "Changed": true
+}

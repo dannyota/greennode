@@ -29,8 +29,8 @@ const LOAD_BALANCER: Read = Read {
     route: "v2/{}/loadBalancers/{}",
 };
 
-struct BusyRefusal;
-struct CompleteRefusal;
+pub(super) struct BusyRefusal;
+pub(super) struct CompleteRefusal;
 
 pub(super) type WriteResult<T> = Result<T, Failure<T>>;
 
@@ -107,6 +107,15 @@ impl<'a> ChildWriter<'a> {
         ctx: &RequestContext,
         child: Option<&ChildTarget<'_>>,
     ) -> Result<Ready, Box<Error>> {
+        self.ready_with(ctx, child, |_, _, _| Ok(())).await
+    }
+
+    pub(super) async fn ready_with(
+        &mut self,
+        ctx: &RequestContext,
+        child: Option<&ChildTarget<'_>>,
+        validate_raw: impl Fn(&Read, &str, &Evidence) -> Result<(), Box<Error>>,
+    ) -> Result<Ready, Box<Error>> {
         let clock = self.client.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
         loop {
@@ -127,6 +136,7 @@ impl<'a> ChildWriter<'a> {
                 if let Some(field) = child.guard_field {
                     validate_guard_string(child.read, &row, field, &self.evidence)?;
                 }
+                validate_raw(child.read, &row, &self.evidence)?;
                 let row = guard::canonical_json(child.read, &row, child.shape, &self.evidence)?;
                 (child.validate)(child.read, &row, &self.evidence)?;
                 if !child_busy(&progress(child.read, &row, child.id, &self.evidence)?) {
@@ -194,13 +204,20 @@ impl<'a> ChildWriter<'a> {
         body: Bytes,
         busy_child: Option<&ChildTarget<'_>>,
     ) -> Result<(StatusCode, Bytes), Failure<O>> {
-        let first = self.send_once(ctx, &method, target, body.clone()).await;
+        let retry = if method == Method::POST {
+            Retry::NonIdempotent
+        } else {
+            Retry::Repeatable
+        };
+        let first = self
+            .send_once(ctx, &method, target, body.clone(), retry)
+            .await;
         match first {
             Err(failure) if failure.error().detail::<BusyRefusal>().is_some() => {
                 self.ready(ctx, busy_child)
                     .await
                     .map_err(|error| Failure::new(*error, None, failure.write_dispatch()))?;
-                self.send_once(ctx, &method, target, body)
+                self.send_once(ctx, &method, target, body, retry)
                     .await
                     .map_err(|failure: Failure<O>| {
                         Failure::new(failure.into_parts().0, None, WriteDispatch::MayHaveBeenSent)
@@ -210,12 +227,13 @@ impl<'a> ChildWriter<'a> {
         }
     }
 
-    async fn send_once<O>(
+    pub(super) async fn send_once<O>(
         &mut self,
         ctx: &RequestContext,
         method: &Method,
         target: &ChildTarget<'_>,
         body: Bytes,
+        retry: Retry,
     ) -> Result<(StatusCode, Bytes), Failure<O>> {
         let session = &self.client.session;
         let mut jitter = || session.retry_jitter();
@@ -248,11 +266,7 @@ impl<'a> ChildWriter<'a> {
             template: target.read.route,
             method: method.clone(),
             class: Classification::Write,
-            retry: if method == Method::POST {
-                Retry::NonIdempotent
-            } else {
-                Retry::Repeatable
-            },
+            retry,
             success: &[StatusCode::OK, StatusCode::ACCEPTED],
             cap: 8 << 20,
             allow_recovery: true,

@@ -24,6 +24,8 @@ macro_rules! option_field {
     };
 }
 
+pub(super) use option_field;
+
 const ALGORITHM: Field = flag("algorithm", "string", false);
 const UPDATE_ALGORITHM: Field = flag("algorithm", "*string", false);
 const UPDATE_STICKINESS: Field = flag("stickiness", "*bool", false);
