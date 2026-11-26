@@ -136,14 +136,13 @@ impl Client {
     }
 }
 
-fn screen_error(error: Error, evidence: &Evidence) -> Error {
+fn screen_error(mut error: Error, evidence: &Evidence) -> Error {
+    let reflects_status = |status| evidence.reflected_in(&serde_json::Value::from(status));
+    error.remove_details::<StatusCode>(|status| reflects_status(status.as_u16()));
     let Some(api) = error.api_error() else {
         return error;
     };
-    if !api
-        .status()
-        .is_some_and(|status| evidence.reflected_in(&serde_json::Value::from(status)))
-    {
+    if !api.status().is_some_and(reflects_status) {
         return error;
     }
     let message = if evidence.text_reflects(api.message()) {

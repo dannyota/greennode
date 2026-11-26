@@ -16,9 +16,18 @@ macro_rules! decode {
     };
 }
 
+macro_rules! projected {
+    ($value:expr) => {
+        $value
+    };
+    ($value:expr, $projection:path) => {
+        &$projection($value)
+    };
+}
+
 macro_rules! record {
     ($(#[$meta:meta])* $name:ident $(<$item:ident>)? {
-        $($(#[$field_meta:meta])* $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)?;) +
+        $($(#[$field_meta:meta])* $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)? $(=> $projection:path)?;) +
     }) => {
         $(#[$meta])*
         #[derive(Clone, Debug, Default, PartialEq)]
@@ -60,7 +69,7 @@ macro_rules! record {
                     if self.masked.contains(&$go) {
                         output.serialize_field($go, REDACTED)?;
                     } else {
-                        output.serialize_field($go, &self.$field)?;
+                        output.serialize_field($go, projected!(&self.$field $(, $projection)?))?;
                     }
                 )+
                 output.end()
@@ -207,7 +216,7 @@ record! {
         /// Resource patterns covered by the statement.
         resources: Vec<String> => "resources", "Resources";
         /// Conditions keyed by the API's operator names.
-        condition: Option<BTreeMap<String, Value>> => "condition", "Condition", wire::condition;
+        condition: Option<BTreeMap<String, Value>> => "condition", "Condition", wire::condition => wire::condition_output;
     }
 }
 

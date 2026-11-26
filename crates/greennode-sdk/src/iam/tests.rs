@@ -133,7 +133,7 @@ async fn policy_conditions_screen_reflected_keys_values_and_rendered_numbers() {
 
 #[tokio::test]
 async fn user_decodes_go_strings_and_validates_types_without_error_details() {
-    let replacements = b"{\"USERNAME\":\"a\xed\xa0\x80\\ud800\",\"createdAt\":\"1969-12-31T23:59:59.9999Z\",\"lastUse\":-0}";
+    let replacements = b"{\"username\":\"a\xed\xa0\x80\\ud800\",\"createdAt\":\"1969-12-31T23:59:59.9999Z\",\"lastUse\":-0}";
     let server = Server::start(vec![
         response("200 OK", replacements),
         response(
@@ -240,4 +240,99 @@ async fn attachment_failure_discards_previous_results_and_stops_before_third_rea
     assert!(partial.is_none());
     assert_eq!(dispatch, WriteDispatch::NotAWrite);
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn user_fields_decode_exact_case_and_reject_folded_duplicates() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            br#"{"id":"user-1","USERNAME":"ignored","TWOFACTORAUTH":false}"#,
+        ),
+        response("200 OK", br#"{"username":"known","USERNAME":"duplicate"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, "toy-bearer");
+    let input = GetUserInput::new("user-1");
+    assert!(
+        client
+            .get_user(&ctx, input.clone())
+            .await
+            .unwrap()
+            .user
+            .username
+            .is_empty()
+    );
+    assert_eq!(
+        client
+            .get_user(&ctx, input)
+            .await
+            .unwrap_err()
+            .into_parts()
+            .0
+            .detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+}
+
+#[tokio::test]
+async fn timestamp_formats_match_go() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"createdAt":"1970-01-01 00:00:00Z"}"#),
+        response(
+            "200 OK",
+            br#"{"createdAt":"1970-01-01T00:00:00,125123456789Z"}"#,
+        ),
+        response("200 OK", br#"{"createdAt":"1970-01-02T0:00:00+24:60"}"#),
+        response("200 OK", br#"{"createdAt":"1970-01-01T23:59:60Z"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, "toy-bearer");
+    let input = GetUserInput::new("user-1");
+    let error = client
+        .get_user(&ctx, input.clone())
+        .await
+        .unwrap_err()
+        .into_parts()
+        .0;
+    assert_eq!(
+        error.detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+    for expected in [125, -3_600_000] {
+        let result = client.get_user(&ctx, input.clone()).await;
+        assert!(
+            result
+                .as_ref()
+                .is_ok_and(|output| output.user.created_at == expected)
+        );
+    }
+    let error = client
+        .get_user(&ctx, input)
+        .await
+        .unwrap_err()
+        .into_parts()
+        .0;
+    assert_eq!(
+        error.detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+}
+
+#[tokio::test]
+async fn reflected_observed_status_is_removed_from_typed_details() {
+    let oversized = vec![b' '; OBJECT_CAP + 1];
+    for (bearer, keeps_status) in [("200", false), ("toy-bearer", true)] {
+        let server = Server::start(vec![response("200 OK", &oversized)]);
+        let (ctx, _) = RequestContext::new();
+        let error = client(&server, bearer)
+            .get_user(&ctx, GetUserInput::new("user-1"))
+            .await
+            .unwrap_err()
+            .into_parts()
+            .0;
+        assert_eq!(error.class(), ErrorClass::Api);
+        assert!(error.is_body_too_large());
+        assert_eq!(error.detail::<StatusCode>().is_some(), keeps_status);
+    }
 }

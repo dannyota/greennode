@@ -195,3 +195,83 @@ async fn required_operands_and_configured_credentials_fail_before_requests() {
     }
     assert_eq!(server.requests(), 0);
 }
+
+#[tokio::test]
+async fn policy_condition_numbers_use_go_float_output() {
+    let body = br#"{"id":"policy-1","statements":[{"condition":{"stringEquals":{"count":1,"limits":[1e6,0.5]}}}]}"#;
+    for format in ["json", "table", "text"] {
+        let server = Server::start(vec![response(200, body.to_vec())]);
+        let (status, stdout, stderr) = invoke(
+            &[
+                "--output",
+                format,
+                "iam",
+                "get-policy",
+                "--policy-id",
+                "policy-1",
+            ],
+            &server,
+            BEARER,
+        )
+        .await;
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(
+            output.contains("1000000") && !output.contains("1.0"),
+            "{format}"
+        );
+        assert!(output.contains(if format == "json" {
+            "\"count\": 1,"
+        } else {
+            "\"count\":1,"
+        }));
+    }
+}
+
+#[tokio::test]
+async fn base64_reflections_are_redacted_from_policy_queries_and_errors() {
+    const TOKEN: &str = "toy/??!";
+    for encoded in ["dG95Lz8/IQ==", "dG95Lz8/IQ", "dG95Lz8_IQ==", "dG95Lz8_IQ"] {
+        let body = format!(
+            r#"{{"id":"policy-1","name":"{encoded}","statements":[{{"condition":{{"{encoded}":{{"toy":"keep"}},"stringEquals":{{"{encoded}":"keep","kept":"{encoded}","ordinary":"public"}}}}}}]}}"#
+        );
+        let rejected = format!(r#"{{"message":"value {encoded}"}}"#);
+        let server = Server::start(vec![
+            response(200, body.into_bytes()),
+            response(400, rejected.into_bytes()),
+        ]);
+        let (status, stdout, stderr) = invoke(
+            &[
+                "--debug",
+                "iam",
+                "get-policy",
+                "--policy-id",
+                "policy-1",
+                "--query",
+                "Policy.{Name:Name,Condition:Statements[0].Condition}",
+            ],
+            &server,
+            TOKEN,
+        )
+        .await;
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty() || !String::from_utf8_lossy(&stderr).contains(encoded));
+        let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        assert!(!String::from_utf8_lossy(&stdout).contains(encoded));
+        assert!(output["Name"] == "<redacted>");
+        assert!(
+            output["Condition"]
+                == serde_json::json!({"stringEquals":{"kept":"<redacted>","ordinary":"public"}})
+        );
+        let (status, stdout, stderr) = invoke(
+            &["iam", "get-policy", "--policy-id", "policy-1"],
+            &server,
+            TOKEN,
+        )
+        .await;
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&stderr).contains(encoded));
+    }
+}

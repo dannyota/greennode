@@ -370,6 +370,20 @@ impl Error {
         self.detail = Some(Box::new(detail));
         self
     }
+    pub(crate) fn remove_details<T: Any + Send + Sync>(&mut self, matches: impl Fn(&T) -> bool) {
+        let mut error = Some(self);
+        while let Some(node) = error {
+            if node
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.downcast_ref())
+                .is_some_and(&matches)
+            {
+                node.detail = None;
+            }
+            error = node.cause.as_deref_mut();
+        }
+    }
     /// Returns the outermost category.
     pub fn class(&self) -> ErrorClass {
         self.class

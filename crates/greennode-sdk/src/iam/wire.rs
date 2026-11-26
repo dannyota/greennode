@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Number, Value, value::RawValue};
 
 use crate::error::SafeText;
@@ -14,6 +15,7 @@ use crate::wire::strict_json::{self, Shape};
 use crate::{ApiError, Error};
 
 mod text;
+mod timestamp;
 
 pub(super) const REDACTED: &str = "<redacted>";
 
@@ -27,11 +29,7 @@ pub(super) fn field<'a>(
     fields: &BTreeMap<String, &'a RawValue>,
     name: &str,
 ) -> Option<&'a RawValue> {
-    fields.get(name).copied().or_else(|| {
-        fields
-            .iter()
-            .find_map(|(key, value)| strict_json::field_matches(key, name).then_some(*value))
-    })
+    fields.get(name).copied()
 }
 
 pub(super) fn condition(
@@ -46,6 +44,46 @@ pub(super) fn condition(
         return Err(invalid("invalid condition operator"));
     }
     Ok(fields)
+}
+
+pub(super) fn condition_output(fields: &Option<BTreeMap<String, Value>>) -> impl Serialize + '_ {
+    fields.as_ref().map(|fields| ConditionMap(fields.iter()))
+}
+
+struct ConditionMap<I>(I);
+
+impl<'a, I: Clone + ExactSizeIterator<Item = (&'a String, &'a Value)>> Serialize
+    for ConditionMap<I>
+{
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0.clone() {
+            map.serialize_entry(key, &ConditionValue(value))?;
+        }
+        map.end()
+    }
+}
+
+struct ConditionValue<'a>(&'a Value);
+
+impl Serialize for ConditionValue<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            Value::Object(fields) => ConditionMap(fields.iter()).serialize(serializer),
+            Value::Array(items) => {
+                let mut list = serializer.serialize_seq(Some(items.len()))?;
+                for value in items {
+                    list.serialize_element(&ConditionValue(value))?;
+                }
+                list.end()
+            }
+            Value::Number(number) => number
+                .as_f64()
+                .ok_or_else(|| serde::ser::Error::custom("invalid condition number"))?
+                .serialize(serializer),
+            other => other.serialize(serializer),
+        }
+    }
 }
 
 impl Wire for String {
@@ -121,8 +159,6 @@ impl Wire for Value {
 }
 
 pub(super) fn epoch(raw: &RawValue) -> Result<i64, serde_json::Error> {
-    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
     match raw.get().as_bytes().first() {
         Some(b'"') => {
             let value = String::decode(raw)?;
@@ -132,14 +168,11 @@ pub(super) fn epoch(raw: &RawValue) -> Result<i64, serde_json::Error> {
             if let Ok(value) = value.parse() {
                 return Ok(value);
             }
-            let date = OffsetDateTime::parse(&value, &Rfc3339)
-                .map_err(|_| invalid("invalid timestamp"))?;
-            i64::try_from(date.unix_timestamp_nanos().div_euclid(1_000_000))
-                .map_err(|_| invalid("invalid timestamp"))
+            timestamp::parse(&value).ok_or_else(|| invalid("invalid timestamp"))
         }
         Some(b'{') => {
             let fields = serde_json::from_str(raw.get())?;
-            strict_json::validate_shape(
+            strict_json::validate_exact_shape(
                 raw.get().as_bytes(),
                 &Shape::Object(&[strict_json::ShapeField {
                     name: "$numberLong",
@@ -269,7 +302,7 @@ impl<T: Wire> Output for Body<T> {
         let error = |detail| Box::new(decode_error(operation, detail));
         let raw = serde_json::from_str::<&RawValue>(&body)
             .map_err(|_| error(super::DecodeError::MalformedJson))?;
-        strict_json::validate_shape(body.as_bytes(), &Self::SCHEMA, body.len())
+        strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         T::decode(raw)
             .map(Self)
