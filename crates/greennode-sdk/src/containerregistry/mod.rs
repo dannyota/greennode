@@ -1,11 +1,18 @@
-//! Read container registry repositories and permissions.
+//! Manage container registry repositories, users, and permissions.
 
 mod reads;
 pub use reads::*;
 
+mod repository_writes;
+mod user_writes;
+pub use repository_writes::*;
+pub use user_writes::*;
+
 use crate::config::Session;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation, Output},
+    options::Options,
     redirect::{Classification, Retry},
     retry,
     sender::Response,
@@ -16,7 +23,7 @@ use http::{Method, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::Arc;
 
-/// Client for token-scoped container registry reads.
+/// Client for token-scoped container registry operations.
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,
@@ -313,30 +320,112 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
     ) -> Result<T, Failure<O>> {
+        self.request(
+            ctx,
+            operation,
+            path,
+            query,
+            bytes::Bytes::new(),
+            &mut Evidence::new(),
+        )
+        .await
+    }
+
+    async fn request<T: Output, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+        body: bytes::Bytes,
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
+        let dispatch = if matches!(operation.class, Classification::Write) {
+            WriteDispatch::NotSent
+        } else {
+            WriteDispatch::NotAWrite
+        };
         let session = &self.session;
         let base = session
             .endpoints()
             .container_registry
             .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
+            .ok_or_else(|| Failure::new(Error::new(ErrorClass::InvalidConfig), None, dispatch))?;
         let mut jitter = || session.retry_jitter();
         let runtime = session
             .runtime(ctx, &mut jitter)
-            .map_err(|error| failure(*error))?;
-        operation::execute::<T>(
+            .map_err(|error| Failure::new(*error, None, dispatch))?;
+        operation::execute_with_evidence::<RegistryResponse<T>>(
             runtime,
             base,
             operation,
+            &Options::DEFAULT,
             path,
             query,
             session.bearer_source(),
-            bytes::Bytes::new(),
+            body,
+            evidence,
         )
         .await
-        .map(|(_, value)| value)
-        .map_err(|error| {
-            let (error, _, dispatch) = error.into_parts();
+        .map(|(_, response)| response.0)
+        .map_err(|failure| {
+            let (error, _, dispatch) = failure.into_parts();
+            let error = if operation.sensitive {
+                withhold_registry_error(operation, error)
+            } else {
+                error
+            };
             Failure::new(error, None, dispatch)
+        })
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+struct RegistryResponse<T>(T);
+
+impl<T: Output> Output for RegistryResponse<T> {
+    const SCHEMA: Shape<'static> = T::SCHEMA;
+    const CHECK_RENDERED_NUMBERS: bool = T::CHECK_RENDERED_NUMBERS;
+
+    fn credential_error(
+        op: &Operation,
+        sent: &crate::wire::product::sender::SentCredentials,
+    ) -> Option<Box<Error>> {
+        T::credential_error(op, sent)
+    }
+
+    fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        if matches!(op.class, Classification::Read) && !op.sensitive {
+            return T::decode_response(op, response).map(Self);
+        }
+        if op.allow_empty && response.body.is_empty() && op.success.contains(&response.status) {
+            return Ok(Self::default());
+        }
+        T::decode_response(op, response).map(Self).map_err(|error| {
+            if !op.success.contains(&response.status) {
+                return error;
+            }
+            let reflected = op.reject_reflected_credentials
+                && operation::reflects_json(
+                    &response.body,
+                    &response.credentials,
+                    T::CHECK_RENDERED_NUMBERS,
+                ) == Some(true);
+            let malformed =
+                serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err();
+            let (operation, message) = if reflected {
+                ("", "containerregistry: unsafe registry response")
+            } else if malformed && op.sensitive {
+                (op.id, "invalid JSON response; body withheld")
+            } else if op.sensitive {
+                (op.id, "response failed to decode; body withheld")
+            } else if malformed {
+                (op.id, "invalid JSON response")
+            } else {
+                (op.id, "response failed to decode")
+            };
+            Box::new(registry_error(operation, None, "", message).with_cause(*error))
         })
     }
 }
@@ -363,6 +452,141 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         no_redirect: false,
         retry_config: retry::Config::default(),
     }
+}
+
+/// Service-specific registry failure identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorDetail {
+    /// The repository contains images and the delete was refused.
+    RepositoryNotEmpty,
+    /// The issued secret cannot be attributed to a returned user identity.
+    UserNotFound,
+    /// A repository delete could not establish the current image count.
+    ImageCountUnknown,
+    /// The SDK rejected locally invalid input.
+    InvalidInput,
+}
+
+fn registry_error(
+    operation: &'static str,
+    status: Option<u16>,
+    code: &str,
+    message: &str,
+) -> Error {
+    Error::from_api(crate::ApiError::new(
+        operation,
+        status,
+        crate::error::SafeText::new(code, &[]),
+        crate::error::SafeText::new(message, &[]),
+        false,
+    ))
+}
+
+fn withhold_registry_error(operation: &Operation, error: Error) -> Error {
+    if error.is_body_too_large()
+        || error.class() == ErrorClass::Cancelled
+        || error.class() == ErrorClass::DeadlineExceeded
+    {
+        return error;
+    }
+    match error.api_error() {
+        Some(api) if api.status().is_some() => Error::from_api(crate::ApiError::new(
+            operation.id,
+            api.status(),
+            crate::error::SafeText::new(api.code(), &[]),
+            crate::error::SafeText::new("registry response withheld", &[]),
+            api.retryable(),
+        ))
+        .with_cause(error),
+        _ => error,
+    }
+}
+
+fn redact_failure<T>(failure: Failure<T>, evidence: &Evidence) -> Failure<T> {
+    let (error, partial, dispatch) = failure.into_parts();
+    let error = match error.api_error() {
+        Some(api)
+            if evidence.credentials().reflects(api.message().as_bytes())
+                || evidence.credentials().reflects(api.code().as_bytes()) =>
+        {
+            Error::from_api(crate::ApiError::new(
+                api.operation(),
+                api.status(),
+                crate::error::SafeText::new("", &[]),
+                crate::error::SafeText::new("registry response withheld", &[]),
+                api.retryable(),
+            ))
+            .with_cause(error)
+        }
+        _ => error,
+    };
+    Failure::new(error, partial, dispatch)
+}
+
+fn not_sent<T>(error: Error) -> Failure<T> {
+    Failure::new(error, None, WriteDispatch::NotSent)
+}
+
+fn before_write<T, U>(failure: Failure<T>) -> Failure<U> {
+    not_sent(failure.into_parts().0)
+}
+
+fn invalid_input<T>(message: &str) -> Failure<T> {
+    not_sent(
+        Error::new(ErrorClass::InvalidInput)
+            .with_detail(ErrorDetail::InvalidInput)
+            .with_cause(registry_error("", None, "", message)),
+    )
+}
+
+fn write_operation(
+    id: &'static str,
+    method: Method,
+    template: &'static str,
+    success: &'static [StatusCode],
+) -> Operation {
+    Operation {
+        method,
+        class: Classification::Write,
+        retry: Retry::Once,
+        success,
+        allow_recovery: false,
+        no_redirect: true,
+        ..read_operation(id, template)
+    }
+}
+
+fn status(error: &Error) -> Option<u16> {
+    error.api_error().and_then(crate::ApiError::status)
+}
+
+fn is_server_error(error: &Error) -> bool {
+    status(error).is_some_and(|status| (500..600).contains(&status))
+}
+
+fn create_failure<T>(failure: Failure<T>, message: &'static str) -> Failure<T> {
+    let (error, partial, dispatch) = failure.into_parts();
+    if dispatch != WriteDispatch::MayHaveBeenSent
+        || status(&error)
+            .is_some_and(|status| (400..500).contains(&status) && !matches!(status, 408 | 499))
+    {
+        return Failure::new(error, partial, dispatch);
+    }
+    let api = error.api_error();
+    let message = if let Some(api) = api.filter(|api| !api.message().is_empty()) {
+        format!("{message}: {}", api.message())
+    } else {
+        message.to_owned()
+    };
+    let error = registry_error(
+        api.map_or("", crate::ApiError::operation),
+        status(&error),
+        api.map_or("", crate::ApiError::code),
+        &message,
+    )
+    .with_cause(error);
+    Failure::new(error, partial, dispatch)
 }
 
 #[cfg(test)]
@@ -454,3 +678,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod write_tests;

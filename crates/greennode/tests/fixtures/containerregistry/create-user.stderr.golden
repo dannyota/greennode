@@ -1,0 +1,1 @@
+{"error":{"code":"UserNotFound","message":"containerregistry: created user not found: containerregistry.CreateUser: a name match cannot prove creation ownership; reconcile with list-users before any cleanup"}}

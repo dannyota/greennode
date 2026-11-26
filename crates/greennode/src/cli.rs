@@ -7,6 +7,7 @@ pub mod op;
 mod query;
 pub mod render;
 mod root;
+pub(crate) mod secret_file;
 
 pub use root::command_with_registry;
 
@@ -142,7 +143,8 @@ mod tests {
                 partial: None,
                 dispatch: WriteDispatch::NotAWrite,
                 query_partial: false,
-            })
+            }
+            .into())
         })
     }
 

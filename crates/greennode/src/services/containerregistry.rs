@@ -1,3 +1,5 @@
+mod writes;
+
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
@@ -146,7 +148,7 @@ macro_rules! operation {
 }
 pub(super) const SERVICE: Service = Service {
     name: "containerregistry",
-    error_rules: &[],
+    error_rules: writes::ERROR_RULES,
     operations: &[
         operation!(
             "list-repositories",
@@ -164,6 +166,8 @@ pub(super) const SERVICE: Service = Service {
             GET,
             get_repository
         ),
+        writes::CREATE_REPOSITORY,
+        writes::DELETE_REPOSITORY,
         operation!(
             "list-users",
             "containerregistry.ListUsers",
@@ -188,6 +192,8 @@ pub(super) const SERVICE: Service = Service {
             EMPTY,
             list_permissions
         ),
+        writes::CREATE_USER,
+        writes::DELETE_USER,
     ],
 };
 fn list_repositories<'a>(
@@ -208,7 +214,7 @@ fn list_repositories<'a>(
                 .await,
             std::convert::identity,
         );
-        if let Err(failure) = &mut result {
+        if let Err(dispatch::ExecutionFailure::Sdk(failure)) = &mut result {
             failure.partial = None;
         }
         result

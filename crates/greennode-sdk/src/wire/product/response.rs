@@ -89,6 +89,10 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
+    reflects_credential_forms(text, credentials)
+}
+
+pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
     let mut needles = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
