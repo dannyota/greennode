@@ -8,6 +8,7 @@ mod table;
 mod value;
 pub use redaction::DynamicMap;
 pub use table::write_table;
+pub(crate) use table::{TableView, write_table_with_columns};
 pub use value::{Value, write_text};
 
 use std::fmt;
@@ -250,23 +251,32 @@ impl ser::Serializer for Encoder {
             fields: Vec::new(),
             key: None,
             sort: true,
-            number: false,
+            token: None,
             depth: self.descend()?,
             dynamic: self.1,
         })
     }
     fn serialize_struct(self, name: &'static str, _: usize) -> Result<Map, Error> {
+        let depth = if name == "$serde_json::private::Number" {
+            self.0
+        } else {
+            self.descend()?
+        };
+        let token = match name {
+            "$serde_json::private::Number" => Some((name, number::Token::Number)),
+            "$serde_json::private::RawValue" if self.1 => {
+                return Err(Error::Invalid("raw JSON inside a dynamic map".into()));
+            }
+            "$serde_json::private::RawValue" => Some((name, number::Token::Raw(depth))),
+            _ => None,
+        };
         Ok(Map {
             fields: Vec::new(),
             key: None,
             sort: false,
-            number: name == "$serde_json::private::Number",
+            token,
             dynamic: self.1,
-            depth: if name == "$serde_json::private::Number" {
-                self.0
-            } else {
-                self.descend()?
-            },
+            depth,
         })
     }
     fn serialize_struct_variant(
@@ -337,7 +347,7 @@ struct Map {
     fields: Vec<(String, Node)>,
     key: Option<ObjectKey>,
     sort: bool,
-    number: bool,
+    token: Option<(&'static str, number::Token)>,
     depth: usize,
     dynamic: bool,
 }
@@ -371,15 +381,14 @@ impl SerializeMap for Map {
         if self.key.is_some() {
             return Err(Error::Invalid("missing map key".into()));
         }
-        if self.number {
+        if let Some((name, _)) = self.token {
             if self.fields.len() == 1
-                && let Some((key, Node::String(s))) = self.fields.pop()
-                && key == "$serde_json::private::Number"
-                && serde_json::from_str::<serde_json::Number>(&s).is_ok()
+                && let Some((key, node)) = self.fields.pop()
+                && key == name
             {
-                return Ok(Node::Number(s));
+                return Ok(node);
             }
-            return Err(Error::Invalid("invalid number".into()));
+            return Err(Error::Invalid("invalid JSON token".into()));
         }
         if self.sort {
             self.fields.sort_by(|a, b| a.0.cmp(&b.0));
@@ -395,11 +404,11 @@ impl SerializeStruct for Map {
         key: &'static str,
         v: &T,
     ) -> Result<(), Error> {
-        if self.number {
-            if key != "$serde_json::private::Number" || !self.fields.is_empty() {
-                return Err(Error::Invalid("invalid number token".into()));
+        if let Some((name, token)) = self.token {
+            if key != name || !self.fields.is_empty() {
+                return Err(Error::Invalid("invalid JSON token".into()));
             }
-            self.fields.push((key.into(), v.serialize(number::Token)?));
+            self.fields.push((key.into(), v.serialize(token)?));
             return Ok(());
         }
         let key = ObjectKey::new(key.into(), self.dynamic);

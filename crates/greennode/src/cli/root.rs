@@ -99,6 +99,9 @@ pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
                 .disable_help_flag(true)
                 .args_override_self(true)
                 .about(operation.short_help);
+            if !operation.notes.is_empty() {
+                operation_command = operation_command.long_about(operation.notes.join("\n\n"));
+            }
             if operation.handler.is_none_or(|handler| handler.allow_json) {
                 operation_command = operation_command.arg(
                     Arg::new("cli-input-json")
@@ -191,7 +194,11 @@ fn render_help_path(registry: &crate::services::Registry, path: &[&str]) -> Opti
             return None;
         }
     }
-    Some(selected.render_help().to_string())
+    Some(if selected.get_long_about().is_some() {
+        selected.render_long_help().to_string()
+    } else {
+        selected.render_help().to_string()
+    })
 }
 
 fn invalid_command(stderr: &mut dyn Write) -> ExitCode {

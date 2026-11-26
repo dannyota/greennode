@@ -115,9 +115,9 @@ fn measure<'a>(
     Ok(())
 }
 
-fn border<W: Write>(w: &mut W, sizes: &BTreeMap<&str, (usize, usize)>) -> Result<(), Error> {
+fn border<W: Write>(w: &mut W, sizes: &[(&str, (usize, usize))]) -> Result<(), Error> {
     write!(w, "+")?;
-    for (width, _) in sizes.values() {
+    for (_, (width, _)) in sizes {
         let length = width.checked_add(2).ok_or(Error::TableLimit)?;
         write!(w, "{}+", "-".repeat(length))?;
     }
@@ -138,14 +138,38 @@ fn row<W: Write>(w: &mut W, cells: impl Iterator<Item = (String, usize)>) -> Res
 }
 
 pub fn write_table<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
+    write_table_with_columns(w, value, None)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct TableView {
+    pub(crate) columns: &'static [&'static str],
+    pub(crate) show_empty_headers: bool,
+}
+
+pub(crate) fn write_table_with_columns<W: Write>(
+    w: &mut W,
+    value: &Value,
+    view: Option<TableView>,
+) -> Result<(), Error> {
     check_depth(value)?;
     let items = rows(value);
+    let columns = view
+        .filter(|view| view.show_empty_headers || !items.is_empty())
+        .map(|view| view.columns);
     let mut sizes = BTreeMap::new();
+    if let Some(columns) = columns {
+        for key in columns {
+            measure(&mut sizes, key, &Value::Null)?;
+        }
+    }
     for item in items {
         match item {
             Value::Object(map) => {
                 for (key, value) in map {
-                    measure(&mut sizes, key, value)?;
+                    if columns.is_none_or(|columns| columns.contains(&key.as_str())) {
+                        measure(&mut sizes, key, value)?;
+                    }
                 }
             }
             _ => measure(&mut sizes, "Value", item)?,
@@ -180,6 +204,13 @@ pub fn write_table<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
     if projected > 64 * 1024 * 1024 {
         return Err(Error::TableLimit);
     }
+    let sizes: Vec<_> = match columns {
+        Some(columns) => columns
+            .iter()
+            .filter_map(|&key| sizes.get(key).map(|&size| (key, size)))
+            .collect(),
+        None => sizes.into_iter().collect(),
+    };
     border(w, &sizes)?;
     row(
         w,

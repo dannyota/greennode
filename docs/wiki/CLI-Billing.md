@@ -110,3 +110,76 @@ Kind: Read.
 ```sh
 greennode billing list-cost-resources --start-date <start-date> --end-date <end-date>
 ```
+
+## list-payments
+
+Kind: Read.
+
+Dates are inclusive YYYY-MM-DD in fixed UTC+07:00. An empty end date means
+today. Size defaults to 50 and is capped at 50. `--all` starts at page 1 and
+rejects `--page` above 1.
+
+JSON, text, and explicit queries can contain account data. Queries use `Items`,
+`Page`, `PageSize`, `TotalPage`, and `TotalItem`.
+
+A complete walk is limited to 100 pages, 8 MiB per response, 32 MiB of JSON
+values, and two minutes. A walk limit or changing coverage can return
+`HistoryIncomplete` with no output.
+
+Default table columns are CreatedAt, Gateway, Status, TypeCode, and Amount.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--start-date` | `string` | yes      |
+| `--end-date`   | `string` |          |
+| `--page`       | `int`    |          |
+| `--size`       | `int`    |          |
+| `--all`        | `bool`   |          |
+
+```sh
+greennode billing list-payments --start-date 2024-11-01 --end-date 2024-11-30
+```
+
+## list-resources
+
+Kind: Read.
+
+Lists prepaid resource renewal state across products. Tables show billing
+timestamps in epoch milliseconds. The currency and meaning of `Cost` are
+unverified.
+
+No fields.
+
+```sh
+greennode billing list-resources
+```
+
+## list-transactions
+
+Kind: Read.
+
+Dates are inclusive YYYY-MM-DD in fixed UTC+07:00. An empty end date means
+today. Size defaults to 50 and is capped at 50. `--all` starts at page 1 and
+rejects `--page` above 1.
+
+JSON, text, and explicit queries can contain account data. Queries use `Items`,
+`Page`, `PageSize`, `TotalPage`, and `TotalItem`.
+
+A complete walk is limited to 100 pages, 8 MiB per response, 32 MiB of JSON
+values, and two minutes. A walk limit or changing coverage can return
+`HistoryIncomplete` with no output.
+
+Default table columns are CreatedAt, Type, TypeCode, Direction, Amount, and
+Balance.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--start-date` | `string` | yes      |
+| `--end-date`   | `string` |          |
+| `--page`       | `int`    |          |
+| `--size`       | `int`    |          |
+| `--all`        | `bool`   |          |
+
+```sh
+greennode billing list-transactions --start-date 2024-11-01 --end-date 2024-11-30 --all
+```

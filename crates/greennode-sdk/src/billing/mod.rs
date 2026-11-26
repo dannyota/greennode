@@ -3,6 +3,7 @@
 mod budget_reads;
 mod cost;
 mod envelope;
+mod history;
 mod model;
 #[cfg(test)]
 mod tests;
@@ -16,6 +17,13 @@ pub use cost::{
     Balances, CostBreakdown, CostResource, CostResourceSummary, CostSeries, CostSeriesGroup,
     CostSeriesPoint, CostSummary, GetBalancesInput, GetBalancesOutput, GetCostOverviewInput,
     GetCostOverviewOutput, ListCostResourcesInput, ListCostResourcesOutput,
+};
+pub use history::{
+    DIRECTION_CREDIT, DIRECTION_DEBIT, GATEWAY_BALANCE, ListPaymentsInput, ListPaymentsOutput,
+    ListResourcesInput, ListResourcesOutput, ListTransactionsInput, ListTransactionsOutput,
+    Payment, RENEW_TYPE_AUTO_RENEW, RENEW_TYPE_MANUAL, RENEW_TYPE_NON_RENEWABLE, Resource,
+    ResourceBillingElement, ResourceThresholds, TRANSACTION_CHARGE, TRANSACTION_PURCHASE,
+    TRANSACTION_REFUND, Transaction,
 };
 pub use model::Budget;
 

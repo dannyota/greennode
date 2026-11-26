@@ -6,7 +6,7 @@ use crate::wire::{
 use crate::{Clock, CredentialsProvider, RequestContext, Secret, Token};
 use bytes::Bytes;
 use http::{HeaderMap, Method};
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::LazyLock};
 use tokio::time::Instant;
 use url::Url;
 
@@ -92,11 +92,15 @@ pub(crate) struct Request {
 #[derive(Clone, Default)]
 pub(crate) struct SentCredentials {
     values: Vec<Secret>,
+    numeric_product_credential: bool,
 }
 impl SentCredentials {
     #[cfg(test)]
     pub(crate) fn for_test(values: Vec<Secret>) -> Self {
-        Self { values }
+        Self {
+            values,
+            ..Self::default()
+        }
     }
     pub(crate) fn record(&mut self, secret: &Secret) {
         let value = secret.expose_secret();
@@ -104,7 +108,21 @@ impl SentCredentials {
             self.values.push(secret.clone());
         }
     }
-    fn extend(&mut self, credentials: &Self) {
+    fn record_product_credential(&mut self, secret: &Secret) {
+        static NUMBER: LazyLock<Result<regex_lite::Regex, regex_lite::Error>> =
+            LazyLock::new(|| {
+                regex_lite::Regex::new(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
+            });
+        self.numeric_product_credential |= NUMBER.as_ref().map_or(true, |pattern| {
+            pattern.is_match(secret.expose_secret().trim())
+        });
+        self.record(secret);
+    }
+    pub(crate) fn has_numeric_product_credential(&self) -> bool {
+        self.numeric_product_credential
+    }
+    pub(crate) fn extend(&mut self, credentials: &Self) {
+        self.numeric_product_credential |= credentials.numeric_product_credential;
         for secret in credentials.values() {
             self.record(secret);
         }
@@ -479,7 +497,7 @@ async fn run_inner(
                 return Err(Error::InvalidRequest);
             }
             for secret in pending {
-                sent.record(secret);
+                sent.record_product_credential(secret);
             }
             let mut outgoing = http::Request::builder()
                 .method(op.method.clone())

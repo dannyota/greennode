@@ -233,3 +233,6 @@ fn non_null_cost_matches_the_go_json_golden() {
     );
     assert!(stderr.is_empty());
 }
+
+#[path = "billing/history.rs"]
+mod history;

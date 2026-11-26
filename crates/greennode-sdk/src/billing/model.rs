@@ -150,7 +150,7 @@ fn limit_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Er
     exact_integer(raw.get()).ok_or_else(|| serde::de::Error::custom("invalid limitAmount"))
 }
 
-fn exact_integer(raw: &str) -> Option<i64> {
+pub(super) fn exact_integer(raw: &str) -> Option<i64> {
     if raw.len() > 128 || !matches!(raw.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
         return None;
     }

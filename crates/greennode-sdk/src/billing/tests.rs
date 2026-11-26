@@ -334,3 +334,6 @@ fn assert_invalid_response<T>(failure: Failure<T>) {
 
 #[path = "cost/tests.rs"]
 mod cost;
+
+#[path = "history/tests.rs"]
+mod history;

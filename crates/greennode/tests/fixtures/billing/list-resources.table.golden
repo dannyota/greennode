@@ -1,0 +1,7 @@
++------------+--------------+----------------+-------------+----------------+------------+----------+-------------+------------+------------------+
+| ArtifactID | ArtifactName | ArtifactType   | BillingType | EndBillingTime | IsRenewing | Product  | RenewPeriod | RenewType  | StartBillingTime |
++------------+--------------+----------------+-------------+----------------+------------+----------+-------------+------------+------------------+
+| project-1  | <account>    | object-storage | PREPAID     | 1890000000000  | false      | vstorage |             | MANUAL     | 1790000000000    |
+| project-2  | <account>    | object-storage | PREPAID     | 1890000000000  | false      | vstorage | 1           | AUTO-RENEW | 1790000000000    |
+| project-3  | <account>    | object-storage | PREPAID     | 1890000000000  | false      | vstorage |             | FUTURE     | 1790000000000    |
++------------+--------------+----------------+-------------+----------------+------------+----------+-------------+------------+------------------+

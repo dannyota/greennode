@@ -112,6 +112,9 @@ pub(crate) async fn execute<T: Output>(
     {
         Ok(response) => response,
         Err(failure) => {
+            if let Some(error) = T::credential_error(operation, &failure.credentials) {
+                return Err(crate::Failure::new(*error, None, failure.dispatch));
+            }
             let status = failure.status;
             let overflow = matches!(&failure.error, sender::Error::Send(error) if matches!(error.kind(), send::Error::BodyTooLarge));
             if overflow
@@ -181,6 +184,9 @@ pub(crate) async fn execute<T: Output>(
     } else {
         crate::WriteDispatch::NotAWrite
     };
+    if let Some(error) = T::credential_error(operation, &response.credentials) {
+        return Err(crate::Failure::new(*error, None, dispatch));
+    }
     let output = T::decode_response(operation, &response)
         .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
     Ok((status, output))
@@ -202,7 +208,9 @@ pub(crate) fn decode_response<T: Output>(
         (true, operation.sensitive, operation.retry),
         &response.credentials,
     )?;
-    if operation.reject_reflected_credentials && reflects_json(&body, &response.credentials) {
+    if operation.reject_reflected_credentials
+        && reflects_json(&body, &response.credentials, T::CHECK_RENDERED_NUMBERS)
+    {
         return Err(invalid());
     }
     if operation.no_output {
@@ -211,15 +219,45 @@ pub(crate) fn decode_response<T: Output>(
     decode(&body, operation.allow_empty, operation.cap).map_err(|_| invalid())
 }
 
-fn reflects_json(body: &[u8], credentials: &sender::SentCredentials) -> bool {
+fn reflects_json(
+    body: &[u8],
+    credentials: &sender::SentCredentials,
+    check_rendered_numbers: bool,
+) -> bool {
     if credentials.reflects(body)
         || serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err()
     {
         return true;
     }
+    let numeric_match_possible = check_rendered_numbers
+        && credentials.values().iter().any(|secret| {
+            secret
+                .expose_secret()
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e'))
+        });
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {
+            if numeric_match_possible && matches!(body[index], b'-' | b'0'..=b'9') {
+                let start = index;
+                while index < body.len()
+                    && matches!(body[index], b'-' | b'+' | b'0'..=b'9' | b'.' | b'e' | b'E')
+                {
+                    index += 1;
+                }
+                if std::str::from_utf8(&body[start..index])
+                    .ok()
+                    .and_then(|number| number.parse::<f64>().ok())
+                    .is_some_and(|number| {
+                        number.is_finite()
+                            && crate::output_number::reflects(number, credentials, false)
+                    })
+                {
+                    return true;
+                }
+                continue;
+            }
             index += 1;
             continue;
         }
@@ -309,6 +347,14 @@ fn api_error(
 #[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
+    const CHECK_RENDERED_NUMBERS: bool = false;
+
+    fn credential_error(
+        _operation: &Operation,
+        _credentials: &sender::SentCredentials,
+    ) -> Option<Box<crate::Error>> {
+        None
+    }
 
     fn decode_response(
         operation: &Operation,
