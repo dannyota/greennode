@@ -433,8 +433,7 @@ impl Client {
         macro_rules! typed_progress {
             ($model:ty, $shape:expr $(, $inner:tt)?) => {{
                 let row: $model = guard::parse(read, data, &$shape, evidence)?;
-                let row = row$(.$inner)?;
-                (row.uuid, row.progress_status)
+                (row$(.$inner)?.uuid, row$(.$inner)?.progress_status)
             }};
         }
         let (uuid, progress) = match read.id {
