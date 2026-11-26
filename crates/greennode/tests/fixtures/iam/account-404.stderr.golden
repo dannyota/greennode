@@ -1,0 +1,1 @@
+{"error":{"code":"NotFound","message":"iam.GetServiceAccount: read service account: iam.GetServiceAccount: IAM user request failed; response withheld (status 404)","status":404,"operation":"iam.GetServiceAccount"}}

@@ -1,0 +1,434 @@
+[
+  {
+    "name": "get-caller-identity",
+    "args": [
+      "get-caller-identity"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/accounts-api/v1/auth/userinfo"
+    ]
+  },
+  {
+    "name": "get-user",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "list-users",
+    "args": [
+      "list-users"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/accounts-api/v1/iam-users?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "list-actions",
+    "args": [
+      "list-actions"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/actions?product=iam"
+    ]
+  },
+  {
+    "name": "list-service-accounts",
+    "args": [
+      "list-service-accounts"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/accounts-api/v1/service-accounts?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "get-service-account",
+    "args": [
+      "get-service-account",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/accounts-api/v1/service-accounts/sa-1"
+    ]
+  },
+  {
+    "name": "list-service-account-policies",
+    "args": [
+      "list-service-account-policies",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "list-policies",
+    "args": [
+      "list-policies"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/policies?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "get-policy",
+    "args": [
+      "get-policy",
+      "--policy-id",
+      "policy-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/policies/policy-1"
+    ]
+  },
+  {
+    "name": "list-policy-attachments",
+    "args": [
+      "list-policy-attachments",
+      "--policy-id",
+      "policy-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/policies/policy-1/groups",
+      "/policies-api/v1/policies/policy-1/iam-users",
+      "/policies-api/v1/policies/policy-1/service-accounts"
+    ]
+  },
+  {
+    "name": "list-groups",
+    "args": [
+      "list-groups"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/groups"
+    ]
+  },
+  {
+    "name": "get-group",
+    "args": [
+      "get-group",
+      "--group-id",
+      "group-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/groups/group-1"
+    ]
+  },
+  {
+    "name": "list-group-policies",
+    "args": [
+      "list-group-policies",
+      "--group-id",
+      "group-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/groups/group-1/policies?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "list-user-groups",
+    "args": [
+      "list-user-groups",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/user-attachments/iam-users/user-1/groups"
+    ]
+  },
+  {
+    "name": "list-user-policies",
+    "args": [
+      "list-user-policies",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 0,
+    "routes": [
+      "/policies-api/v1/user-attachments/iam-users/user-1/policies?pageNumber=0&pageSize=10000"
+    ]
+  },
+  {
+    "name": "http-201",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 201,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-204",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 204,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-400",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 400,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-401",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 401,
+    "exit": 3,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-403",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 403,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-404",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 404,
+    "exit": 4,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-409",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 409,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-429",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 429,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "http-500",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 500,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "user-malformed",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "user-shape",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "user-missing",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "user-duplicate",
+    "args": [
+      "get-user",
+      "--user-id",
+      "user-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/iam-users/user-1"
+    ]
+  },
+  {
+    "name": "group-malformed",
+    "args": [
+      "get-group",
+      "--group-id",
+      "group-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/policies-api/v1/groups/group-1"
+    ]
+  },
+  {
+    "name": "group-shape",
+    "args": [
+      "get-group",
+      "--group-id",
+      "group-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/policies-api/v1/groups/group-1"
+    ]
+  },
+  {
+    "name": "group-wrong-id",
+    "args": [
+      "get-group",
+      "--group-id",
+      "group-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/policies-api/v1/groups/group-1"
+    ]
+  },
+  {
+    "name": "account-403",
+    "args": [
+      "get-service-account",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "status": 403,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/service-accounts/sa-1"
+    ]
+  },
+  {
+    "name": "account-404",
+    "args": [
+      "get-service-account",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "status": 404,
+    "exit": 4,
+    "routes": [
+      "/accounts-api/v1/service-accounts/sa-1"
+    ]
+  },
+  {
+    "name": "account-200",
+    "args": [
+      "get-service-account",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "status": 200,
+    "exit": 1,
+    "routes": [
+      "/accounts-api/v1/service-accounts/sa-1"
+    ]
+  }
+]

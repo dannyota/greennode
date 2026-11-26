@@ -1,0 +1,1 @@
+{"id":"policy-1","name":"reader","createdAt":{"$numberLong":"123"},"description":"toy","manager":"user","scope":"account","root":12,"statements":[{"effect":"allow","actions":["vserver:ListServers"],"resources":["*"],"condition":{"stringEquals":{"example:team":"ops","example:roles":["viewer",null],"example:floor":1.25}}}]}

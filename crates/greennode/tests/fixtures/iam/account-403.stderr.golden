@@ -1,0 +1,1 @@
+{"error":{"code":"Forbidden","message":"iam.GetServiceAccount: read service account: iam.GetServiceAccount: IAM user request failed; response withheld (status 403)","status":403,"operation":"iam.GetServiceAccount"}}

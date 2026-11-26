@@ -1,0 +1,20 @@
+{
+  "User": {
+    "ID": "user-1",
+    "Username": "acct-1",
+    "CreatedAt": 1735689600000,
+    "Enabled": true,
+    "From": "iam",
+    "LastUse": 17,
+    "MFA": {
+      "Email": {
+        "Verified": true,
+        "Enabled": null
+      },
+      "GoogleAuthenticator": {
+        "Verified": null,
+        "Enabled": false
+      }
+    }
+  }
+}

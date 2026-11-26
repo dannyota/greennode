@@ -11,6 +11,7 @@
 - [Database](CLI-Database.md)
 - [DNS](CLI-DNS.md)
 - [GlobalLoadBalancer](CLI-GlobalLoadBalancer.md)
+- [IAM](CLI-IAM.md)
 - [Portal](CLI-Portal.md)
 - [Pricing](CLI-Pricing.md)
 - [Project](CLI-Project.md)

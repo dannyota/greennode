@@ -1,0 +1,32 @@
+{
+  "Policy": {
+    "ID": "policy-1",
+    "Name": "reader",
+    "Description": "toy",
+    "Manager": "user",
+    "Scope": "account",
+    "Root": "12",
+    "Statements": [
+      {
+        "Effect": "allow",
+        "Actions": [
+          "vserver:ListServers"
+        ],
+        "Resources": [
+          "*"
+        ],
+        "Condition": {
+          "stringEquals": {
+            "example:floor": 1.25,
+            "example:roles": [
+              "viewer",
+              null
+            ],
+            "example:team": "ops"
+          }
+        }
+      }
+    ],
+    "CreatedAt": 123
+  }
+}

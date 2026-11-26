@@ -1,0 +1,1 @@
+{"id":"user-1","username":"acct-1","createdAt":"2025-01-01T00:00:00Z","enabled":true,"from":"iam","lastUse":{"$numberLong":"17"},"password":"private-toy","twoFactorAuth":{"email":{"verified":true,"enabled":null,"address":"private-toy"},"googleAuthenticator":{"verified":null,"enabled":false,"seed":"private-toy"},"sms":{"verified":true,"enabled":true,"phone":"private-toy"}}}
