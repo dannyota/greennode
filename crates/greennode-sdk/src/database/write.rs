@@ -57,7 +57,7 @@ impl Client {
         &self,
         ctx: &RequestContext,
         operation: &Operation,
-        options: &Options,
+        options: &Options<'_>,
         path: &[&str],
         body: Bytes,
         evidence: &mut Evidence,

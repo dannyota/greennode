@@ -577,3 +577,66 @@ async fn pricing_refuses_malformed_inventory_error_without_retry() {
         assert_eq!(provider.0.load(Ordering::Relaxed), usize::from(code == 401));
     }
 }
+
+#[tokio::test]
+async fn estimate_screens_encoded_catalog_region_in_success_and_partial_output() {
+    use std::fmt::Write as _;
+
+    let mut encoded_region = String::new();
+    for byte in CANARY.bytes() {
+        write!(&mut encoded_region, "%{byte:02x}").unwrap();
+    }
+    let (ctx, _) = RequestContext::new();
+    let mut storage = EstimateStorage::new("objects", "Gold", 1, 30);
+    storage.region = "region-2".into();
+    for (region, partial) in [
+        (&encoded_region[..], false),
+        (&encoded_region[..], true),
+        ("DAD01", true),
+    ] {
+        let catalog = serde_json::json!({"success": true, "datas": [{"regionId": "region-2", "regionName": region}]}).to_string();
+        let mut responses = vec![response(OK, &catalog)];
+        if partial {
+            responses.push(response("403 Forbidden", "{}"));
+        } else {
+            responses.extend([
+                response(OK, fixture!("discovery_project_types")),
+                response(OK, fixture!("discovery_purchase_types")),
+                response(OK, fixture!("discovery_config_min_quota")),
+                response(OK, fixture!("discovery_config_max_quota")),
+                response(OK, fixture!("discovery_config_max_projects")),
+                response(OK, fixture!("discovery_config_iam_checkout")),
+                response(OK, fixture!("discovery_quote_gold")),
+            ]);
+        }
+        let server = Server::start(responses);
+        let result = client(&server)
+            .estimate(
+                &ctx,
+                EstimateInput {
+                    storage: vec![storage.clone()],
+                    public_ips: vec![EstimatePublicIp::new("unknown", "reservation", "", 1)],
+                    allow_partial: partial,
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(server.requests(), if partial { 2 } else { 8 });
+        let Err(failure) = result else {
+            panic!("encoded region survived full estimate screening");
+        };
+        if region == "DAD01" {
+            let output = failure.partial().unwrap();
+            assert_eq!(failure.error().class(), ErrorClass::DiscoveryIncomplete);
+            assert_eq!(output.items[1].region, region);
+        } else {
+            assert!(failure.partial().is_none());
+            assert!(
+                failure
+                    .error()
+                    .api_error()
+                    .is_some_and(|api| api.code() == "InvalidResponse")
+            );
+        }
+    }
+}

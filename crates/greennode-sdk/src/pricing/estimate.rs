@@ -137,11 +137,6 @@ impl Client {
             return Err(failure(safe_error(recover(error), evidence)));
         }
         if serde_json::to_value(&output).map_or(true, |value| evidence.reflected_in(&value))
-            || output
-                .items
-                .iter()
-                .flat_map(|item| &item.breakdown)
-                .any(|charge| evidence.text_reflects(&charge.name))
             || accounting::table_amounts(&output).any(|amount| evidence.reflects_fixed_two(amount))
         {
             return Err(failure(safe_error(*request::invalid(OP, 200), evidence)));

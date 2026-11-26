@@ -62,11 +62,15 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     body: bytes::Bytes,
     evidence: &mut Evidence,
 ) -> Result<(StatusCode, T), crate::Failure<T>> {
+    let options = Options {
+        response_guard: options.response_guard.or(T::RESPONSE_GUARD),
+        ..*options
+    };
     let response = send_route(
         runtime,
         base,
         operation,
-        options,
+        &options,
         path,
         query,
         RouteAuth::Bearer(source),
@@ -101,7 +105,7 @@ pub(crate) async fn execute_raw(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
     operation: &Operation,
-    options: &Options,
+    options: &Options<'_>,
     path: &[&str],
     query: &[(&str, &str)],
     auth: RouteAuth<'_>,
@@ -128,7 +132,7 @@ async fn send_route<T>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
     operation: &Operation,
-    options: &Options,
+    options: &Options<'_>,
     path: &[&str],
     query: &[(&str, &str)],
     auth: RouteAuth<'_>,
@@ -261,10 +265,7 @@ async fn send_route<T>(
     };
     let policy = sender::Operation {
         pacing: options.pacing,
-        response_guard: options
-            .response_guard
-            .or(T::RESPONSE_GUARD)
-            .map(|guard| (operation.id, guard)),
+        response_guard: options.response_guard.map(|guard| (operation.id, guard)),
         method: operation.method.clone(),
         class: operation.class,
         retry: operation.retry,
