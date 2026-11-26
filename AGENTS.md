@@ -61,7 +61,7 @@ The [architecture](docs/design/architecture.md#layout) owns the intended layout.
 
 ## Commands
 
-`make check` before every commit. `make deny` and `make crate-age` when `Cargo.lock` changes. `make reference` clones the baseline. `make help` lists all targets.
+`make check` passes on the exact tree before every commit; an implementer's passing run on that tree counts, and a clean rebase relies on CI. `make deny` and `make crate-age` when `Cargo.lock` changes. `make reference` clones the baseline. `make help` lists all targets.
 
 ## Roles
 
