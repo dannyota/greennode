@@ -246,13 +246,13 @@ error.
 
 Keep the baseline's four command forms, key file/section mapping, prompt order,
 blank-to-keep behavior, stdin limit and masks. On Unix `configure` requires
-terminal stdin, prompts on stdout, and reads secrets without echo. Windows
-interactive `configure` refuses with `InvalidUsage`/2 and names
-`configure set <key> -`; that noninteractive form works on Windows.
-`configure set <key> -` requires nonterminal stdin, reads at most 4096 bytes
-plus one, strips one final LF or CRLF, and rejects an empty value or embedded
-newline. Never accept literal `password`, `totp_secret`, `vcdn_api_key` or
-`client_secret`. None of the commands authenticate. `get <key>` prints the
+terminal stdin, prompts on stdout, and reads secrets without echo. On Windows
+every `configure` write refuses with `InvalidUsage`/2 before reading stdin or
+touching a file, and tells the user to edit the files by hand; `get` and `list`
+still work. `configure set <key> -` requires nonterminal stdin, reads at most
+4096 bytes plus one, strips one final LF or CRLF, and rejects an empty value or
+embedded newline. Never accept literal `password`, `totp_secret`, `vcdn_api_key`
+or `client_secret`. None of the commands authenticate. `get <key>` prints the
 stored value and `list` prints the stored keys in fixed order, with `****` for
 nonempty secrets. Both ignore output/query selection and remain available under
 read-only and in legacy mode. Keep the missing-region hint on stderr, using the
@@ -298,8 +298,8 @@ These add to the names and paths in the
   table limit, says the write succeeded and must not be retried.
 - When rendering a partial output fails, the operation's own failure stays on
   stderr and decides the exit code.
-- On Windows `configure` has no interactive prompt in the first releases. Use
-  `configure set <key> -` for secrets.
+- On Windows `configure` has no writes in the first releases; edit the files by
+  hand.
 - [Output key normalization](cli-output.md#redaction) also redacts sensitive
   dynamic-map keys surrounded by non-ASCII letters or digits.
 - The [query engine](cli-query.md) bounds query length and depth, reports

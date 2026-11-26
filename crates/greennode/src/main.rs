@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::IsTerminal;
+#[cfg(not(windows))]
+use std::io::Read;
+use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 use greennode_sdk::{ConfigSource, RequestContext, SystemClock};
@@ -13,8 +15,52 @@ impl ConfigSource for Environment {
     }
 }
 
+#[cfg(not(windows))]
+struct Input<'a> {
+    context: &'a RequestContext,
+    stdin: io::Stdin,
+}
+
+#[cfg(not(windows))]
+impl Input<'_> {
+    fn check(&self) -> io::Result<()> {
+        if self.context.check(&SystemClock).is_some() {
+            return Err(io::Error::other("stdin read cancelled"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+impl Read for Input<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        let mut fds = [PollFd::new(&self.stdin, PollFlags::IN)];
+        let wait = Timespec {
+            tv_sec: 0,
+            tv_nsec: 25_000_000,
+        };
+        loop {
+            self.check()?;
+            if poll(&mut fds, Some(&wait))? != 0 {
+                self.check()?;
+                return Ok(rustix::io::read(&self.stdin, bytes)?);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl Read for Input<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.check()?;
+        self.stdin.read(bytes)
+    }
+}
+
 fn main() -> ExitCode {
-    let runtime = match tokio::runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
         .enable_all()
         .build()
     {
@@ -66,10 +112,17 @@ fn main() -> ExitCode {
         }
         tokio::task::yield_now().await;
         let source = Environment(std::env::vars_os().collect());
-        let mut stdin = std::io::stdin();
+        let stdin = io::stdin();
         let mut stdout = std::io::stdout();
         let mut stderr = std::io::stderr();
         let stdin_terminal = stdin.is_terminal();
+        #[cfg(not(windows))]
+        let mut stdin = Input {
+            context: &context,
+            stdin,
+        };
+        #[cfg(windows)]
+        let mut stdin = stdin;
         let stdout_terminal = stdout.is_terminal();
         let stderr_terminal = stderr.is_terminal();
         greennode::cli::run_invocation(greennode::cli::Invocation {
