@@ -99,6 +99,57 @@ async fn create_checks_catalogs_sends_once_and_settles() {
 }
 
 #[tokio::test]
+async fn create_does_not_send_the_password_in_an_instance_name() {
+    let mut replies = catalogs();
+    replies.push(response(
+        "200 OK",
+        br#"{"code":200,"data":[{"resourceId":"db-1"}]}"#,
+    ));
+    replies.push(response("200 OK", DETAIL));
+    let server = Server::start(replies);
+    let (ctx, _) = RequestContext::new();
+    let mut input = create_input();
+    input.name = PASS.into();
+    let result = fixture(&server).create_database_instance(&ctx, input).await;
+    assert!(
+        server
+            .heads()
+            .iter()
+            .all(|head| !head.starts_with(b"POST "))
+    );
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
+async fn create_confirmation_withholds_an_encoded_password_in_instance_name() {
+    let detail = std::str::from_utf8(DETAIL)
+        .unwrap()
+        .replace("demo-db", &PASS.replace('_', "%5f"));
+    let mut replies = catalogs();
+    replies.push(response(
+        "200 OK",
+        br#"{"code":200,"data":[{"resourceId":"db-1"}]}"#,
+    ));
+    replies.push(response("200 OK", detail.as_bytes()));
+    let server = Server::start(replies);
+    let (ctx, _) = RequestContext::new();
+    let outcome = fixture(&server)
+        .create_database_instance(&ctx, create_input())
+        .await;
+    assert!(outcome.is_err());
+    let failure = outcome.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    let partial = &failure.partial().unwrap().instance;
+    assert_eq!(partial.id, "db-1");
+    assert!(partial.name.is_empty());
+    assert_eq!(server.requests(), 7);
+}
+
+#[tokio::test]
 async fn create_rejects_untrusted_provenance_before_catalogs() {
     let server = Server::start(vec![]);
     let (ctx, _) = RequestContext::new();

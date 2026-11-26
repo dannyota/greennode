@@ -480,7 +480,7 @@ pub(super) const SERVICE: Service = Service {
                         .is_some_and(|api| api.operation() == "volume.GetVolume")
             },
             name: Some(RuleName {
-                rank: 25,
+                rank: 18,
                 code: "UnexpectedStatus",
                 operation: RuleOperation::Omit,
                 include_api_status: false,
@@ -492,7 +492,7 @@ pub(super) const SERVICE: Service = Service {
             identity: "volume-resize-unexpected-status",
             matches: |error| error.detail::<volume::UnexpectedStatus>().is_some(),
             name: Some(RuleName {
-                rank: 29,
+                rank: 19,
                 code: "UnexpectedStatus",
                 operation: RuleOperation::Omit,
                 include_api_status: false,

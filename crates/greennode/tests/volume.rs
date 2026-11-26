@@ -515,3 +515,72 @@ fn destructive_volume_commands_need_yes_and_retain_safety_codes() {
         assert_eq!(server.requests(), count);
     }
 }
+
+#[test]
+fn missing_confirmation_status_keeps_unexpected_status_cli_identity() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"volume-1","status":"AVAILABLE"}}"#,
+        ),
+        response("202 Accepted", ""),
+        response("200 OK", r#"{"data":{"uuid":"volume-1"}}"#),
+    ]);
+    let (status, _, stderr) = invoke_mode(
+        &[
+            "attach-volume",
+            "--volume-id",
+            "volume-1",
+            "--server-id",
+            "server-1",
+        ],
+        &server,
+        false,
+    );
+    assert_eq!(status, ExitCode::from(1));
+    let output: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(output["error"]["code"], "UnexpectedStatus");
+    assert!(output["error"].get("status").is_none());
+    assert!(output["error"].get("operation").is_none());
+    assert_eq!(server.requests(), 3);
+}
+
+#[test]
+fn create_gateway_failure_keeps_status_reason_and_recovery_advice() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+        ),
+        response("200 OK", QUOTE),
+        response("502 Bad Gateway", ""),
+    ]);
+    let (status, stdout, stderr) = invoke_mode(
+        &[
+            "create-volume",
+            "--name",
+            "toy-volume",
+            "--zone-id",
+            "zone-1",
+            "--volume-type-id",
+            "type-1",
+            "--size",
+            "1",
+            "--max-price",
+            "3200",
+            "--no-wait",
+        ],
+        &server,
+        false,
+    );
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    let output: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    let error = &output["error"];
+    assert_eq!(error["code"], "ServerError");
+    assert_eq!(error["status"], 502);
+    assert_eq!(error["operation"], "volume.CreateVolume");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("Bad Gateway") && message.contains("match the name exactly"));
+    assert_eq!(server.requests(), 3);
+}

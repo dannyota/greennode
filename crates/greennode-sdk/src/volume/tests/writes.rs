@@ -180,7 +180,7 @@ async fn create_checks_inventory_and_quotes_before_sending_once() {
     assert!(
         error
             .error()
-            .api_error()
+            .detail::<crate::RecoveryAdvice>()
             .unwrap()
             .message()
             .contains("match the name exactly")
@@ -358,8 +358,7 @@ async fn failed_create_returns_the_confirmed_error_state() {
     assert_eq!(server.requests(), 4);
 }
 
-#[tokio::test]
-async fn quote_credential_is_rechecked_before_ordering() {
+fn changing_client(server: &Server, tokens: &'static [&'static str]) -> Client {
     use std::{
         future::Future,
         pin::Pin,
@@ -368,18 +367,15 @@ async fn quote_credential_is_rechecked_before_ordering() {
             atomic::{AtomicUsize, Ordering},
         },
     };
-    struct Provider(AtomicUsize);
+    struct Provider(&'static [&'static str], AtomicUsize);
     impl crate::CredentialsProvider for Provider {
         fn token<'a>(
             &'a self,
             _: &'a RequestContext,
         ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
             Box::pin(async move {
-                let value = match self.0.fetch_add(1, Ordering::Relaxed) {
-                    0 => "toy-inventory-bearer",
-                    1 => "toy-quote-bearer",
-                    _ => "toy-order-bearer",
-                };
+                let index = self.1.fetch_add(1, Ordering::Relaxed);
+                let value = self.0.get(index).copied().unwrap_or("toy-last-bearer");
                 Ok(crate::Token::new(crate::Secret::new(value), None))
             })
         }
@@ -391,12 +387,11 @@ async fn quote_credential_is_rechecked_before_ordering() {
             Box::pin(async { Ok(()) })
         }
     }
-    let server = Server::start(vec![response(EMPTY), response(QUOTE)]);
     let config = crate::Config::new(
         crate::ConfigOptions::default()
             .with_region("hcm-3".into())
             .with_project_id("project-1".into())
-            .with_credentials_provider(Arc::new(Provider(AtomicUsize::new(0))))
+            .with_credentials_provider(Arc::new(Provider(tokens, AtomicUsize::new(0))))
             .with_endpoint_overrides(crate::EndpointOverrides {
                 vserver: Some(format!("{}/server/", server.origin)),
                 portal: Some(format!("{}/portal/", server.origin)),
@@ -407,8 +402,14 @@ async fn quote_credential_is_rechecked_before_ordering() {
     config
         .session()
         .set_test_product_root(server.root_der.clone());
+    Client::new(&config)
+}
+
+#[tokio::test]
+async fn quote_credential_is_rechecked_before_ordering() {
+    let server = Server::start(vec![response(EMPTY), response(QUOTE)]);
     let (ctx, _) = RequestContext::new();
-    let failure = Client::new(&config)
+    let failure = changing_client(&server, &["toy-inventory-bearer", "toy-quote-bearer"])
         .create_volume(
             &ctx,
             CreateVolumeInput {
@@ -421,4 +422,116 @@ async fn quote_credential_is_rechecked_before_ordering() {
     assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn acquired_and_refreshed_tokens_are_screened_against_original_query() {
+    let (ctx, _) = RequestContext::new();
+    for (name, sends) in [
+        ("toy%2dfirst%2dbearer", 0),
+        ("toy%2drefresh%2dbearer", 1),
+        ("toy%25252dvalue", 0),
+    ] {
+        let server = Server::start(vec![
+            reply("401 Unauthorized", "{}"),
+            reply("403 Forbidden", "{}"),
+        ]);
+        let failure = changing_client(&server, &["toy-first-bearer", "toy-refresh-bearer"])
+            .create_volume(
+                &ctx,
+                CreateVolumeInput {
+                    name: name.into(),
+                    ..create()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(server.requests(), sends);
+        assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    }
+}
+
+#[tokio::test]
+async fn invalid_size_diagnostic_omits_a_bearer_acquired_during_volume_read() {
+    let current = AVAILABLE.replace("\"size\":1", "\"size\":1000000000");
+    let server = Server::start(vec![response(&current)]);
+    let (ctx, _) = RequestContext::new();
+    let bearer = "731940128";
+    let failure = changing_client(&server, &["731940128"])
+        .quote_resize_volume(
+            &ctx,
+            ResizeVolumeInput {
+                size: bearer.parse().unwrap(),
+                ..resize()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert!(
+        failure
+            .error()
+            .detail::<String>()
+            .is_some_and(|message| !message.contains(bearer))
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn create_requires_strict_type_id_and_accepts_underscore_encryption_keys() {
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![reply("403 Forbidden", "{}")]);
+    let failure = client(&server, "hcm-3")
+        .create_volume(
+            &ctx,
+            CreateVolumeInput {
+                volume_type_id: "type_1".into(),
+                ..create()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 0);
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    let server = Server::start(vec![response(QUOTE)]);
+    let result = client(&server, "hcm-3")
+        .quote_create_volume(
+            &ctx,
+            CreateVolumeInput {
+                encryption_type_id: "toy_encryption".into(),
+                ..create()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.optimum_price, 3200.0);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn unsettled_confirmation_retains_permission_denied_api_cause() {
+    let server = Server::start(vec![
+        response(AVAILABLE),
+        reply(ACCEPTED, ""),
+        reply("403 Forbidden", "{}"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "hcm-3")
+        .delete_volume(
+            &ctx,
+            DeleteVolumeInput {
+                volume_id: "volume-1".into(),
+                no_wait: false,
+            },
+        )
+        .await
+        .unwrap_err();
+    let error = failure.error();
+    assert_eq!(error.class(), ErrorClass::NotSettled);
+    assert!(error.has_class(ErrorClass::PermissionDenied));
+    let cause = error.api_error().unwrap();
+    assert_eq!(cause.status(), Some(403));
+    assert_eq!(cause.operation(), "volume.GetVolume");
+    assert_eq!(server.requests(), 3);
 }

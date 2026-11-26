@@ -247,3 +247,143 @@ async fn redirect_encoded_query_with_bearer_is_refused() {
 async fn redirect_encoded_path_with_bearer_is_refused() {
     check_reflected_redirect("/to%79-first/next").await;
 }
+
+#[tokio::test]
+async fn redaction_only_values_can_be_sent_but_credentials_cannot() {
+    use crate::wire::product::evidence::Evidence;
+
+    let server = Server::start(vec![response("200 OK", &[]), response("200 OK", &[])]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let mut evidence = Evidence::new();
+    evidence.add_redaction(&Secret::new("toy-resource-label"));
+    evidence.absorb(&SentCredentials::for_test(vec![Secret::new(
+        "toy-configured",
+    )]));
+    let op = operation(Method::POST, redirect::Retry::Once);
+    for (body, query, accepted) in [
+        ("toy-resource-label", "toy-resource-label", true),
+        ("toy%2dconfigured", "toy-resource-label", false),
+        ("toy%2dfirst", "toy-resource-label", false),
+        ("toy-resource-label", "toy%2dfirst", false),
+    ] {
+        let mut request = request(&server.origin);
+        request.url.query_pairs_mut().append_pair("label", query);
+        request.body = Bytes::from(serde_json::to_vec(&serde_json::json!({"label":body})).unwrap());
+        let source = Provider::default();
+        let outcome = super::super::run(
+            Runtime {
+                configured_credentials: Some(evidence.credentials()),
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &Immediate::default(),
+                jitter: &mut || 0,
+            },
+            &op,
+            Auth::Bearer(&PublicSource(&source)),
+            &request,
+            RouteInputs {
+                path: &[],
+                query: &[("label", query)],
+                ..RouteInputs::default()
+            },
+        )
+        .await;
+        if accepted {
+            let response = outcome.unwrap();
+            assert!(response.credentials.reflects(b"toy-resource-label"));
+        } else {
+            assert!(outcome.is_err());
+        }
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn database_password_slot_refuses_reused_configured_iam_password() {
+    use crate::wire::product::evidence::Evidence;
+    use crate::{Config, ConfigOptions, IamUserAuth};
+
+    let password = Secret::new("ToyDatabasePassword9");
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_iam_user(IamUserAuth::new(
+                "toy@example.test".into(),
+                "toy-user".into(),
+                password.clone(),
+            )),
+    )
+    .unwrap();
+    let server = Server::start(vec![
+        response("200 OK", &[]),
+        response("200 OK", &[]),
+        response("200 OK", &[]),
+    ]);
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let (ctx, clock, deadline) = ctx();
+    let mut jitter = || 0;
+    let configured = config
+        .session()
+        .runtime(&ctx, &mut jitter)
+        .unwrap()
+        .configured_credentials
+        .unwrap();
+    let clients = client(&server);
+    let mut request = request(&server.origin);
+    request.body = Bytes::from(
+        serde_json::to_vec(
+            &serde_json::json!({"user":{"password":password.expose_secret()},"name":"toy-db"}),
+        )
+        .unwrap(),
+    );
+    let operation = operation(Method::POST, redirect::Retry::Once);
+    let mut refused = [false; 3];
+    for (index, order) in [None, Some(false), Some(true)].into_iter().enumerate() {
+        let mut evidence = Evidence::new();
+        if order == Some(true) {
+            evidence.absorb(configured);
+        }
+        evidence.add_database_password(&password);
+        if order == Some(false) {
+            evidence.absorb(configured);
+        }
+        let source = Provider::default();
+        let result = super::super::run(
+            Runtime {
+                configured_credentials: Some(evidence.credentials()),
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &Immediate::default(),
+                jitter: &mut || 0,
+            },
+            &operation,
+            Auth::Bearer(&PublicSource(&source)),
+            &request,
+            RouteInputs {
+                database_password: Some(&password),
+                ..RouteInputs::default()
+            },
+        )
+        .await;
+        refused[index] = match result {
+            Ok(_) => false,
+            Err(Failure {
+                error: Error::Provider(error),
+                ..
+            }) => {
+                assert_eq!(error.class(), crate::ErrorClass::InvalidInput);
+                true
+            }
+            Err(_) => panic!("unexpected sender failure"),
+        };
+    }
+    assert_eq!(refused, [false, true, true]);
+    assert_eq!(server.requests(), 1);
+}

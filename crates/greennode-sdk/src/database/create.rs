@@ -13,7 +13,7 @@ use crate::wire::product::{
     sender::Response,
 };
 use crate::wire::strict_json::Shape;
-use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
+use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 use bytes::Bytes;
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -106,7 +106,7 @@ impl Client {
         validate(&input).map_err(|error| not_sent(*error))?;
         self.write_provenance()?;
         let mut evidence = Evidence::new();
-        evidence.add_secret(&input.password);
+        evidence.add_database_password(&input.password);
         let engine = self.plan_create(ctx, &input, &mut evidence).await?;
         let package = input.flavor_id.to_string();
         let body = create_body(&input, &engine, &package)
@@ -119,6 +119,7 @@ impl Client {
         );
         let options = Options {
             headers: &[("user-type", "IAM_USER")],
+            database_password: Some(&input.password),
             ..Options::DEFAULT
         };
         let reply = match self
@@ -126,6 +127,12 @@ impl Client {
             .await
         {
             Ok(reply) => reply,
+            Err(failure)
+                if failure.write_dispatch() == WriteDispatch::NotSent
+                    && failure.error().has_class(ErrorClass::InvalidInput) =>
+            {
+                return Err(not_sent(failure.into_parts().0));
+            }
             Err(failure) => {
                 return Err(rejection(failure, CREATE).unwrap_or_else(|| {
                     create_unsettled(
@@ -157,7 +164,8 @@ impl Client {
                 },
             }
         }).await {
-            Ok(instance) => Ok(CreateDatabaseInstanceOutput { instance }),
+            Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.reflected_in(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
+            Ok(_) => Err(unsettled(CREATE, INTERRUPTED, Some(id.to_owned()), &evidence, id_only)),
             Err(settlement) => Err(unsettled(CREATE, settlement, Some(id.to_owned()), &evidence, id_only)),
         }
     }

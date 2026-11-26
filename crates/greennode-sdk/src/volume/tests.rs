@@ -352,7 +352,11 @@ async fn quote_refuses_body_against_provider_token_and_refreshed_token() {
             })
         }
     }
-    for (selector, sent) in [("toy%2dfirst%2dbearer", 0), ("toy%2drefresh%2dbearer", 1)] {
+    for (selector, sent) in [
+        ("toy%2dfirst%2dbearer", 0),
+        ("toy%2drefresh%2dbearer", 1),
+        ("toy%25252dvalue", 0),
+    ] {
         let server = Server::start(vec![
             Response::Http {
                 status: "401 Unauthorized".into(),

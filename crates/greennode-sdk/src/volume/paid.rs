@@ -106,10 +106,10 @@ impl Client {
             if dispatch != WriteDispatch::MayHaveBeenSent || client_error(&error) || error.api_error().is_some_and(|api| api.message() == CREATE_UNKNOWN) {
                 return Failure::new(error, None, dispatch);
             }
-            let status = error.api_error().and_then(crate::ApiError::status);
-            let code = error.api_error().map_or("", crate::ApiError::code);
-            let warning = api(CREATE.id, status, code, "create may have already reached the server; list volumes and match the name exactly before creating it again");
-            Failure::new(warning.with_cause(error), None, dispatch)
+            let advice = "create may have already reached the server; list volumes and match the name exactly before creating it again";
+            let reason = error.api_error().map(crate::ApiError::message).filter(|message| !message.is_empty());
+            let advice = reason.map_or_else(|| advice.to_owned(), |reason| format!("{advice}: {reason}"));
+            Failure::new(error.with_outer_detail(crate::RecoveryAdvice::new(&advice)), None, dispatch)
         })?;
         let ids = if input.no_wait {
             PathIds::WithUnderscore

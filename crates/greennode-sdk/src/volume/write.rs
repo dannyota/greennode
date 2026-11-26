@@ -269,19 +269,20 @@ pub(super) fn named(class: ErrorClass, message: &str) -> Error {
 }
 
 pub(super) fn settlement_error(error: Error, op: &str, detail: &str) -> Error {
-    if error.class() == ErrorClass::Failed {
-        named(
+    let (class, advice) = if error.class() == ErrorClass::Failed {
+        (
             ErrorClass::Failed,
-            &format!("vngcloud: write failed: {op}: volume is ERROR"),
+            format!("vngcloud: write failed: {op}: volume is ERROR"),
         )
-        .with_cause(error)
     } else {
-        named(
+        (
             ErrorClass::NotSettled,
-            &format!("vngcloud: write outcome not confirmed: {op}: {detail}"),
+            format!("vngcloud: write outcome not confirmed: {op}: {detail}"),
         )
+    };
+    Error::new(class)
+        .with_detail(crate::RecoveryAdvice::new(&advice))
         .with_cause(error)
-    }
 }
 
 pub(super) fn safe<T: Serialize + Redact>(mut output: T, evidence: &Evidence) -> Option<T> {

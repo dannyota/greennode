@@ -167,6 +167,14 @@ async fn send_route<T>(
     if path.iter().any(|id| !options.path_ids.allows(id)) {
         return Err(invalid());
     }
+    if options.database_password.is_some()
+        && !(operation.id == "database.CreateDatabaseInstance"
+            && operation.method == Method::POST
+            && matches!(operation.class, redirect::Classification::Write)
+            && matches!(auth, RouteAuth::Bearer(_)))
+    {
+        return Err(invalid());
+    }
     let mut parts = operation.template.split("{}");
     let mut rendered = parts.next().ok_or_else(invalid)?.to_owned();
     for id in path {
@@ -213,7 +221,7 @@ async fn send_route<T>(
         }
     }
     if matches!(auth, RouteAuth::CdnKey(Some(_)) | RouteAuth::PublicHtml)
-        && (sender::uri_reflects_credential_forms(&url, evidence.credentials())
+        && (sender::uri_reflects_credential_forms(&url, &evidence.credentials().transport_only())
             || sender::uri_reflects_credential_forms(&url, key_evidence.credentials()))
     {
         return Err(invalid());
@@ -283,7 +291,11 @@ async fn send_route<T>(
         &policy,
         auth,
         &request,
-        sender::RouteInputs { path, query },
+        sender::RouteInputs {
+            path,
+            query,
+            database_password: options.database_password,
+        },
     )
     .await
     {

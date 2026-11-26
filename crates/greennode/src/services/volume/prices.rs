@@ -79,7 +79,7 @@ pub(super) fn execute<'a>(
                 .sort_by(|left, right| compare(left, right, input));
             output
         });
-        if let Err(failure) = &mut result {
+        if let Err(dispatch::ExecutionFailure::Sdk(failure)) = &mut result {
             failure.query_partial = true;
         }
         result

@@ -144,6 +144,11 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         .filter_map(|rule| rule.message)
         .next()
         .or_else(|| {
+            error
+                .detail::<greennode_sdk::RecoveryAdvice>()
+                .map(|advice| advice.message())
+        })
+        .or_else(|| {
             api.map(|api| api.message())
                 .filter(|message| !message.is_empty())
                 .or_else(|| {

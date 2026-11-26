@@ -1,3 +1,4 @@
+pub(crate) use super::evidence::SentCredentials;
 use super::{redirect, retry, unauthorized};
 use crate::wire::{
     connection::{OneSendClient, PooledClient},
@@ -6,7 +7,7 @@ use crate::wire::{
 use crate::{Clock, CredentialsProvider, RequestContext, Secret, Token};
 use bytes::Bytes;
 use http::{HeaderMap, Method};
-use std::{future::Future, pin::Pin, sync::LazyLock};
+use std::{future::Future, pin::Pin};
 use tokio::time::Instant;
 use url::Url;
 
@@ -98,64 +99,6 @@ pub(crate) struct Request {
     pub(crate) headers: HeaderMap,
     pub(crate) credentials: Vec<CredentialHeader>,
     pub(crate) body: Bytes,
-}
-#[derive(Clone, Default)]
-pub(crate) struct SentCredentials {
-    values: Vec<Secret>,
-    numeric_product_credential: bool,
-    incomplete_signin: bool,
-}
-impl SentCredentials {
-    #[cfg(test)]
-    pub(crate) fn for_test(values: Vec<Secret>) -> Self {
-        Self {
-            values,
-            ..Self::default()
-        }
-    }
-    pub(crate) fn record(&mut self, secret: &Secret) {
-        let value = secret.expose_secret();
-        if !value.is_empty() && !self.values.iter().any(|item| item.expose_secret() == value) {
-            self.values.push(secret.clone());
-        }
-    }
-    fn record_product_credential(&mut self, secret: &Secret) {
-        static NUMBER: LazyLock<Result<regex_lite::Regex, regex_lite::Error>> =
-            LazyLock::new(|| {
-                regex_lite::Regex::new(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
-            });
-        self.numeric_product_credential |= NUMBER.as_ref().map_or(true, |pattern| {
-            pattern.is_match(secret.expose_secret().trim())
-        });
-        self.record(secret);
-    }
-    pub(crate) fn has_numeric_product_credential(&self) -> bool {
-        self.numeric_product_credential
-    }
-    pub(super) fn has_incomplete_signin(&self) -> bool {
-        self.incomplete_signin
-    }
-    pub(crate) fn extend(&mut self, credentials: &Self) {
-        self.incomplete_signin |= credentials.incomplete_signin;
-        self.numeric_product_credential |= credentials.numeric_product_credential;
-        for secret in credentials.values() {
-            self.record(secret);
-        }
-    }
-    pub(crate) fn values(&self) -> &[Secret] {
-        &self.values
-    }
-    pub(crate) fn reflects(&self, data: &[u8]) -> bool {
-        self.values.iter().any(|secret| {
-            let value = secret.expose_secret().as_bytes();
-            !value.is_empty() && data.windows(value.len()).any(|part| part == value)
-        })
-    }
-}
-impl std::fmt::Debug for SentCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SentCredentials([redacted])")
-    }
 }
 fn contains_secret(data: &[u8], secret: &Secret) -> bool {
     let value = secret.expose_secret().as_bytes();
@@ -310,7 +253,9 @@ async fn acquire_bearer(
     })
     .await
     .and_then(|result| result.map_err(|error| Error::Provider(Box::new(error))));
-    credentials.incomplete_signin |= started && result.is_err();
+    if started && result.is_err() {
+        credentials.mark_incomplete_signin();
+    }
     result
 }
 
@@ -385,6 +330,7 @@ pub(crate) struct Runtime<'a> {
 pub(super) struct RouteInputs<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
+    pub(super) database_password: Option<&'a Secret>,
 }
 
 impl RouteInputs<'_> {
@@ -393,7 +339,7 @@ impl RouteInputs<'_> {
             .iter()
             .copied()
             .chain(self.query.iter().map(|(_, value)| *value))
-            .any(|input| credentials.reflects(input.as_bytes()))
+            .any(|input| super::response::reflects_credential(input, credentials))
     }
 }
 
@@ -477,7 +423,7 @@ async fn run_inner(
         })
         || (matches!(auth, Auth::None) && !request.credentials.is_empty())
         || (matches!(auth, Auth::Key) && request.credentials.is_empty())
-        || route_inputs.reflects(reflection)
+        || route_inputs.reflects(&reflection.transport_only())
     {
         return Err(Error::InvalidRequest);
     }
@@ -549,18 +495,21 @@ async fn run_inner(
             if hops == 0 && uri_contains_credential(&url, sent, &pending) {
                 return Err(Error::InvalidRequest);
             }
-            if !request.body.is_empty() {
-                let mut credentials = reflection.clone();
-                credentials.extend(sent);
-                for secret in &pending {
-                    credentials.record(secret);
-                }
-                let body = String::from_utf8_lossy(&request.body);
-                if super::response::reflects_encoded_text(&body, &credentials) {
-                    return Err(Error::Provider(Box::new(crate::Error::new(
-                        crate::ErrorClass::InvalidInput,
-                    ))));
-                }
+            let mut credentials = reflection.transport_only();
+            credentials.extend(sent);
+            for secret in &pending {
+                credentials.record(secret);
+            }
+            if route_inputs.reflects(&credentials)
+                || super::evidence::body_reflects(
+                    &request.body,
+                    &credentials,
+                    route_inputs.database_password,
+                )
+            {
+                return Err(Error::Provider(Box::new(crate::Error::new(
+                    crate::ErrorClass::InvalidInput,
+                ))));
             }
             if let Some(pacing) = op.pacing {
                 bounded(&ctx, clock, || pacing.before_send(&ctx, clock))
@@ -658,11 +607,9 @@ async fn run_inner(
                             location,
                         )
                         .map_err(Error::Redirect)?;
-                        if uri_contains_credential(&next, sent, &[])
-                            || uri_contains_credential(&next, reflection, &[])
+                        if uri_contains_credential(&next, &credentials, &[])
                             || (!matches!(auth, Auth::Bearer(_))
-                                && (uri_reflects_credential_forms(&next, sent)
-                                    || uri_reflects_credential_forms(&next, reflection)))
+                                && uri_reflects_credential_forms(&next, &credentials))
                         {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }

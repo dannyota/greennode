@@ -5,6 +5,58 @@ fn body(server: &Server, index: usize) -> Value {
     serde_json::from_slice(&server.bodies()[index]).unwrap()
 }
 
+fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Client {
+    use crate::{CredentialsProvider, Token};
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct Provider {
+        calls: AtomicUsize,
+        confirmation_bearer: &'static str,
+    }
+    impl CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+            let value = if self.calls.fetch_add(1, Ordering::Relaxed) < 2 {
+                BEARER
+            } else {
+                self.confirmation_bearer
+            };
+            Box::pin(ready(Ok(Token::new(Secret::new(value), None))))
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_credentials_provider(Arc::new(Provider {
+                calls: AtomicUsize::new(0),
+                confirmation_bearer: bearer,
+            }))
+            .with_endpoint_overrides(EndpointOverrides {
+                dns: Some(format!("{}/vdns-api/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    Client::new(&config)
+}
+
 #[tokio::test]
 async fn replacement_requires_complete_matching_evidence() {
     for snapshot in [
@@ -36,20 +88,22 @@ async fn replacement_requires_complete_matching_evidence() {
 
 #[tokio::test]
 async fn replacement_sends_explicit_empty_associations_and_retains_safe_partial() {
+    const DESCRIPTION: &str = "zone-migration-pending";
     let server = Server::start(vec![
         response(
             "200 OK",
             &ZONE.replace(r#""status""#, r#""description":"before","status""#),
         ),
-        response("503 Service Unavailable", ""),
+        response("204 No Content", ""),
+        response("403 Forbidden", ""),
     ]);
     let (ctx, _) = RequestContext::new();
-    let failure = client(&server, BEARER)
+    let failure = client_with_confirmation_bearer(&server, DESCRIPTION)
         .update_hosted_zone(
             &ctx,
             UpdateHostedZoneInput {
                 hosted_zone_id: "zone-1".into(),
-                description: Some(format!("reflected {BEARER}")),
+                description: Some(DESCRIPTION.into()),
                 vpc_ids: Some(vec![]),
                 no_wait: true,
             },
@@ -63,7 +117,7 @@ async fn replacement_sends_explicit_empty_associations_and_retains_safe_partial(
     assert!(zone.associated_vpc_ids.is_empty());
     assert!(zone.description == "<redacted>");
     assert_eq!(body(&server, 1)["assocVpcIds"], json!([]));
-    assert_eq!(server.requests(), 2);
+    assert_eq!(server.requests(), 3);
 }
 
 #[tokio::test]
@@ -74,7 +128,7 @@ async fn post_write_reads_cannot_replace_a_partial_with_the_wrong_record() {
         response("200 OK", &RECORD.replace("zone-1", "another-zone")),
     ]);
     let (ctx, _) = RequestContext::new();
-    let failure = client(&server, "610237")
+    let failure = client_with_confirmation_bearer(&server, "610237")
         .update_record(
             &ctx,
             UpdateRecordInput {

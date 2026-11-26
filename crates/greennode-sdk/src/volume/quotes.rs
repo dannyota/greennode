@@ -121,15 +121,13 @@ pub(super) fn create_quote(
     }
     if volume.size < 0 {
         return Err(invalid(format!(
-            "vngcloud: invalid input: {op}: Size must be greater than 0, got {}",
-            volume.size
+            "vngcloud: invalid input: {op}: Size must be greater than 0"
         )));
     }
-    if !response_id(&volume.volume_type_id)
-        || (!volume.encryption_type_id.is_empty() && !response_id(&volume.encryption_type_id))
-    {
+    path_id(op, "VolumeTypeID", &volume.volume_type_id)?;
+    if !volume.encryption_type_id.is_empty() && !response_id(&volume.encryption_type_id) {
         return Err(invalid(format!(
-            "vngcloud: invalid input: {op} requires valid VolumeTypeID and EncryptionTypeID"
+            "vngcloud: invalid input: {op} requires EncryptionTypeID to match ^[A-Za-z0-9_-]+$"
         )));
     }
     let body = input::volume(
@@ -163,8 +161,7 @@ pub(super) fn resize_bodies(
         .filter(|size| *size > volume.size)
         .ok_or_else(|| {
             invalid(format!(
-                "vngcloud: invalid input: {op}: Size {} must be greater than the current size {}",
-                input.size, volume.size,
+                "vngcloud: invalid input: {op}: Size must be greater than the current size"
             ))
         })?;
     if !response_id(&volume.volume_type_id) {
