@@ -434,6 +434,7 @@ pub struct Failure<T> {
     error: Error,
     partial: Option<T>,
     dispatch: WriteDispatch,
+    private_delivery: Option<Box<crate::Secret>>,
 }
 impl<T> Failure<T> {
     #[allow(dead_code)]
@@ -442,7 +443,15 @@ impl<T> Failure<T> {
             error,
             partial,
             dispatch,
+            private_delivery: None,
         }
+    }
+    pub(crate) fn with_private_delivery(mut self, secret: crate::Secret) -> Self {
+        self.private_delivery = Some(Box::new(secret));
+        self
+    }
+    pub(crate) fn private_delivery(&self) -> Option<&crate::Secret> {
+        self.private_delivery.as_deref()
     }
     #[allow(dead_code)]
     pub(crate) fn wrap<U>(
@@ -471,6 +480,7 @@ impl<T> Failure<T> {
         self.dispatch
     }
     /// Consumes the failure and returns its error, partial output, and dispatch state.
+    /// Any separate private delivery is dropped.
     pub fn into_parts(self) -> (Error, Option<T>, WriteDispatch) {
         (self.error, self.partial, self.dispatch)
     }

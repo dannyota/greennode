@@ -329,3 +329,43 @@ async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn failed_lookup_keeps_private_delivery_outside_the_error() {
+    let server = Server::start(vec![
+        response("200 OK", r#"[{"uuid":"policy-1","action":"pull"}]"#),
+        response("200 OK", r#"{"data":[],"totalPage":0,"totalItem":0}"#),
+        response("200 OK", r#"{"secretKey":"issued-secret-canary"}"#),
+    ]);
+    let provider = SequenceProvider {
+        fail_at: Some(3),
+        ..SequenceProvider::default()
+    };
+    let client = client_with(
+        &server,
+        ConfigOptions::default().with_credentials_provider(Arc::new(provider)),
+    );
+    let failure = client
+        .create_user(
+            &RequestContext::new().0,
+            CreateUserInput::new(
+                "app-ci",
+                vec![UserPermission::new("repo-1", vec!["pull".into()])],
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.partial().is_none());
+    assert!(
+        issued_user_secret(&failure)
+            .is_some_and(|key| key.expose_secret() == "issued-secret-canary")
+    );
+    let (error, partial, dispatch) = failure.into_parts();
+    assert_eq!(
+        error.detail::<ErrorDetail>(),
+        Some(&ErrorDetail::UserNotFound)
+    );
+    assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    assert!(issued_user_secret(&Failure::new(error, partial, dispatch)).is_none());
+    assert_eq!(server.requests(), 3);
+}

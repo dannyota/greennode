@@ -84,20 +84,13 @@ impl CreateUserOutput {
     }
 }
 
-struct IssuedUserSecret(Secret);
-
 /// Borrows the issued key from a failed create for private storage.
 /// The key can remain available here when the failure has no public partial output.
 pub fn issued_user_secret(failure: &Failure<CreateUserOutput>) -> Option<&Secret> {
     failure
         .partial()
         .map(CreateUserOutput::secret_key)
-        .or_else(|| {
-            failure
-                .error()
-                .detail::<IssuedUserSecret>()
-                .map(|issued| &issued.0)
-        })
+        .or_else(|| failure.private_delivery())
 }
 
 /// Identifies a registry user by UUID for deletion.
@@ -195,6 +188,10 @@ impl Client {
             ));
         }
         evidence.add_secret(&secret_key);
+        let trimmed_key = secret_key.expose_secret().trim();
+        if !trimmed_key.is_empty() && trimmed_key.len() != secret_key.expose_secret().len() {
+            evidence.add_secret(&Secret::new(trimmed_key));
+        }
         let lookup = self.find_user_name(ctx, &input.name, &mut evidence).await;
         let (message, cause) = match lookup {
             Ok(_) => (
@@ -229,11 +226,7 @@ impl Client {
                 dispatch,
             ))
         } else {
-            Err(Failure::new(
-                error.with_outer_detail(IssuedUserSecret(secret_key)),
-                None,
-                dispatch,
-            ))
+            Err(Failure::new(error, None, dispatch).with_private_delivery(secret_key))
         }
     }
 

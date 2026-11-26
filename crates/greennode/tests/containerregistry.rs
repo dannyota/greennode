@@ -498,6 +498,24 @@ fn create_user_masks_trimmed_and_escaped_secret_filenames() {
 }
 
 #[cfg(unix)]
+#[test]
+fn create_user_masks_a_short_trimmed_issued_key_in_the_filename() {
+    for spelling in ["toy-key", "toy-%6bey"] {
+        let path = LocalSecret(format!(
+            "sc-{:012x}-{spelling}",
+            getrandom::u64().unwrap() >> 16
+        ));
+        let server = Server::start(create_user_responses("toy-key\n"));
+        let (status, stdout, stderr) = run_write(&server, &user_args(&path.0));
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stderr.contains("UserNotFound"));
+        let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert!(output["SecretFile"].as_str() == Some("<redacted>"));
+        assert!(std::fs::read(&path.0).unwrap() == b"toy-key\n");
+    }
+}
+
+#[cfg(unix)]
 #[derive(Default)]
 struct FailingCandidateAuth(std::sync::atomic::AtomicUsize);
 

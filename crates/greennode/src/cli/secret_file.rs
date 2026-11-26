@@ -96,16 +96,8 @@ impl Destination {
 
     #[cfg(unix)]
     fn publish(&self, contents: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
-        let stage = Stage::new(&self.parent)?;
-        let mode = Mode::RUSR | Mode::WUSR;
-        let fd = openat(
-            &stage.dir,
-            Stage::FILE,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            mode,
-        )?;
-        fchmod(&fd, mode)?;
-        let mut file = File::from(fd);
+        let mut stage = Stage::new(&self.parent)?;
+        let mut file = stage.create_file()?;
         contents(&mut file)?;
         file.sync_all()?;
         linkat(
@@ -154,11 +146,25 @@ struct Stage<'a> {
     parent: &'a OwnedFd,
     name: String,
     dir: OwnedFd,
+    file_created: bool,
 }
 
 #[cfg(unix)]
 impl<'a> Stage<'a> {
     const FILE: &str = "secret";
+
+    fn create_file(&mut self) -> io::Result<File> {
+        let mode = Mode::RUSR | Mode::WUSR;
+        let fd = openat(
+            &self.dir,
+            Self::FILE,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            mode,
+        )?;
+        self.file_created = true;
+        fchmod(&fd, mode)?;
+        Ok(File::from(fd))
+    }
 
     fn new(parent: &'a OwnedFd) -> io::Result<Self> {
         let nonce = getrandom::u64().map_err(|_| io::ErrorKind::Other)?;
@@ -174,14 +180,21 @@ impl<'a> Stage<'a> {
         if stat.st_uid != rustix::process::geteuid().as_raw() || stat.st_mode & 0o077 != 0 {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
-        Ok(Self { parent, name, dir })
+        Ok(Self {
+            parent,
+            name,
+            dir,
+            file_created: false,
+        })
     }
 }
 
 #[cfg(unix)]
 impl Drop for Stage<'_> {
     fn drop(&mut self) {
-        let _ = unlinkat(&self.dir, Self::FILE, AtFlags::empty());
+        if self.file_created {
+            let _ = unlinkat(&self.dir, Self::FILE, AtFlags::empty());
+        }
         let _ = unlinkat(self.parent, &self.name, AtFlags::REMOVEDIR);
     }
 }
@@ -295,6 +308,19 @@ mod tests {
         assert!(result.is_err());
         assert!(std::fs::read(&path).unwrap() == b"racing file");
         assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_exclusive_stage_create_preserves_the_preexisting_file() {
+        let dir = TempDir::new();
+        let destination = Destination::check(&dir.0.join("output")).unwrap();
+        let mut stage = Stage::new(&destination.parent).unwrap();
+        let original = dir.0.join(&stage.name).join(Stage::FILE);
+        std::fs::write(&original, b"existing file").unwrap();
+        let error = stage.create_file().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        drop(stage);
+        assert!(std::fs::read(&original).is_ok_and(|bytes| bytes == b"existing file"));
     }
 
     #[test]
