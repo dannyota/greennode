@@ -1,9 +1,13 @@
 use serde::Serialize;
 use serde::ser::{self, Impossible};
 
-use super::{Error, Node};
+use super::{Error, Node, raw};
 
-pub(super) struct Token;
+#[derive(Clone, Copy)]
+pub(super) enum Token {
+    Number,
+    Raw(usize),
+}
 
 fn invalid<T>() -> Result<T, Error> {
     Err(Error::Invalid("invalid number token".into()))
@@ -45,11 +49,18 @@ impl ser::Serializer for Token {
     reject!(serialize_bytes, &[u8]);
 
     fn serialize_str(self, value: &str) -> Result<Node, Error> {
-        if value.trim() != value || serde_json::from_str::<serde_json::Number>(value).is_err() {
-            return invalid();
+        match self {
+            Self::Number
+                if value.trim() == value
+                    && serde_json::from_str::<serde_json::Number>(value).is_ok() =>
+            {
+                Ok(Node::Number(value.into()))
+            }
+            Self::Raw(depth) => raw::validate(value, depth).map(Node::Raw),
+            Self::Number => invalid(),
         }
-        Ok(Node::String(value.into()))
     }
+
     fn serialize_none(self) -> Result<Node, Error> {
         invalid()
     }

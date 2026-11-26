@@ -113,19 +113,17 @@ impl Budget {
             self.alarm_threshold_count,
         ]
         .into_iter()
-        .any(|value| {
-            credentials.reflects(value.to_string().as_bytes())
-                || crate::output_number::reflects(value as f64, credentials, false)
-        }) || [
-            self.actual_cost,
-            self.forecasted_cost,
-            self.actual_percentage,
-            self.forecasted_percentage,
-            self.threshold_percentage,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|value| crate::output_number::reflects(value, credentials, true))
+        .any(|value| reflects_integer(value, credentials))
+            || [
+                self.actual_cost,
+                self.forecasted_cost,
+                self.actual_percentage,
+                self.forecasted_percentage,
+                self.threshold_percentage,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| crate::output_number::reflects(value, credentials, true))
     }
 }
 
@@ -136,7 +134,12 @@ pub(super) const fn field(name: &'static str) -> ShapeField<'static> {
     }
 }
 
-fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> bool {
+    credentials.reflects(value.to_string().as_bytes())
+        || crate::output_number::reflects(value as f64, credentials, false)
+}
+
+pub(super) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
     deserializer: D,
 ) -> Result<T, D::Error> {
     Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
@@ -147,7 +150,7 @@ fn limit_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Er
     exact_integer(raw.get()).ok_or_else(|| serde::de::Error::custom("invalid limitAmount"))
 }
 
-fn exact_integer(raw: &str) -> Option<i64> {
+pub(super) fn exact_integer(raw: &str) -> Option<i64> {
     if raw.len() > 128 || !matches!(raw.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
         return None;
     }

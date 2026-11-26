@@ -1,3 +1,7 @@
+mod budget_reads;
+mod cost;
+mod history;
+
 use clap::ArgMatches;
 use greennode_sdk::billing::{Client, GetBudgetInput, ListBudgetsInput};
 use greennode_sdk::{Config, RequestContext};
@@ -96,6 +100,9 @@ const GET_INPUT: InputDescriptor<GetInput> = InputDescriptor {
 pub(super) const SERVICE: Service = Service {
     name: "billing",
     operations: &[
+        history::LIST_TRANSACTIONS,
+        history::LIST_PAYMENTS,
+        history::LIST_RESOURCES,
         Operation {
             name: "list-budgets",
             sdk_operation: "billing.ListBudgets",
@@ -144,6 +151,12 @@ pub(super) const SERVICE: Service = Service {
                 },
             )),
         },
+        budget_reads::GET_CURRENT_PERIOD_COST,
+        budget_reads::LIST_BUDGET_THRESHOLDS,
+        budget_reads::LIST_BUDGET_ALERTS,
+        cost::GET_COST_OVERVIEW,
+        cost::LIST_COST_RESOURCES,
+        cost::GET_BALANCES,
     ],
 };
 

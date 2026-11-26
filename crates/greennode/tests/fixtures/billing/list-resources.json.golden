@@ -1,0 +1,85 @@
+{
+  "Items": [
+    {
+      "ArtifactID": "project-1",
+      "ArtifactName": "\u003caccount\u003e",
+      "ArtifactType": "object-storage",
+      "Product": "vstorage",
+      "RenewType": "MANUAL",
+      "BillingType": "PREPAID",
+      "StartBillingTime": 1790000000000,
+      "EndBillingTime": 1890000000000,
+      "DateLeft": 30,
+      "RenewPeriod": null,
+      "Channel": 0,
+      "IsRenewing": false,
+      "Cost": 10000000.12345679,
+      "Status": 1,
+      "StatusUI": {"level":"good"},
+      "BillingElements": [
+        {
+          "SKU": "synthetic-sku",
+          "Quantity": 30,
+          "MetaKey": {"quota":30}
+        }
+      ]
+    },
+    {
+      "ArtifactID": "project-2",
+      "ArtifactName": "\u003caccount\u003e",
+      "ArtifactType": "object-storage",
+      "Product": "vstorage",
+      "RenewType": "AUTO-RENEW",
+      "BillingType": "PREPAID",
+      "StartBillingTime": 1790000000000,
+      "EndBillingTime": 1890000000000,
+      "DateLeft": 30,
+      "RenewPeriod": 1,
+      "Channel": 1,
+      "IsRenewing": false,
+      "Cost": 123,
+      "Status": 1,
+      "StatusUI": {"level":"good"},
+      "BillingElements": [
+        {
+          "SKU": "synthetic-sku",
+          "Quantity": 30,
+          "MetaKey": {"quota":30}
+        }
+      ]
+    },
+    {
+      "ArtifactID": "project-3",
+      "ArtifactName": "\u003caccount\u003e",
+      "ArtifactType": "object-storage",
+      "Product": "vstorage",
+      "RenewType": "FUTURE",
+      "BillingType": "PREPAID",
+      "StartBillingTime": 1790000000000,
+      "EndBillingTime": 1890000000000,
+      "DateLeft": 30,
+      "RenewPeriod": null,
+      "Channel": 2,
+      "IsRenewing": false,
+      "Cost": 123,
+      "Status": 1,
+      "StatusUI": {"level":"good"},
+      "BillingElements": [
+        {
+          "SKU": "synthetic-sku",
+          "Quantity": 30,
+          "MetaKey": {"quota":30}
+        }
+      ]
+    }
+  ],
+  "TotalAutoRenews": 1,
+  "TotalGoodResources": 3,
+  "TotalWarningResources": 0,
+  "TotalAlertedResources": 0,
+  "TotalExpiredResources": 0,
+  "Extra": {
+    "WarningThresholds": [7],
+    "AlarmThresholds": [1]
+  }
+}

@@ -89,6 +89,10 @@ impl Session {
         &self._endpoints
     }
 
+    pub(crate) fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
+    }
+
     pub(crate) fn bearer_source(&self) -> &dyn BearerSource {
         self
     }

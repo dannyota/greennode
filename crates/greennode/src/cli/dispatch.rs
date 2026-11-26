@@ -1,3 +1,5 @@
+mod output;
+
 use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::future::Future;
@@ -10,6 +12,8 @@ use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, Failure, 
 use super::input::{self, InputDescriptor, ParsedOperationInput};
 use super::op::{Kind, Operation};
 use super::{Invocation, errors, query, render};
+pub use output::OutputView;
+use output::{OutputError, render_output};
 
 pub type FutureResult<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -102,6 +106,9 @@ pub trait Adapter<I: ParsedInput> {
     fn preflight_output(&self, _input: &I, _error: &LocalError) -> Option<render::Projected> {
         None
     }
+    fn output_view(&self) -> OutputView {
+        OutputView::default()
+    }
     fn render_failure(&self, _failure: RenderFailure) -> Option<LocalError> {
         None
     }
@@ -121,6 +128,7 @@ struct ManagementAdapter<'a, T> {
     options: &'a ConfigOptions,
     matches: &'a ArgMatches,
     source: &'a dyn ConfigSource,
+    view: OutputView,
 }
 
 struct ManagementInput<'a, T: 'static> {
@@ -304,6 +312,10 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         Ok(())
     }
 
+    fn output_view(&self) -> OutputView {
+        self.view
+    }
+
     fn execute<'a>(
         &'a mut self,
         ctx: &'a RequestContext,
@@ -328,6 +340,25 @@ pub(crate) async fn management<T: Send + 'static>(
     descriptor: &'static InputDescriptor<T>,
     execute: ManagementOperation<T>,
 ) -> u8 {
+    management_with_view(
+        invocation,
+        operation,
+        matches,
+        descriptor,
+        execute,
+        OutputView::default(),
+    )
+    .await
+}
+
+pub(crate) async fn management_with_view<T: Send + 'static>(
+    invocation: &mut Invocation<'_>,
+    operation: &Operation,
+    matches: &ArgMatches,
+    descriptor: &'static InputDescriptor<T>,
+    execute: ManagementOperation<T>,
+    view: OutputView,
+) -> u8 {
     let mut input = ManagementInput {
         descriptor,
         matches,
@@ -340,6 +371,7 @@ pub(crate) async fn management<T: Send + 'static>(
         options: &invocation.config_options,
         matches,
         source: invocation.source,
+        view,
     };
     run_with_clock(
         &mut input,
@@ -395,38 +427,6 @@ pub enum RenderFailure {
     Output,
 }
 
-enum OutputError {
-    Query,
-    Render(render::Error),
-}
-
-impl From<render::Error> for OutputError {
-    fn from(error: render::Error) -> Self {
-        Self::Render(error)
-    }
-}
-
-fn render_output(
-    writer: &mut dyn Write,
-    projected: &render::Projected,
-    format: Format,
-    query: Option<&query::CompiledQuery>,
-) -> Result<(), OutputError> {
-    if format == Format::Json && query.is_none() {
-        return render::write_json(&mut &mut *writer, projected).map_err(Into::into);
-    }
-    let mut value = projected.for_query()?;
-    if let Some(query) = query {
-        value = query::evaluate(query, &value).map_err(|_| OutputError::Query)?;
-    }
-    match format {
-        Format::Json => render::write_json(&mut &mut *writer, &render::project(&value)?),
-        Format::Table => render::write_table(&mut &mut *writer, &value),
-        Format::Text => render::write_text(&mut &mut *writer, &value),
-    }
-    .map_err(Into::into)
-}
-
 fn refuse<I: ParsedInput, A: Adapter<I>>(
     input: &I,
     adapter: &A,
@@ -439,7 +439,7 @@ fn refuse<I: ParsedInput, A: Adapter<I>>(
             .output()
             .and_then(Format::parse)
             .unwrap_or(Format::Json);
-        let _ = render_output(stdout, &output, format, None);
+        let _ = render_output(stdout, &output, format, None, OutputView::default());
     }
     local(stderr, error)
 }
@@ -573,10 +573,11 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     {
         return refuse(input, adapter, error, stdout, stderr);
     }
+    let view = adapter.output_view();
     match adapter.execute(ctx, &settings, input).await {
         Ok(Some(output)) => match output
             .map_err(OutputError::from)
-            .and_then(|output| render_output(stdout, &output, format, query.as_ref()))
+            .and_then(|output| render_output(stdout, &output, format, query.as_ref(), view))
         {
             Ok(()) => 0,
             Err(error) => {
@@ -586,6 +587,18 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     OutputError::Render(render::Error::Io(_)) => RenderFailure::Output,
                     OutputError::Render(_) => RenderFailure::Encoding,
                 };
+                if failure != RenderFailure::Output
+                    && let Some(message) = view.withhold
+                {
+                    return local(
+                        stderr,
+                        LocalError {
+                            code: "QueryFailed",
+                            message: message.into(),
+                            exit: 1,
+                        },
+                    );
+                }
                 if let Some(classified) = adapter.render_failure(failure) {
                     return local(stderr, classified);
                 }
@@ -646,6 +659,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     } else {
                         None
                     },
+                    OutputView::default(),
                 );
             }
             let mut classified = errors::classify(&failure.error, adapter.rules());

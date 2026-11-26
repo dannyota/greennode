@@ -1,3 +1,8 @@
+#[path = "billing/budget_reads.rs"]
+mod budget_reads;
+#[path = "billing/cost.rs"]
+mod cost;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -29,12 +34,20 @@ fn response(status: &str, body: String) -> Response {
 }
 
 fn invoke(args: &[&str], server: Option<&Server>) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_bearer(args, server, BEARER)
+}
+
+fn invoke_with_bearer(
+    args: &[&str],
+    server: Option<&Server>,
+    bearer: &str,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let mut config_options = ConfigOptions::default();
     if let Some(server) = server {
         config_options = with_billing_loopback(
-            config_options.with_static_token(Secret::new(BEARER)),
+            config_options.with_static_token(Secret::new(bearer)),
             server,
         );
     }
@@ -58,9 +71,22 @@ fn invoke(args: &[&str], server: Option<&Server>) -> (ExitCode, Vec<u8>, Vec<u8>
         clock: &SystemClock,
         context: &context,
     }));
-    assert!(!String::from_utf8_lossy(&stdout).contains(BEARER));
-    assert!(!String::from_utf8_lossy(&stderr).contains(BEARER));
+    assert!(!String::from_utf8_lossy(&stdout).contains(bearer));
+    assert!(!String::from_utf8_lossy(&stderr).contains(bearer));
     (status, stdout, stderr)
+}
+
+fn assert_numeric_bearer_rejected(args: &[&str], body: &str, number: &str) {
+    let server = Server::start(vec![response("200 OK", body.into())]);
+    let mut argv = vec!["billing"];
+    argv.extend_from_slice(args);
+    let (status, stdout, stderr) = invoke_with_bearer(&argv, Some(&server), &format!("+{number}"));
+    assert_eq!(status, ExitCode::from(1), "{args:?}");
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidResponse");
+    assert_eq!(error["error"]["status"], 200);
+    assert_eq!(server.requests(), 1);
 }
 
 #[test]
@@ -228,3 +254,6 @@ fn non_null_cost_matches_the_go_json_golden() {
     );
     assert!(stderr.is_empty());
 }
+
+#[path = "billing/history.rs"]
+mod history;

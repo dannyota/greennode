@@ -1,3 +1,5 @@
+mod budget_reads;
+
 use super::*;
 use crate::wire::test_server::{Response, Server};
 use crate::{ConfigOptions, EndpointOverrides, ErrorClass, Secret, WriteDispatch};
@@ -329,3 +331,9 @@ fn assert_invalid_response<T>(failure: Failure<T>) {
     assert!(api.code() == "InvalidResponse");
     assert!(!format!("{failure:?} {}", failure.error()).contains(BEARER));
 }
+
+#[path = "cost/tests.rs"]
+mod cost;
+
+#[path = "history/tests.rs"]
+mod history;

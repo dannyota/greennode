@@ -6,7 +6,7 @@ Shared rules live here and in `instructions/`. [CLAUDE.md](CLAUDE.md) adds Claud
 
 `greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. It is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud), licensed under Apache-2.0, and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
 
-The SDK has configuration, both sign-in kinds with the token cache, the request stack and project discovery, but no service yet. The tool ships one command, `greennode version`, plus the input, dispatch and query frame that operations will use. Remaining work is in the [foundation plan](docs/plans/foundation.md).
+The SDK has configuration, both sign-in kinds with the token cache, the request stack and project discovery, and the billing reads. The tool ships `version`, `configure` and the billing reads on the input, dispatch and query frame. Remaining work is in the [foundation plan](docs/plans/foundation.md).
 
 ## Map
 
@@ -51,6 +51,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|
+|`crates/greennode-sdk/src/billing/`, `crates/greennode/src/services/billing.rs`, `src/services/billing/`|The billing service: SDK client, models and private envelope; CLI operations; the template every service port copies|
 |`crates/greennode-sdk/src/cache/`|Token cache: safe path selection, the anchored Unix store, the lock, the entry format and the one-time-code marker (crate-private)|
 |`crates/greennode-sdk/src/session/`|Built-in token sources: the service-account and IAM user sources with the cache, the one-time-code marker, single-flight refresh and rejection rules (crate-private)|
 |`crates/greennode-sdk/src/discovery/`|Project discovery: the region's projects read, selection and the shared discovery gate (crate-private)|
