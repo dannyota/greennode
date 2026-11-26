@@ -7,6 +7,91 @@ const VERSIONS: &str = include_str!("../../tests/fixtures/vks/hcm-cluster-versio
 const QUOTA: &str = include_str!("../../tests/fixtures/vks/hcm-quota.json");
 const BEARER: &str = "synthetic-vks-bearer-canary";
 
+#[tokio::test]
+async fn delete_requires_iam_user_and_default_endpoints_before_any_request() {
+    let server = Server::start(vec![]);
+    let client = test_client(&server, "hcm-3", BEARER);
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .delete_cluster(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidConfig);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn delete_output_uses_baseline_projection_name() {
+    assert_eq!(
+        serde_json::to_string(&DeleteClusterOutput { deleted: false }).unwrap(),
+        r#"{"Deleted":false}"#
+    );
+}
+
+#[tokio::test]
+async fn delete_preflights_sends_once_and_confirms_absence() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"id":"cluster-1","status":"ACTIVE"}"#),
+        response("202 Accepted", ""),
+        response("404 Not Found", ""),
+    ]);
+    let client = test_client(&server, "hcm-3", BEARER);
+    let (ctx, _) = RequestContext::new();
+    let output = client
+        .delete_cluster_inner(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap();
+    assert!(output.deleted);
+    let heads = server.heads();
+    assert_eq!(heads.len(), 3);
+    assert!(heads[0].starts_with(b"GET /vks-api/v1/clusters/cluster-1 "));
+    assert!(heads[1].starts_with(b"DELETE /vks-api/v1/clusters/cluster-1 "));
+    assert!(heads[2].starts_with(b"GET /vks-api/v1/clusters/cluster-1 "));
+}
+
+#[tokio::test]
+async fn delete_failure_preserves_dispatch_and_partial_output() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"id":"cluster-1","status":"ACTIVE"}"#),
+        response("503 Service Unavailable", ""),
+    ]);
+    let client = test_client(&server, "hcm-3", BEARER);
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .delete_cluster_inner(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(!failure.partial().unwrap().deleted);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn delete_no_wait_returns_unconfirmed_and_preflight_failure_stops_write() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"id":"cluster-1","status":"ACTIVE"}"#),
+        response("202 Accepted", ""),
+        response("404 Not Found", ""),
+    ]);
+    let client = test_client(&server, "hcm-3", BEARER);
+    let (ctx, _) = RequestContext::new();
+    let mut input = DeleteClusterInput::new("cluster-1");
+    input.no_wait = true;
+    assert!(
+        !client
+            .delete_cluster_inner(&ctx, input.clone())
+            .await
+            .unwrap()
+            .deleted
+    );
+    let failure = client.delete_cluster_inner(&ctx, input).await.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotFound);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 3);
+}
+
 fn response(status: &str, body: &str) -> Response {
     Response::Http {
         status: status.into(),

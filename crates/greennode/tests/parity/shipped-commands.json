@@ -43,6 +43,7 @@
   "greennode tagging list-resource-tags",
   "greennode version",
   "greennode vks",
+  "greennode vks delete-cluster",
   "greennode vks get-quota",
   "greennode vks list-cluster-versions",
   "greennode vks list-clusters"

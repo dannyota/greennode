@@ -2,6 +2,22 @@
 
 # CLI: VKS
 
+## delete-cluster
+
+Kind: Write, destructive.
+
+Deletes the cluster named by exact ID, public or private. A 404 after a
+successful preflight read confirms deletion. Deletion does not promise a refund.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--cluster-id` | `string` | yes      |
+| `--no-wait`    | `bool`   |          |
+
+```sh
+greennode vks delete-cluster --cluster-id <cluster-id> --yes
+```
+
 ## get-quota
 
 Kind: Read.
