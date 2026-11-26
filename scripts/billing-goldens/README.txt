@@ -26,3 +26,7 @@ for the first cost. Copy the three generated list-resources files
 to crates/greennode/tests/fixtures/billing/. The Rust history tests use the
 baseline's existing billing-list-transactions and billing-list-payments goldens
 under crates/greennode/tests/fixtures/render/golden/.
+
+For create-budget, update-budget, and delete-budget, use
+'^TestBillingBudgetWriteGoldens$' with billing_goldens_test.go and the same
+setup. Copy the nine files to crates/greennode/tests/fixtures/billing/.

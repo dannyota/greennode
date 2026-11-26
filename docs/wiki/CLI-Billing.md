@@ -2,6 +2,40 @@
 
 # CLI: Billing
 
+## create-budget
+
+Kind: Write.
+
+Budget writes are sent once and never follow redirects. Responses are limited to
+8 MiB. If the outcome is unconfirmed, read current budgets before retrying.
+
+| Flag             | Type     | Required |
+| ---------------- | -------- | -------- |
+| `--name`         | `string` | yes      |
+| `--period-type`  | `string` | yes      |
+| `--type`         | `string` | yes      |
+| `--limit-amount` | `int64`  | yes      |
+| `--status`       | `string` |          |
+
+```sh
+greennode billing create-budget --name <name> --period-type <period-type> --type <type> --limit-amount <limit-amount>
+```
+
+## delete-budget
+
+Kind: Write, destructive.
+
+Budget writes are sent once and never follow redirects. Responses are limited to
+8 MiB. If the outcome is unconfirmed, read current budgets before retrying.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--budget-uuid` | `string` | yes      |
+
+```sh
+greennode billing delete-budget --budget-uuid <budget-uuid> --yes
+```
+
 ## get-balances
 
 Kind: Read.
@@ -182,4 +216,24 @@ Balance.
 
 ```sh
 greennode billing list-transactions --start-date 2024-11-01 --end-date 2024-11-30 --all
+```
+
+## update-budget
+
+Kind: Write.
+
+Budget writes are sent once and never follow redirects. Responses are limited to
+8 MiB. If the outcome is unconfirmed, read current budgets before retrying.
+
+| Flag             | Type      | Required |
+| ---------------- | --------- | -------- |
+| `--budget-uuid`  | `string`  | yes      |
+| `--name`         | `*string` |          |
+| `--period-type`  | `*string` |          |
+| `--type`         | `*string` |          |
+| `--limit-amount` | `*int64`  |          |
+| `--status`       | `*string` |          |
+
+```sh
+greennode billing update-budget --budget-uuid <budget-uuid> --status PAUSED
 ```

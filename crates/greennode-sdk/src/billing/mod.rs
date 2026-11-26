@@ -1,6 +1,7 @@
-//! Read budgets and spend summaries for the authenticated account.
+//! Manage budgets and read spend summaries for the authenticated account.
 
 mod budget_reads;
+mod budget_writes;
 mod cost;
 mod envelope;
 mod history;
@@ -12,6 +13,10 @@ pub use budget_reads::{
     Alert, GetCurrentPeriodCostInput, GetCurrentPeriodCostOutput, ListBudgetAlertsInput,
     ListBudgetAlertsOutput, ListBudgetThresholdsInput, ListBudgetThresholdsOutput, PeriodCost,
     Threshold,
+};
+pub use budget_writes::{
+    CreateBudgetInput, CreateBudgetOutput, DeleteBudgetInput, DeleteBudgetOutput,
+    UpdateBudgetInput, UpdateBudgetOutput,
 };
 pub use cost::{
     Balances, CostBreakdown, CostResource, CostResourceSummary, CostSeries, CostSeriesGroup,

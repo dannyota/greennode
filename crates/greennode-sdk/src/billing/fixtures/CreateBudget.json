@@ -1,0 +1,20 @@
+{
+  "code": 201,
+  "message": "notification.created",
+  "data": {
+    "id": 1,
+    "uuid": "budget-1",
+    "userId": 1,
+    "name": "example-budget",
+    "periodType": "MONTHLY",
+    "type": "ACTUAL",
+    "limitAmount": 1000000,
+    "currency": "credit",
+    "startDate": "2026-09-01T00:00:00.000000000",
+    "status": "PAUSED",
+    "createdBy": 1,
+    "createdAt": "2026-09-01T00:00:00.000000000",
+    "updatedAt": "2026-09-01T00:00:00.000000000",
+    "deletedAt": null
+  }
+}

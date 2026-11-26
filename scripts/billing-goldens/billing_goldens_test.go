@@ -100,3 +100,39 @@ func TestBillingResourcesGoldens(t *testing.T) {
 		})
 	}
 }
+
+func TestBillingBudgetWriteGoldens(t *testing.T) {
+	for _, tc := range []struct {
+		command, fixture, path string
+		status                 int
+		flags                  []string
+	}{
+		{"create-budget", "CreateBudget", "", http.StatusCreated, []string{"--name", "example-budget", "--period-type", "MONTHLY", "--type", "ACTUAL", "--limit-amount", "1000000"}},
+		{"update-budget", "UpdateBudget", "/budget-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--status", "PAUSED"}},
+		{"delete-budget", "DeleteBudget", "/budget-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--yes"}},
+	} {
+		body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "billing", tc.fixture+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.command+"/"+format, func(t *testing.T) {
+				path := "/gateway/api/v1/budgets" + tc.path
+				fixture := newSvcFixture(map[string]func(http.ResponseWriter, *http.Request){path: jsonHandler(tc.status, string(body))})
+				root, stdout, stderr := newSvcRoot(t, fixture)
+				args := []string{"--region", "hcm-3", "--output", format, "billing", tc.command}
+				root.SetArgs(append(args, tc.flags...))
+				if err := root.ExecuteContext(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if fixture.requestCount() != 1 || stderr.Len() != 0 {
+					t.Fatal("expected one request and empty stderr")
+				}
+				name := tc.command + "." + format + ".golden"
+				if err := os.WriteFile(filepath.Join(os.Getenv("BILLING_GOLDEN_DIR"), name), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}

@@ -1,4 +1,5 @@
 mod budget_reads;
+mod budget_writes;
 mod cost;
 mod history;
 
@@ -154,6 +155,9 @@ pub(super) const SERVICE: Service = Service {
         budget_reads::GET_CURRENT_PERIOD_COST,
         budget_reads::LIST_BUDGET_THRESHOLDS,
         budget_reads::LIST_BUDGET_ALERTS,
+        budget_writes::CREATE_BUDGET,
+        budget_writes::UPDATE_BUDGET,
+        budget_writes::DELETE_BUDGET,
         cost::GET_COST_OVERVIEW,
         cost::LIST_COST_RESOURCES,
         cost::GET_BALANCES,
