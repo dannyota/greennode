@@ -1,0 +1,15 @@
+{
+  "Items": [
+    {
+      "ID": "type-1",
+      "VolumeTypeID": "",
+      "Name": "\u003cname\u003e",
+      "IOPS": 3000,
+      "MaxSize": 1000,
+      "MinSize": 20,
+      "Throughput": 200,
+      "ZoneID": "zone-a",
+      "VolumeTypeZoneID": ""
+    }
+  ]
+}

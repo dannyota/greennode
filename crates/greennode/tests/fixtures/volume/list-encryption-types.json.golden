@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "ID": "toy-encryption-a",
+      "Name": "toy-encryption-a",
+      "Value": "toy-encryption-a",
+      "DisplayKey": "toy-encryption-a",
+      "Key": "toy-encryption-a",
+      "Description": ""
+    },
+    {
+      "ID": "toy-encryption-b",
+      "Name": "toy-encryption-b",
+      "Value": "toy-encryption-b",
+      "DisplayKey": "toy-encryption-b",
+      "Key": "toy-encryption-b",
+      "Description": ""
+    }
+  ]
+}

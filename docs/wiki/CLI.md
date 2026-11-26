@@ -16,6 +16,7 @@
 - [Project](CLI-Project.md)
 - [Tagging](CLI-Tagging.md)
 - [VKS](CLI-VKS.md)
+- [Volume](CLI-Volume.md)
 
 ## Global flags
 

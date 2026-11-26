@@ -1,0 +1,55 @@
+{
+  "Items": [
+    {
+      "UUID": "volume-1",
+      "ID": "",
+      "ProjectID": "project-1",
+      "Name": "\u003cname\u003e",
+      "Description": "",
+      "Size": 100,
+      "Status": "IN-USE",
+      "StatusMessage": "",
+      "VolumeTypeID": "type-1",
+      "VolumeType": null,
+      "VolumeTypeZoneName": "\u003cname\u003e",
+      "IOPS": "3000",
+      "Throughput": null,
+      "ServerID": "server-1",
+      "ServerNameList": [],
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": null,
+      "Bootable": false,
+      "EncryptionType": "aes-xts-plain64_128",
+      "EncryptionKeyID": "",
+      "BootIndex": -1,
+      "MultiAttach": true,
+      "ServerIDList": [
+        "server-1",
+        "server-2"
+      ],
+      "Location": "hcm-3",
+      "Product": "vserver",
+      "PersistentVolume": false,
+      "MigrateState": "",
+      "MaxSize": 0,
+      "MinSize": 0,
+      "ZoneID": "",
+      "Zone": {
+        "UUID": "zone-a",
+        "Name": "\u003cname\u003e",
+        "ZoneType": "",
+        "IsDefault": false,
+        "Description": "",
+        "IsEnabled": false,
+        "OpenStackZone": "",
+        "IPRanges": [],
+        "ServerCount": 0,
+        "VolumeCount": 0
+      }
+    }
+  ],
+  "Page": 2,
+  "PageSize": 10,
+  "TotalPage": 3,
+  "TotalItem": 21
+}
