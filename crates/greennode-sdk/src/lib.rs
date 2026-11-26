@@ -9,6 +9,7 @@ mod clock;
 mod config;
 mod context;
 mod discovery;
+pub mod dns;
 mod endpoint;
 mod error;
 mod event;
