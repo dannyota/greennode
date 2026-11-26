@@ -153,6 +153,67 @@ async fn untag_noop_sends_no_write() {
     assert_eq!(server.heads().len(), 1);
 }
 
+struct Rotating(std::sync::atomic::AtomicUsize);
+impl crate::CredentialsProvider for Rotating {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::Token, Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let count = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(crate::Token::new(
+                Secret::new(if count == 0 {
+                    "old-toy-bearer"
+                } else {
+                    "new-toy-bearer"
+                }),
+                None,
+            ))
+        })
+    }
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn discovery_bearer_stays_redacted_after_rotation() {
+    let before = r#"[{"key":"env","value":"old-toy-bearer","systemTag":false}]"#;
+    let after = r#"[{"key":"env","value":"new","systemTag":false},{"key":"other","value":"old-toy-bearer","systemTag":true}]"#;
+    let server = Server::start(vec![
+        http_response(r#"{"projects":[{"projectId":"project-1"}]}"#),
+        http_response(before),
+        http_response(""),
+        http_response(after),
+    ]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_credentials_provider(Arc::new(Rotating(std::sync::atomic::AtomicUsize::new(0))))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(server.origin.clone()),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let (ctx, _) = RequestContext::new();
+    let output = Client::new(&config)
+        .tag_resource(&ctx, write_input("env"))
+        .await
+        .unwrap();
+    assert_eq!(output["Previous"], "<redacted>");
+    assert_eq!(output["Tags"][1]["Value"], "<redacted>");
+    assert!(!output.to_string().contains("old-toy-bearer"));
+}
+
 fn write_input(key: &str) -> TagResourceInput {
     TagResourceInput {
         resource_id: "res-1".into(),
@@ -214,9 +275,11 @@ async fn system_tag_refusal_has_baseline_identity() {
         .tag_resource(&ctx, write_input("vng.zone"))
         .await
         .unwrap_err();
-    let api = failure.error().api_error().unwrap();
-    assert_eq!(api.code(), "SystemTag");
-    assert_eq!(api.message(), "tagging: key is a system tag");
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::SystemTag)
+    );
+    assert!(failure.error().api_error().is_none());
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert!(server.heads().is_empty());
 }

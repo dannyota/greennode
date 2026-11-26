@@ -223,3 +223,77 @@ fn writes_match_baseline_output_formats() {
         assert_eq!(server.requests(), 3);
     }
 }
+
+#[test]
+fn tagging_errors_have_fixed_messages() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for mode in ["system", "confirm-failed", "mismatch"] {
+        let response = |body: &str| Response::Http {
+            status: "200 OK".into(),
+            headers: vec![("Content-Length".into(), body.len().to_string())],
+            body: body.as_bytes().to_vec(),
+        };
+        let responses = if mode == "system" {
+            vec![]
+        } else {
+            vec![
+                response("[]"),
+                response(""),
+                response(if mode == "mismatch" { "[]" } else { "[" }),
+            ]
+        };
+        let server = Server::start(responses);
+        let options = with_product_loopback(
+            Product::Vserver,
+            ConfigOptions::default().with_static_token(Secret::new("toy-token")),
+            &server,
+        );
+        let (context, _) = RequestContext::new();
+        let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+        let status = runtime.block_on(run_invocation(Invocation {
+            args: [
+                "greennode",
+                "--project-id",
+                "project-1",
+                "tagging",
+                "tag-resource",
+                "--resource-id",
+                "res-1",
+                "--resource-type",
+                "SERVER",
+                "--key",
+                if mode == "system" { "vng.zone" } else { "env" },
+                "--value",
+                "new",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+            source: &Source,
+            config_options: options,
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_terminal: false,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &SystemClock,
+            context: &context,
+        }));
+        assert_eq!(status, ExitCode::from(1));
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        if mode == "system" {
+            assert_eq!(error["error"]["code"], "SystemTag");
+            assert_eq!(error["error"]["message"], "tagging: key is a system tag");
+        } else {
+            assert_eq!(error["error"]["code"], "NotSettled");
+            assert_eq!(
+                error["error"]["message"],
+                "tagging: write outcome is unconfirmed; read tags before retrying"
+            );
+        }
+    }
+}

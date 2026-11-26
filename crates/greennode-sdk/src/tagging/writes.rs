@@ -59,13 +59,7 @@ fn safe_partial(evidence: &Evidence, mut value: Value) -> Value {
 }
 
 fn system_tag_error() -> Error {
-    Error::from_api(crate::ApiError::without_fallback(
-        "",
-        None,
-        crate::error::SafeText::new("SystemTag", &[]),
-        crate::error::SafeText::new("tagging: key is a system tag", &[]),
-        false,
-    ))
+    Error::new(ErrorClass::Api).with_detail(ErrorDetail::SystemTag)
 }
 
 fn operation(id: &'static str, write: bool) -> Operation {
@@ -157,9 +151,10 @@ impl Client {
         if key.starts_with("vng.") {
             return Err(fail(system_tag_error()));
         }
+        let mut evidence = Evidence::new();
         let project = self
             .session
-            .require_project_id(ctx)
+            .require_project_id_with_evidence(ctx, &mut evidence)
             .await
             .map_err(|e| fail(*e))?;
         let base = self
@@ -175,7 +170,6 @@ impl Client {
         };
         let read = operation(op_id, false);
         let write = operation(op_id, true);
-        let mut evidence = Evidence::new();
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -269,7 +263,7 @@ impl Client {
                 return Err(Failure::new(error, None, dispatch));
             }
             let failure = Failure::<Value>::wrap(
-                Error::new(ErrorClass::NotSettled),
+                Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),
                 None,
                 WriteDispatch::MayHaveBeenSent,
                 failure,
@@ -283,7 +277,7 @@ impl Client {
         let runtime = self.session.runtime(ctx, &mut jitter).map_err(|e| {
             evidence.with_partial(
                 Failure::<Value>::wrap(
-                    Error::new(ErrorClass::NotSettled),
+                    Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),
                     None,
                     WriteDispatch::MayHaveBeenSent,
                     fail(*e),
@@ -306,7 +300,7 @@ impl Client {
         .await;
         let (_, snapshot) = confirmed.map_err(|failure| {
             let failure = Failure::<Value>::wrap(
-                Error::new(ErrorClass::NotSettled),
+                Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),
                 None,
                 WriteDispatch::MayHaveBeenSent,
                 failure,
@@ -328,7 +322,7 @@ impl Client {
         {
             return Err(evidence.with_partial(
                 Failure::<Value>::new(
-                    Error::new(ErrorClass::NotSettled),
+                    Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),
                     None,
                     WriteDispatch::MayHaveBeenSent,
                 ),

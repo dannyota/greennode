@@ -364,6 +364,7 @@ fn service_rules_use_fixed_ranks_and_reject_duplicates() {
         true
     }
     let rule = Rule {
+        message: None,
         identity: "quota-status",
         matches: any,
         name: Some(RuleName {
@@ -401,6 +402,7 @@ fn page_format_name_follows_api_and_invalid_config() {
     use greennode_sdk::{ErrorClass, testing};
 
     let rules = [Rule {
+        message: None,
         identity: "page-format",
         matches: |error| error.has_identity(ErrorClass::RateLimited),
         name: Some(RuleName {
@@ -487,4 +489,19 @@ fn dispatched_operation_waits_for_cancellation_and_exits_one() {
         assert!(stdout.is_empty());
         assert!(stderr.starts_with(b"{\"error\":"));
     });
+}
+
+#[test]
+fn fixed_rule_message_overrides_api_message() {
+    use greennode::cli::errors::{Rule, classify};
+    use greennode_sdk::{Error, testing};
+    let rules = [Rule {
+        identity: "fixed",
+        matches: |_: &Error| true,
+        name: None,
+        exit: None,
+        message: Some("fixed advice"),
+    }];
+    let error = testing::api("operation", Some(500), "Failed", "inner message");
+    assert_eq!(classify(&error, &rules).envelope.message, "fixed advice");
 }

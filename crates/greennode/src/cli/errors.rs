@@ -18,6 +18,7 @@ pub struct Rule {
     pub matches: fn(&Error) -> bool,
     pub name: Option<RuleName>,
     pub exit: Option<RuleExit>,
+    pub message: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -138,19 +139,24 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
     } else {
         1
     };
-    let message = api
-        .map(|api| api.message())
-        .filter(|message| !message.is_empty())
+    let message = matching
+        .clone()
+        .filter_map(|rule| rule.message)
+        .next()
         .or_else(|| {
-            error
-                .service_account_login_error()
-                .map(|login| login.reason())
-        })
-        .or_else(|| error.login_error().map(|login| login.reason()))
-        .or_else(|| {
-            error
-                .detail::<greennode_sdk::Diagnostic>()
-                .map(|detail| detail.message())
+            api.map(|api| api.message())
+                .filter(|message| !message.is_empty())
+                .or_else(|| {
+                    error
+                        .service_account_login_error()
+                        .map(|login| login.reason())
+                })
+                .or_else(|| error.login_error().map(|login| login.reason()))
+                .or_else(|| {
+                    error
+                        .detail::<greennode_sdk::Diagnostic>()
+                        .map(|detail| detail.message())
+                })
         })
         .unwrap_or("request failed");
     let (status, operation) = match name {

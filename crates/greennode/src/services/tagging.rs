@@ -2,6 +2,7 @@
 mod writes;
 
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
+use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 use greennode_sdk::tagging::{Client, ListResourceTagsInput};
@@ -51,7 +52,33 @@ const INPUT: InputDescriptor<ListResourceTagsInput> = InputDescriptor {
 
 pub(super) const SERVICE: Service = Service {
     name: "tagging",
-    error_rules: &[],
+    error_rules: &[
+        Rule {
+            identity: "tagging-system-tag",
+            matches: |error| {
+                error.detail::<greennode_sdk::tagging::ErrorDetail>()
+                    == Some(&greennode_sdk::tagging::ErrorDetail::SystemTag)
+            },
+            name: Some(RuleName {
+                rank: 10,
+                code: "SystemTag",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: Some("tagging: key is a system tag"),
+        },
+        Rule {
+            identity: "tagging-not-settled",
+            matches: |error| {
+                error.detail::<greennode_sdk::tagging::ErrorDetail>()
+                    == Some(&greennode_sdk::tagging::ErrorDetail::NotSettled)
+            },
+            name: None,
+            exit: Some(RuleExit::Failure),
+            message: Some("tagging: write outcome is unconfirmed; read tags before retrying"),
+        },
+    ],
     operations: &[
         writes::TAG,
         writes::UNTAG,

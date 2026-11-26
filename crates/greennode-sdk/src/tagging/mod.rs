@@ -17,6 +17,15 @@ use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
+/// Tagging-specific failure details.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorDetail {
+    /// The key belongs to a system tag.
+    SystemTag,
+    /// The replacement could not be confirmed.
+    NotSettled,
+}
+
 /// One resource tag, including whether it is managed by the platform.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]

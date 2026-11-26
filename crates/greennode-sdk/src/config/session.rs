@@ -138,6 +138,31 @@ impl Session {
             .map(|project| project.id)
     }
 
+    pub(crate) async fn require_project_id_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        evidence: &mut crate::wire::product::evidence::Evidence,
+    ) -> Result<String, Box<Error>> {
+        let mut jitter = || self.retry_jitter();
+        let runtime = self.runtime(ctx, &mut jitter)?;
+        let base = self
+            .endpoints()
+            .vserver
+            .as_ref()
+            .ok_or_else(|| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+        self.discovery
+            .require_with_evidence(
+                runtime,
+                base,
+                self.bearer_source(),
+                &self.region,
+                ProjectRead::Id,
+                evidence,
+            )
+            .await
+            .map(|project| project.id)
+    }
+
     pub(crate) async fn require_project(
         &self,
         ctx: &RequestContext,

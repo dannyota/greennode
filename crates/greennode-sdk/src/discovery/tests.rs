@@ -90,6 +90,41 @@ async fn call_at(
 }
 
 #[tokio::test]
+async fn discovery_adds_bearer_to_caller_evidence() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projects":[{"projectId":"one"}]}"#,
+    )]);
+    let clients = sender::Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+    };
+    let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let mut evidence = Evidence::new();
+    Discovery::default()
+        .require_with_evidence(
+            Runtime {
+                configured_credentials: None,
+                client: &clients,
+                ctx: &ctx,
+                clock: &SystemClock,
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                sleeper: &Sleeper,
+                jitter: &mut || 0,
+            },
+            &base,
+            &Source,
+            "han-1",
+            ProjectRead::Id,
+            &mut evidence,
+        )
+        .await
+        .unwrap();
+    assert!(evidence.reflected_in(&serde_json::json!("toy-token")));
+}
+
+#[tokio::test]
 async fn selected_and_cached() {
     let server = Server::start(vec![response(
         "200 OK",
