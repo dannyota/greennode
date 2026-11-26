@@ -100,6 +100,107 @@ async fn concurrent_callers_share_exchange() {
     assert_eq!(server.requests(), 1);
 }
 
+#[test]
+fn in_memory_expiry_uses_monotonic_time() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    struct JumpClock {
+        clock: crate::TestClock,
+        jump: AtomicI64,
+    }
+    impl Clock for JumpClock {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            self.clock.utc_now() + time::Duration::seconds(self.jump.load(Ordering::SeqCst))
+        }
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            self.clock.monotonic_now()
+        }
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.clock.sleep_until(deadline)
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let server = server(2);
+        let clock = Arc::new(JumpClock {
+            clock: crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+            jump: AtomicI64::new(0),
+        });
+        let mut source = ServiceAccount::new(
+            "client".into(),
+            Secret::new("canary-secret"),
+            "default".into(),
+            None,
+            None,
+            clock.clone(),
+            Duration::ZERO,
+        );
+        source.endpoint = Some((server.origin.clone(), server.root_der.clone()));
+        let (ctx, _) = RequestContext::new();
+        assert!(source.token(&ctx).await.is_ok());
+        clock.jump.store(300, Ordering::SeqCst);
+        assert!(source.token(&ctx).await.is_ok());
+        assert_eq!(server.requests(), 1);
+        clock.jump.store(-300, Ordering::SeqCst);
+        clock.clock.advance(Duration::from_secs(91));
+        assert!(source.token(&ctx).await.is_ok());
+        assert_eq!(server.requests(), 2);
+    });
+}
+
+#[tokio::test]
+async fn expiry_uses_exchange_clock_sample() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct JumpClock {
+        clock: crate::TestClock,
+        samples: AtomicUsize,
+    }
+    impl Clock for JumpClock {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            let jump = if self.samples.fetch_add(1, Ordering::SeqCst) == 0 {
+                0
+            } else {
+                300
+            };
+            self.clock.utc_now() + time::Duration::seconds(jump)
+        }
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            self.clock.monotonic_now()
+        }
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.clock.sleep_until(deadline)
+        }
+    }
+    let server = server(2);
+    let clock = Arc::new(JumpClock {
+        clock: crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+        samples: AtomicUsize::new(0),
+    });
+    let mut source = ServiceAccount::new(
+        "client".into(),
+        Secret::new("canary-secret"),
+        "default".into(),
+        None,
+        None,
+        clock.clone(),
+        Duration::ZERO,
+    );
+    source.endpoint = Some((server.origin.clone(), server.root_der.clone()));
+    let (ctx, _) = RequestContext::new();
+    assert!(source.token(&ctx).await.is_ok());
+    clock.clock.advance(Duration::from_secs(91));
+    assert!(source.token(&ctx).await.is_ok());
+    assert_eq!(server.requests(), 2);
+}
+
 #[tokio::test]
 async fn expired_token_refreshes() {
     let server = server(2);
@@ -143,6 +244,101 @@ async fn rejection_checks_age_and_exact_token() {
             .is_ok()
     );
     assert!(source.token(&ctx).await.is_ok());
+    assert_eq!(server.requests(), 2);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn disk_entry_expiring_during_read_is_refreshed() {
+    let dir = Dir::new();
+    let server = server(2);
+    let clock = Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
+    let first = source(&server, clock.clone(), Some(dir.0.join("cache")));
+    let (ctx, _) = RequestContext::new();
+    let initial = first.token(&ctx).await;
+    assert!(initial.is_ok(), "initial error: {:?}", initial.err());
+    let mut second = source(&server, clock.clone(), Some(dir.0.join("cache")));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = std::sync::Mutex::new(Some(started_tx));
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    second.read_hook = Some(Arc::new(move || {
+        let _ = started_tx.lock().unwrap().take().unwrap().send(());
+        release_rx.lock().unwrap().recv().unwrap();
+    }));
+    let task = tokio::spawn(async move { second.token(&ctx).await.is_ok() });
+    started_rx.await.unwrap();
+    clock.advance(Duration::from_secs(91));
+    release_tx.send(()).unwrap();
+    assert!(task.await.unwrap());
+    assert_eq!(server.requests(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn dropped_refresh_does_not_publish_and_releases_lock() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let dir = Dir::new();
+        let server = server(2);
+        let clock = Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
+        let mut first = source(&server, clock.clone(), Some(dir.0.join("cache")));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let started_tx = std::sync::Mutex::new(Some(started_tx));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = std::sync::Mutex::new(release_rx);
+        first.sync_hook = Some(Arc::new(move || {
+            let _ = started_tx.lock().unwrap().take().unwrap().send(());
+            release_rx.lock().unwrap().recv().unwrap();
+        }));
+        let (ctx, _) = RequestContext::new();
+        let task = tokio::spawn(async move { first.token(&ctx).await.map(|_| ()) });
+        started_rx.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        release_tx.send(()).unwrap();
+        tokio::task::spawn_blocking(|| {}).await.unwrap();
+        let second = source(&server, clock, Some(dir.0.join("cache")));
+        let (ctx, _) = RequestContext::new();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), second.token(&ctx))
+                .await
+                .unwrap()
+                .is_ok()
+        );
+        assert_eq!(server.requests(), 2);
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn token_expiring_during_write_is_refreshed() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = Dir::new();
+    let server = server(2);
+    let clock = Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
+    let mut account = source(&server, clock.clone(), Some(dir.0.join("cache")));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = std::sync::Mutex::new(Some(started_tx));
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let first = AtomicBool::new(true);
+    account.sync_hook = Some(Arc::new(move || {
+        if first.swap(false, Ordering::SeqCst) {
+            let _ = started_tx.lock().unwrap().take().unwrap().send(());
+            release_rx.lock().unwrap().recv().unwrap();
+        }
+    }));
+    let (ctx, _) = RequestContext::new();
+    let task = tokio::spawn(async move { account.token(&ctx).await.map(|_| ()) });
+    started_rx.await.unwrap();
+    clock.advance(Duration::from_secs(91));
+    release_tx.send(()).unwrap();
+    assert!(task.await.unwrap().is_ok());
     assert_eq!(server.requests(), 2);
 }
 

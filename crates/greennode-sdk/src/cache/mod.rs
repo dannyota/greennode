@@ -106,7 +106,7 @@ fn inside_legacy_identity(legacy: &Path, directory: &Path) -> Result<bool, ()> {
     Ok(false)
 }
 
-fn resolve(path: &Path, preserve_final_symlink: bool) -> Result<PathBuf, ()> {
+pub(crate) fn resolve(path: &Path, preserve_final_symlink: bool) -> Result<PathBuf, ()> {
     if !path.is_absolute() {
         return Err(());
     }

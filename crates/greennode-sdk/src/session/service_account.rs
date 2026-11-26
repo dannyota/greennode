@@ -21,6 +21,21 @@ pub(crate) struct ServiceAccount {
     endpoint: Option<(String, rustls::pki_types::CertificateDer<'static>)>,
     #[cfg(test)]
     disk_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    read_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(test)]
+    sync_hook: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+#[cfg(unix)]
+struct LiveWrite(Arc<std::sync::Mutex<bool>>);
+#[cfg(unix)]
+impl Drop for LiveWrite {
+    fn drop(&mut self) {
+        if let Ok(mut live) = self.0.lock() {
+            *live = false;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -32,6 +47,7 @@ struct State {
 struct Cached {
     token: Token,
     obtained: ObtainedAt,
+    expires_monotonic: Option<tokio::time::Instant>,
 }
 
 impl Cached {
@@ -46,10 +62,15 @@ impl Cached {
     }
     fn fresh(&self, clock: &dyn Clock) -> bool {
         !self.token.access_token.expose_secret().is_empty()
-            && self
-                .token
-                .expires_at
-                .is_some_and(|expiry| expiry - clock.utc_now() > time::Duration::seconds(30))
+            && match self.expires_monotonic {
+                Some(expiry) => expiry
+                    .checked_duration_since(clock.monotonic_now())
+                    .is_some_and(|remaining| remaining > Duration::from_secs(30)),
+                None => self
+                    .token
+                    .expires_at
+                    .is_some_and(|expiry| expiry - clock.utc_now() > time::Duration::seconds(30)),
+            }
     }
     fn old(&self, clock: &dyn Clock) -> bool {
         match self.obtained {
@@ -93,10 +114,17 @@ impl ServiceAccount {
             endpoint: None,
             #[cfg(test)]
             disk_hook: None,
+            #[cfg(test)]
+            read_hook: None,
+            #[cfg(test)]
+            sync_hook: None,
         }
     }
 
-    async fn exchange(&self, ctx: &RequestContext) -> Result<Token, Box<Error>> {
+    async fn exchange(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<crate::wire::credential::service_account::TimedToken, Box<Error>> {
         #[cfg(test)]
         if let Some((url, root)) = &self.endpoint {
             return crate::wire::credential::service_account::exchange_test(
@@ -148,10 +176,12 @@ impl ServiceAccount {
                     return Err(Box::new(end.into()));
                 }
                 let checked = crate::cache::checked_directory(home.as_deref(), &directory)?;
+                let checked = crate::cache::resolve(&checked, true)
+                    .map_err(|()| Box::new(Error::new(ErrorClass::TokenCache)))?;
                 if let Some(end) = worker_context.check(worker_clock.as_ref()) {
                     return Err(Box::new(end.into()));
                 }
-                let root = crate::cache::store::Store::create(&checked)?;
+                let root = crate::cache::store::Store::create_avoiding(&checked, home.as_deref())?;
                 if let Some(end) = worker_context.check(worker_clock.as_ref()) {
                     return Err(Box::new(end.into()));
                 }
@@ -165,27 +195,42 @@ impl ServiceAccount {
                 &self.secret,
             );
             let name = format!("{stem}.json");
-            let lock =
+            let mut lock =
                 crate::cache::lock::acquire(store.clone(), format!("{stem}.lock"), ctx, clock)
                     .await?;
             let reader = store.clone();
             let read_name = name.clone();
             let rejected = state.rejected.clone();
             let now = clock.utc_now();
+            #[cfg(test)]
+            let read_hook = self.read_hook.clone();
             let entry = blocking(ctx, self.clock.clone(), move || {
-                crate::cache::entry::read(
+                let result = crate::cache::entry::read(
                     &reader,
                     &read_name,
                     crate::cache::entry::Kind::ServiceAccount,
                     now,
                     rejected.as_ref(),
-                )
+                );
+                #[cfg(test)]
+                if let Some(hook) = read_hook {
+                    hook();
+                }
+                result
             })
             .await?;
-            if let Some(entry) = entry {
+            if let Some(entry) = entry
+                && entry.expires - clock.utc_now() > time::Duration::seconds(30)
+                && !state.rejected.as_ref().is_some_and(|rejected| {
+                    let age = clock.utc_now() - entry.obtained;
+                    rejected.expose_secret() == entry.token.expose_secret()
+                        && (age < time::Duration::ZERO || age >= time::Duration::seconds(30))
+                })
+            {
                 let cached = Cached {
                     token: Token::new(entry.token, Some(entry.expires)),
                     obtained: ObtainedAt::Disk(entry.obtained),
+                    expires_monotonic: None,
                 };
                 let result = cached.bearer();
                 if let Some(end) = ctx.check(clock) {
@@ -195,54 +240,96 @@ impl ServiceAccount {
                 state.rejected = None;
                 return Ok(result);
             }
-            let token = self.exchange(ctx).await?;
-            let obtained = clock.utc_now();
-            let mono = clock.monotonic_now();
-            let expires = token
-                .expires_at
-                .ok_or_else(|| Error::new(ErrorClass::Auth))?;
-            let entry = crate::cache::entry::Entry {
-                token: token.access_token.clone(),
-                expires,
-                obtained,
-            };
-            let writer_context = ctx.clone();
-            let writer_clock = self.clock.clone();
-            let write = blocking(ctx, self.clock.clone(), move || {
-                let _lock = lock;
-                crate::cache::entry::write(
-                    &store,
-                    &name,
-                    &entry,
-                    &writer_context,
-                    writer_clock.as_ref(),
-                )
-            })
-            .await;
-            if let Some(end) = ctx.check(clock) {
-                return Err(Box::new(end.into()));
+            loop {
+                let timed = self.exchange(ctx).await?;
+                let exchange_wall = timed.started_wall;
+                let exchange_mono = timed.started_monotonic;
+                let token = timed.token;
+                let obtained = clock.utc_now();
+                let mono = clock.monotonic_now();
+                let expires = token
+                    .expires_at
+                    .ok_or_else(|| Error::new(ErrorClass::Auth))?;
+                let entry = crate::cache::entry::Entry {
+                    token: token.access_token.clone(),
+                    expires,
+                    obtained,
+                };
+                let writer_context = ctx.clone();
+                let writer_clock = self.clock.clone();
+                let live = LiveWrite(Arc::new(std::sync::Mutex::new(true)));
+                let writer_live = live.0.clone();
+                let writer_store = store.clone();
+                let writer_name = name.clone();
+                #[cfg(test)]
+                let sync_hook = self.sync_hook.clone();
+                let (returned_lock, write) = blocking(ctx, self.clock.clone(), move || {
+                    #[cfg(test)]
+                    let hook = sync_hook.as_deref();
+                    #[cfg(not(test))]
+                    let hook = None;
+                    let result = crate::cache::entry::write_hook(
+                        &writer_store,
+                        &writer_name,
+                        &entry,
+                        || {
+                            writer_context
+                                .check(writer_clock.as_ref())
+                                .map_or(Ok(()), |end| Err(Box::new(end.into())))
+                        },
+                        hook,
+                        Some(&writer_live),
+                    );
+                    Ok((lock, result))
+                })
+                .await?;
+                lock = returned_lock;
+                if let Some(end) = ctx.check(clock) {
+                    return Err(Box::new(end.into()));
+                }
+                if let Err(error) = write
+                    && error.class() != ErrorClass::TokenCache
+                {
+                    return Err(error);
+                }
+                let expires_monotonic = Duration::try_from(expires - exchange_wall)
+                    .ok()
+                    .and_then(|duration| exchange_mono.checked_add(duration));
+                let cached = Cached {
+                    token,
+                    obtained: ObtainedAt::InProcess(mono),
+                    expires_monotonic,
+                };
+                if !cached.fresh(clock)
+                    || state.rejected.as_ref().is_some_and(|rejected| {
+                        rejected.expose_secret() == cached.token.access_token.expose_secret()
+                            && cached.old(clock)
+                    })
+                {
+                    continue;
+                }
+                let result = cached.bearer();
+                state.cached = Some(cached);
+                state.rejected = None;
+                return Ok(result);
             }
-            if let Err(error) = write
-                && error.class() != ErrorClass::TokenCache
-            {
-                return Err(error);
-            }
-            let cached = Cached {
-                token,
-                obtained: ObtainedAt::InProcess(mono),
-            };
-            let result = cached.bearer();
-            state.cached = Some(cached);
-            state.rejected = None;
-            return Ok(result);
         }
-        let token = self.exchange(ctx).await?;
+        let timed = self.exchange(ctx).await?;
+        let exchange_wall = timed.started_wall;
+        let exchange_mono = timed.started_monotonic;
+        let token = timed.token;
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
         }
+        let mono = clock.monotonic_now();
+        let expires_monotonic = token
+            .expires_at
+            .and_then(|expiry| Duration::try_from(expiry - exchange_wall).ok())
+            .and_then(|duration| exchange_mono.checked_add(duration));
         let cached = Cached {
             token,
-            obtained: ObtainedAt::InProcess(clock.monotonic_now()),
+            obtained: ObtainedAt::InProcess(mono),
+            expires_monotonic,
         };
         let result = cached.bearer();
         state.cached = Some(cached);

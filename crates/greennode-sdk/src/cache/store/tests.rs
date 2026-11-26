@@ -17,7 +17,7 @@ impl Dir {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        Self(path)
+        Self(std::fs::canonicalize(path).unwrap())
     }
 }
 
@@ -42,6 +42,18 @@ fn creates_cache_and_namespace() {
     let store = Store::create(&cache).unwrap();
     let _namespace = store.create_child("service-account-v1").unwrap();
     assert!(cache.join("service-account-v1").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_ancestor_symlink_into_legacy_tree() {
+    let dir = Dir::new();
+    let legacy = dir.0.join(".vngcloud");
+    std::fs::create_dir(&legacy).unwrap();
+    std::os::unix::fs::symlink(&legacy, dir.0.join("redirect")).unwrap();
+    assert!(Store::create(&dir.0.join("redirect/cache")).is_err());
+    assert!(!legacy.join("cache").exists());
+    assert!(Store::create(&dir.0.join("safe")).is_ok());
 }
 
 #[cfg(unix)]
