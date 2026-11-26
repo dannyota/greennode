@@ -25,6 +25,7 @@ pub(super) struct Mutation {
     pub(super) method: Method,
     pub(super) retry: Retry,
     pub(super) success: &'static [StatusCode],
+    pub(super) overflow_overrides_status: bool,
 }
 
 pub(super) enum Settlement<'a> {
@@ -102,7 +103,7 @@ impl Client {
             allow_empty: true,
             no_output: false,
             keep_status: true,
-            overflow_overrides_status: once,
+            overflow_overrides_status: mutation.overflow_overrides_status,
             sensitive,
             reject_reflected_credentials: false,
             no_redirect: true,

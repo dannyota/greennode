@@ -113,6 +113,29 @@ async fn group_create_oversized_conflict_is_rejected() {
 }
 
 #[tokio::test]
+async fn created_group_rejects_encoded_credentials_in_all_identifiers() {
+    for body in [
+        r#"{"data":{"uuid":"group-1","policyId":"preYWJjpost"}}"#,
+        r#"{"data":{"uuid":"group-1","servers":[{"uuid":"preYWJjpost"}]}}"#,
+        r#"{"data":{"uuid":"group-1","serverGroupId":"preYWJjpost"}}"#,
+    ] {
+        let server = TestServer::start(vec![http("201 Created", body)]);
+        let (ctx, _) = RequestContext::new();
+        let result = client_with_token(&server, "abc")
+            .create_server_group(
+                &ctx,
+                CreateServerGroupInput {
+                    name: "group".into(),
+                    policy_id: "policy-1".into(),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
 async fn created_group_rejects_encoded_short_bearer_in_identifier() {
     let server = TestServer::start(vec![http(
         "201 Created",

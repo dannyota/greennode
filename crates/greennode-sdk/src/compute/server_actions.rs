@@ -21,30 +21,35 @@ const START: Mutation = action(
     "v2/{}/servers/{}/start",
     Retry::Once,
     &[StatusCode::ACCEPTED],
+    true,
 );
 const STOP: Mutation = action(
     "compute.StopServer",
     "v2/{}/servers/{}/stop",
     Retry::Once,
     &[StatusCode::ACCEPTED],
+    true,
 );
 const REBOOT: Mutation = action(
     "compute.RebootServer",
     "v2/{}/servers/{}/reboot",
     Retry::Once,
     &[StatusCode::ACCEPTED],
+    true,
 );
 const RENAME: Mutation = action(
     "compute.RenameServer",
     "v2/{}/servers/{}/rename",
     Retry::Repeatable,
     &[StatusCode::OK],
+    false,
 );
 const RESIZE: Mutation = action(
     "compute.ResizeServer",
     "v2/{}/servers/{}/resize",
     Retry::Once,
     &[StatusCode::ACCEPTED],
+    false,
 );
 
 const fn action(
@@ -52,11 +57,13 @@ const fn action(
     template: &'static str,
     retry: Retry,
     success: &'static [StatusCode],
+    overflow_overrides_status: bool,
 ) -> Mutation {
     Mutation {
         id,
         template,
         method: Method::PUT,
+        overflow_overrides_status,
         retry,
         success,
     }

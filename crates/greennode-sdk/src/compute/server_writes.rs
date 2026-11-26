@@ -22,6 +22,7 @@ const CREATE: Mutation = Mutation {
     template: "v2/{}/servers",
     method: Method::POST,
     retry: Retry::Once,
+    overflow_overrides_status: true,
     success: &[StatusCode::ACCEPTED],
 };
 const DELETE: Mutation = Mutation {
@@ -29,6 +30,7 @@ const DELETE: Mutation = Mutation {
     template: "v2/{}/servers/{}",
     method: Method::DELETE,
     retry: Retry::Repeatable,
+    overflow_overrides_status: false,
     success: &[StatusCode::ACCEPTED],
 };
 const DISK_ADVICE: &str = "a 400 can mean a disk type is not offered in ZoneID; list the zone's types with volume.ListVolumeTypes and ZoneID";

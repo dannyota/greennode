@@ -1,6 +1,6 @@
 use http::{Method, StatusCode};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::model::wire::WireField;
 use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
@@ -20,6 +20,7 @@ const CREATE: Mutation = Mutation {
     template: "v2/{}/serverGroups",
     method: Method::POST,
     retry: Retry::NonIdempotent,
+    overflow_overrides_status: false,
     success: &[StatusCode::CREATED],
 };
 const UPDATE: Mutation = Mutation {
@@ -27,6 +28,7 @@ const UPDATE: Mutation = Mutation {
     template: "v2/{}/serverGroups/{}",
     method: Method::PUT,
     retry: Retry::Repeatable,
+    overflow_overrides_status: false,
     success: &[StatusCode::OK],
 };
 const DELETE: Mutation = Mutation {
@@ -34,6 +36,7 @@ const DELETE: Mutation = Mutation {
     template: "v2/{}/serverGroups/{}",
     method: Method::DELETE,
     retry: Retry::Repeatable,
+    overflow_overrides_status: false,
     success: &[StatusCode::NO_CONTENT],
 };
 
@@ -150,7 +153,10 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             ));
         }
-        if !evidence.can_retain_partial() || !group.redact(&evidence) {
+        if !evidence.can_retain_partial()
+            || group_ids_reflect(&group, &evidence)
+            || !group.redact(&evidence)
+        {
             return Err(Failure::new(
                 invalid_mutation_response(&CREATE, &evidence),
                 None,
@@ -192,7 +198,7 @@ impl Client {
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
         if group.uuid != *id
-            || evidence.id_reflects(&group.uuid)
+            || group_ids_reflect(&group, &evidence)
             || serde_json::to_value(&group).map_or(true, |value| evidence.reflected_in(&value))
             || !group.redact(&evidence)
         {
@@ -214,7 +220,7 @@ impl Client {
         let error = match result {
             Ok(mut group)
                 if group.uuid == *id
-                    && !evidence.id_reflects(&group.uuid)
+                    && !group_ids_reflect(&group, &evidence)
                     && evidence.can_retain_partial() =>
             {
                 if group.redact(&evidence) {
@@ -228,7 +234,7 @@ impl Client {
             Err(error) => error.into_parts().0,
         };
         let partial = (evidence.can_retain_partial()
-            && !evidence.id_reflects(&fallback.uuid)
+            && !group_ids_reflect(&fallback, &evidence)
             && fallback.redact(&evidence))
         .then_some(UpdateServerGroupOutput {
             server_group: fallback,
@@ -273,7 +279,7 @@ impl Client {
         }
         for mut group in groups.items {
             if !PathIds::WithUnderscore.allows(&group.uuid)
-                || evidence.id_reflects(&group.uuid)
+                || group_ids_reflect(&group, &evidence)
                 || !group.redact(&evidence)
             {
                 return Err(not_sent(group_read_error(
@@ -312,6 +318,27 @@ impl Client {
             })?;
         Ok(DeleteServerGroupOutput {})
     }
+}
+
+fn group_ids_reflect(group: &ServerGroup, evidence: &Evidence) -> bool {
+    fn dynamic(value: &Value, evidence: &Evidence) -> bool {
+        match value {
+            Value::String(id) => evidence.id_reflects(id),
+            Value::Array(values) => values.iter().any(|value| dynamic(value, evidence)),
+            Value::Object(values) => values
+                .iter()
+                .any(|(key, value)| evidence.id_reflects(key) || dynamic(value, evidence)),
+            _ => evidence.reflected_in(value),
+        }
+    }
+    evidence.id_reflects(&group.uuid)
+        || evidence.id_reflects(&group.policy_id)
+        || dynamic(&group.server_group_id, evidence)
+        || group.servers.as_ref().is_some_and(|servers| {
+            servers
+                .iter()
+                .any(|server| evidence.id_reflects(&server.uuid))
+        })
 }
 
 fn in_use(message: &str, evidence: &Evidence) -> Error {
