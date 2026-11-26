@@ -32,9 +32,12 @@ fn input() -> CreatePolicyInput {
 #[tokio::test]
 async fn policy_create_rejects_reflected_operands_before_guard_reads() {
     let (ctx, _) = RequestContext::new();
+    let hex = data_encoding::HEXUPPER.encode(BEARER.as_bytes());
     for condition in [
         json!({"equals": {"x": "toy%2Fbearer"}}),
         json!({"equals": {"toy/bearer": ":"}}),
+        json!({"equals": {"x": hex}}),
+        json!({"equals": {hex: ":"}}),
     ] {
         let server = Server::start(vec![]);
         let mut input = input();
@@ -282,7 +285,6 @@ async fn attachment_guard_refuses_noncanonical_pagination_metadata() {
 }
 
 #[tokio::test]
-#[ignore = "requires hexadecimal credential screening in the shared matcher"]
 async fn hex_credential_never_becomes_a_policy_confirmation_id() {
     let encoded = data_encoding::HEXLOWER.encode(BEARER.as_bytes());
     let body = json!({"id": format!("pol-{encoded}")}).to_string();
