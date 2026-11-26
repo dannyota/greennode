@@ -83,6 +83,12 @@ pub trait Adapter<I: ParsedInput> {
         settings: &'a Self::Settings,
         input: &'a I,
     ) -> FutureResult<'a, Result<Option<render::Projected>, OperationFailure>>;
+    fn preflight_output(&self, _input: &I, _error: &LocalError) -> Option<render::Projected> {
+        None
+    }
+    fn render_failure(&self, _failure: RenderFailure) -> Option<LocalError> {
+        None
+    }
     fn rules(&self) -> &[errors::Rule] {
         &[]
     }
@@ -117,6 +123,14 @@ fn local(stderr: &mut dyn Write, error: LocalError) -> u8 {
     error.exit
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RenderFailure {
+    Query,
+    TableLimit,
+    Encoding,
+    Output,
+}
+
 enum OutputError {
     Query,
     Render(render::Error),
@@ -149,6 +163,23 @@ fn render_output(
     .map_err(Into::into)
 }
 
+fn refuse<I: ParsedInput, A: Adapter<I>>(
+    input: &I,
+    adapter: &A,
+    error: LocalError,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
+    if let Some(output) = adapter.preflight_output(input, &error) {
+        let format = input
+            .output()
+            .and_then(Format::parse)
+            .unwrap_or(Format::Json);
+        let _ = render_output(stdout, &output, format, None);
+    }
+    local(stderr, error)
+}
+
 pub async fn run<I: ParsedInput, A: Adapter<I>>(
     input: &mut I,
     adapter: &mut A,
@@ -156,6 +187,12 @@ pub async fn run<I: ParsedInput, A: Adapter<I>>(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> u8 {
+    if let Some(end) = ctx.check(&greennode_sdk::SystemClock) {
+        let error = Error::from(end);
+        let classified = errors::classify(&error, adapter.rules());
+        errors::write_error(stderr, &classified.envelope);
+        return classified.exit;
+    }
     if !errors::validate_rules(adapter.rules()) {
         return local(
             stderr,
@@ -168,31 +205,53 @@ pub async fn run<I: ParsedInput, A: Adapter<I>>(
     }
     for check in [I::before_input, I::merge, I::input_guards] {
         if let Err(error) = check(input) {
-            return local(stderr, error);
+            return refuse(input, adapter, error, stdout, stderr);
         }
     }
     if input.is_write() && input.read_only() {
-        return local(stderr, LocalError::read_only());
+        return refuse(input, adapter, LocalError::read_only(), stdout, stderr);
     }
     if let Err(error) = input.required() {
-        return local(stderr, error);
+        return refuse(input, adapter, error, stdout, stderr);
     }
     let query = match input.query().filter(|value| !value.is_empty()) {
         Some(value) => match query::compile(value) {
             Ok(query) => Some(query),
-            Err(_) => return local(stderr, LocalError::usage("invalid query")),
+            Err(_) => {
+                return refuse(
+                    input,
+                    adapter,
+                    LocalError::usage("invalid query"),
+                    stdout,
+                    stderr,
+                );
+            }
         },
         None => None,
     };
     let explicit_format = match input.output().filter(|value| !value.is_empty()) {
         Some(value) => match Format::parse(value) {
             Some(format) => Some(format),
-            None => return local(stderr, LocalError::usage("invalid output format")),
+            None => {
+                return refuse(
+                    input,
+                    adapter,
+                    LocalError::usage("invalid output format"),
+                    stdout,
+                    stderr,
+                );
+            }
         },
         None => None,
     };
     if input.needs_confirmation() && !input.yes() {
-        return local(stderr, LocalError::usage("confirmation requires --yes"));
+        return refuse(
+            input,
+            adapter,
+            LocalError::usage("confirmation requires --yes"),
+            stdout,
+            stderr,
+        );
     }
     let settings = match adapter.settings(ctx).await {
         Ok(settings) => settings,
@@ -210,15 +269,32 @@ pub async fn run<I: ParsedInput, A: Adapter<I>>(
     }) {
         Some(format) => format,
         None if adapter.output(&settings).is_none_or(str::is_empty) => Format::Json,
-        None => return local(stderr, LocalError::usage("invalid output format")),
+        None => {
+            return refuse(
+                input,
+                adapter,
+                LocalError::usage("invalid output format"),
+                stdout,
+                stderr,
+            );
+        }
     };
     if input.is_write() && adapter.profile_read_only(&settings) {
-        return local(stderr, LocalError::read_only());
+        return refuse(input, adapter, LocalError::read_only(), stdout, stderr);
     }
     match adapter.execute(ctx, &settings, input).await {
         Ok(Some(output)) => match render_output(stdout, &output, format, query.as_ref()) {
             Ok(()) => 0,
             Err(error) => {
+                let failure = match &error {
+                    OutputError::Query => RenderFailure::Query,
+                    OutputError::Render(render::Error::TableLimit) => RenderFailure::TableLimit,
+                    OutputError::Render(render::Error::Io(_)) => RenderFailure::Output,
+                    OutputError::Render(_) => RenderFailure::Encoding,
+                };
+                if let Some(classified) = adapter.render_failure(failure) {
+                    return local(stderr, classified);
+                }
                 let (code, message, exit) = if matches!(error, OutputError::Query) {
                     (
                         "QueryFailed",

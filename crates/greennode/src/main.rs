@@ -43,11 +43,28 @@ fn main() -> ExitCode {
             });
         }
         #[cfg(not(unix))]
-        tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                cancel.cancel();
+        {
+            use std::future::{Future, poll_fn};
+            use std::task::Poll;
+            let mut interrupt = Box::pin(tokio::signal::ctrl_c());
+            let initial = poll_fn(|cx| match interrupt.as_mut().poll(cx) {
+                Poll::Ready(result) => Poll::Ready(Some(result)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await;
+            match initial {
+                Some(Ok(())) => cancel.cancel(),
+                Some(Err(_)) => return ExitCode::FAILURE,
+                None => {
+                    tokio::spawn(async move {
+                        if interrupt.await.is_ok() {
+                            cancel.cancel();
+                        }
+                    });
+                }
             }
-        });
+        }
+        tokio::task::yield_now().await;
         let source = Environment(std::env::vars_os().collect());
         let mut stdin = std::io::stdin();
         let mut stdout = std::io::stdout();

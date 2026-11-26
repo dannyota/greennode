@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use greennode::cli::dispatch::{
-    self, Adapter, FutureResult, LocalError, OperationFailure, ParsedInput,
+    self, Adapter, FutureResult, LocalError, OperationFailure, ParsedInput, RenderFailure,
 };
 use greennode::cli::render;
 use greennode_sdk::{Error, RequestContext};
@@ -14,6 +14,8 @@ struct Input {
     read_only: bool,
     yes: bool,
     query: Option<&'static str>,
+    reject: bool,
+    billing: bool,
 }
 impl ParsedInput for Input {
     fn before_input(&mut self) -> Result<(), LocalError> {
@@ -26,6 +28,9 @@ impl ParsedInput for Input {
     }
     fn input_guards(&mut self) -> Result<(), LocalError> {
         self.events.borrow_mut().push("guard");
+        if self.reject {
+            return Err(LocalError::usage("query is not allowed"));
+        }
         Ok(())
     }
     fn required(&self) -> Result<(), LocalError> {
@@ -48,12 +53,13 @@ impl ParsedInput for Input {
         self.query
     }
     fn output(&self) -> Option<&str> {
-        None
+        self.billing.then_some("table")
     }
 }
 struct Stub {
     events: Rc<RefCell<Vec<&'static str>>>,
     fail: bool,
+    billing: bool,
 }
 impl Adapter<Input> for Stub {
     type Settings = ();
@@ -75,8 +81,15 @@ impl Adapter<Input> for Stub {
     ) -> FutureResult<'a, Result<Option<render::Projected>, OperationFailure>> {
         self.events.borrow_mut().push("execute");
         let fail = self.fail;
+        let billing = self.billing;
         Box::pin(async move {
-            let value = render::project(&serde_json::json!({"Items": [1]})).unwrap();
+            let value = if billing {
+                let fields: std::collections::BTreeMap<String, u8> =
+                    (0..101).map(|n| (format!("column{n}"), 1)).collect();
+                render::project(&fields).unwrap()
+            } else {
+                render::project(&serde_json::json!({"Items": [1]})).unwrap()
+            };
             if fail {
                 Err(OperationFailure {
                     error: Error::provider_failed(),
@@ -89,6 +102,18 @@ impl Adapter<Input> for Stub {
             }
         })
     }
+    fn preflight_output(&self, input: &Input, _: &LocalError) -> Option<render::Projected> {
+        input
+            .reject
+            .then(|| render::project(&serde_json::json!({"Effect": "not sent"})).unwrap())
+    }
+    fn render_failure(&self, failure: RenderFailure) -> Option<LocalError> {
+        (self.billing && failure == RenderFailure::TableLimit).then_some(LocalError {
+            code: "QueryFailed",
+            message: "billing report withheld",
+            exit: 1,
+        })
+    }
     fn advice(&self, _: &Error) -> Option<&'static str> {
         Some("fixed recovery advice")
     }
@@ -98,6 +123,7 @@ fn invoke(mut input: Input, fail: bool) -> (u8, Vec<u8>, Vec<u8>, Vec<&'static s
     let mut adapter = Stub {
         events: events.clone(),
         fail,
+        billing: input.billing,
     };
     let (ctx, _) = RequestContext::new();
     let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -115,6 +141,125 @@ fn invoke(mut input: Input, fail: bool) -> (u8, Vec<u8>, Vec<u8>, Vec<&'static s
     let recorded = events.borrow().clone();
     (status, out, err, recorded)
 }
+#[test]
+fn preflight_refusal_emits_safe_outcome_before_error_without_settings() {
+    #[derive(Clone)]
+    struct Writer(&'static str, Rc<RefCell<Vec<&'static str>>>);
+    impl std::io::Write for Writer {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.1.borrow_mut().push(self.0);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut input = Input {
+        reject: true,
+        query: Some(""),
+        events: events.clone(),
+        ..Default::default()
+    };
+    let mut adapter = Stub {
+        events: events.clone(),
+        fail: false,
+        billing: false,
+    };
+    let (ctx, _) = RequestContext::new();
+    let mut out = Writer("stdout", events.clone());
+    let mut err = Writer("stderr", events.clone());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert_eq!(
+        runtime.block_on(dispatch::run(
+            &mut input,
+            &mut adapter,
+            &ctx,
+            &mut out,
+            &mut err
+        )),
+        2
+    );
+    let events = events.borrow();
+    assert_eq!(&events[..3], ["before", "merge", "guard"]);
+    let first_err = events.iter().position(|event| *event == "stderr").unwrap();
+    assert!(events[3..first_err].iter().all(|event| *event == "stdout"));
+    assert!(first_err > 3);
+    assert!(events[first_err..].iter().all(|event| *event == "stderr"));
+    let (status, out, err, _) = invoke(
+        Input {
+            reject: true,
+            query: Some(""),
+            ..Default::default()
+        },
+        false,
+    );
+    assert_eq!(status, 2);
+    assert_eq!(out, b"{\n  \"Effect\": \"not sent\"\n}\n");
+    assert_eq!(
+        err,
+        b"{\"error\":{\"code\":\"InvalidUsage\",\"message\":\"query is not allowed\"}}\n"
+    );
+}
+
+#[test]
+fn cancellation_before_dispatch_skips_guards_and_settings() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut input = Input {
+        events: events.clone(),
+        ..Default::default()
+    };
+    let mut adapter = Stub {
+        events: events.clone(),
+        fail: false,
+        billing: false,
+    };
+    let (ctx, cancel) = RequestContext::new();
+    cancel.cancel();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    assert_eq!(
+        runtime.block_on(dispatch::run(
+            &mut input,
+            &mut adapter,
+            &ctx,
+            &mut out,
+            &mut err
+        )),
+        1
+    );
+    assert!(events.borrow().is_empty());
+    assert!(out.is_empty());
+    assert!(!err.is_empty());
+}
+
+#[test]
+fn billing_policy_withholds_table_limit_output() {
+    let (status, out, err, events) = invoke(
+        Input {
+            billing: true,
+            ..Default::default()
+        },
+        false,
+    );
+    assert_eq!(status, 1);
+    assert!(out.is_empty());
+    assert_eq!(
+        err,
+        b"{\"error\":{\"code\":\"QueryFailed\",\"message\":\"billing report withheld\"}}\n"
+    );
+    assert_eq!(
+        events.iter().filter(|event| **event == "execute").count(),
+        1
+    );
+}
+
 #[test]
 fn invalid_query_refuses_before_settings_and_execution() {
     let (status, out, _, events) = invoke(
