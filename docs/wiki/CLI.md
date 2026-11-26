@@ -5,6 +5,7 @@
 ## Services
 
 - [Billing](CLI-Billing.md)
+- [Project](CLI-Project.md)
 
 ## Global flags
 

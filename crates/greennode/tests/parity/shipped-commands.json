@@ -24,5 +24,7 @@
   "greennode configure list",
   "greennode configure set",
   "greennode help",
+  "greennode project",
+  "greennode project list-projects",
   "greennode version"
 ]

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::error::SafeText;
 use crate::wire::product::{
     operation::{self, Operation, Output},
     redirect::{Classification, Retry},
@@ -7,7 +8,7 @@ use crate::wire::product::{
     sender::{BearerSource, Runtime},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{Error, ErrorClass, Project};
+use crate::{ApiError, Error, ErrorClass, Project};
 use http::{Method, StatusCode};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -65,41 +66,8 @@ impl Discovery {
         if let Some(project) = &*state {
             return Ok(project.clone());
         }
-        let (_, inventory) = operation::execute::<Inventory>(
-            runtime,
-            base,
-            &projects_operation(),
-            &[],
-            &[],
-            source,
-            bytes::Bytes::new(),
-        )
-        .await
-        .map_err(|failure| Box::new(failure.into_parts().0))?;
-        let mut ids = HashSet::new();
-        let projects = inventory.projects.ok_or_else(invalid_response)?;
-        if inventory.extra.keys().any(|key| {
-            matches!(
-                key.as_str(),
-                "page"
-                    | "pageSize"
-                    | "paging"
-                    | "pagination"
-                    | "totalPage"
-                    | "totalPages"
-                    | "next"
-                    | "nextPage"
-                    | "isNext"
-                    | "hasMore"
-                    | "continuationToken"
-            )
-        }) || projects
-            .iter()
-            .any(|project| project.id.is_empty() || !ids.insert(&project.id))
-        {
-            return Err(invalid_response());
-        }
-        let selected = select(projects, region)?;
+        let projects = read_projects(runtime, base, source, region).await?;
+        let selected = select(projects)?;
         #[cfg(test)]
         if let Some(hook) = &self.before_publish {
             hook();
@@ -112,17 +80,82 @@ impl Discovery {
     }
 }
 
-fn invalid_response() -> Box<Error> {
-    Box::new(Error::new(ErrorClass::Api).with_outer_detail(StatusCode::OK))
-}
-
-fn select(projects: Vec<Project>, region: &str) -> Result<Project, Box<Error>> {
-    let mut matches = projects.into_iter().filter_map(|mut project| {
+pub(crate) async fn read_projects(
+    runtime: Runtime<'_>,
+    base: &crate::endpoint::Base,
+    source: &dyn BearerSource,
+    region: &str,
+) -> Result<Vec<Project>, Box<Error>> {
+    let (_, inventory) = operation::execute::<Inventory>(
+        runtime,
+        base,
+        &projects_operation(),
+        &[],
+        &[],
+        source,
+        bytes::Bytes::new(),
+    )
+    .await
+    .map_err(|failure| {
+        let (error, _, _) = failure.into_parts();
+        if error.class() == ErrorClass::Api
+            && error.detail::<StatusCode>() == Some(&StatusCode::OK)
+            && !error.is_body_too_large()
+        {
+            invalid_response()
+        } else {
+            Box::new(error)
+        }
+    })?;
+    let mut ids = HashSet::new();
+    let mut projects = inventory.projects.ok_or_else(invalid_response)?;
+    if inventory.extra.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "page"
+                | "pageSize"
+                | "paging"
+                | "pagination"
+                | "totalPage"
+                | "totalPages"
+                | "next"
+                | "nextPage"
+                | "isNext"
+                | "hasMore"
+                | "continuationToken"
+        )
+    }) || projects
+        .iter()
+        .any(|project| project.id.is_empty() || !ids.insert(&project.id))
+    {
+        return Err(invalid_response());
+    }
+    projects.retain_mut(|project| {
         if project.region.is_empty() {
             project.region = region.to_owned();
         }
-        (project.region == region).then_some(project)
+        project.region == region
     });
+    Ok(projects)
+}
+
+const LIST_PROJECTS: &str = "project.ListProjects";
+
+fn invalid_response() -> Box<Error> {
+    Box::new(
+        Error::from_api(ApiError::without_fallback(
+            LIST_PROJECTS,
+            Some(StatusCode::OK.as_u16()),
+            SafeText::new("InvalidResponse", &[]),
+            SafeText::new("invalid discovery response; body withheld", &[]),
+            false,
+        ))
+        .with_outer_detail(StatusCode::OK),
+    )
+}
+
+fn select(projects: Vec<Project>) -> Result<Project, Box<Error>> {
+    let mut matches = projects.into_iter();
     let project = matches
         .next()
         .ok_or_else(|| Box::new(Error::new(ErrorClass::ProjectNotFound)))?;
@@ -134,7 +167,7 @@ fn select(projects: Vec<Project>, region: &str) -> Result<Project, Box<Error>> {
 
 fn projects_operation() -> Operation {
     Operation {
-        id: "project.ListProjects",
+        id: LIST_PROJECTS,
         template: "v1/projects",
         method: Method::GET,
         class: Classification::Read,
