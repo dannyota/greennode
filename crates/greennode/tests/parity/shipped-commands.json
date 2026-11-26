@@ -79,6 +79,8 @@
   "greennode dns update-hosted-zone",
   "greennode dns update-record",
   "greennode globalloadbalancer",
+  "greennode globalloadbalancer create-load-balancer",
+  "greennode globalloadbalancer delete-load-balancer",
   "greennode globalloadbalancer get-listener",
   "greennode globalloadbalancer get-load-balancer",
   "greennode globalloadbalancer get-pool-member",

@@ -1,7 +1,9 @@
-//! Read global load balancers and their catalogs, children, and usage.
+//! Manage global load balancers and read their catalogs, children, and usage.
 
+mod load_balancer_writes;
 mod models;
 mod wire;
+mod write;
 
 #[cfg(test)]
 mod tests;
@@ -25,11 +27,12 @@ use crate::{
     WriteDispatch,
 };
 
+pub use load_balancer_writes::*;
 pub use models::*;
 pub use wire::DecodeError;
 use wire::{Field, WireField, response_error};
 
-/// Shares the configuration's authentication and connections for global load balancer reads.
+/// Shares the configuration's authentication and connections for global load balancers.
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,

@@ -47,11 +47,8 @@ pub struct ConfigOptions {
     token_cache: Option<std::path::PathBuf>,
     iam_details: Option<IamUserAuth>,
     endpoint_overrides: EndpointOverrides,
-    #[cfg(feature = "test-support")]
-    billing_fixture: Option<(
-        crate::testing::Product,
-        crate::wire::connection::FixtureTrust,
-    )>,
+    #[cfg(any(test, feature = "test-support"))]
+    product_fixtures: Vec<crate::testing::ProductFixture>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -63,17 +60,22 @@ struct ParseHooks {
 }
 
 impl ConfigOptions {
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_product_loopback(
         mut self,
         product: crate::testing::Product,
         server: &crate::testing::Server,
+        write: bool,
     ) -> Self {
         let endpoint = product.override_slot(&mut self.endpoint_overrides);
         if endpoint.as_deref().is_none_or(str::is_empty) {
             *endpoint = Some(server.origin.clone());
         }
-        self.billing_fixture = Some((product, crate::wire::connection::FixtureTrust::new(server)));
+        self.product_fixtures.push(crate::testing::ProductFixture {
+            product,
+            trust: crate::wire::connection::FixtureTrust::new(server),
+            write,
+        });
         self
     }
 
@@ -264,12 +266,10 @@ impl Config {
             None,
             (options.iam_details, options.endpoint_overrides),
         )?;
-        #[cfg(feature = "test-support")]
-        if let Some(fixture) = options.billing_fixture {
-            session
-                .set_billing_fixture(&fixture)
-                .map_err(|error| *error)?;
-        }
+        #[cfg(any(test, feature = "test-support"))]
+        session
+            .set_product_fixtures(&options.product_fixtures)
+            .map_err(|error| *error)?;
         Ok(Self {
             region,
             settings: Default::default(),

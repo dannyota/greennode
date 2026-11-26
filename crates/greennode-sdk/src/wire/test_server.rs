@@ -40,7 +40,6 @@ pub struct Server {
     pub root_der: rustls::pki_types::CertificateDer<'static>,
     pub origin: String,
     pub address: SocketAddr,
-    #[cfg(feature = "test-support")]
     fixture: (SocketAddr, rustls::pki_types::CertificateDer<'static>),
     requests: Arc<AtomicUsize>,
     connections: Arc<AtomicUsize>,
@@ -191,7 +190,6 @@ impl Server {
             });
         });
         Self {
-            #[cfg(feature = "test-support")]
             fixture: (address, root_der.clone()),
             root_der,
             origin: format!("https://localhost:{}", address.port()),
@@ -205,7 +203,6 @@ impl Server {
             thread: Some(thread),
         }
     }
-    #[cfg(feature = "test-support")]
     pub(crate) fn fixture(&self) -> (SocketAddr, &rustls::pki_types::CertificateDer<'static>) {
         (self.fixture.0, &self.fixture.1)
     }

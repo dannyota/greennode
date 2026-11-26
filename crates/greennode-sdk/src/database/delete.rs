@@ -196,8 +196,10 @@ impl Client {
         if !instance.replicas.is_empty() || !instance.replica_source_id.is_empty() {
             return Err(refuse("the instance has replication"));
         }
-        #[cfg(feature = "test-support")]
-        if self.session.is_database_write_fixture()
+        #[cfg(any(test, feature = "test-support"))]
+        if self
+            .session
+            .is_write_fixture(crate::testing::Product::Database)
             && self
                 .session
                 .project_id_context(ctx)

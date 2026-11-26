@@ -1,0 +1,16 @@
+{
+  "LoadBalancer": {
+    "ID": "glb-1",
+    "Name": "demo",
+    "Description": "",
+    "Status": "ACTIVE",
+    "Package": "pkg-1",
+    "Type": "Layer 4",
+    "UserID": 0,
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": "",
+    "VIPs": [],
+    "Domains": []
+  }
+}

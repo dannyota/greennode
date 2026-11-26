@@ -2,6 +2,47 @@
 
 # CLI: GlobalLoadBalancer
 
+## create-load-balancer
+
+Kind: Write.
+
+Requires `--yes`, SDK IAM-user login, and default GLB and auth endpoints.
+
+Uses credits-only automated payment. A prepaid three-day hold and later
+connection and traffic charges apply.
+
+The SDK submits one create and waits up to 15 minutes for `ACTIVE`. If the write
+fails or remains unconfirmed, inspect inventory and billing before another
+mutation.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--package-id`  | `string` | yes      |
+| `--description` | `string` |          |
+
+```sh
+greennode globalloadbalancer create-load-balancer --name <name> --package-id <package-id> --yes
+```
+
+## delete-load-balancer
+
+Kind: Write, destructive.
+
+Requires `--yes`, SDK IAM-user login, and default GLB and auth endpoints.
+Deletion does not promise a refund.
+
+The SDK submits one delete for a Layer 4 load balancer in `ACTIVE` or `ERROR`
+and waits up to 10 minutes for a detail read to confirm absence.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+
+```sh
+greennode globalloadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes
+```
+
 ## get-listener
 
 Kind: Read.

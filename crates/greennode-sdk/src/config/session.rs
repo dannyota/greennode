@@ -19,8 +19,8 @@ pub(crate) struct Session {
     default_endpoints: EndpointSet,
     endpoint_overrides_used: bool,
     default_auth_endpoints: bool,
-    #[cfg(feature = "test-support")]
-    database_write_fixture: OnceLock<()>,
+    #[cfg(any(test, feature = "test-support"))]
+    write_fixtures: OnceLock<Vec<crate::testing::Product>>,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
@@ -124,9 +124,13 @@ impl Session {
         self.default_auth_endpoints
     }
 
-    #[cfg(feature = "test-support")]
-    pub(crate) fn is_database_write_fixture(&self) -> bool {
-        self.database_write_fixture.get().is_some()
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn is_write_fixture(&self, product: crate::testing::Product) -> bool {
+        self.auth_kind() == AuthKind::Static
+            && self
+                .write_fixtures
+                .get()
+                .is_some_and(|products| products.contains(&product))
     }
 
     pub(crate) async fn project_id_context(
@@ -281,27 +285,39 @@ impl Session {
         );
     }
 
-    #[cfg(feature = "test-support")]
-    pub(super) fn set_billing_fixture(
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn set_product_fixtures(
         &self,
-        fixture: &(
-            crate::testing::Product,
-            crate::wire::connection::FixtureTrust,
-        ),
+        fixtures: &[crate::testing::ProductFixture],
     ) -> Result<(), Box<Error>> {
+        if fixtures.is_empty() {
+            return Ok(());
+        }
         let invalid = || Box::new(Error::new(ErrorClass::InvalidConfig));
-        let (product, fixture) = fixture;
-        if !product
-            .endpoint(self.endpoints())
-            .is_some_and(|url| fixture.allows(url))
-        {
+        if fixtures.iter().any(|fixture| {
+            !fixture
+                .product
+                .endpoint(self.endpoints())
+                .is_some_and(|url| fixture.trust.allows(url))
+        }) {
             return Err(invalid());
         }
-        let clients = product_clients(|| fixture.trust()).map_err(|_| invalid())?;
+        let clients = product_clients(|| {
+            crate::wire::connection::FixtureTrust::trust(
+                fixtures.iter().map(|fixture| &fixture.trust),
+            )
+        })
+        .map_err(|_| invalid())?;
         self.clients.set(Ok(clients)).map_err(|_| invalid())?;
-        if matches!(product, crate::testing::Product::DatabaseWrite) {
-            self.database_write_fixture.set(()).map_err(|_| invalid())?;
-        }
+        self.write_fixtures
+            .set(
+                fixtures
+                    .iter()
+                    .filter(|fixture| fixture.write)
+                    .map(|fixture| fixture.product)
+                    .collect(),
+            )
+            .map_err(|_| invalid())?;
         Ok(())
     }
 
@@ -441,8 +457,8 @@ impl Session {
             default_endpoints,
             endpoint_overrides_used,
             default_auth_endpoints,
-            #[cfg(feature = "test-support")]
-            database_write_fixture: OnceLock::new(),
+            #[cfg(any(test, feature = "test-support"))]
+            write_fixtures: OnceLock::new(),
             clients: OnceLock::new(),
             clock,
             timeout,

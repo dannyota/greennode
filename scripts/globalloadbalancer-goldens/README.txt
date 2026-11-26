@@ -11,3 +11,9 @@ GOMODCACHE, run from the archived module:
 The test runs the complete Go CLI in-process with the ten testdata/glb
 responses. Copy the 30 stdout goldens to
 crates/greennode/tests/fixtures/globalloadbalancer/.
+
+Copy globalloadbalancer_write_goldens_test.go into the same archive and run:
+
+    go test ./internal/cli -run '^TestGlobalLoadBalancerWriteGoldens$' -count=1
+
+Copy the eight success and partial stdout goldens to the same directory.

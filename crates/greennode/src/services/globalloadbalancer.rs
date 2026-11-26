@@ -88,7 +88,13 @@ macro_rules! int_field {
 
 macro_rules! operation {
     ($input:ident, $defaults:expr, $method:ident, $name:literal, $go:literal,
-     $help:literal, $notes:expr, [$($flag:ident => $field:expr),* $(,)?]) => {{
+     $help:literal, $notes:expr, [$($flag:ident => $field:expr),* $(,)?]) => {
+        operation!($input, $defaults, $method, $name, $go, $help, $notes,
+                   [$($flag => $field),*], Kind::Read, None, None)
+    };
+    ($input:ident, $defaults:expr, $method:ident, $name:literal, $go:literal,
+     $help:literal, $notes:expr, [$($flag:ident => $field:expr),* $(,)?],
+     $kind:expr, $guard:expr, $example:expr) => {{
         const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
             defaults: $defaults,
             fields: &[$($field),*],
@@ -96,16 +102,16 @@ macro_rules! operation {
             allow_query: true,
             project_binding: None,
             pre_guard: Some(check_input_source),
-            guard: None,
+            guard: $guard,
         };
         Operation {
             name: $name,
             sdk_operation: concat!("globalloadbalancer.", $go),
             short_help: $help,
-            example: None,
+            example: $example,
             presence_required_fields: &[],
             inherited_bindings: &[],
-            kind: Kind::Read,
+            kind: $kind,
             flags: &[$($flag),*],
             json_fields: &[],
             extra_flags: &[],
@@ -123,6 +129,8 @@ macro_rules! operation {
     }};
 }
 
+mod writes;
+
 const SHAPE_NOTE: &str =
     "The response shape comes from the Go SDK and has no populated live read fixture.";
 
@@ -130,6 +138,8 @@ pub(super) const SERVICE: Service = Service {
     name: "globalloadbalancer",
     error_rules: &[],
     operations: &[
+        writes::CREATE,
+        writes::DELETE,
         operation!(
             ListPackagesInput,
             sdk::ListPackagesInput::default,

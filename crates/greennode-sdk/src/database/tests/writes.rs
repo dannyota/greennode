@@ -1,5 +1,5 @@
 use super::*;
-use crate::testing::{Product, with_product_loopback};
+use crate::testing::{Product, with_write_loopback};
 
 const PASS: &str = "Synthetic_Password32";
 const BEARER: &str = "synthetic-bearer";
@@ -7,8 +7,8 @@ const DETAIL: &[u8] = br#"{"code":200,"data":{"id":"db-1","name":"demo-db","stat
 
 fn fixture(server: &Server) -> Client {
     Client::new(
-        &Config::new(with_product_loopback(
-            Product::DatabaseWrite,
+        &Config::new(with_write_loopback(
+            Product::Database,
             ConfigOptions::default()
                 .with_region("hcm-3".into())
                 .with_project_id("project-1".into())
