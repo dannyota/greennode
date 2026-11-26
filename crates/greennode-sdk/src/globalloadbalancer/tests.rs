@@ -4,11 +4,12 @@ use crate::{ConfigOptions, EndpointOverrides, Secret};
 
 const TOKEN: &str = "toy-glb-session-bearer";
 
-fn response(status: &str, body: &str) -> Response {
+fn response(status: &str, body: impl AsRef<[u8]>) -> Response {
+    let body = body.as_ref();
     Response::Http {
         status: status.into(),
         headers: vec![("Content-Length".into(), body.len().to_string())],
-        body: body.as_bytes().to_vec(),
+        body: body.to_vec(),
     }
 }
 
@@ -311,5 +312,119 @@ async fn error_http_status_is_preserved_after_body_sanitization() {
         assert_eq!(api.code(), code);
         assert!(!api.message().contains(TOKEN));
         assert_eq!(api.message(), message);
+    }
+}
+
+#[tokio::test]
+async fn percent_encoded_credentials_are_removed_from_strings_and_nested_keys() {
+    let encoded = TOKEN.replace('-', "%252D");
+    let headers = format!(r#"{{"headers":"https://example.invalid/?header={encoded}"}}"#);
+    let packages = format!(
+        r#"[{{"detail":[{{"{encoded}":"omit","name":"{encoded}","URL":"https://example.invalid/é%20x"}}]}}]"#
+    );
+    let server = Server::start(vec![
+        response("200 OK", headers),
+        response("200 OK", packages),
+    ]);
+    let client = client(&server, TOKEN);
+    let (ctx, _) = RequestContext::new();
+    let listener = client
+        .get_listener(&ctx, GetListenerInput::new("glb-1", "listener-1"))
+        .await
+        .unwrap()
+        .listener;
+    assert!(listener.headers.as_deref() == Some("<redacted>"));
+    let packages = client
+        .list_packages(&ctx, ListPackagesInput {})
+        .await
+        .unwrap();
+    let detail = &packages.items[0].detail[0];
+    assert!(detail.get(&encoded).is_none());
+    assert!(detail["name"] == "<redacted>");
+    assert_eq!(detail["URL"], "https://example.invalid/é%20x");
+}
+
+#[tokio::test]
+async fn dynamic_booleans_and_nulls_check_their_rendered_spellings() {
+    let (ctx, _) = RequestContext::new();
+    for (bearer, reflected, safe, expected) in [
+        ("true", "true", "false", serde_json::json!(false)),
+        ("false", "false", "true", serde_json::json!(true)),
+        ("null", "null", "false", serde_json::json!(false)),
+    ] {
+        let body =
+            format!(r#"[{{"enabled":{safe},"detail":{{"match":{reflected},"safe":{safe}}}}}]"#);
+        let server = Server::start(vec![response("200 OK", body)]);
+        let output = client(&server, bearer)
+            .list_packages(&ctx, ListPackagesInput {})
+            .await
+            .unwrap();
+        let detail = &output.items[0].detail;
+        assert!(detail["match"] == "<redacted>");
+        assert_eq!(detail["safe"], expected);
+    }
+}
+
+#[tokio::test]
+async fn invalid_unicode_is_replaced_before_shape_validation_and_redaction() {
+    let body = b"[{\"name\":\"\xE2\x82x\",\"detail\":{\"\\uDC00\":\"\\uD800toy-glb-session-bearer\",\"pair\":\"\\uD834\\uDD1E\",\"literal\":\"\\\\uD800\"}}]";
+    let server = Server::start(vec![
+        response("200 OK", body),
+        response("200 OK", br#"[{"detail":{"\uD800":1,"\uDC00":2}}]"#),
+    ]);
+    let client = client(&server, TOKEN);
+    let (ctx, _) = RequestContext::new();
+    let output = client
+        .list_packages(&ctx, ListPackagesInput {})
+        .await
+        .unwrap();
+    assert_eq!(output.items[0].name, "��x");
+    let detail = &output.items[0].detail;
+    assert!(detail["�"] == "<redacted>");
+    assert_eq!(detail["pair"], "𝄞");
+    assert_eq!(detail["literal"], r"\uD800");
+    let error = client
+        .list_packages(&ctx, ListPackagesInput {})
+        .await
+        .unwrap_err()
+        .into_parts()
+        .0;
+    assert_eq!(
+        error.detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+}
+
+#[tokio::test]
+async fn go_integer_negative_zero_decodes_with_exact_signed_bounds() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"offset":-0,"limit":9223372036854775807,"total":-9223372036854775808,"items":[{"userId":-0}]}"#,
+        ),
+        response("200 OK", r#"{"total":9223372036854775808}"#),
+        response("200 OK", r#"{"total":-0.0}"#),
+    ]);
+    let client = client(&server, TOKEN);
+    let (ctx, _) = RequestContext::new();
+    let output = client
+        .list_load_balancers(&ctx, ListLoadBalancersInput::default())
+        .await
+        .unwrap();
+    assert_eq!(output.offset, 0);
+    assert_eq!(output.limit, i64::MAX);
+    assert_eq!(output.total, i64::MIN);
+    assert_eq!(output.items[0].user_id, 0);
+    for _ in 0..2 {
+        let error = client
+            .list_load_balancers(&ctx, ListLoadBalancersInput::default())
+            .await
+            .unwrap_err()
+            .into_parts()
+            .0;
+        assert_eq!(
+            error.detail::<DecodeError>(),
+            Some(&DecodeError::InvalidShape)
+        );
     }
 }
