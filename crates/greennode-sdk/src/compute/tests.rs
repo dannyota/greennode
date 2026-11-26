@@ -1,3 +1,5 @@
+mod paid;
+
 use super::*;
 use crate::wire::test_server::{Response, Server as TestServer};
 use crate::{ConfigOptions, EndpointOverrides, ErrorClass, RequestContext, Secret};

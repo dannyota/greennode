@@ -446,6 +446,9 @@ async fn run_inner(
     let mut recovered = false;
     let mut attempt = 0usize;
     'attempt: loop {
+        if let Some(token) = &bearer {
+            reflection.record_product_credential(&token.token.access_token);
+        }
         if let Some(credentials) = bearer
             .as_ref()
             .and_then(|value| value.signin_credentials.as_deref())

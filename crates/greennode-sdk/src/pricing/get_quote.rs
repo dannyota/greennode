@@ -88,6 +88,27 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
+        self.quote(ctx, input, evidence, false, false).await
+    }
+
+    pub(crate) async fn compute_quote_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        input: GetQuoteInput,
+        evidence: &mut Evidence,
+        require_totals: bool,
+    ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
+        self.quote(ctx, input, evidence, require_totals, true).await
+    }
+
+    async fn quote(
+        &self,
+        ctx: &RequestContext,
+        input: GetQuoteInput,
+        evidence: &mut Evidence,
+        require_totals: bool,
+        retain_code: bool,
+    ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         if input.resource_type.is_empty() {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
@@ -106,7 +127,7 @@ impl Client {
             &input.action
         };
         let body = input::regional(&input.resource_type, action, input.resource_info.as_ref());
-        let raw = request::exchange(
+        let raw = request::exchange_with_code(
             &self.session,
             ctx,
             evidence,
@@ -119,8 +140,10 @@ impl Client {
                 body: Some(&body),
             },
             None,
+            retain_code,
         )
-        .await;
+        .await
+        .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))));
         let numeric = evidence.credentials().has_numeric_product_credential();
         match raw {
             Err(error) => {
@@ -140,7 +163,7 @@ impl Client {
             Ok(raw) => {
                 let output = crate::quote::catalog::value(OP, &raw)
                     .ok()
-                    .and_then(|value| project(&value, action).ok());
+                    .and_then(|value| project(&value, action, require_totals).ok());
                 let output = output.filter(|result| {
                     serde_json::to_value(result).is_ok_and(|value| !evidence.reflected_in(&value))
                 });
@@ -150,11 +173,15 @@ impl Client {
     }
 }
 
-fn project(raw: &Value, action: &str) -> Result<GetQuoteOutput, Box<Error>> {
+fn project(raw: &Value, action: &str, require_totals: bool) -> Result<GetQuoteOutput, Box<Error>> {
     let obj = decode::quote_object(OP, raw)?;
-    let amount = |name| decode::numeric(OP, obj, name).map(Option::unwrap_or_default);
+    let amount = |name| match decode::numeric(OP, obj, name)? {
+        Some(amount) => Ok(amount),
+        None if require_totals => Err(Box::new(decode::invalid_quote(OP, Some(200)))),
+        None => Ok(0.0),
+    };
     let optimum_price = decode::numeric(OP, obj, "optimumPrice")?
-        .filter(|amount| *amount >= 0.0 || action == ACTION_RESIZE)
+        .filter(|amount| *amount >= 0.0 || action == ACTION_RESIZE || require_totals)
         .ok_or_else(|| Box::new(decode::invalid_quote(OP, Some(200))))?;
     let properties = decode::properties(OP, obj)?
         .iter()

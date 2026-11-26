@@ -138,6 +138,16 @@ pub(super) struct Envelope(BTreeMap<String, Box<RawValue>>);
     reason = "The public API returns Failure by value"
 )]
 impl Envelope {
+    pub(super) fn reflects(&self, evidence: &Evidence) -> bool {
+        self.0.iter().any(|(key, raw)| {
+            evidence.text_reflects(key)
+                || operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
+                    .unwrap_or(true)
+                || serde_json::from_str::<serde_json::Value>(raw.get())
+                    .map_or(true, |value| evidence.reflected_in(&value))
+        })
+    }
+
     pub(super) fn field<T: WireField, O>(
         &self,
         name: &str,

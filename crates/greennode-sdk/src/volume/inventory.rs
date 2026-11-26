@@ -113,14 +113,20 @@ impl Client {
         input: GetVolumeInput,
     ) -> Result<GetVolumeOutput, Failure<GetVolumeOutput>> {
         output(
-            async {
-                let mut evidence = Evidence::new();
-                let mut volume = self.volume(ctx, &input.volume_id, &mut evidence).await?;
-                volume.redact(&evidence);
-                screen(&evidence, GetVolumeOutput { volume }, VOLUME.id)
-            }
-            .await,
+            self.get_volume_with_evidence(ctx, &input.volume_id, &mut Evidence::new())
+                .await,
         )
+    }
+
+    pub(crate) async fn get_volume_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<GetVolumeOutput, Box<Error>> {
+        let mut volume = self.volume(ctx, id, evidence).await?;
+        volume.redact(evidence);
+        screen(evidence, GetVolumeOutput { volume }, VOLUME.id)
     }
 
     pub(super) async fn volume(
@@ -206,35 +212,34 @@ impl Client {
         input: ListVolumesByServerInput,
     ) -> Result<ListVolumesByServerOutput, Failure<ListVolumesByServerOutput>> {
         output(
-            async {
-                path_id(BY_SERVER.id, "ServerID", &input.server_id)?;
-                let mut evidence = Evidence::new();
-                let project = self.project(ctx, &mut evidence).await?;
-                self.read(
-                    ctx,
-                    BY_SERVER,
-                    &[&project, &input.server_id],
-                    &[],
-                    &mut evidence,
-                    |raw| {
-                        let items = if raw.get().starts_with('[') {
-                            Vec::from_wire(raw)?
-                        } else if raw.get() == "null" {
-                            Vec::new()
-                        } else {
-                            let values = Object::parse(raw)?;
-                            let volumes = values.optional("volumes")?;
-                            let data = values.optional("data")?;
-                            let list_data = values.optional("listData")?;
-                            volumes.or(data).or(list_data).unwrap_or_default()
-                        };
-                        Ok(List { items })
-                    },
-                )
-                .await
-            }
-            .await,
+            self.list_volumes_by_server_with_evidence(ctx, &input.server_id, &mut Evidence::new())
+                .await,
         )
+    }
+
+    pub(crate) async fn list_volumes_by_server_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<ListVolumesByServerOutput, Box<Error>> {
+        path_id(BY_SERVER.id, "ServerID", id)?;
+        let project = self.project(ctx, evidence).await?;
+        self.read(ctx, BY_SERVER, &[&project, id], &[], evidence, |raw| {
+            let items = if raw.get().starts_with('[') {
+                Vec::from_wire(raw)?
+            } else if raw.get() == "null" {
+                Vec::new()
+            } else {
+                let values = Object::parse(raw)?;
+                let volumes = values.optional("volumes")?;
+                let data = values.optional("data")?;
+                let list_data = values.optional("listData")?;
+                volumes.or(data).or(list_data).unwrap_or_default()
+            };
+            Ok(List { items })
+        })
+        .await
     }
 }
 

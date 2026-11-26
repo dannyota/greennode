@@ -4,7 +4,10 @@ mod aggregates;
 mod flavors;
 mod inventory;
 mod models;
+mod mutation;
 mod prices;
+mod quotes;
+mod server_writes;
 mod wire;
 
 #[cfg(test)]
@@ -18,6 +21,9 @@ pub use prices::{
     FlavorPrice, FlavorPriceReference, ListFlavorPricesInput, ListFlavorPricesOutput,
 };
 
+pub use quotes::{CreateServerInput, ResizeServerInput};
+pub use server_writes::{CreateServerOutput, DeleteServerInput, DeleteServerOutput};
+
 use std::sync::Arc;
 
 use crate::config::Session;
@@ -28,6 +34,8 @@ use crate::{Config, Error, Failure, WriteDispatch};
 pub struct Client {
     session: Arc<Session>,
     region: String,
+    pricing: crate::pricing::Client,
+    volume: crate::volume::Client,
 }
 
 impl Client {
@@ -36,6 +44,8 @@ impl Client {
         Self {
             session: Arc::clone(config.session()),
             region: config.region().to_owned(),
+            pricing: crate::pricing::Client::new(config),
+            volume: crate::volume::Client::new(config),
         }
     }
 }
