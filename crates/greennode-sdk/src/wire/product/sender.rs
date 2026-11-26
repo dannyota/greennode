@@ -617,6 +617,7 @@ async fn run_inner(
                             location,
                         )
                         .map_err(Error::Redirect)?;
+                        credentials.extend(reflection);
                         let reflected = match auth {
                             Auth::Bearer(_) => {
                                 super::response::reflects_credential(location, &credentials)

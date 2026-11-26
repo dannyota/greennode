@@ -4,6 +4,8 @@ mod accounts;
 mod groups;
 mod models;
 mod policies;
+mod principal_guard;
+mod service_account_writes;
 mod wire;
 mod writes;
 
@@ -31,6 +33,7 @@ pub use accounts::*;
 pub use groups::*;
 pub use models::*;
 pub use policies::*;
+pub use service_account_writes::*;
 pub use writes::WriteError;
 
 const OBJECT_CAP: usize = 256 << 10;
@@ -115,6 +118,7 @@ impl Client {
         .await
         .map_err(|error| {
             let error = wire::account_error(operation.id, error.into_parts().0);
+            let error = wire::private_status_error(operation, error, evidence);
             failure(screen_error(error, evidence))
         })?;
         Ok(output)

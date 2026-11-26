@@ -1,4 +1,5 @@
 mod groups;
+mod service_accounts;
 
 use super::*;
 use crate::wire::test_server::{Response, Server};

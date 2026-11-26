@@ -139,6 +139,8 @@ macro_rules! operation {
     }};
 }
 
+mod service_account_writes;
+
 const PAGE_NOTE: &str =
     "Returns one zero-based page. The default size is 10000. Unknown page metadata is null.";
 const USER_NOTE: &str = "Use `list-user-policies` and `list-user-groups` with the user ID to see attached policies and memberships.";
@@ -165,10 +167,22 @@ macro_rules! write_rule {
 pub(super) const SERVICE: Service = Service {
     name: "iam",
     error_rules: &[
+        write_rule!(SelfChange, 41),
         write_rule!(PrivilegedChange, 42),
         write_rule!(ResourceInUse, 44),
     ],
     operations: &[
+        service_account_writes::CREATE,
+        service_account_writes::RESET,
+        operation!(
+            DestructiveWrite; DeleteServiceAccountInput, || sdk::DeleteServiceAccountInput::new(""), delete_service_account,
+            "delete-service-account", "DeleteServiceAccount", "Delete an IAM service account",
+            Some("greennode iam delete-service-account --service-account-id <service-account-id> --yes"),
+            &["Refuses service-account callers and accounts with an attached IAM write policy."], [
+                SERVICE_ACCOUNT_ID => required_string!(sdk::DeleteServiceAccountInput, service_account_id, SERVICE_ACCOUNT_ID, "ServiceAccountID"),
+            ]
+        ),
+        service_account_writes::UPDATE,
         operation!(
             Write; CreateGroupInput, || sdk::CreateGroupInput::new(""), create_group,
             "create-group", "CreateGroup", "Create an empty IAM group",

@@ -18,6 +18,24 @@ uncertain, list groups before repeating the command.
 greennode iam create-group --name <name>
 ```
 
+## create-service-account
+
+Kind: Write.
+
+Creates the account once and saves the issued secret to a new private file.
+Confirm creation with `list-service-accounts` before another write if the result
+is uncertain.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--description` | `string` |          |
+| `--secret-file` | `string` | yes      |
+
+```sh
+greennode iam create-service-account --name <name> --secret-file <secret-file>
+```
+
 ## delete-group
 
 Kind: Write, destructive.
@@ -31,6 +49,20 @@ policies. An attachment returns `ResourceInUse`.
 
 ```sh
 greennode iam delete-group --group-id <group-id> --yes
+```
+
+## delete-service-account
+
+Kind: Write, destructive.
+
+Refuses service-account callers and accounts with an attached IAM write policy.
+
+| Flag                   | Type     | Required |
+| ---------------------- | -------- | -------- |
+| `--service-account-id` | `string` | yes      |
+
+```sh
+greennode iam delete-service-account --service-account-id <service-account-id> --yes
 ```
 
 ## get-caller-identity
@@ -255,6 +287,22 @@ policies and memberships.
 greennode iam list-users
 ```
 
+## reset-service-account-secret
+
+Kind: Write, destructive.
+
+Rotates the secret once and saves it to a new private file. Treat the previous
+secret as revoked after an uncertain result.
+
+| Flag                   | Type     | Required |
+| ---------------------- | -------- | -------- |
+| `--service-account-id` | `string` | yes      |
+| `--secret-file`        | `string` | yes      |
+
+```sh
+greennode iam reset-service-account-secret --service-account-id <service-account-id> --secret-file <secret-file> --yes
+```
+
 ## update-group
 
 Kind: Write.
@@ -270,4 +318,21 @@ preserves it. Reads the group again after a successful update.
 
 ```sh
 greennode iam update-group --group-id <group-id> --description <description>
+```
+
+## update-service-account
+
+Kind: Write.
+
+Updates only the fields supplied. Confirms the service-account identity with a
+read after the update.
+
+| Flag                       | Type      | Required |
+| -------------------------- | --------- | -------- |
+| `--service-account-id`     | `string`  | yes      |
+| `--description`            | `*string` |          |
+| `--access-token-life-span` | `*int`    |          |
+
+```sh
+greennode iam update-service-account --service-account-id <service-account-id>
 ```

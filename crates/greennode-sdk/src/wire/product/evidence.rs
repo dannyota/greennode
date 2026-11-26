@@ -195,6 +195,12 @@ impl Evidence {
         self.credentials.extend(credentials);
     }
 
+    pub(crate) fn transport_only(&self) -> Self {
+        Self {
+            credentials: self.credentials.transport_only(),
+        }
+    }
+
     pub(crate) fn credentials(&self) -> &SentCredentials {
         &self.credentials
     }

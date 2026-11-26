@@ -1,0 +1,288 @@
+use std::collections::{BTreeMap, HashSet};
+use std::sync::LazyLock;
+
+use regex_lite::Regex;
+use serde::Serialize;
+use serde_json::value::RawValue;
+
+use super::wire::{self, Wire};
+use super::writes::{confirmed_identity, guard_failed, guard_refusal};
+use super::{
+    Action, Api, Client, LIST_CAP, OBJECT_CAP, Operation, Policy, PolicySummary, WriteError,
+    read_operation,
+};
+use crate::wire::product::evidence::Evidence;
+use crate::wire::strict_json::{Shape, ShapeField};
+use crate::{Failure, RequestContext};
+
+const ACCOUNT_POLICIES: &str = "policies-api/v1/user-attachments/service-accounts/{}/policies";
+const ACTIONS: &str = "policies-api/v1/actions";
+const POLICY: &str = "policies-api/v1/policies/{}";
+
+#[derive(Default)]
+struct AttachmentPage {
+    items: Option<Vec<PolicySummary>>,
+    total_items: Option<i64>,
+    total_pages: Option<i64>,
+}
+
+impl Wire for AttachmentPage {
+    const SHAPE: Shape<'static> = Shape::Object(&[
+        ShapeField {
+            name: "data",
+            shape: Vec::<PolicySummary>::SHAPE,
+        },
+        ShapeField {
+            name: "totalItems",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "totalPages",
+            shape: Shape::Any,
+        },
+    ]);
+
+    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
+        let fields: BTreeMap<String, &RawValue> =
+            serde_json::from_str::<Option<_>>(raw.get())?.unwrap_or_default();
+        Ok(Self {
+            items: optional_field(&fields, "data")?,
+            total_items: optional_field(&fields, "totalItems")?,
+            total_pages: optional_field(&fields, "totalPages")?,
+        })
+    }
+}
+
+pub(super) fn optional_field<T: Wire>(
+    fields: &BTreeMap<String, &RawValue>,
+    key: &str,
+) -> Result<Option<T>, serde_json::Error> {
+    wire::field(fields, key)
+        .map(Option::<T>::decode)
+        .transpose()
+        .map(Option::flatten)
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+impl Client {
+    pub(super) async fn guard_service_account<O>(
+        &self,
+        ctx: &RequestContext,
+        op: &'static str,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<(), Failure<O>> {
+        let caller = self.require_classified_caller(ctx, op, evidence).await?;
+        if matches!(caller.user_type.as_str(), "user-sa" | "service-sa") {
+            return Err(guard_refusal(
+                &format!(
+                    "iam: refused: target is the caller: {op}: the caller is a service account"
+                ),
+                Some(WriteError::SelfChange),
+            ));
+        }
+        let actions = self.guard_write_actions(ctx, evidence).await?;
+        let protected = self
+            .paged_policies_are_privileged(
+                ctx,
+                op,
+                ACCOUNT_POLICIES,
+                ("ServiceAccountID", id),
+                &actions,
+                evidence,
+            )
+            .await?;
+        if protected {
+            return Err(guard_refusal(
+                &format!(
+                    "iam: refused: target is protected: {op}: the service account has a privileged policy attached"
+                ),
+                Some(WriteError::PrivilegedChange),
+            ));
+        }
+        if evidence.id_reflects(id) {
+            return Err(guard_failed(super::invalid_input(
+                "IAM request operand withheld".into(),
+            )));
+        }
+        Ok(())
+    }
+
+    async fn guard_write_actions<O>(
+        &self,
+        ctx: &RequestContext,
+        evidence: &mut Evidence,
+    ) -> Result<Vec<String>, Failure<O>> {
+        let actions: Vec<Action> = self
+            .fetch(
+                ctx,
+                Api::Policies,
+                &guard_read("iam.ListActions", ACTIONS, LIST_CAP),
+                &[],
+                &[("product", "iam")],
+                evidence,
+            )
+            .await
+            .map_err(guard_failed)?;
+        require_safe(
+            &actions,
+            "iam: iam.ListActions: unsafe action list",
+            evidence,
+        )?;
+        let names = write_action_names(&actions)
+            .filter(|names| !names.is_empty())
+            .ok_or_else(|| {
+                guard_refusal(
+                    "iam: guard: refused: the account's IAM action list names no write action",
+                    None,
+                )
+            })?;
+        Ok(names)
+    }
+
+    async fn paged_policies_are_privileged<O>(
+        &self,
+        ctx: &RequestContext,
+        op: &'static str,
+        route: &'static str,
+        id: (&str, &str),
+        actions: &[String],
+        evidence: &mut Evidence,
+    ) -> Result<bool, Failure<O>> {
+        let page: AttachmentPage = self
+            .fetch(
+                ctx,
+                Api::Policies,
+                &guard_read(op, route, LIST_CAP),
+                &[id],
+                &[("pageNumber", "0"), ("pageSize", "10000")],
+                evidence,
+            )
+            .await
+            .map_err(guard_failed)?;
+        let refuse = |reason| guard_refusal(&format!("iam: guard: {op}: {reason}"), None);
+        let items = page
+            .items
+            .ok_or_else(|| refuse("attachment list response had no data field"))?;
+        let total = page
+            .total_items
+            .ok_or_else(|| refuse("attachment list response had no totalItems field"))?;
+        if usize::try_from(total) != Ok(items.len()) {
+            return Err(refuse(
+                "attachment list item count does not match totalItems",
+            ));
+        }
+        if page.total_pages.is_some_and(|pages| pages > 1) {
+            return Err(refuse("attachment list reports more than one page"));
+        }
+        require_safe(
+            &(total, page.total_pages, &items),
+            "iam: guard: policy attachments withheld",
+            evidence,
+        )?;
+        let mut seen = HashSet::new();
+        for item in &items {
+            if seen.insert(item.id.as_str())
+                && self
+                    .policy_is_privileged(ctx, &item.id, actions, evidence)
+                    .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn policy_is_privileged<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        actions: &[String],
+        evidence: &mut Evidence,
+    ) -> Result<bool, Failure<O>> {
+        let policy: Policy = self
+            .fetch(
+                ctx,
+                Api::Policies,
+                &guard_read("iam.GetPolicy", POLICY, OBJECT_CAP),
+                &[("PolicyID", id)],
+                &[],
+                evidence,
+            )
+            .await
+            .map_err(guard_failed)?;
+        confirmed_identity(
+            &policy.id,
+            id,
+            "iam.GetPolicy: policy identity is unproven",
+            evidence,
+        )
+        .map_err(guard_failed)?;
+        require_safe(&policy, "iam: iam.GetPolicy: unsafe policy", evidence)?;
+        Ok(policy.statements.is_empty()
+            || policy.statements.iter().any(|statement| {
+                let effect = &statement.effect;
+                !effect.eq_ignore_ascii_case("deny")
+                    && (!effect.eq_ignore_ascii_case("allow")
+                        || statement.actions.is_empty()
+                        || statement
+                            .actions
+                            .iter()
+                            .any(|pattern| matches_write_action(pattern, actions)))
+            }))
+    }
+}
+
+fn guard_read(id: &'static str, route: &'static str, cap: usize) -> Operation {
+    Operation {
+        sensitive: true,
+        ..read_operation(id, route, cap, false)
+    }
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+pub(super) fn require_safe<O>(
+    value: &impl Serialize,
+    message: &str,
+    evidence: &Evidence,
+) -> Result<(), Failure<O>> {
+    if serde_json::to_value(value).is_ok_and(|value| !evidence.reflected_in(&value)) {
+        Ok(())
+    } else {
+        Err(guard_refusal(message, None))
+    }
+}
+
+fn write_action_names(actions: &[Action]) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for action in actions {
+        let name = action.action.to_ascii_lowercase();
+        let name = name.strip_prefix("iam:").unwrap_or(&name);
+        if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return None;
+        }
+        if !matches!(action.label.as_str(), "List" | "Read" | "Tagging") {
+            names.push(format!("iam:{name}"));
+        }
+    }
+    Some(names)
+}
+
+fn matches_write_action(pattern: &str, actions: &[String]) -> bool {
+    static VALID: LazyLock<Result<Regex, regex_lite::Error>> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9*]+(-[A-Za-z0-9*]+)*(:[A-Za-z0-9*]+)?$"));
+    if VALID
+        .as_ref()
+        .map_or(true, |regex| !regex.is_match(pattern))
+    {
+        return true;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    if matches!(pattern.as_str(), "*" | "*:*" | "iam:*") {
+        return true;
+    }
+    let pattern = format!("^{}$", pattern.replace('*', ".*"));
+    Regex::new(&pattern).map_or(true, |regex| {
+        actions.iter().any(|action| regex.is_match(action))
+    })
+}

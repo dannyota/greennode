@@ -318,13 +318,14 @@ impl<T: Wire> Output for Body<T> {
     const SCHEMA: Shape<'static> = T::SHAPE;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        let label = account_label(operation.id);
+        let account = account_label(operation.id).is_some();
+        let private = operation.sensitive && operation.id != "iam.GetUser";
         let body = response::classify(
             operation.id,
             response.status,
             bytes::Bytes::copy_from_slice(&response.body),
             operation.success,
-            (true, label.is_some(), operation.retry),
+            (true, account || private, operation.retry),
             &response.credentials,
         )?;
         if operation.no_output || (body.is_empty() && operation.allow_empty) {
@@ -336,10 +337,75 @@ impl<T: Wire> Output for Body<T> {
             .map_err(|_| error(super::DecodeError::MalformedJson))?;
         strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
-        T::decode(raw)
-            .map(Self)
-            .map_err(|_| error(super::DecodeError::InvalidShape))
+        let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
+        if operation.reject_reflected_credentials
+            && super::operation::reflects_json_forms(body.as_bytes(), &response.credentials)
+                != Some(false)
+        {
+            return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
+                crate::RecoveryAdvice::new("iam: iam.GetServiceAccount: unsafe guard response"),
+            )));
+        }
+        Ok(Self(value))
     }
+}
+
+pub(super) fn private_status_error(
+    operation: &Operation,
+    error: Error,
+    evidence: &Evidence,
+) -> Error {
+    if !operation.sensitive
+        || operation.id == "iam.GetUser"
+        || account_label(operation.id).is_some()
+    {
+        return error;
+    }
+    let Some(api) = error
+        .api_error()
+        .filter(|api| api.operation() == operation.id)
+    else {
+        return error;
+    };
+    let Some(status) = api
+        .status()
+        .and_then(|status| http::StatusCode::from_u16(status).ok())
+        .filter(|status| !operation.success.contains(status))
+    else {
+        return error;
+    };
+    const MESSAGE: &str = "IAM user request failed; response withheld";
+    let label = match operation.template {
+        "accounts-api/v1/auth/userinfo" => Some("caller identity"),
+        "policies-api/v1/actions" => Some("action list"),
+        "policies-api/v1/policies/{}" => Some("policy"),
+        "policies-api/v1/user-attachments/service-accounts/{}/policies" => {
+            Some("policy attachments")
+        }
+        _ => None,
+    };
+    let message = label.map_or_else(
+        || MESSAGE.to_owned(),
+        |label| {
+            let id = operation.id;
+            format!(
+                "{id}: read {label}: {id}: {MESSAGE} (status {})",
+                status.as_u16()
+            )
+        },
+    );
+    let private = Error::from_api(ApiError::new(
+        operation.id,
+        Some(status.as_u16()),
+        SafeText::new("", &[]),
+        SafeText::new(&message, &[]),
+        api.retryable(),
+    ));
+    let private = match error.detail::<http::StatusCode>() {
+        Some(observed) => private.with_outer_detail(*observed),
+        None => private,
+    };
+    private.screen_api(&|value| response::reflects_credential_forms(value, evidence.credentials()))
 }
 
 fn account_label(operation: &str) -> Option<&'static str> {

@@ -17,8 +17,14 @@ use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WriteError {
-    /// The caller type cannot be classified for the guard.
+    /// The target could be the current caller.
+    SelfChange,
+    /// The caller or target cannot be proved safe for a guarded write.
     PrivilegedChange,
+    /// The create returned but could not be confirmed.
+    CreateUnconfirmed,
+    /// The service acknowledged a write without returning its one-time credential.
+    NoSecret,
     /// A resource still has an attachment that prevents deletion.
     ResourceInUse,
 }
@@ -96,6 +102,7 @@ impl Client {
         .map(|(_, Body(value))| value)
         .map_err(|failed| {
             let (error, _, dispatch) = failed.into_parts();
+            let error = super::wire::private_status_error(operation, error, evidence);
             Failure::new(screen_error(error, evidence), None, dispatch)
         })
     }
@@ -105,17 +112,25 @@ impl Client {
         ctx: &RequestContext,
         op: &str,
         evidence: &mut Evidence,
-    ) -> Result<(), Failure<O>> {
+    ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
         let caller: super::GetCallerIdentityOutput = self
             .fetch::<_, O>(
                 ctx,
                 Api::Accounts,
-                &read_operation(
-                    "iam.GetCallerIdentity",
-                    "accounts-api/v1/auth/userinfo",
-                    OBJECT_CAP,
-                    false,
-                ),
+                &Operation {
+                    sensitive: matches!(
+                        op,
+                        "iam.UpdateServiceAccount"
+                            | "iam.DeleteServiceAccount"
+                            | "iam.ResetServiceAccountSecret"
+                    ),
+                    ..read_operation(
+                        "iam.GetCallerIdentity",
+                        "accounts-api/v1/auth/userinfo",
+                        OBJECT_CAP,
+                        false,
+                    )
+                },
                 &[],
                 &[],
                 evidence,
@@ -143,7 +158,7 @@ impl Client {
                 Some(WriteError::PrivilegedChange),
             ));
         }
-        Ok(())
+        Ok(caller)
     }
 }
 
