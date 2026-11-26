@@ -43,6 +43,14 @@ The [architecture](../docs/design/architecture.md#differences-from-the-baseline)
 5. Check the operation against the parity test, which compares its name, kind, and flags with the baseline.
 6. List in the report anything the baseline does that the tests do not prove.
 
+Billing is the template; copy its shape:
+
+- SDK: `src/<service>/` with `Client::new(&Config)`, one file per group of operations, named inputs and outputs, models that deserialize from wire names and serialize with Go's output names, and the envelope private to the service. Each call is an operation declaration on the crate-private operation client with an output schema; reflection checks and test trust come from the shared code, never the service.
+- CLI: `src/services/<service>.rs` or `<service>/`, one input descriptor per operation with `pre_guard` set, registered in `services/mod.rs`; output keys, table columns and text come from the SDK projection.
+- Goldens: JSON, table and text for every command, generated in-process from the baseline with `scripts/billing-goldens/` (copy it per service), stored under `crates/greennode/tests/fixtures/<service>/`.
+- Tests: SDK loopback tests per operation; CLI in-process tests that build `Config` through the SDK `test-support` feature and compare stdout with the goldens; built-binary tests only for offline paths.
+- Finish with `shipped-commands.json` entries and the `docs/wiki/CLI-<Service>.md` page from `gen-docs`.
+
 ## Limits of a port
 
 Fixtures and mocks prove the port matches the Go code. They do not prove the GreenNode API still behaves that way. State which claims rest only on the baseline, and leave live verification to the primary under the [security rules](security.md#live-calls).
