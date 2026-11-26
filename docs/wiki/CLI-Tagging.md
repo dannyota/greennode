@@ -17,3 +17,32 @@ marks one of them.
 ```sh
 greennode tagging list-resource-tags --resource-id <resource-id>
 ```
+
+## tag-resource
+
+Kind: Write.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--resource-id`   | `string` | yes      |
+| `--resource-type` | `string` | yes      |
+| `--key`           | `string` | yes      |
+| `--value`         | `string` |          |
+
+```sh
+greennode tagging tag-resource --resource-id <resource-id> --resource-type <resource-type> --key <key>
+```
+
+## untag-resource
+
+Kind: Write.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--resource-id`   | `string` | yes      |
+| `--resource-type` | `string` | yes      |
+| `--key`           | `string` | yes      |
+
+```sh
+greennode tagging untag-resource --resource-id <resource-id> --resource-type <resource-type> --key <key>
+```

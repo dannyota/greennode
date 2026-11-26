@@ -1,6 +1,8 @@
 use crate::error::SafeText;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation, Output},
+    options::Options,
     redirect::{Classification, Retry},
     retry,
     sender::{BearerSource, Response, Runtime, SentCredentials},
@@ -81,6 +83,19 @@ impl Discovery {
         region: &str,
         read: ProjectRead,
     ) -> Result<Project, Box<Error>> {
+        self.require_with_evidence(runtime, base, source, region, read, &mut Evidence::new())
+            .await
+    }
+
+    pub(crate) async fn require_with_evidence(
+        &self,
+        runtime: Runtime<'_>,
+        base: &crate::endpoint::Base,
+        source: &dyn BearerSource,
+        region: &str,
+        read: ProjectRead,
+        evidence: &mut Evidence,
+    ) -> Result<Project, Box<Error>> {
         let ctx = runtime.ctx.child_with_deadline(runtime.deadline);
         let clock = runtime.clock;
         let mut state = self.lock(&ctx, clock).await?;
@@ -89,7 +104,7 @@ impl Discovery {
         {
             return Ok(project.clone());
         }
-        let projects = read_projects(runtime, base, source, region).await?;
+        let projects = read_projects_with_evidence(runtime, base, source, region, evidence).await?;
         let selected = select(projects, region, state.as_ref())?;
         #[cfg(test)]
         if let Some(hook) = &self.before_publish {
@@ -109,14 +124,26 @@ pub(crate) async fn read_projects(
     source: &dyn BearerSource,
     region: &str,
 ) -> Result<Vec<Project>, Box<Error>> {
-    let (_, inventory) = operation::execute::<Inventory>(
+    read_projects_with_evidence(runtime, base, source, region, &mut Evidence::new()).await
+}
+
+async fn read_projects_with_evidence(
+    runtime: Runtime<'_>,
+    base: &crate::endpoint::Base,
+    source: &dyn BearerSource,
+    region: &str,
+    evidence: &mut Evidence,
+) -> Result<Vec<Project>, Box<Error>> {
+    let (_, inventory) = operation::execute_with_evidence::<Inventory>(
         runtime,
         base,
         &projects_operation(),
+        &Options::DEFAULT,
         &[],
         &[],
         source,
         bytes::Bytes::new(),
+        evidence,
     )
     .await
     .map_err(|failure| {

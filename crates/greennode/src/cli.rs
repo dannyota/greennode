@@ -183,6 +183,7 @@ mod tests {
     };
 
     const RULE: Rule = Rule {
+        message: None,
         identity: "stub-permission",
         matches: |error| error.has_identity(ErrorClass::PermissionDenied),
         name: Some(NAME),
@@ -200,6 +201,7 @@ mod tests {
         operations: &[OPERATION],
         error_rules: &[
             Rule {
+                message: None,
                 identity: "stub-api",
                 matches: |error| error.api_error().is_some(),
                 name: Some(RuleName {
