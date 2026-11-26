@@ -174,6 +174,56 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn injected_blocking_pipe_cannot_hold_password_input_past_its_deadline() {
+        use crate::cli::BlockingStdin;
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+
+        let (mut reader, writer) = UnixStream::pair().unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut borrowed: &mut dyn Read = &mut reader;
+        let clock = greennode_sdk::SystemClock;
+        let (context, _) = RequestContext::new();
+        let error = read(&context, &clock, Path::new("-"), &mut borrowed, false)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.message,
+            "--password-file: input canceled or timed out"
+        );
+
+        reader.set_read_timeout(None).unwrap();
+        let mut input = BlockingStdin::new(reader);
+        let deadline = clock.monotonic_now() + Duration::from_millis(25);
+        let context = context.child_with_deadline(deadline);
+        let result = read(&context, &clock, Path::new("-"), &mut input, false).await;
+        drop(writer);
+        assert!(clock.monotonic_now() >= deadline);
+        assert_eq!(
+            result.unwrap_err().message,
+            "--password-file: input canceled or timed out"
+        );
+
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let toy_password = "Synthetic_Password32";
+        assert!(writer.write_all(toy_password.as_bytes()).is_ok());
+        drop(writer);
+        let (context, _) = RequestContext::new();
+        let result = read(
+            &context,
+            &clock,
+            Path::new("-"),
+            &mut BlockingStdin::new(reader),
+            false,
+        )
+        .await;
+        assert!(result.is_ok_and(|secret| secret.expose_secret() == toy_password));
+    }
+
     #[tokio::test]
     async fn stdin_supplies_the_shorter_of_its_timeout_and_the_caller_deadline() {
         let clock = TestClock::new(greennode_sdk::SystemClock.utc_now());

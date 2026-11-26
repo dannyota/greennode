@@ -9,8 +9,10 @@ mod query;
 pub mod render;
 mod root;
 pub(crate) mod secret_file;
+mod stdin;
 
 pub use root::command_with_registry;
+pub use stdin::{BlockingStdin, Stdin};
 
 pub struct Invocation<'a> {
     pub args: Vec<std::ffi::OsString>,
@@ -25,22 +27,6 @@ pub struct Invocation<'a> {
     pub clock: &'a dyn greennode_sdk::Clock,
     pub context: &'a greennode_sdk::RequestContext,
 }
-
-pub trait Stdin: std::io::Read {
-    fn read_before(
-        &mut self,
-        bytes: &mut [u8],
-        _deadline: tokio::time::Instant,
-    ) -> std::io::Result<usize> {
-        self.read(bytes)
-    }
-}
-
-impl Stdin for std::io::Empty {}
-impl Stdin for &[u8] {}
-impl Stdin for &mut dyn std::io::Read {}
-#[cfg(windows)]
-impl Stdin for std::io::Stdin {}
 
 pub trait Terminal {
     fn disable_echo(&mut self) -> std::io::Result<()>;

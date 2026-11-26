@@ -248,3 +248,89 @@ async fn delete_proves_project_across_pages_and_checks_backups() {
         }
     }
 }
+
+#[tokio::test]
+async fn delete_refuses_noncanonical_safety_fields() {
+    let detail = std::str::from_utf8(DETAIL).unwrap();
+    for (step, body) in [
+        (0, detail.replace("\"zoneId\"", "\"Replicas\":[\"replica-1\"],\"zoneId\"")),
+        (0, detail.replace("\"zoneId\"", "\"Owner\":false,\"zoneId\"")),
+        (0, detail.replace("projectId", "ProjectID")),
+        (2, r#"{"code":200,"data":{"projectId":"project-1","data":[{"id":"db-1","name":"demo-db","status":"ACTIVE","ProjectID":"project-other"}],"pageObject":{"number":2,"size":1,"totalElements":2,"totalPages":2}}}"#.to_owned()),
+    ] {
+        let mut responses = delete_reads(br#"{"code":200,"data":[]}"#);
+        responses[step] = response("200 OK", body.as_bytes());
+        responses.extend([response("204 No Content", b""), response("404 Not Found", b"{}")]);
+        let server = Server::start(responses);
+        let (ctx, _) = RequestContext::new();
+        let result = fixture(&server).delete_database_instance(&ctx, DeleteDatabaseInstanceInput::new("db-1")).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), step + 1);
+    }
+}
+
+#[tokio::test]
+async fn delete_requires_an_integer_backup_envelope_code() {
+    let mut responses =
+        delete_reads(br#"{"code":{"$serde_json::private::Number":"200"},"data":[]}"#);
+    responses.extend([
+        response("204 No Content", b""),
+        response("404 Not Found", b"{}"),
+    ]);
+    let server = Server::start(responses);
+    let (ctx, _) = RequestContext::new();
+    let result = fixture(&server)
+        .delete_database_instance(&ctx, DeleteDatabaseInstanceInput::new("db-1"))
+        .await;
+    assert!(result.is_err());
+    let failure = result.unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn delete_does_not_confirm_absence_from_a_truncated_404() {
+    let mut responses = delete_reads(br#"{"code":200,"data":[]}"#);
+    responses.extend([
+        response("204 No Content", b""),
+        Response::RawClose(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n{}".to_vec()),
+    ]);
+    let server = Server::start(responses);
+    let (ctx, _) = RequestContext::new();
+    let result = fixture(&server)
+        .delete_database_instance(&ctx, DeleteDatabaseInstanceInput::new("db-1"))
+        .await;
+    assert!(result.is_err());
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(
+        failure.partial().map(|out| (out.id.as_str(), out.deleted)),
+        Some(("db-1", false))
+    );
+    assert_eq!(server.requests(), 7);
+}
+
+#[tokio::test]
+async fn create_does_not_poll_a_conflicting_receipt_id() {
+    let mut responses = catalogs();
+    responses.push(response(
+        "200 OK",
+        br#"{"code":200,"data":[{"resourceId":"db-1","ResourceId":"db-2"}]}"#,
+    ));
+    responses.push(response("200 OK", DETAIL));
+    let server = Server::start(responses);
+    let (ctx, _) = RequestContext::new();
+    let result = fixture(&server)
+        .create_database_instance(&ctx, create_input())
+        .await;
+    assert!(result.is_err());
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 6);
+}

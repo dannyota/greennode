@@ -1,3 +1,4 @@
+use super::wire::CompletedNotFound;
 use super::{Client, Instance};
 use crate::config::session::AuthKind;
 use crate::endpoint::Base;
@@ -100,7 +101,7 @@ impl Client {
         while ctx.check(clock).is_none() {
             let instance = match self.get_instance::<()>(&ctx, id, evidence).await {
                 Ok(instance) => Some(instance),
-                Err(failure) if failure.error().has_class(ErrorClass::NotFound) => None,
+                Err(failure) if failure.error().detail::<CompletedNotFound>().is_some() => None,
                 Err(_) => break,
             };
             if ctx.check(clock).is_some() {

@@ -4,14 +4,19 @@ use crate::wire::product::{
     operation::{self, Operation, Output},
     sender::{Response, SentCredentials},
 };
-use crate::wire::strict_json::{Shape, ShapeField};
+use crate::wire::strict_json::{Shape, ShapeField, field_matches};
 use crate::{ApiError, Error, ErrorClass};
 use http::StatusCode;
 use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
 pub(super) trait Data: DeserializeOwned + Default {
     const SHAPE: Shape<'static>;
     fn valid(&self) -> bool;
+    fn canonical_fields(_: &RawValue) -> bool {
+        true
+    }
     fn reflects(&self, _: &SentCredentials) -> bool {
         false
     }
@@ -32,25 +37,40 @@ impl<T: Data> Output for Envelope<T> {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {
-            return operation::decode_response(operation, response);
+            return operation::decode_response(operation, response).map_err(|error| {
+                if response.status == StatusCode::NOT_FOUND {
+                    Box::new(error.with_detail(CompletedNotFound))
+                } else {
+                    error
+                }
+            });
         }
         let invalid = || Box::new(invalid_response(operation));
-        let header: serde_json::Value =
-            serde_json::from_slice(&response.body).map_err(|_| invalid())?;
+        #[derive(Deserialize)]
+        struct Header<'a> {
+            code: i64,
+            #[serde(borrow)]
+            data: &'a RawValue,
+        }
+        let header: Header<'_> = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
         if response.credentials.has_numeric_product_credential()
-            || header.get("code").and_then(serde_json::Value::as_i64) != Some(200)
-            || header.get("data").is_none_or(serde_json::Value::is_null)
+            || header.code != 200
+            || header.data.get() == "null"
+            || !T::canonical_fields(header.data)
         {
             return Err(invalid());
         }
-        let data = &header["data"];
-        if operation.id == "ListDatabaseNetworks"
-            && data.as_array().is_none_or(|rows| {
-                rows.iter()
-                    .any(|row| !row.get("subnets").is_some_and(serde_json::Value::is_array))
-            })
-        {
-            return Err(invalid());
+        if operation.id == "ListDatabaseNetworks" {
+            #[derive(Deserialize)]
+            struct NetworkRow<'a> {
+                #[serde(borrow)]
+                subnets: &'a RawValue,
+            }
+            let rows: Vec<NetworkRow<'_>> =
+                serde_json::from_str(header.data.get()).map_err(|_| invalid())?;
+            if rows.iter().any(|row| !row.subnets.get().starts_with('[')) {
+                return Err(invalid());
+            }
         }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
@@ -60,6 +80,8 @@ impl<T: Data> Output for Envelope<T> {
         Ok(output)
     }
 }
+
+pub(super) struct CompletedNotFound;
 
 pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
     let Some(api) = error.api_error() else {
@@ -75,10 +97,15 @@ pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
         SafeText::new("request failed; response withheld", &[]),
         api.retryable(),
     ));
-    if error.class() == ErrorClass::Api {
+    let safe = if error.class() == ErrorClass::Api {
         safe
     } else {
         Error::new(error.class()).with_cause(safe)
+    };
+    if error.detail::<CompletedNotFound>().is_some() {
+        safe.with_detail(CompletedNotFound)
+    } else {
+        safe
     }
 }
 
@@ -93,7 +120,7 @@ pub(super) fn invalid_response(operation: &Operation) -> Error {
     .with_outer_detail(StatusCode::OK)
 }
 
-const fn field(name: &'static str, shape: Shape<'static>) -> ShapeField<'static> {
+pub(super) const fn field(name: &'static str, shape: Shape<'static>) -> ShapeField<'static> {
     ShapeField { name, shape }
 }
 
@@ -132,8 +159,32 @@ impl Data for Vec<Network> {
         })
     }
 }
+const INSTANCE_SAFETY_FIELDS: &[&str] = &[
+    "id",
+    "status",
+    "datastoreType",
+    "zoneId",
+    "projectId",
+    "owner",
+    "replicaSourceId",
+    "replicas",
+    "deleted",
+];
+
+fn canonical_keys(object: &BTreeMap<String, &RawValue>, fields: &[&str]) -> bool {
+    object.keys().all(|key| {
+        !fields
+            .iter()
+            .any(|field| *field != key && field_matches(field, key))
+    })
+}
+
 impl Data for Instance {
     const SHAPE: Shape<'static> = Instance::SCHEMA;
+    fn canonical_fields(raw: &RawValue) -> bool {
+        serde_json::from_str(raw.get())
+            .is_ok_and(|object| canonical_keys(&object, INSTANCE_SAFETY_FIELDS))
+    }
     fn valid(&self) -> bool {
         valid_id(&self.id) && !self.name.is_empty() && !self.status.is_empty()
     }
@@ -170,6 +221,16 @@ impl Data for InstanceData {
         field("data", Shape::Array(&Instance::SCHEMA)),
         field("pageObject", Page::SCHEMA),
     ]);
+    fn canonical_fields(raw: &RawValue) -> bool {
+        let Ok(object) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get()) else {
+            return false;
+        };
+        canonical_keys(&object, &["projectId", "data", "pageObject"])
+            && object.get("data").is_some_and(|items| {
+                serde_json::from_str::<Vec<&RawValue>>(items.get())
+                    .is_ok_and(|rows| rows.into_iter().all(Instance::canonical_fields))
+            })
+    }
     fn valid(&self) -> bool {
         self.data.iter().all(Data::valid)
     }

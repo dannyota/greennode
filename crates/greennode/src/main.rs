@@ -216,7 +216,7 @@ fn main() -> ExitCode {
             },
         };
         #[cfg(windows)]
-        let mut input = stdin;
+        let mut input = greennode::cli::BlockingStdin::new(stdin);
         let stdout_terminal = stdout.is_terminal();
         let stderr_terminal = stderr.is_terminal();
         let invocation = greennode::cli::Invocation {

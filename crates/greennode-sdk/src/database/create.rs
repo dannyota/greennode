@@ -1,4 +1,4 @@
-use super::wire::valid_id;
+use super::wire::{field, valid_id};
 use super::write::{
     Settlement, local_error, not_sent, preflight, rejection, unsettled, write_operation,
 };
@@ -17,7 +17,6 @@ use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
 use bytes::Bytes;
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::task::Poll;
 use zeroize::Zeroizing;
 
@@ -465,23 +464,39 @@ fn create_body(
 }
 
 #[derive(Default, Deserialize)]
-struct CreateReply(Value);
+struct CreateReply {
+    code: Option<i64>,
+    data: Option<Vec<CreateResource>>,
+}
+
+#[derive(Deserialize)]
+struct CreateResource {
+    #[serde(rename = "resourceId")]
+    id: Option<String>,
+}
 
 impl CreateReply {
     fn instance_id(&self, evidence: &Evidence) -> Option<&str> {
-        if self.0.get("code")?.as_i64() != Some(200) || evidence.reflected_in(&self.0) {
+        if self.code != Some(200) {
             return None;
         }
-        let [item] = self.0.get("data")?.as_array()?.as_slice() else {
+        let [item] = self.data.as_deref()? else {
             return None;
         };
-        let id = item.get("resourceId")?.as_str()?;
-        PathIds::Strict.allows(id).then_some(id)
+        let id = item.id.as_deref()?;
+        (PathIds::Strict.allows(id) && !evidence.credentials().reflects(id.as_bytes()))
+            .then_some(id)
     }
 }
 
 impl Output for CreateReply {
-    const SCHEMA: Shape<'static> = Shape::Any;
+    const SCHEMA: Shape<'static> = Shape::Object(&[
+        field("code", Shape::Any),
+        field(
+            "data",
+            Shape::Array(&Shape::Object(&[field("resourceId", Shape::Any)])),
+        ),
+    ]);
     const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
