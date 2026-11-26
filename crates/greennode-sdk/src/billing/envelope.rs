@@ -21,6 +21,8 @@ pub(super) trait BudgetData: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
 
     fn valid(&self, credentials: &SentCredentials) -> bool;
+
+    fn redact(&mut self, _: &SentCredentials) {}
 }
 
 impl BudgetData for Budget {
@@ -93,11 +95,12 @@ impl<T: BudgetData> Output for Envelope<T> {
             strict_json::validate_shape(&response.body, &Self::SCHEMA, operation.cap)
                 .map_err(|_| invalid())?;
         }
-        let output: Self =
+        let mut output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
         if !output.data.valid(&response.credentials) {
             return Err(invalid());
         }
+        output.data.redact(&response.credentials);
         Ok(output)
     }
 }

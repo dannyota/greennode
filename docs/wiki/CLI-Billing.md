@@ -21,6 +21,27 @@ Budget writes are sent once and never follow redirects. Responses are limited to
 greennode billing create-budget --name <name> --period-type <period-type> --type <type> --limit-amount <limit-amount>
 ```
 
+## create-budget-threshold
+
+Kind: Write.
+
+Threshold writes are sent once and never follow redirects. Responses are limited
+to 8 MiB. If the outcome is unconfirmed, list the budget thresholds before
+retrying. Malformed successful replies return InvalidResponse with the observed
+HTTP status.
+
+| Flag                        | Type     | Required |
+| --------------------------- | -------- | -------- |
+| `--budget-uuid`             | `string` | yes      |
+| `--threshold-type`          | `string` | yes      |
+| `--threshold-percentage`    | `int`    | yes      |
+| `--max-alerts-per-period`   | `int`    |          |
+| `--reminder-interval-hours` | `int`    |          |
+
+```sh
+greennode billing create-budget-threshold --budget-uuid <budget-uuid> --threshold-type <threshold-type> --threshold-percentage <threshold-percentage>
+```
+
 ## delete-budget
 
 Kind: Write, destructive.
@@ -34,6 +55,24 @@ Budget writes are sent once and never follow redirects. Responses are limited to
 
 ```sh
 greennode billing delete-budget --budget-uuid <budget-uuid> --yes
+```
+
+## delete-budget-threshold
+
+Kind: Write, destructive.
+
+Threshold writes are sent once and never follow redirects. Responses are limited
+to 8 MiB. If the outcome is unconfirmed, list the budget thresholds before
+retrying. Malformed successful replies return InvalidResponse with the observed
+HTTP status.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--budget-uuid`    | `string` | yes      |
+| `--threshold-uuid` | `string` | yes      |
+
+```sh
+greennode billing delete-budget-threshold --budget-uuid <budget-uuid> --threshold-uuid <threshold-uuid> --yes
 ```
 
 ## get-balances
@@ -236,4 +275,26 @@ Budget writes are sent once and never follow redirects. Responses are limited to
 
 ```sh
 greennode billing update-budget --budget-uuid <budget-uuid> --status PAUSED
+```
+
+## update-budget-threshold
+
+Kind: Write.
+
+Threshold writes are sent once and never follow redirects. Responses are limited
+to 8 MiB. If the outcome is unconfirmed, list the budget thresholds before
+retrying. Malformed successful replies return InvalidResponse with the observed
+HTTP status.
+
+| Flag                        | Type     | Required |
+| --------------------------- | -------- | -------- |
+| `--budget-uuid`             | `string` | yes      |
+| `--threshold-uuid`          | `string` | yes      |
+| `--threshold-percentage`    | `*int`   |          |
+| `--enabled`                 | `*bool`  |          |
+| `--max-alerts-per-period`   | `*int`   |          |
+| `--reminder-interval-hours` | `*int`   |          |
+
+```sh
+greennode billing update-budget-threshold --budget-uuid <budget-uuid> --threshold-uuid <threshold-uuid> --enabled=false
 ```

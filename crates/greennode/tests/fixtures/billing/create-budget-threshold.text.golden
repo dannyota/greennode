@@ -1,0 +1,1 @@
+{"ComparisonOperator":"GTE","Enabled":true,"LastAlertAt":"","MaxAlertsPerPeriod":1,"NotificationState":"OK","ReminderIntervalHours":648,"ThresholdPercentage":100,"ThresholdType":"ACTUAL","UUID":"threshold-1"}

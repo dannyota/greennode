@@ -8,6 +8,7 @@ mod history;
 mod model;
 #[cfg(test)]
 mod tests;
+mod threshold_writes;
 
 pub use budget_reads::{
     Alert, GetCurrentPeriodCostInput, GetCurrentPeriodCostOutput, ListBudgetAlertsInput,
@@ -31,6 +32,10 @@ pub use history::{
     TRANSACTION_REFUND, Transaction,
 };
 pub use model::Budget;
+pub use threshold_writes::{
+    CreateBudgetThresholdInput, CreateBudgetThresholdOutput, DeleteBudgetThresholdInput,
+    DeleteBudgetThresholdOutput, UpdateBudgetThresholdInput, UpdateBudgetThresholdOutput,
+};
 
 use crate::config::Session;
 use crate::wire::product::{
