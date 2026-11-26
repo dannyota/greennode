@@ -5,6 +5,8 @@
 pub mod backup;
 pub mod billing;
 mod cache;
+#[allow(clippy::result_large_err)]
+pub mod cdn;
 mod clock;
 mod config;
 pub mod containerregistry;

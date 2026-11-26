@@ -1,5 +1,6 @@
 mod backup;
 mod billing;
+mod cdn;
 mod containerregistry;
 mod database;
 mod dns;
@@ -155,6 +156,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
     Registry::new(&[
         backup::SERVICE,
         billing::SERVICE,
+        cdn::SERVICE,
         containerregistry::SERVICE,
         database::SERVICE,
         dns::SERVICE,

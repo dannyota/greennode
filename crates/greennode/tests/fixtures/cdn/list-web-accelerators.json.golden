@@ -1,0 +1,12 @@
+{
+  "Items": [
+    {
+      "CDNID": "\u003ccdn-id\u003e",
+      "DomainName": "\u003cdomain\u003e",
+      "CDNDomain": "\u003ccdn-domain\u003e",
+      "CNames": [],
+      "Status": 1,
+      "StatusName": "ACTIVE"
+    }
+  ]
+}

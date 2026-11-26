@@ -98,6 +98,7 @@ pub struct ApiError {
     code: String,
     message: String,
     retryable: bool,
+    public_route: bool,
 }
 
 impl ApiError {
@@ -132,6 +133,7 @@ impl ApiError {
             code: code.to_owned(),
             message: message.0,
             retryable,
+            public_route: false,
         }
     }
     pub(crate) fn without_fallback(
@@ -147,6 +149,7 @@ impl ApiError {
             code: code.0,
             message: message.0,
             retryable,
+            public_route: false,
         }
     }
     /// Returns the operation identifier.
@@ -283,12 +286,16 @@ impl Error {
             },
         }
     }
+    pub(crate) fn from_public_api(mut api: ApiError) -> Self {
+        api.public_route = true;
+        Self::from_api(api)
+    }
     pub(crate) fn from_api(api: ApiError) -> Self {
         let class = match api.status {
             Some(404) => ErrorClass::NotFound,
             Some(403) => ErrorClass::PermissionDenied,
             Some(429) => ErrorClass::RateLimited,
-            Some(401) => ErrorClass::Auth,
+            Some(401) if !api.public_route => ErrorClass::Auth,
             _ => ErrorClass::Api,
         };
         Self {
@@ -347,14 +354,15 @@ impl Error {
     pub fn class(&self) -> ErrorClass {
         self.class
     }
-    /// Checks the cause chain and maps HTTP 401, 403, 404 and 429 to their categories; any API error also matches `Api`.
+    /// Checks the cause chain and maps HTTP 401, 403, 404 and 429 to their categories.
+    /// Public routes carry no credential for a 401 to reject. Any API error also matches `Api`.
     pub fn has_class(&self, class: ErrorClass) -> bool {
         self.has_identity(class)
             || self.api_error().is_some_and(|api| match class {
                 ErrorClass::NotFound => api.status == Some(404),
                 ErrorClass::PermissionDenied => api.status == Some(403),
                 ErrorClass::RateLimited => api.status == Some(429),
-                ErrorClass::Auth => api.status == Some(401),
+                ErrorClass::Auth => api.status == Some(401) && !api.public_route,
                 ErrorClass::Api => true,
                 _ => false,
             })

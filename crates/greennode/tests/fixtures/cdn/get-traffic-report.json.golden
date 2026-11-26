@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "DomainName": "\u003cdomain\u003e",
+      "CDNDomain": "\u003ccdn-domain\u003e",
+      "TrafficType": "Domestic",
+      "GroupType": "Standard",
+      "Points": [
+        {
+          "Time": "2026-10-09T00:00:00Z",
+          "Value": 0
+        },
+        {
+          "Time": "2026-10-10T00:00:00Z",
+          "Value": 0
+        }
+      ]
+    }
+  ]
+}

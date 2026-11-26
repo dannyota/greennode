@@ -62,6 +62,80 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     body: bytes::Bytes,
     evidence: &mut Evidence,
 ) -> Result<(StatusCode, T), crate::Failure<T>> {
+    let response = send_route(
+        runtime,
+        base,
+        operation,
+        options,
+        path,
+        query,
+        RouteAuth::Bearer(source),
+        body,
+        evidence,
+        T::credential_error,
+    )
+    .await?;
+    let status = response.status;
+    let dispatch = if matches!(operation.class, redirect::Classification::Write) {
+        crate::WriteDispatch::MayHaveBeenSent
+    } else {
+        crate::WriteDispatch::NotAWrite
+    };
+    if let Some(error) = T::credential_error(operation, &response.credentials) {
+        return Err(crate::Failure::new(*error, None, dispatch));
+    }
+    let output = T::decode_response(operation, &response)
+        .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    Ok((status, output))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RouteAuth<'a> {
+    Bearer(&'a dyn sender::BearerSource),
+    CdnKey(Option<&'a crate::Secret>),
+    PublicHtml,
+}
+
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) async fn execute_raw(
+    runtime: sender::Runtime<'_>,
+    base: &crate::endpoint::Base,
+    operation: &Operation,
+    options: &Options,
+    path: &[&str],
+    query: &[(&str, &str)],
+    auth: RouteAuth<'_>,
+    body: bytes::Bytes,
+    evidence: &mut Evidence,
+) -> Result<sender::Response, crate::Failure<()>> {
+    send_route(
+        runtime,
+        base,
+        operation,
+        options,
+        path,
+        query,
+        auth,
+        body,
+        evidence,
+        |_, _| None,
+    )
+    .await
+}
+
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
+async fn send_route<T>(
+    runtime: sender::Runtime<'_>,
+    base: &crate::endpoint::Base,
+    operation: &Operation,
+    options: &Options,
+    path: &[&str],
+    query: &[(&str, &str)],
+    auth: RouteAuth<'_>,
+    body: bytes::Bytes,
+    evidence: &mut Evidence,
+    credential_error: impl Fn(&Operation, &sender::SentCredentials) -> Option<Box<crate::Error>> + Send,
+) -> Result<sender::Response, crate::Failure<T>> {
     if let Some(credentials) = runtime.configured_credentials {
         evidence.absorb(credentials);
     }
@@ -99,7 +173,11 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     if parts.next().is_some() {
         return Err(invalid());
     }
-    let route = base.route(&rendered, &[]).map_err(|_| invalid())?;
+    let route = if rendered.is_empty() {
+        base.to_string()
+    } else {
+        base.route(&rendered, &[]).map_err(|_| invalid())?
+    };
     let mut url = url::Url::parse(&route).map_err(|_| invalid())?;
     let mut pairs: Vec<_> = query.to_vec();
     pairs.sort_by(|left, right| left.0.cmp(right.0));
@@ -115,11 +193,57 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         }
         url.set_query(Some(&encoded));
     }
+    let mut key_evidence = Evidence::new();
+    if let RouteAuth::CdnKey(Some(key)) = auth {
+        key_evidence.add_secret(key);
+        if matches!(operation.class, redirect::Classification::Read) && !body.is_empty() {
+            use serde_json::{Map, Value};
+            let fields: Map<String, Value> =
+                serde_json::from_slice(&body).map_err(|_| invalid())?;
+            if fields
+                .values()
+                .any(|value| evidence.reflected_in(value) || key_evidence.reflected_in(value))
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    if matches!(auth, RouteAuth::CdnKey(Some(_)) | RouteAuth::PublicHtml)
+        && (sender::uri_reflects_credential_forms(&url, evidence.credentials())
+            || sender::uri_reflects_credential_forms(&url, key_evidence.credentials()))
+    {
+        return Err(invalid());
+    }
+    let (auth, accept, credentials) = match auth {
+        RouteAuth::Bearer(source) => (sender::Auth::Bearer(source), "application/json", Vec::new()),
+        RouteAuth::CdnKey(Some(key)) => (
+            sender::Auth::Key,
+            "application/json",
+            vec![sender::CredentialHeader {
+                name: http::header::AUTHORIZATION,
+                value: key.clone(),
+                bearer: true,
+            }],
+        ),
+        RouteAuth::CdnKey(None) => {
+            return Err(crate::Failure::new(
+                crate::Error::new(crate::ErrorClass::NoCredentials),
+                None,
+                dispatch,
+            ));
+        }
+        RouteAuth::PublicHtml => {
+            if operation.method != Method::GET
+                || !matches!(operation.class, redirect::Classification::Read)
+                || !body.is_empty()
+            {
+                return Err(invalid());
+            }
+            (sender::Auth::None, "text/html", Vec::new())
+        }
+    };
     let mut headers = http::HeaderMap::new();
-    headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
+    headers.insert(http::header::ACCEPT, http::HeaderValue::from_static(accept));
     if !body.is_empty() {
         headers.insert(
             http::header::CONTENT_TYPE,
@@ -132,7 +256,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     let request = sender::Request {
         url,
         headers,
-        credentials: Vec::new(),
+        credentials,
         body,
     };
     let policy = sender::Operation {
@@ -151,7 +275,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     let response = match sender::run(
         runtime,
         &policy,
-        sender::Auth::Bearer(source),
+        auth,
         &request,
         sender::RouteInputs { path, query },
     )
@@ -160,7 +284,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         Ok(response) => response,
         Err(failure) => {
             evidence.absorb(&failure.credentials);
-            if let Some(error) = T::credential_error(operation, &failure.credentials) {
+            if let Some(error) = credential_error(operation, &failure.credentials) {
                 return Err(crate::Failure::new(*error, None, failure.dispatch));
             }
             let status = failure.status;
@@ -235,18 +359,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         }
     };
     evidence.absorb(&response.credentials);
-    let status = response.status;
-    let dispatch = if matches!(operation.class, redirect::Classification::Write) {
-        crate::WriteDispatch::MayHaveBeenSent
-    } else {
-        crate::WriteDispatch::NotAWrite
-    };
-    if let Some(error) = T::credential_error(operation, &response.credentials) {
-        return Err(crate::Failure::new(*error, None, dispatch));
-    }
-    let output = T::decode_response(operation, &response)
-        .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
-    Ok((status, output))
+    Ok(response)
 }
 
 pub(crate) fn decode_response<T: Output>(

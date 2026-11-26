@@ -42,7 +42,7 @@ products! {
     Vserver => vserver, Vlb => vlb, Vnetwork => vnetwork,
     GlobalLoadBalancer => global_load_balancer, Dns => dns,
     ContainerRegistry => container_registry, Portal => portal, Billing => billing,
-    Monitor => monitor, Iam => iam, Storage => storage, Cdn => cdn, Vks => vks,
+    Monitor => monitor, Iam => iam, Storage => storage, Cdn => cdn, CdnDocs => cdn_docs, Vks => vks,
     VserverBackup => vserver_backup, BackupCenter => backup_center, Database => database,
     DatabaseWrite => database,
 }
