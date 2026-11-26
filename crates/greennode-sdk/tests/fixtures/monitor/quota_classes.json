@@ -1,0 +1,29 @@
+[
+  {
+    "id": "class-2",
+    "name": "Pro",
+    "description": "Coming soon.",
+    "status": "DISABLED",
+    "priority": 2
+  },
+  {
+    "id": "class-1",
+    "name": "Basic",
+    "description": "Free class",
+    "status": "ACTIVE",
+    "priority": 1.0,
+    "config": {
+      "packages": "unit_1",
+      "locations": [
+        {
+          "packageId": "unit_1",
+          "amount": 1,
+          "minApi": 10,
+          "maxApi": 20,
+          "step": 1,
+          "status": "ACTIVE"
+        }
+      ]
+    }
+  }
+]

@@ -1,5 +1,8 @@
 #![cfg(feature = "test-support")]
 
+#[path = "monitor/quota.rs"]
+mod quota;
+
 use greennode_sdk::monitor::{
     Client, GetDashboardInput, ListCheckResponseTimesInput, ListDashboardsInput,
 };

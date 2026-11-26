@@ -38,6 +38,8 @@ pub struct OutputView {
     pub(crate) withhold: Option<&'static str>,
     pub(crate) custom: Option<CustomOutput>,
     pub(crate) raw_text: Option<RawText>,
+    pub(crate) transform_query_cells: Option<fn(&mut render::Value)>,
+    pub(crate) use_for_partial: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -104,6 +106,11 @@ fn write_output(
     let mut value = projected.for_query()?;
     if let Some(query) = query {
         value = query::evaluate(query, &value).map_err(|_| OutputError::Query)?;
+        if format != Format::Json
+            && let Some(transform) = view.transform_query_cells
+        {
+            transform(&mut value);
+        }
     }
     if let (Format::Text, Some(raw)) = (format, view.raw_text) {
         let candidate = match (&value, query) {

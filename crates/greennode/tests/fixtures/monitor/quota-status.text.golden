@@ -1,0 +1,4 @@
+As of 2000-01-01 00:00:00 UTC; complete: true (sequential snapshot)
+unknown	unknown	unknown		Synthetic	monitor get-synthetic-quota	unknown	unknown	unknown	unknown	none	unknown
+unknown	unknown	unknown		Email	monitor get-notification-quota	unknown	unknown	unknown	unknown	none	unknown
+unknown	unknown	unknown		SMS	monitor get-notification-quota	unknown	unknown	unknown	unknown	none	unknown

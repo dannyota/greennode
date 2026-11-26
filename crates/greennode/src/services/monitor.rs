@@ -1,10 +1,14 @@
+mod quota;
+
 use std::io::Write;
 
 use greennode_sdk::monitor::{
-    Client, GetDashboardInput, ListCheckResponseTimesInput, ListDashboardsInput,
+    Client, ErrorDetail, GetDashboardInput, GetQuotaStatusInput, ListCheckResponseTimesInput,
+    ListDashboardsInput, ListSyntheticPackagesInput,
 };
 
 use crate::cli::dispatch::{self, Format, OutputView};
+use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 use crate::cli::render::{self, Value};
@@ -12,6 +16,7 @@ use crate::cli::render::{self, Value};
 #[derive(Default)]
 struct Input {
     dashboard_id: String,
+    kind: String,
     check_id: String,
     start: String,
     end: String,
@@ -69,6 +74,7 @@ macro_rules! field {
 const DASHBOARD_ID: InputField<Input> =
     field!("dashboard-id", "DashboardID", dashboard_id, required);
 const CHECK_ID: InputField<Input> = field!("check-id", "CheckID", check_id, required);
+const KIND: InputField<Input> = field!("kind", "Kind", kind, "string", String);
 const START: InputField<Input> = field!("start", "Start", start, "string", String);
 const END: InputField<Input> = field!("end", "End", end, "string", String);
 const PAGE: InputField<Input> = field!("page", "Page", page, "int", i64);
@@ -100,6 +106,8 @@ const fn descriptor(fields: &'static [InputField<Input>]) -> InputDescriptor<Inp
     }
 }
 
+const LIST_SYNTHETIC_PACKAGES: InputDescriptor<Input> = descriptor(&[]);
+const QUOTA_STATUS: InputDescriptor<Input> = descriptor(&[KIND]);
 const GET_DASHBOARD: InputDescriptor<Input> = descriptor(&[DASHBOARD_ID]);
 const LIST_DASHBOARDS: InputDescriptor<Input> = descriptor(&[PAGE, SIZE, SYSTEM]);
 const LIST_RESPONSE_TIMES: InputDescriptor<Input> = descriptor(&[CHECK_ID, START, END]);
@@ -171,7 +179,31 @@ fn render_dashboards(
 
 pub(super) const SERVICE: Service = Service {
     name: "monitor",
-    error_rules: &[],
+    error_rules: &[
+        Rule {
+            identity: "monitor-invalid-quota-kind",
+            matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::InvalidQuotaKind),
+            name: None,
+            exit: Some(RuleExit::Usage),
+            message: Some(
+                "monitor.GetQuotaStatus: Kind must be synthetic, email, or sms: vngcloud: invalid input",
+            ),
+        },
+        Rule {
+            identity: "monitor-quota-status-incomplete",
+            matches: |error| {
+                error.detail::<ErrorDetail>() == Some(&ErrorDetail::QuotaStatusIncomplete)
+            },
+            name: Some(RuleName {
+                rank: 1,
+                code: "QuotaStatusIncomplete",
+                operation: RuleOperation::Fixed("monitor.GetQuotaStatus"),
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: Some("monitor: quota status incomplete"),
+        },
+    ],
     operations: &[
         read!(
             "get-dashboard",
@@ -221,6 +253,36 @@ pub(super) const SERVICE: Service = Service {
                 "Lists custom dashboards by default. --system lists dashboards GreenNode generates per resource. The read omits widgets. There is no delete command."
             ],
             "list-dashboards"
+        ),
+        read!(
+            "list-synthetic-packages",
+            "ListSyntheticPackages",
+            "List synthetic quota classes and packages",
+            list_synthetic_packages,
+            LIST_SYNTHETIC_PACKAGES,
+            [],
+            |_: &Input| ListSyntheticPackagesInput,
+            quota::catalog_view(),
+            &[
+                "Lists class options, class unit packages, and v1 packages separately, with their own identifiers. Class Packages shows unit API, location, tier, and monthly unit price. Options join only by exact package ID within the class. The v1 catalog cannot establish class option prices. Disabled classes stay visible. AutoRenewEligible is unknown without provider evidence. Settings periods are shown separately. Known free periods are capped by the free maximum. Read-only settings allow this read."
+            ],
+            "list-synthetic-packages"
+        ),
+        read!(
+            "quota-status",
+            "GetQuotaStatus",
+            "Read the sequential quota status snapshot",
+            get_quota_status,
+            QUOTA_STATUS,
+            [KIND],
+            |input: &Input| GetQuotaStatusInput {
+                kind: input.kind.clone()
+            },
+            quota::status_view(),
+            &[
+                "--kind optionally selects synthetic, email, or sms, case insensitively. Omitted means all three. Returns a sequential snapshot with one UTC AsOf. Synthetic uses quota, detail, class catalog, and settings reads, with detail price and class and an unknown package name. Notification price is the current list price. Missing quotas produce none rows and exit 0. Failed rows print partial output, ignore --query, and exit 1 as QuotaStatusIncomplete. Null means unknown. False and zero remain distinct. RenewWindowOpen describes the catalog-eligible free Synthetic timing window. NextSafeCommand suggests renewal inside the free window or recovery for expired free trash, only with POC and auto-renew off. Suggested writes require explicit guards from a fresh read. Table and text show time left in days, hours, and minutes. Rows without errors have a blank Error cell. Read-only settings allow this read."
+            ],
+            "quota-status --kind synthetic"
         ),
     ],
 };

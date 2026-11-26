@@ -1,0 +1,8 @@
+{
+  "monthPeriods": [
+    1,
+    3
+  ],
+  "maxMonthPeriodForFreeQuota": 1,
+  "paymentMethod": "PRE-PAID"
+}

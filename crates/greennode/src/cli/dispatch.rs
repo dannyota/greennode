@@ -389,7 +389,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     } else {
                         None
                     },
-                    if failure.query_partial {
+                    if failure.query_partial || view.use_for_partial {
                         view
                     } else {
                         OutputView::default()

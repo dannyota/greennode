@@ -1,0 +1,18 @@
+[
+  {
+    "id": "v1_1",
+    "name": "free10",
+    "tierId": 24,
+    "api": 10,
+    "location": 1,
+    "price": 0
+  },
+  {
+    "id": "v1_2",
+    "name": "plus",
+    "tierId": 25,
+    "api": 20,
+    "location": 2,
+    "price": null
+  }
+]

@@ -170,6 +170,8 @@ pub(super) const LIST_TRANSACTIONS: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    transform_query_cells: None,
+                    use_for_partial: false,
                     table: Some(TableView {
                         columns: &[
                             "CreatedAt",
@@ -211,6 +213,8 @@ pub(super) const LIST_PAYMENTS: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    transform_query_cells: None,
+                    use_for_partial: false,
                     table: Some(TableView {
                         columns: &["CreatedAt", "Gateway", "Status", "TypeCode", "Amount"],
                         show_empty_headers: true,
@@ -249,6 +253,8 @@ pub(super) const LIST_RESOURCES: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    transform_query_cells: None,
+                    use_for_partial: false,
                     table: Some(TableView {
                         columns: &[
                             "ArtifactID",
