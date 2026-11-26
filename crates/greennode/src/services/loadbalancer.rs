@@ -99,7 +99,8 @@ macro_rules! operation {
     };
     (@kind $kind:expr, $input:ident, $method:ident, $name:literal, $go:literal,
      $help:literal, $example:literal, $notes:expr,
-     [$($flag:ident => $field:expr),* $(,)?] $(, [$($hidden:expr => $json:expr),+ $(,)?])?) => {{
+     [$($flag:ident => $field:expr),* $(,)?] $(, [$($hidden:expr => $json:expr),+ $(,)?])?
+     $(, guard: $guard:expr)?) => {{
         const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
             defaults: sdk::$input::default,
             fields: &[$($field,)* $($($json,)*)?],
@@ -107,7 +108,7 @@ macro_rules! operation {
             allow_query: true,
             project_binding: None,
             pre_guard: Some(check_input_source),
-            guard: None,
+            guard: operation!(@guard $($guard)?),
         };
         Operation {
             name: $name,
@@ -133,6 +134,8 @@ macro_rules! operation {
             })),
         }
     }};
+    (@guard $guard:expr) => { Some($guard) };
+    (@guard) => { None };
 }
 
 macro_rules! optional_bool {
@@ -156,6 +159,7 @@ macro_rules! optional_bool {
 }
 
 mod listener_writes;
+mod member_writes;
 mod policy_writes;
 mod pool_writes;
 
@@ -213,6 +217,9 @@ pub(super) const SERVICE: Service = Service {
         },
     ],
     operations: &[
+        member_writes::ADD,
+        member_writes::REMOVE,
+        member_writes::UPDATE,
         paid::CREATE,
         paid::RESIZE,
         certificate_import::IMPORT,

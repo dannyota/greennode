@@ -159,7 +159,7 @@ impl Serialize for UpdatePoolOutput {
 const MONITOR: Shape<'_> = shape!("timeout", "createdAt", "updatedAt", "domainName",
     "httpVersion", "healthCheckProtocol", "interval", "healthyThreshold", "unhealthyThreshold",
     "healthCheckMethod", "healthCheckPath", "successCode", "progressStatus", "displayStatus";);
-const MEMBER: Shape<'_> = shape!("uuid", "address", "protocolPort", "weight", "monitorPort",
+pub(super) const MEMBER: Shape<'_> = shape!("uuid", "address", "protocolPort", "weight", "monitorPort",
     "subnetId", "name", "poolId", "typeCreate", "backup", "displayStatus", "createdAt",
     "updateAt", "createdBy", "progressStatus";);
 const POOL: Shape<'_> = shape!("uuid", "name", "protocol", "description", "loadBalanceMethod",
@@ -565,7 +565,7 @@ fn required<'a>(
     Ok(())
 }
 
-fn pool_target<'a>(id: &'a str, ids: &'a [(&'static str, &'a str)]) -> ChildTarget<'a> {
+pub(super) fn pool_target<'a>(id: &'a str, ids: &'a [(&'static str, &'a str)]) -> ChildTarget<'a> {
     ChildTarget {
         kind: "pool",
         id,
@@ -593,7 +593,8 @@ async fn finish<O>(
     let result = if no_wait {
         Ok(())
     } else {
-        settle(ctx, write, target, creating, &mut pool).await
+        let wait = ctx.child_with_deadline(write.client.session.clock().monotonic_now() + BOUND);
+        settle_until(ctx, &wait, write, target, creating, &mut pool).await
     };
     let retained = PoolProjection::retain(&mut pool, &write.evidence)
         .map(|projection| output(pool, projection))
@@ -616,22 +617,22 @@ async fn finish<O>(
     }
 }
 
-async fn settle(
+pub(super) async fn settle_until(
     ctx: &RequestContext,
+    wait: &RequestContext,
     write: &mut ChildWriter<'_>,
     target: &ChildTarget<'_>,
     creating: bool,
     last: &mut Pool,
 ) -> Result<(), Box<Error>> {
     let clock = write.client.session.clock();
-    let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
     loop {
         wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
             .wait(clock)
             .await;
-        write.confirm_time(ctx, &wait, target)?;
-        let row = write.read_data(&wait, &GET_POOL, target.ids).await;
-        write.confirm_time(ctx, &wait, target)?;
+        write.confirm_time(ctx, wait, target)?;
+        let row = write.read_data(wait, &GET_POOL, target.ids).await;
+        write.confirm_time(ctx, wait, target)?;
         let row = match row {
             Ok(row) => row,
             Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
@@ -649,8 +650,8 @@ async fn settle(
         match last.progress_status.as_str() {
             "ERROR" => return Err(write.failed(target.kind, target.id)),
             "CREATED" => {
-                let parent = write.parent(&wait).await;
-                write.confirm_time(ctx, &wait, target)?;
+                let parent = write.parent(wait).await;
+                write.confirm_time(ctx, wait, target)?;
                 let (status, _) = parent.map_err(|error| write.unconfirmed(target, *error))?;
                 if status == "ERROR" {
                     return Err(write.failed("load balancer", write.lb_id));

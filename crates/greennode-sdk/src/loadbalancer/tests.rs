@@ -1,6 +1,7 @@
 mod child_deletes;
 mod create_writes;
 mod listener_writes;
+mod member_writes;
 mod policy_writes;
 mod pool_writes;
 

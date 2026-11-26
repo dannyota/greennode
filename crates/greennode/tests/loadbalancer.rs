@@ -359,6 +359,8 @@ async fn errors_match_go_goldens() {
 mod child_writes;
 #[path = "loadbalancer/listener_writes.rs"]
 mod listener_writes;
+#[path = "loadbalancer/member_writes.rs"]
+mod member_writes;
 #[path = "loadbalancer/policy_writes.rs"]
 mod policy_writes;
 #[path = "loadbalancer/pool_writes.rs"]
