@@ -180,10 +180,9 @@ async fn monitor_rejects_unsafe_returned_identifiers_and_raw_reflections() {
 }
 
 #[tokio::test]
-#[ignore = "shared identifier matcher does not yet screen hexadecimal credentials"]
 async fn dashboard_rejects_hex_encoded_credential_in_identifier() {
-    let page = include_str!("fixtures/monitor/list_dashboards_system.json")
-        .replace("dash-1", "prefix616263suffix");
+    let page =
+        include_str!("fixtures/monitor/list_dashboards_system.json").replace("dash-1", "616263");
     let server = Server::start(vec![response("200 OK", &page)]);
     let (ctx, _) = RequestContext::new();
     let failure = client_with_token(&server, "abc")
