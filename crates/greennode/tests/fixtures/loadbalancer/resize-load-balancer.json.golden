@@ -1,0 +1,30 @@
+{
+  "LoadBalancer": {
+    "UUID": "lb-1",
+    "Name": "",
+    "DisplayStatus": "",
+    "Address": "",
+    "PrivateSubnetID": "",
+    "PrivateSubnetCIDR": "",
+    "Type": "",
+    "DisplayType": "",
+    "LoadBalancerSchema": "",
+    "PackageID": "package-2",
+    "Description": "",
+    "Location": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ProgressStatus": "CREATED",
+    "Status": "",
+    "BackendSubnetID": "",
+    "Internal": false,
+    "AutoScalable": false,
+    "ZoneID": "",
+    "MinSize": 0,
+    "MaxSize": 0,
+    "TotalNodes": 0,
+    "Nodes": []
+  },
+  "QuotedPrice": -3,
+  "Changed": true
+}

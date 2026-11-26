@@ -11,8 +11,8 @@ use greennode_sdk::{Clock, Error, Failure, RequestContext};
 
 use super::{errors, query, render};
 pub(crate) use management::{
-    management, management_custom, management_with_confirmation, management_with_password,
-    management_with_view,
+    management, management_custom, management_with_confirmation, management_with_input_preparation,
+    management_with_password, management_with_view,
 };
 pub(crate) use output::RawText;
 pub use output::{ExecutionFailure, ExecutionResult, OutputView, RenderFailure};

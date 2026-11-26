@@ -37,27 +37,71 @@ pub(crate) async fn read(
     stdin: &mut dyn Stdin,
     stdin_terminal: bool,
 ) -> Result<Secret, LocalError> {
-    let cancelled = || LocalError::usage("--password-file: input canceled or timed out");
+    read_input(ctx, clock, path, stdin, stdin_terminal, FileInput::Password).await
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FileInput {
+    Password,
+    Certificate {
+        flag: &'static str,
+        private: bool,
+        trim_newline: bool,
+    },
+}
+
+impl FileInput {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Password => FIELD.name,
+            Self::Certificate { flag, .. } => flag,
+        }
+    }
+
+    fn limit(self) -> usize {
+        match self {
+            Self::Password => 4096,
+            Self::Certificate { .. } => 64 * 1024,
+        }
+    }
+
+    fn error(self, message: &str) -> LocalError {
+        LocalError::usage(format!("--{}: {message}", self.flag()))
+    }
+}
+
+pub(crate) async fn read_input(
+    ctx: &RequestContext,
+    clock: &dyn Clock,
+    path: &Path,
+    stdin: &mut dyn Stdin,
+    stdin_terminal: bool,
+    input: FileInput,
+) -> Result<Secret, LocalError> {
+    let cancelled = || input.error("input canceled or timed out");
     if ctx.check(clock).is_some() {
         return Err(cancelled());
     }
     if path != Path::new("-") {
         let path: PathBuf = path.to_owned();
-        let result = tokio::task::spawn_blocking(move || read_file(&path))
+        let result = tokio::task::spawn_blocking(move || read_file(&path, input))
             .await
-            .map_err(|_| LocalError::usage("--password-file: input could not be read"))?;
+            .map_err(|_| input.error("input could not be read"))?;
         if ctx.check(clock).is_some() {
             return Err(cancelled());
         }
         return result;
     }
     if stdin_terminal {
-        return Err(LocalError::usage("--password-file - refuses a terminal"));
+        return Err(LocalError::usage(format!(
+            "--{} - refuses a terminal",
+            input.flag()
+        )));
     }
     let deadline = clock.monotonic_now() + Duration::from_secs(30);
     let ctx = ctx.child_with_deadline(deadline);
     let deadline = ctx.deadline().unwrap_or(deadline);
-    let result = read_bytes(|bytes| {
+    let result = read_bytes(input, |bytes| {
         if ctx.check(clock).is_some() {
             return Err(io::ErrorKind::TimedOut.into());
         }
@@ -69,26 +113,27 @@ pub(crate) async fn read(
     result
 }
 
-fn read_file(path: &Path) -> Result<Secret, LocalError> {
-    let file = open(path).map_err(|_| LocalError::usage("--password-file: cannot open input"))?;
+fn read_file(path: &Path, input: FileInput) -> Result<Secret, LocalError> {
+    let mut file = open(path).map_err(|_| input.error("cannot open input"))?;
     let metadata = file
         .metadata()
         .ok()
         .filter(std::fs::Metadata::is_file)
-        .ok_or_else(|| LocalError::usage("--password-file: input must be a regular file"))?;
+        .ok_or_else(|| input.error("input must be a regular file"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(LocalError::usage(
-                "--password-file: input must be private (mode 0600)",
-            ));
+        let private = matches!(
+            input,
+            FileInput::Password | FileInput::Certificate { private: true, .. }
+        );
+        if private && metadata.permissions().mode() & 0o077 != 0 {
+            return Err(input.error("input must be private (mode 0600)"));
         }
     }
     #[cfg(not(unix))]
     let _ = metadata;
-    let mut file = file;
-    read_bytes(|bytes| file.read(bytes))
+    read_bytes(input, |bytes| file.read(bytes))
 }
 
 #[cfg(unix)]
@@ -107,44 +152,55 @@ fn open(path: &Path) -> io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-fn read_bytes(mut read: impl FnMut(&mut [u8]) -> io::Result<usize>) -> Result<Secret, LocalError> {
-    let mut data = Zeroizing::new([0; 4097]);
+fn read_bytes(
+    input: FileInput,
+    mut read: impl FnMut(&mut [u8]) -> io::Result<usize>,
+) -> Result<Secret, LocalError> {
+    let mut data = Zeroizing::new(vec![0; input.limit() + 1]);
     let mut offset = 0;
     loop {
         let remaining = data
             .get_mut(offset..)
             .filter(|remaining| !remaining.is_empty())
-            .ok_or_else(|| LocalError::usage("--password-file: input exceeds 4096 bytes"))?;
+            .ok_or_else(|| input.error(&format!("input exceeds {} bytes", input.limit())))?;
         match read(remaining) {
             Ok(0) => break,
             Ok(count) if count <= remaining.len() => offset += count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                return Err(LocalError::usage(
-                    "--password-file: input canceled or timed out",
-                ));
+                return Err(input.error("input canceled or timed out"));
             }
-            _ => {
-                return Err(LocalError::usage(
-                    "--password-file: input could not be read",
-                ));
-            }
+            _ => return Err(input.error("input could not be read")),
         }
     }
     let bytes = data.get(..offset).unwrap_or_default();
     let text = std::str::from_utf8(bytes)
         .ok()
-        .map(|text| {
-            text.strip_suffix("\r\n")
-                .or_else(|| text.strip_suffix('\n'))
-                .unwrap_or(text)
-        })
         .filter(|text| !text.is_empty())
-        .ok_or_else(|| LocalError::usage("--password-file: input must be non-empty valid UTF-8"))?;
-    if text.chars().any(char::is_control) {
-        return Err(LocalError::usage(
-            "--password-file: input must not contain controls",
-        ));
+        .ok_or_else(|| input.error("input must be non-empty valid UTF-8"))?;
+    let text = if matches!(
+        input,
+        FileInput::Password
+            | FileInput::Certificate {
+                trim_newline: true,
+                ..
+            }
+    ) {
+        text.strip_suffix("\r\n")
+            .or_else(|| text.strip_suffix('\n'))
+            .unwrap_or(text)
+    } else {
+        text
+    };
+    if matches!(input, FileInput::Password) && text.is_empty() {
+        return Err(input.error("input must be non-empty valid UTF-8"));
+    }
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let newline = ch == '\n' || (ch == '\r' && chars.peek() == Some(&'\n'));
+        if ch.is_control() && (matches!(input, FileInput::Password) || !newline) {
+            return Err(input.error("input must not contain controls"));
+        }
     }
     Ok(Secret::new(text))
 }
@@ -154,6 +210,27 @@ mod tests {
     use super::*;
     use greennode_sdk::TestClock;
     use tokio::time::Instant;
+
+    #[test]
+    fn certificate_mode_preserves_newlines_and_password_mode_remains_single_line() {
+        let mode = FileInput::Certificate {
+            flag: "private-key-file",
+            private: true,
+            trim_newline: false,
+        };
+        let input = b"first\r\nsecond\n";
+        let read = |mode, mut bytes: &[u8]| read_bytes(mode, |out| bytes.read(out));
+        assert!(read(mode, input).is_ok_and(|value| value.expose_secret().as_bytes() == input));
+        assert!(read(mode, b"line\rrest").is_err());
+        assert!(read(FileInput::Password, input).is_err());
+        assert!(
+            read(FileInput::Password, b"toy\r\n").is_ok_and(|value| value.expose_secret() == "toy")
+        );
+        let long = vec![b'a'; 65536];
+        assert!(read(mode, &long).is_ok());
+        assert!(read(mode, &[long.as_slice(), b"a"].concat()).is_err());
+        assert!(read(FileInput::Password, &long).is_err());
+    }
 
     struct TimedInput<'a> {
         clock: &'a TestClock,

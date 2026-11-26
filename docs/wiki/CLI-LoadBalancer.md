@@ -2,6 +2,28 @@
 
 # CLI: LoadBalancer
 
+## create-load-balancer
+
+Kind: Write.
+
+Set a maximum monthly price in VND. An Internet scheme requires `--yes`. Waits
+up to 20 minutes for creation unless `--no-wait` is set.
+
+| Flag           | Type      | Required |
+| -------------- | --------- | -------- |
+| `--name`       | `string`  | yes      |
+| `--package-id` | `string`  | yes      |
+| `--type`       | `string`  | yes      |
+| `--scheme`     | `string`  | yes      |
+| `--subnet-id`  | `string`  | yes      |
+| `--zone-id`    | `string`  | yes      |
+| `--max-price`  | `float64` |          |
+| `--no-wait`    | `bool`    |          |
+
+```sh
+greennode loadbalancer create-load-balancer --name <name> --type 'Layer 4' --scheme Internal --subnet-id <subnet-id> --zone-id <zone-id> --package-id <package-id> --max-price <monthly-vnd>
+```
+
 ## delete-certificate
 
 Kind: Write, destructive.
@@ -107,6 +129,33 @@ Kind: Read.
 
 ```sh
 greennode loadbalancer get-pool-health-monitor --load-balancer-id <load-balancer-id> --pool-id <pool-id> --query HealthMonitor
+```
+
+## import-certificate
+
+Kind: Write.
+
+Read PEM material from files up to 64 KiB each. A single file flag can use `-`
+for non-terminal stdin. Private keys and passphrases require private files on
+Unix and are forbidden in `--cli-input-json`.
+
+TLS imports require `--private-key-file`. Other certificate types accept only
+the certificate itself. If an import may have reached the server, list
+certificates by name before trying again.
+
+| Flag                                             | Type     | Required |
+| ------------------------------------------------ | -------- | -------- |
+| `--name`                                         | `string` | yes      |
+| `--type`                                         | `string` | yes      |
+| `--certificate-file`                             | `string` | yes      |
+| `--certificate-chain-file`                       | `string` |          |
+| `--private-key-file`                             | `string` |          |
+| `--passphrase-file`                              | `string` |          |
+| `Certificate` (via `--cli-input-json` only)      | `string` | yes      |
+| `CertificateChain` (via `--cli-input-json` only) | `string` |          |
+
+```sh
+greennode loadbalancer import-certificate --name <name> --type TLS/SSL --certificate-file <certificate.pem> --private-key-file <key.pem>
 ```
 
 ## list-certificates
@@ -250,4 +299,23 @@ listing packages. Prices are in VND and include VAT.
 
 ```sh
 greennode loadbalancer quote-resize-load-balancer --load-balancer-id <load-balancer-id> --package-id <package-id>
+```
+
+## resize-load-balancer
+
+Kind: Write.
+
+The target package comes from the load balancer's zone. The current package is a
+no-op. Resize accepts negative quotes as credits and waits up to 45 minutes
+unless `--no-wait` is set.
+
+| Flag                 | Type      | Required |
+| -------------------- | --------- | -------- |
+| `--load-balancer-id` | `string`  | yes      |
+| `--package-id`       | `string`  | yes      |
+| `--max-price`        | `float64` |          |
+| `--no-wait`          | `bool`    |          |
+
+```sh
+greennode loadbalancer resize-load-balancer --load-balancer-id <load-balancer-id> --package-id <package-id> --max-price <vnd>
 ```
