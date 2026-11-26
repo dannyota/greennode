@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "uuid": "repo-1",
+      "name": "app",
+      "backendName": "app",
+      "accessLevel": "PRIVATE",
+      "registryUrl": "<hostname>/app",
+      "quotaLimit": 1,
+      "quotaUsed": 0,
+      "imageCount": 0,
+      "attachedUser": 0,
+      "createdAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "page": 1,
+  "pageSize": 25,
+  "totalPage": 1,
+  "totalItem": 1
+}

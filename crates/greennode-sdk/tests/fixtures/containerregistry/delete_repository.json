@@ -1,0 +1,12 @@
+{
+  "uuid": "repo-1",
+  "name": "app-test",
+  "backendName": "app-test",
+  "accessLevel": "PRIVATE",
+  "registryUrl": "<hostname>/app-test",
+  "quotaLimit": 1,
+  "quotaUsed": 0,
+  "imageCount": 0,
+  "attachedUser": 0,
+  "createdAt": "2026-01-01T00:00:00Z"
+}
