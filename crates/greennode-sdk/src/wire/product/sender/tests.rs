@@ -14,6 +14,7 @@ macro_rules! run {
             $op,
             $auth,
             $request,
+            RouteInputs::default(),
         )
     };
 }

@@ -93,6 +93,7 @@ pub(crate) struct Request {
 pub(crate) struct SentCredentials {
     values: Vec<Secret>,
     numeric_product_credential: bool,
+    incomplete_signin: bool,
 }
 impl SentCredentials {
     #[cfg(test)]
@@ -121,7 +122,11 @@ impl SentCredentials {
     pub(crate) fn has_numeric_product_credential(&self) -> bool {
         self.numeric_product_credential
     }
+    pub(super) fn has_incomplete_signin(&self) -> bool {
+        self.incomplete_signin
+    }
     pub(crate) fn extend(&mut self, credentials: &Self) {
+        self.incomplete_signin |= credentials.incomplete_signin;
         self.numeric_product_credential |= credentials.numeric_product_credential;
         for secret in credentials.values() {
             self.record(secret);
@@ -277,6 +282,23 @@ async fn bounded<T, F: Future<Output = T>>(
     .await
 }
 
+async fn acquire_bearer(
+    ctx: &RequestContext,
+    clock: &dyn Clock,
+    source: &dyn BearerSource,
+    credentials: &mut SentCredentials,
+) -> Result<BearerToken, Error> {
+    let mut started = false;
+    let result = bounded(ctx, clock, || {
+        started = true;
+        source.token(ctx)
+    })
+    .await
+    .and_then(|result| result.map_err(|error| Error::Provider(Box::new(error))));
+    credentials.incomplete_signin |= started && result.is_err();
+    result
+}
+
 fn system_time(time: time::OffsetDateTime) -> Option<std::time::SystemTime> {
     let nanos = time.unix_timestamp_nanos();
     let absolute = nanos.unsigned_abs();
@@ -344,11 +366,28 @@ pub(crate) struct Runtime<'a> {
     pub(crate) sleeper: &'a dyn Sleeper,
     pub(crate) jitter: &'a mut (dyn FnMut() -> u64 + Send),
 }
-pub(crate) async fn run(
+#[derive(Default)]
+pub(super) struct RouteInputs<'a> {
+    pub(super) path: &'a [&'a str],
+    pub(super) query: &'a [(&'a str, &'a str)],
+}
+
+impl RouteInputs<'_> {
+    fn reflects(&self, credentials: &SentCredentials) -> bool {
+        self.path
+            .iter()
+            .copied()
+            .chain(self.query.iter().map(|(_, value)| *value))
+            .any(|input| credentials.reflects(input.as_bytes()))
+    }
+}
+
+pub(super) async fn run(
     runtime: Runtime<'_>,
     op: &Operation,
     auth: Auth<'_>,
     request: &Request,
+    route_inputs: RouteInputs<'_>,
 ) -> Result<Response, Failure> {
     let dispatch = if matches!(op.class, redirect::Classification::Write) {
         crate::WriteDispatch::NotSent
@@ -358,20 +397,12 @@ pub(crate) async fn run(
     let mut evidence = Evidence {
         status: None,
         dispatch,
+        sent: SentCredentials::default(),
+        reflection: runtime.configured_credentials.cloned().unwrap_or_default(),
     };
-    let mut credentials = runtime.configured_credentials.cloned().unwrap_or_default();
-    let mut sent = SentCredentials::default();
-    let result = run_inner(
-        runtime,
-        op,
-        auth,
-        request,
-        &mut evidence,
-        &mut sent,
-        &mut credentials,
-    )
-    .await;
-    credentials.extend(&sent);
+    let result = run_inner(runtime, op, auth, request, route_inputs, &mut evidence).await;
+    let mut credentials = evidence.reflection;
+    credentials.extend(&evidence.sent);
     match result {
         Ok(reply) => Ok(Response { reply, credentials }),
         Err(error) => Err(Failure {
@@ -386,6 +417,8 @@ pub(crate) async fn run(
 struct Evidence {
     status: Option<http::StatusCode>,
     dispatch: crate::WriteDispatch,
+    sent: SentCredentials,
+    reflection: SentCredentials,
 }
 
 async fn run_inner(
@@ -393,10 +426,11 @@ async fn run_inner(
     op: &Operation,
     auth: Auth<'_>,
     request: &Request,
+    route_inputs: RouteInputs<'_>,
     evidence: &mut Evidence,
-    sent: &mut SentCredentials,
-    reflection: &mut SentCredentials,
 ) -> Result<send::Reply, Error> {
+    let sent = &mut evidence.sent;
+    let reflection = &mut evidence.reflection;
     let Runtime {
         client,
         ctx,
@@ -428,6 +462,7 @@ async fn run_inner(
         })
         || (matches!(auth, Auth::None) && !request.credentials.is_empty())
         || (matches!(auth, Auth::Key) && request.credentials.is_empty())
+        || route_inputs.reflects(reflection)
     {
         return Err(Error::InvalidRequest);
     }
@@ -441,11 +476,7 @@ async fn run_inner(
     let ctx = ctx.child_with_deadline(deadline);
     let deadline = ctx.deadline().ok_or(Error::InvalidRequest)?;
     let mut bearer = match auth {
-        Auth::Bearer(source) => Some(
-            bounded(&ctx, clock, || source.token(&ctx))
-                .await?
-                .map_err(|error| Error::Provider(Box::new(error)))?,
-        ),
+        Auth::Bearer(source) => Some(acquire_bearer(&ctx, clock, source, reflection).await?),
         _ => None,
     };
     let mut recovered = false;
@@ -456,6 +487,9 @@ async fn run_inner(
             .and_then(|value| value.signin_credentials.as_deref())
         {
             reflection.extend(credentials);
+            if route_inputs.reflects(credentials) {
+                return Err(Error::InvalidRequest);
+            }
         }
         let mut url = request.url.clone();
         let mut visited = std::collections::HashSet::new();
@@ -486,7 +520,8 @@ async fn run_inner(
                     || name == http::header::CONTENT_TYPE)
                     && value.as_bytes() == b"application/json";
                 !fixed_json
-                    && (sent.reflects(value.as_bytes())
+                    && (reflection.reflects(value.as_bytes())
+                        || sent.reflects(value.as_bytes())
                         || pending
                             .iter()
                             .any(|secret| contains_secret(value.as_bytes(), secret)))
@@ -557,11 +592,7 @@ async fn run_inner(
                     && let Auth::Bearer(source) = auth
                     && source.refreshable()
                 {
-                    bearer = Some(
-                        bounded(&ctx, clock, || source.token(&ctx))
-                            .await?
-                            .map_err(|error| Error::Provider(Box::new(error)))?,
-                    );
+                    bearer = Some(acquire_bearer(&ctx, clock, source, reflection).await?);
                     recovered = true;
                     attempt = 0;
                     continue 'attempt;
