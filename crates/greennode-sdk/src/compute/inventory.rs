@@ -91,21 +91,29 @@ impl Client {
         ctx: &RequestContext,
         input: GetServerInput,
     ) -> Result<GetServerOutput, Failure<GetServerOutput>> {
-        GET_SERVER
-            .path("ServerID", &input.server_id)
-            .map_err(failure)?;
-        let ctx = self.server_deadline(ctx);
         let mut evidence = Evidence::new();
-        let envelope = self
-            .read(&ctx, &GET_SERVER, &[&input.server_id], &[], &mut evidence)
+        let server = self
+            .server_detail(ctx, &input.server_id, &mut evidence)
             .await?;
-        let server: Server = envelope.field("data", &GET_SERVER, &evidence)?;
-        if server.uuid != input.server_id {
-            return Err(failure(GET_SERVER.invalid(&evidence)));
-        }
         Ok(GetServerOutput {
             server: GET_SERVER.retain(server, &evidence)?,
         })
+    }
+
+    pub(super) async fn server_detail<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<Server, Failure<O>> {
+        GET_SERVER.path("ServerID", id).map_err(failure)?;
+        let ctx = self.server_deadline(ctx);
+        let envelope = self.read(&ctx, &GET_SERVER, &[id], &[], evidence).await?;
+        let server: Server = envelope.field("data", &GET_SERVER, evidence)?;
+        if server.uuid != id {
+            return Err(failure(GET_SERVER.invalid(evidence)));
+        }
+        Ok(server)
     }
 
     /// Reads the server console log into a redacted secret value.

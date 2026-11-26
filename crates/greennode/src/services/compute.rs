@@ -1,4 +1,5 @@
 mod prices;
+mod server_commands;
 
 use clap::ArgMatches;
 use greennode_sdk::compute as sdk;
@@ -168,6 +169,10 @@ pub(super) const SERVICE: Service = Service {
     name: "compute",
     error_rules: &prices::ERROR_RULES,
     operations: &[
+        server_commands::CREATE_SERVER,
+        server_commands::DELETE_SERVER,
+        server_commands::QUOTE_CREATE_SERVER,
+        server_commands::QUOTE_RESIZE_SERVER,
         operation!(
             GetServerInput, || sdk::GetServerInput::new(""), get_server, "get-server", "GetServer",
             "Get server", &[SERVER_NOTE], false, [

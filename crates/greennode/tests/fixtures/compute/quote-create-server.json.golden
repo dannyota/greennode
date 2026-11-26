@@ -1,0 +1,16 @@
+{
+  "OptimumPrice": 20,
+  "OriginalPrice": 25,
+  "DiscountPrice": 5,
+  "DiscountPercent": 20,
+  "Properties": [
+    {
+      "Name": "INSTANCE",
+      "Description": "Compute",
+      "OptimumPrice": 20,
+      "MonthlyPrice": 20,
+      "CurrentPrice": null,
+      "DiscountPercent": 0
+    }
+  ]
+}

@@ -88,6 +88,25 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
+        self.quote(ctx, input, evidence, false).await
+    }
+
+    pub(crate) async fn component_quote_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        input: GetQuoteInput,
+        evidence: &mut Evidence,
+    ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
+        self.quote(ctx, input, evidence, true).await
+    }
+
+    async fn quote(
+        &self,
+        ctx: &RequestContext,
+        input: GetQuoteInput,
+        evidence: &mut Evidence,
+        require_totals: bool,
+    ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         if input.resource_type.is_empty() {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
@@ -140,7 +159,7 @@ impl Client {
             Ok(raw) => {
                 let output = crate::quote::catalog::value(OP, &raw)
                     .ok()
-                    .and_then(|value| project(&value, action).ok());
+                    .and_then(|value| project(&value, action, require_totals).ok());
                 let output = output.filter(|result| {
                     serde_json::to_value(result).is_ok_and(|value| !evidence.reflected_in(&value))
                 });
@@ -150,9 +169,13 @@ impl Client {
     }
 }
 
-fn project(raw: &Value, action: &str) -> Result<GetQuoteOutput, Box<Error>> {
+fn project(raw: &Value, action: &str, require_totals: bool) -> Result<GetQuoteOutput, Box<Error>> {
     let obj = decode::quote_object(OP, raw)?;
-    let amount = |name| decode::numeric(OP, obj, name).map(Option::unwrap_or_default);
+    let amount = |name| match decode::numeric(OP, obj, name)? {
+        Some(amount) => Ok(amount),
+        None if require_totals => Err(Box::new(decode::invalid_quote(OP, Some(200)))),
+        None => Ok(0.0),
+    };
     let optimum_price = decode::numeric(OP, obj, "optimumPrice")?
         .filter(|amount| *amount >= 0.0 || action == ACTION_RESIZE)
         .ok_or_else(|| Box::new(decode::invalid_quote(OP, Some(200))))?;

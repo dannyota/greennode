@@ -2,6 +2,59 @@
 
 # CLI: Compute
 
+## create-server
+
+Kind: Write.
+
+Checks inventory and price before placing one order. Supply an SSH key or
+`--user-data-file` for cloud-init login. Floating IP attachment is unavailable.
+
+| Flag                             | Type       | Required |
+| -------------------------------- | ---------- | -------- |
+| `--name`                         | `string`   | yes      |
+| `--zone-id`                      | `string`   | yes      |
+| `--flavor-id`                    | `string`   | yes      |
+| `--image-id`                     | `string`   | yes      |
+| `--vpc-id`                       | `string`   | yes      |
+| `--subnet-id`                    | `string`   | yes      |
+| `--security-group-id`            | `[]string` | yes      |
+| `--ssh-key-id`                   | `string`   |          |
+| `--root-disk-size`               | `int`      | yes      |
+| `--root-disk-type-id`            | `string`   | yes      |
+| `--root-disk-encryption-type-id` | `string`   |          |
+| `--data-disk-size`               | `int`      |          |
+| `--data-disk-type-id`            | `string`   |          |
+| `--data-disk-name`               | `string`   |          |
+| `--data-disk-encryption-type-id` | `string`   |          |
+| `--server-group-id`              | `string`   |          |
+| `--auto-renew`                   | `bool`     |          |
+| `--attach-floating-ip`           | `bool`     |          |
+| `--allow-open-login`             | `bool`     |          |
+| `--max-price`                    | `float64`  |          |
+| `--no-wait`                      | `bool`     |          |
+| `--user-data-file`               | `string`   |          |
+
+```sh
+greennode compute create-server --name <name> --zone-id <zone-id> --flavor-id <flavor-id> --image-id <image-id> --vpc-id <vpc-id> --subnet-id <subnet-id> --security-group-id <security-group-id> --root-disk-size <root-disk-size> --root-disk-type-id <root-disk-type-id>
+```
+
+## delete-server
+
+Kind: Write, destructive.
+
+The boot volume is always deleted. Data volumes are retained unless
+`--delete-volumes` is set.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--server-id`      | `string` | yes      |
+| `--delete-volumes` | `bool`   |          |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode compute delete-server --server-id <server-id> --yes
+```
+
 ## get-server
 
 Kind: Read.
@@ -224,4 +277,55 @@ Kind: Read.
 
 ```sh
 greennode compute list-user-images
+```
+
+## quote-create-server
+
+Kind: Read.
+
+Quotes the priced server fields without ordering.
+
+| Flag                                           | Type       | Required |
+| ---------------------------------------------- | ---------- | -------- |
+| `--name`                                       | `string`   |          |
+| `--zone-id`                                    | `string`   | yes      |
+| `--flavor-id`                                  | `string`   | yes      |
+| `--image-id`                                   | `string`   | yes      |
+| `--vpc-id`                                     | `string`   |          |
+| `--subnet-id`                                  | `string`   |          |
+| `--security-group-id`                          | `[]string` |          |
+| `--ssh-key-id`                                 | `string`   |          |
+| `--root-disk-size`                             | `int`      | yes      |
+| `--root-disk-type-id`                          | `string`   | yes      |
+| `--root-disk-encryption-type-id`               | `string`   |          |
+| `--data-disk-size`                             | `int`      |          |
+| `--data-disk-type-id`                          | `string`   |          |
+| `--data-disk-name`                             | `string`   |          |
+| `--data-disk-encryption-type-id`               | `string`   |          |
+| `--server-group-id`                            | `string`   |          |
+| `--auto-renew`                                 | `bool`     |          |
+| `--attach-floating-ip`                         | `bool`     |          |
+| `AllowOpenLogin` (via `--cli-input-json` only) | `bool`     |          |
+| `MaxPrice` (via `--cli-input-json` only)       | `float64`  |          |
+| `NoWait` (via `--cli-input-json` only)         | `bool`     |          |
+
+```sh
+greennode compute quote-create-server --zone-id <zone-id> --flavor-id <flavor-id> --image-id <image-id> --root-disk-size <root-disk-size> --root-disk-type-id <root-disk-type-id>
+```
+
+## quote-resize-server
+
+Kind: Read.
+
+Quotes a server flavor change. A negative amount indicates a credit.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--server-id`                            | `string`  | yes      |
+| `--flavor-id`                            | `string`  | yes      |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+| `NoWait` (via `--cli-input-json` only)   | `bool`    |          |
+
+```sh
+greennode compute quote-resize-server --server-id <server-id> --flavor-id <flavor-id>
 ```
