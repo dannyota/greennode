@@ -3,6 +3,7 @@ mod billing;
 mod containerregistry;
 mod database;
 mod dns;
+mod globalloadbalancer;
 mod portal;
 mod project;
 mod tagging;
@@ -157,6 +158,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         containerregistry::SERVICE,
         database::SERVICE,
         dns::SERVICE,
+        globalloadbalancer::SERVICE,
         portal::SERVICE,
         project::SERVICE,
         tagging::SERVICE,

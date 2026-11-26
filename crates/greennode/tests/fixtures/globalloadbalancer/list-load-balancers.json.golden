@@ -1,0 +1,21 @@
+{
+  "Items": [
+    {
+      "ID": "glb-1",
+      "Name": "\u003cname\u003e",
+      "Description": "",
+      "Status": "ACTIVE",
+      "Package": "pkg-1",
+      "Type": "PUBLIC",
+      "UserID": 0,
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DeletedAt": "",
+      "VIPs": [],
+      "Domains": []
+    }
+  ],
+  "Offset": 0,
+  "Limit": 10000,
+  "Total": 1
+}

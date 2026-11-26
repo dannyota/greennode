@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "ID": "member-1",
+      "Name": "\u003cname\u003e",
+      "Description": "",
+      "Region": "hcm-3",
+      "GlobalPoolID": "pool-1",
+      "GlobalLoadBalancerID": "glb-1",
+      "TrafficDial": 100,
+      "VPCID": "vpc-1",
+      "Type": "IP",
+      "Status": "ACTIVE",
+      "Members": [],
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DeletedAt": null
+    }
+  ]
+}

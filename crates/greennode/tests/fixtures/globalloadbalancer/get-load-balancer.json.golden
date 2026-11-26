@@ -1,0 +1,39 @@
+{
+  "LoadBalancer": {
+    "ID": "glb-1",
+    "Name": "\u003cname\u003e",
+    "Description": "\u003cdescription\u003e",
+    "Status": "ACTIVE",
+    "Package": "pkg-1",
+    "Type": "PUBLIC",
+    "UserID": 0,
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": "",
+    "VIPs": [
+      {
+        "ID": 1,
+        "Address": "\u003cip\u003e",
+        "Status": "ACTIVE",
+        "Region": "hcm-3",
+        "GlobalLoadBalancerID": "glb-1",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "DeletedAt": ""
+      }
+    ],
+    "Domains": [
+      {
+        "ID": 1,
+        "Hostname": "\u003chostname\u003e",
+        "Status": "ACTIVE",
+        "GlobalLoadBalancerID": "glb-1",
+        "DNSHostedZoneID": "",
+        "DNSServerID": "",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "DeletedAt": ""
+      }
+    ]
+  }
+}

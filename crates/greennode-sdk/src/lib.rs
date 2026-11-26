@@ -16,6 +16,7 @@ mod endpoint;
 mod error;
 mod event;
 mod file_diagnostic;
+pub mod globalloadbalancer;
 mod model;
 #[doc(hidden)]
 #[allow(missing_docs)]

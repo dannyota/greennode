@@ -1,4 +1,4 @@
-use super::sender::SentCredentials;
+use super::{response, sender::SentCredentials};
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
 
@@ -40,7 +40,7 @@ impl Evidence {
             Value::Object(map) => map
                 .iter()
                 .any(|(key, item)| self.text_reflects(key) || self.reflected_in(item)),
-            Value::Null | Value::Bool(_) => false,
+            Value::Null | Value::Bool(_) => self.literal_reflects(value),
         }
     }
 
@@ -67,7 +67,11 @@ impl Evidence {
                     true
                 });
             }
-            Value::Null | Value::Bool(_) => {}
+            Value::Null | Value::Bool(_) => {
+                if self.literal_reflects(value) {
+                    *value = Value::String(REDACTED.to_owned());
+                }
+            }
         }
     }
 
@@ -93,8 +97,18 @@ impl Evidence {
         Failure::new(error, partial, dispatch)
     }
 
-    fn text_reflects(&self, text: &str) -> bool {
-        self.credentials.reflects(text.as_bytes())
+    pub(crate) fn text_reflects(&self, text: &str) -> bool {
+        response::reflects_credential(text, &self.credentials)
+    }
+
+    fn literal_reflects(&self, value: &Value) -> bool {
+        let text: &[u8] = match value {
+            Value::Null => b"null",
+            Value::Bool(true) => b"true",
+            Value::Bool(false) => b"false",
+            _ => return false,
+        };
+        self.credentials.reflects(text)
     }
 
     fn number_reflects(&self, number: &serde_json::Number) -> bool {

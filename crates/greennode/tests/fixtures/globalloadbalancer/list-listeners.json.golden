@@ -1,0 +1,22 @@
+{
+  "Items": [
+    {
+      "ID": "listener-1",
+      "Name": "\u003cname\u003e",
+      "Description": "",
+      "Protocol": "HTTP",
+      "Port": 80,
+      "GlobalLoadBalancerID": "glb-1",
+      "GlobalPoolID": "pool-1",
+      "TimeoutClient": 0,
+      "TimeoutMember": 0,
+      "TimeoutConnection": 0,
+      "AllowedCIDRs": "",
+      "Headers": null,
+      "Status": "ACTIVE",
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DeletedAt": null
+    }
+  ]
+}

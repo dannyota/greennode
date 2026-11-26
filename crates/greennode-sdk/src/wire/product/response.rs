@@ -93,6 +93,14 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
 }
 
 pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
+    matches_credential_forms(text, credentials, true)
+}
+
+pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
+    !credentials.values().is_empty() && matches_credential_forms(text, credentials, false)
+}
+
+fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_text: bool) -> bool {
     let mut needles = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
@@ -115,6 +123,7 @@ pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredential
         work: 8 << 20,
         forms: Vec::new(),
         visited: Vec::new(),
+        error_text,
     };
     matches_forms(text.as_bytes(), &needles, [0; 3], &mut state)
 }
@@ -123,6 +132,7 @@ struct MatchState {
     work: usize,
     forms: Vec<Zeroizing<Vec<u8>>>,
     visited: Vec<(usize, [u8; 3])>,
+    error_text: bool,
 }
 
 impl MatchState {
@@ -158,31 +168,33 @@ fn matches_forms(
             return true;
         }
         let lower = Zeroizing::new(input.to_ascii_lowercase());
-        let normalized = Zeroizing::new(
-            lower
-                .iter()
-                .copied()
-                .filter(u8::is_ascii_alphanumeric)
-                .collect::<Vec<_>>(),
-        );
-        let Ok(marker_text) = std::str::from_utf8(&normalized) else {
-            return true;
-        };
-        if marker_text.contains("clientsecret") {
-            return true;
+        if state.error_text {
+            let normalized = Zeroizing::new(
+                lower
+                    .iter()
+                    .copied()
+                    .filter(u8::is_ascii_alphanumeric)
+                    .collect::<Vec<_>>(),
+            );
+            if std::str::from_utf8(&normalized).is_ok_and(|text| text.contains("clientsecret")) {
+                return true;
+            }
         }
         if !needles.is_empty() {
-            let Ok(haystack) = std::str::from_utf8(&lower) else {
+            if state.error_text && std::str::from_utf8(&lower).is_err() {
                 return true;
-            };
+            }
             for needle in needles {
-                if !state.charge(haystack.len().saturating_add(needle.len())) {
+                if !state.charge(lower.len().saturating_add(needle.len())) {
                     return true;
                 }
                 let Ok(needle) = std::str::from_utf8(needle) else {
                     return true;
                 };
-                if haystack.contains(needle) {
+                if lower
+                    .utf8_chunks()
+                    .any(|chunk| chunk.valid().contains(needle))
+                {
                     return true;
                 }
             }
@@ -836,6 +848,7 @@ mod tests {
             work: 8 << 20,
             forms: Vec::new(),
             visited: Vec::new(),
+            error_text: true,
         };
         assert!(!matches_forms(
             &input,

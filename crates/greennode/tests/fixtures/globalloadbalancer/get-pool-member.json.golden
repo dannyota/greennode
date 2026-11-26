@@ -1,0 +1,36 @@
+{
+  "PoolMember": {
+    "ID": "member-1",
+    "Name": "\u003cname\u003e",
+    "Description": "",
+    "Region": "hcm-3",
+    "GlobalPoolID": "pool-1",
+    "GlobalLoadBalancerID": "glb-1",
+    "TrafficDial": 100,
+    "VPCID": "vpc-1",
+    "Type": "IP",
+    "Status": "ACTIVE",
+    "Members": [
+      {
+        "ID": "member-detail-1",
+        "Name": "",
+        "Description": "",
+        "GlobalPoolMemberID": "member-1",
+        "GlobalLoadBalancerID": "glb-1",
+        "SubnetID": "subnet-1",
+        "Address": "\u003cip\u003e",
+        "Weight": 1,
+        "Port": 80,
+        "MonitorPort": 80,
+        "BackupRole": false,
+        "Status": "ACTIVE",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "DeletedAt": null
+      }
+    ],
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  }
+}

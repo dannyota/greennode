@@ -1,0 +1,20 @@
+{
+  "Listener": {
+    "ID": "listener-1",
+    "Name": "\u003cname\u003e",
+    "Description": "\u003cdescription\u003e",
+    "Protocol": "HTTP",
+    "Port": 80,
+    "GlobalLoadBalancerID": "glb-1",
+    "GlobalPoolID": "pool-1",
+    "TimeoutClient": 50,
+    "TimeoutMember": 50,
+    "TimeoutConnection": 5,
+    "AllowedCIDRs": "\u003ccidr\u003e",
+    "Headers": null,
+    "Status": "ACTIVE",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  }
+}
