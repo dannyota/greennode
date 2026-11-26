@@ -19,6 +19,16 @@ fi
 
 rows() { sed '/^#/d; /^$/d'; }
 
+wiki_exempt() {
+  case "$1" in docs/wiki/*.md | docs/wiki/*.markdown) ;; *) return 1 ;; esac
+  [[ -f "$1" ]] || return 1
+  python3 -I -c 'import os, sys
+path = sys.argv[1]
+root = os.path.join(os.path.realpath("."), "docs", "wiki")
+resolved = os.path.realpath(path)
+sys.exit(not (os.path.normpath(path) == path and os.path.commonpath((root, resolved)) == root))' "$1"
+}
+
 cap_for() {
   CAP_PATH="$1" awk '
     /^#/ || /^$/ { next }
@@ -48,7 +58,10 @@ if [[ -n "$base_ref" ]]; then
   else
     printf 'check-lengths: %s has no baseline; skipping base comparison\n' "$base_ref"
   fi
-  ((base_has_baseline)) && while read -r cap file || [[ -n "$cap" ]]; do
+  ((base_has_baseline)) && while IFS= read -r row || [[ -n "$row" ]]; do
+    cap=${row%% *}
+    file=${row#* }
+    if wiki_exempt "$file"; then continue; fi
     base_cap=$(cap_for "$file" <<<"$base_baseline")
     if [[ -z "$base_cap" ]]; then
       printf '%s: baseline entry absent from base ref\n' "$file"
@@ -105,6 +118,7 @@ while IFS= read -r -d '' file; do
       ;;
     *.md | *.markdown)
       case "$file" in docs/plans/*) continue ;; esac
+      if wiki_exempt "$file"; then continue; fi
       limit=$MD_MAX
       ;;
     *) continue ;;
@@ -130,7 +144,10 @@ while IFS= read -r -d '' file; do
   fi
 done <"$work/files"
 
-while read -r cap file || [[ -n "$cap" ]]; do
+while IFS= read -r row || [[ -n "$row" ]]; do
+  cap=${row%% *}
+  file=${row#* }
+  if wiki_exempt "$file"; then continue; fi
   scanned=0
   while IFS= read -r -d '' path; do
     if [[ "$path" == "$file" ]]; then
