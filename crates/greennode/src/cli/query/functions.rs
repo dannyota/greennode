@@ -5,8 +5,7 @@ use crate::cli::render::Value;
 use super::json_size::json_size;
 
 use super::interpreter::{
-    EvaluationError, WorkBudget, add_size, check, compare_numbers, compare_strings, stable_order,
-    value_size,
+    EvaluationError, WorkBudget, check, compare_numbers, compare_strings, stable_order,
 };
 
 #[derive(Clone, Copy)]
@@ -349,11 +348,11 @@ pub(super) fn call_budgeted(
         ("keys", [Value::Object(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
-            let mut size = std::mem::size_of::<Value>();
             for key in values.keys() {
                 budget.charge(2)?;
                 budget.charge_bytes(key)?;
-                add_size(&mut size, std::mem::size_of::<Value>() + key.len())?;
+                budget.allocate(key.len())?;
+                budget.reserve(&mut result)?;
                 result.push(Value::String(key.clone()));
             }
             Ok(Value::Array(result))
@@ -361,12 +360,11 @@ pub(super) fn call_budgeted(
         ("values", [Value::Object(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
-            let mut size = std::mem::size_of::<Value>();
             for value in values.values() {
                 budget.charge(1)?;
                 check(value, 1, budget)?;
                 budget.charge_value(value)?;
-                add_size(&mut size, value_size(value)?)?;
+                budget.reserve(&mut result)?;
                 result.push(value.clone());
             }
             Ok(Value::Array(result))
@@ -437,20 +435,19 @@ pub(super) fn call_budgeted(
                 bytes = bytes
                     .checked_add(value.len())
                     .ok_or(EvaluationError::WorkBudget)?;
-                parts.push(value.as_str());
+                budget.push(&mut parts, value.as_str())?;
             }
-            add_size(&mut bytes, std::mem::size_of::<Value>())?;
-            budget.charge(
-                u64::try_from(bytes - std::mem::size_of::<Value>())
-                    .map_err(|_| EvaluationError::WorkBudget)?,
-            )?;
+            budget.allocate(bytes)?;
+            budget.charge(u64::try_from(bytes).map_err(|_| EvaluationError::WorkBudget)?)?;
             Ok(Value::String(parts.join(separator)))
         }
         ("to_array", [Value::Array(values)]) => {
-            let mut size = std::mem::size_of::<Value>();
-            for value in values {
-                add_size(&mut size, value_size(value)?)?;
-            }
+            budget.allocate(
+                values
+                    .len()
+                    .checked_mul(std::mem::size_of::<Value>())
+                    .ok_or(EvaluationError::ResultSize)?,
+            )?;
             budget.charge(1)?;
             for value in values {
                 budget.charge_value(value)?;
@@ -458,23 +455,20 @@ pub(super) fn call_budgeted(
             Ok(Value::Array(values.clone()))
         }
         ("to_array", [value]) => {
-            let mut size = std::mem::size_of::<Value>();
-            add_size(&mut size, value_size(value)?)?;
+            budget.allocate(std::mem::size_of::<Value>())?;
             budget.charge(1)?;
             check(value, 1, budget)?;
             budget.charge_value(value)?;
             Ok(Value::Array(vec![value.clone()]))
         }
         ("to_string", [Value::String(value)]) => {
-            let mut size = std::mem::size_of::<Value>();
-            add_size(&mut size, value.len())?;
+            budget.allocate(value.len())?;
             budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
             Ok(Value::String(value.clone()))
         }
         ("to_string", [value]) => {
             let size = json_size(value, budget, 0)?;
-            let mut result_size = std::mem::size_of::<Value>();
-            add_size(&mut result_size, size)?;
+            budget.allocate(size)?;
             budget.charge(u64::try_from(size).map_err(|_| EvaluationError::WorkBudget)?)?;
             let mut output = String::with_capacity(size);
             compact_json(value, &mut output, 0, budget)?;
@@ -527,7 +521,6 @@ pub(super) fn call_budgeted(
                     best = value;
                 }
             }
-            value_size(best)?;
             budget.charge_value(best)?;
             Ok(best.clone())
         }
@@ -545,10 +538,9 @@ pub(super) fn call_budgeted(
                 _ => Err(EvaluationError::FunctionType),
             })?;
             let mut result = Vec::new();
-            let mut size = std::mem::size_of::<Value>();
             for index in order {
                 budget.charge_value(&values[index])?;
-                add_size(&mut size, value_size(&values[index])?)?;
+                budget.reserve(&mut result)?;
                 result.push(values[index].clone());
             }
             Ok(Value::Array(result))
@@ -556,7 +548,6 @@ pub(super) fn call_budgeted(
         ("merge", values) => {
             budget.charge(1)?;
             let mut merged = std::collections::BTreeMap::new();
-            let mut size = std::mem::size_of::<Value>();
             for value in values {
                 let Value::Object(map) = value else {
                     return Err(EvaluationError::FunctionPanic);
@@ -566,11 +557,7 @@ pub(super) fn call_budgeted(
                     budget.charge_bytes(key)?;
                     budget.charge_value(value)?;
                     budget.charge_merge_key(key, merged.len())?;
-                    if let Some(old) = merged.get(key) {
-                        size -= key.len() + value_size(old)?;
-                    }
-                    add_size(&mut size, key.len())?;
-                    add_size(&mut size, value_size(value)?)?;
+                    budget.allocate(128 + key.len())?;
                     merged.insert(key.clone(), value.clone());
                 }
             }
@@ -610,7 +597,6 @@ pub(super) fn call_budgeted(
             for value in values {
                 budget.charge(1)?;
                 if *value != Value::Null {
-                    value_size(value)?;
                     budget.charge_value(value)?;
                     return Ok(value.clone());
                 }
@@ -618,8 +604,7 @@ pub(super) fn call_budgeted(
             Ok(Value::Null)
         }
         ("reverse", [Value::String(value)]) => {
-            let mut size = std::mem::size_of::<Value>();
-            add_size(&mut size, value.len())?;
+            budget.allocate(value.len())?;
             for _ in value.chars() {
                 budget.charge(1)?;
             }
@@ -629,11 +614,10 @@ pub(super) fn call_budgeted(
         ("reverse", [Value::Array(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
-            let mut size = std::mem::size_of::<Value>();
             for value in values.iter().rev() {
                 budget.charge(1)?;
                 budget.charge_value(value)?;
-                add_size(&mut size, value_size(value)?)?;
+                budget.reserve(&mut result)?;
                 result.push(value.clone());
             }
             Ok(Value::Array(result))

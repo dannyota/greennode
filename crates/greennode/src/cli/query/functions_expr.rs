@@ -1,7 +1,7 @@
 // Translated from go-jmespath v0.4.0, Copyright 2015 James Saryerwinnie, Apache-2.0; changed.
 
 use super::{
-    interpreter::{EvaluationError, WorkBudget, add_size, check, execute, value_size},
+    interpreter::{EvaluationError, WorkBudget, check, execute},
     parser::{Node, NodeKind},
 };
 use crate::cli::render::Value;
@@ -19,6 +19,7 @@ pub(super) fn call(
 ) -> Result<Value, EvaluationError> {
     let mut arguments = Vec::new();
     for node in nodes {
+        budget.reserve(&mut arguments)?;
         if node.kind == NodeKind::ExpRef {
             budget.charge(1)?;
             arguments.push(Argument::Reference(
@@ -52,7 +53,6 @@ pub(super) fn call(
     if name == "map" {
         budget.charge(1)?;
         let mut result = Vec::new();
-        let mut size = std::mem::size_of::<Value>();
         let mut ordinary = None;
         for value in values {
             budget.charge(1)?;
@@ -62,8 +62,7 @@ pub(super) fn call(
             }) {
                 Ok(item) => {
                     budget.charge(1)?;
-                    add_size(&mut size, value_size(&item)?)?;
-                    result.push(item);
+                    budget.push(&mut result, item)?;
                 }
                 Err(error) => record_error(error, &mut ordinary)?,
             }
@@ -75,12 +74,11 @@ pub(super) fn call(
     }
     if values.len() < 2 {
         if let Some(value) = values.first() {
-            let mut size = std::mem::size_of::<Value>();
-            add_size(&mut size, value_size(value)?)?;
             budget.charge_value(value)?;
         }
         return if name == "sort_by" {
             budget.charge(1)?;
+            budget.allocate(values.len() * std::mem::size_of::<Value>())?;
             Ok(Value::Array(values.clone()))
         } else {
             Ok(values.first().cloned().unwrap_or(Value::Null))
@@ -115,7 +113,7 @@ pub(super) fn call(
                     };
                     record_error(error, &mut ordinary)?;
                 }
-                keys.push(key);
+                budget.push(&mut keys, key)?;
             }
             Err(error) => {
                 let error = if name == "sort_by" && index > 0 {
@@ -144,11 +142,15 @@ pub(super) fn call(
                 best = index;
             }
         }
-        value_size(&values[best])?;
         budget.charge_value(&values[best])?;
         return Ok(values[best].clone());
     }
     budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+    budget.allocate(
+        keys.len()
+            .checked_mul(std::mem::size_of::<(Value, &Value)>())
+            .ok_or(EvaluationError::ResultSize)?,
+    )?;
     if numeric {
         let indexed = keys
             .into_iter()
@@ -165,11 +167,10 @@ pub(super) fn call(
             })?;
         budget.charge(1)?;
         let mut output = Vec::new();
-        let mut size = std::mem::size_of::<Value>();
         for index in order {
             let value = indexed[index].1;
             budget.charge_value(value)?;
-            add_size(&mut size, value_size(value)?)?;
+            budget.reserve(&mut output)?;
             output.push(value.clone());
         }
         Ok(Value::Array(output))
@@ -188,11 +189,10 @@ pub(super) fn call(
             })?;
         budget.charge(1)?;
         let mut output = Vec::new();
-        let mut size = std::mem::size_of::<Value>();
         for index in order {
             let value = indexed[index].1;
             budget.charge_value(value)?;
-            add_size(&mut size, value_size(value)?)?;
+            budget.reserve(&mut output)?;
             output.push(value.clone());
         }
         Ok(Value::Array(output))
@@ -259,8 +259,8 @@ fn call_regular(
         let mut values = Vec::new();
         for argument in arguments {
             if let Argument::Value(value) = argument {
-                value_size(value)?;
                 budget.charge_value(value)?;
+                budget.reserve(&mut values)?;
                 values.push(value.clone());
             }
         }
@@ -290,7 +290,6 @@ fn call_regular(
                 match value {
                     Argument::Value(Value::Null) => {}
                     Argument::Value(value) => {
-                        value_size(value)?;
                         budget.charge_value(value)?;
                         return Ok(value.clone());
                     }
