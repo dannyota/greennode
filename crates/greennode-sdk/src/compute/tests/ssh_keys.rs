@@ -218,3 +218,75 @@ async fn rejects_embedded_short_credential_in_issued_key_id() {
     assert_eq!(valid.ssh_key.id, "key-1");
     assert_eq!(server.heads().len(), 2);
 }
+
+#[tokio::test]
+async fn ambiguous_ssh_refusal_withholds_peer_text() {
+    use super::super::ssh_keys::withhold_key_error;
+
+    let server = TestServer::start(vec![http(
+        "400 Bad Request",
+        r#"{"data":{"privateKey":"toy-private-key"},"data":{},"message":"toy-private-key"}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .import_ssh_key(
+            &ctx,
+            ImportSshKeyInput {
+                name: "example".into(),
+                public_key: "ssh-rsa toy".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(400));
+    assert!(!api.message().contains(ISSUED));
+    assert!(withhold_key_error(b"{\"message\":"));
+    assert!(!withhold_key_error(br#"{"message":"Invalid public key"}"#));
+}
+
+#[tokio::test]
+async fn create_requires_an_id_usable_for_cleanup() {
+    let server = TestServer::start(vec![http(
+        "201 Created",
+        r#"{"data":{"id":"key_1","privateKey":"toy-private-key"}}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server)
+        .create_ssh_key(
+            &ctx,
+            CreateSshKeyInput {
+                name: "example".into(),
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    let failure = result.unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert!(failure.partial().is_none());
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
+#[ignore = "Enable after rebasing onto the shared hex matcher from PR #101"]
+async fn issued_key_hex_reflection_is_redacted_from_the_returned_name() {
+    let hex = data_encoding::HEXLOWER.encode(ISSUED.as_bytes());
+    let body =
+        serde_json::json!({"data":{"id":"key-1","name":hex,"privateKey":ISSUED}}).to_string();
+    let server = TestServer::start(vec![http("201 Created", &body)]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .create_ssh_key(
+            &ctx,
+            CreateSshKeyInput {
+                name: "example".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(output.ssh_key.name == "<redacted>");
+    assert!(!serde_json::to_string(&output).unwrap().contains(&hex));
+}

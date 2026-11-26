@@ -222,3 +222,63 @@ async fn ssh_secret_file_path_is_screened_before_projection() {
     assert_eq!(output["SecretFile"], "<redacted>");
     assert!(std::fs::read_to_string(path).unwrap() == format!("{ISSUED}\n"));
 }
+
+#[tokio::test]
+async fn create_rejects_reflected_bearer_in_an_unknown_reply_field_before_delivery() {
+    let directory = TestDirectory::new();
+    let path = directory.0.join("toy.key");
+    let raw =
+        serde_json::json!({"data":{"id":"key-1","privateKey":ISSUED},"unknown":{"session":BEARER}})
+            .to_string();
+    let server = Server::start(vec![response("201 Created", &raw)]);
+    let args = [
+        "create-ssh-key",
+        "--project-id",
+        "proj-1",
+        "--name",
+        "example",
+        "--secret-file",
+        path.to_str().unwrap(),
+    ];
+    let (exit, stdout, stderr) = invoke(&server, &args, false).await;
+    assert_eq!(exit, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert!(!path.exists());
+    assert!(!String::from_utf8_lossy(&stderr).contains(ISSUED));
+    let diagnostic: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(diagnostic["error"]["code"], "InvalidResponse");
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+#[ignore = "Enable after rebasing onto the shared hex matcher from PR #101"]
+async fn issued_key_hex_reflection_is_never_used_for_cleanup() {
+    let directory = TestDirectory::new();
+    let path = directory.0.join("toy.key");
+    let hex: String = ISSUED.bytes().map(|byte| format!("{byte:02X}")).collect();
+    let raw = serde_json::json!({"data":{"id":hex,"privateKey":ISSUED}}).to_string();
+    let server = Server::start(vec![
+        response("201 Created", &raw),
+        response("204 No Content", ""),
+    ]);
+    let options = ConfigOptions::default().with_credentials_provider(Arc::new(RaceDestination {
+        path: path.clone(),
+        wrote: AtomicBool::new(false),
+    }));
+    let args = [
+        "create-ssh-key",
+        "--project-id",
+        "proj-1",
+        "--name",
+        "example",
+        "--secret-file",
+        path.to_str().unwrap(),
+    ];
+    let (exit, stdout, stderr) = invoke_with_options(&server, &args, false, options).await;
+    assert_eq!(exit, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains(&hex));
+    assert!(!String::from_utf8_lossy(&stderr).contains(ISSUED));
+    assert_eq!(server.requests(), 1);
+    assert!(std::fs::read_to_string(path).unwrap() == "keep");
+}

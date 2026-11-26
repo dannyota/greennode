@@ -1,11 +1,11 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, value::RawValue};
 
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
+use crate::wire::product::{evidence::Evidence, operation, options::PathIds, redirect::Retry};
 use crate::wire::strict_json;
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
@@ -170,8 +170,11 @@ impl Client {
             return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
         }
         evidence.add_redaction(&private_key);
+        if !ssh_key.id.is_empty() && !PathIds::Strict.allows(&ssh_key.id) {
+            return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
+        }
         if !valid_key_output(&mut ssh_key, &evidence) || private_key.expose_secret().is_empty() {
-            let message = if PathIds::WithUnderscore.allows(&ssh_key.id)
+            let message = if PathIds::Strict.allows(&ssh_key.id)
                 && !evidence.id_reflects(&ssh_key.id)
                 && private_key.expose_secret().is_empty()
             {
@@ -368,7 +371,7 @@ fn decode_key(
     ];
     let invalid = || Box::new(invalid_mutation_response(mutation, evidence));
     let text = zeroize::Zeroizing::new(go_json(body).into_owned());
-    serde_json::from_str::<&RawValue>(&text).map_err(|_| {
+    let raw: &RawValue = serde_json::from_str(&text).map_err(|_| {
         Box::new(api(
             mutation.id,
             None,
@@ -392,11 +395,20 @@ fn decode_key(
     {
         return Err(invalid());
     }
+    if mutation.id == CREATE.id {
+        let reflects = |text: &str| evidence.text_reflects(text);
+        if operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
+            .unwrap_or(true)
+            || matches_raw_tokens(raw, &reflects, &reflects).unwrap_or(true)
+        {
+            return Err(invalid());
+        }
+    }
     let envelope: Envelope<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;
     let Some(data) = envelope.data else {
         return Ok((SshKey::default(), Secret::new("")));
     };
-    let mut fields: std::collections::BTreeMap<String, &RawValue> =
+    let mut fields: BTreeMap<String, &RawValue> =
         serde_json::from_str(data.get()).map_err(|_| invalid())?;
     if fields
         .keys()
@@ -462,17 +474,62 @@ fn sent<O>(error: Error) -> Failure<O> {
 }
 
 pub(super) fn withhold_key_error(body: &[u8]) -> bool {
-    fn shape_has_private_key(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(fields) => fields.iter().any(|(name, value)| {
-                strict_json::field_matches("privateKey", name) || shape_has_private_key(value)
-            }),
-            serde_json::Value::Array(items) => items.iter().any(shape_has_private_key),
-            serde_json::Value::String(text) => text.contains("PRIVATE KEY-----"),
-            _ => false,
-        }
-    }
+    let fields = [
+        "code",
+        "message",
+        "error",
+        "detail",
+        "title",
+        "errors",
+        "data",
+        "privateKey",
+    ]
+    .map(|name| strict_json::Field {
+        name,
+        children: &[],
+    });
     let text = zeroize::Zeroizing::new(go_json(body).into_owned());
-    serde_json::from_str::<serde_json::Value>(&text)
-        .is_ok_and(|value| shape_has_private_key(&value))
+    if strict_json::validate(text.as_bytes(), &fields, 8 << 20).is_err() {
+        return true;
+    }
+    serde_json::from_str::<&RawValue>(&text)
+        .and_then(|raw| {
+            matches_raw_tokens(
+                raw,
+                &|name| strict_json::field_matches("privateKey", name),
+                &|text| text.contains("PRIVATE KEY-----"),
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn matches_raw_tokens(
+    raw: &RawValue,
+    key_matches: &impl Fn(&str) -> bool,
+    value_matches: &impl Fn(&str) -> bool,
+) -> Result<bool, serde_json::Error> {
+    let text = raw.get();
+    match text.as_bytes().first() {
+        Some(b'{') => {
+            for (name, item) in serde_json::from_str::<BTreeMap<String, &RawValue>>(text)? {
+                if key_matches(&name) || matches_raw_tokens(item, key_matches, value_matches)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Some(b'[') => {
+            for item in serde_json::from_str::<Vec<&RawValue>>(text)? {
+                if matches_raw_tokens(item, key_matches, value_matches)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Some(b'"') => {
+            let value = zeroize::Zeroizing::new(serde_json::from_str::<String>(text)?);
+            Ok(value_matches(&value))
+        }
+        _ => Ok(value_matches(text)),
+    }
 }
