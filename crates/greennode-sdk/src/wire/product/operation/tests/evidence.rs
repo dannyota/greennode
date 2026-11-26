@@ -319,11 +319,13 @@ async fn failed_signin_withholds_partial_even_after_later_success() {
     )
     .await
     .unwrap_err();
+    assert!(!evidence.can_retain_partial());
     assert!(
         call_evidence(&server, &read, &options, "two", "toy-second", &mut evidence)
             .await
             .is_ok()
     );
+    assert!(!evidence.can_retain_partial());
     let failure = evidence.with_partial(failure, output.0, WriteDispatch::MayHaveBeenSent);
     assert_eq!(failure.error().class(), ErrorClass::Auth);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);

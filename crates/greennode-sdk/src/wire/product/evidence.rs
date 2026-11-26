@@ -27,6 +27,10 @@ impl Evidence {
         &self.credentials
     }
 
+    pub(crate) fn can_retain_partial(&self) -> bool {
+        !self.credentials.has_incomplete_signin()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn reflected_in(&self, value: &Value) -> bool {
         match value {
@@ -82,7 +86,7 @@ impl Evidence {
             (WriteDispatch::NotSent, _) | (_, WriteDispatch::NotSent) => WriteDispatch::NotSent,
             _ => WriteDispatch::NotAWrite,
         };
-        let partial = (!self.credentials.has_incomplete_signin()).then(|| {
+        let partial = self.can_retain_partial().then(|| {
             self.redact(&mut partial);
             partial
         });

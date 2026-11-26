@@ -1,3 +1,5 @@
+mod writes;
+
 use super::*;
 use crate::wire::test_server::{Response, Server};
 use crate::{ConfigOptions, EndpointOverrides, Secret};

@@ -1,12 +1,19 @@
-//! Read vDNS hosted zones and records.
+//! Read and manage vDNS hosted zones and records.
 
 mod models;
 #[cfg(test)]
 mod tests;
 mod wire;
+mod writes;
 
 pub use models::{Field, HostedZone, Record, RecordValue, Timestamp, VpcMapRegion};
 pub use wire::{DecodeError, Page};
+pub use writes::{
+    CreateHostedZoneInput, CreateHostedZoneOutput, CreateRecordInput, CreateRecordOutput,
+    DeleteHostedZoneInput, DeleteHostedZoneOutput, DeleteRecordInput, DeleteRecordOutput,
+    ErrorDetail, UpdateHostedZoneInput, UpdateHostedZoneOutput, UpdateRecordInput,
+    UpdateRecordOutput,
+};
 
 use std::sync::Arc;
 
@@ -17,6 +24,7 @@ use crate::config::Session;
 use crate::error::SafeText;
 use crate::wire::product::{
     operation::{self, Operation, Output},
+    options::Options,
     redirect::{Classification, Retry},
     retry,
 };
@@ -35,6 +43,7 @@ const GET_RECORD: &str = "dns.GetRecord";
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Selects one page of hosted zones in the account.
@@ -133,6 +142,7 @@ impl Client {
     pub fn new(config: &Config) -> Self {
         Self {
             session: Arc::clone(config.session()),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -270,18 +280,21 @@ fn page_value(value: i64, default: i64) -> String {
     reason = "The public API returns Failure by value"
 )]
 fn check_ids<T>(operation: &str, fields: &[(&str, &str)]) -> Result<(), Failure<T>> {
+    validate_ids(operation, fields).map_err(|error| failure(*error))
+}
+
+fn validate_ids(operation: &str, fields: &[(&str, &str)]) -> Result<(), Box<Error>> {
     let message = if let Some((field, _)) = fields.iter().find(|(_, value)| value.is_empty()) {
         format!("vngcloud: invalid input: {operation} requires {field}")
-    } else if let Some((field, _)) = fields.iter().find(|(_, value)| {
-        !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    }) {
+    } else if let Some((field, _)) = fields
+        .iter()
+        .find(|(_, value)| !Options::DEFAULT.path_ids.allows(value))
+    {
         format!("vngcloud: invalid input: {operation} requires {field} to match ^[A-Za-z0-9-]+$")
     } else {
         return Ok(());
     };
-    Err(failure(
+    Err(Box::new(
         Error::new(ErrorClass::InvalidInput).with_cause(api_error("", "InvalidUsage", &message)),
     ))
 }

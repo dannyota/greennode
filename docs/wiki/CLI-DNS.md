@@ -2,6 +2,83 @@
 
 # CLI: DNS
 
+## create-hosted-zone
+
+Kind: Write.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+| Flag            | Type       | Required |
+| --------------- | ---------- | -------- |
+| `--domain-name` | `string`   | yes      |
+| `--vpc-ids`     | `[]string` | yes      |
+| `--description` | `string`   |          |
+| `--no-wait`     | `bool`     |          |
+
+```sh
+greennode dns create-hosted-zone --domain-name <domain-name> --vpc-ids <vpc-id>
+```
+
+## create-record
+
+Kind: Write.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+| Flag                                   | Type                | Required |
+| -------------------------------------- | ------------------- | -------- |
+| `--hosted-zone-id`                     | `string`            | yes      |
+| `--type`                               | `string`            | yes      |
+| `--sub-domain`                         | `string`            |          |
+| `--ttl`                                | `int`               |          |
+| `--routing-policy`                     | `string`            |          |
+| `--sticky-session`                     | `*bool`             |          |
+| `--no-wait`                            | `bool`              |          |
+| `Values` (via `--cli-input-json` only) | `[]dns.RecordValue` | yes      |
+
+```sh
+greennode dns create-record --hosted-zone-id <hosted-zone-id> --type <type> --cli-input-json '{"Values":[{"Value":"<value>"}]}'
+```
+
+## delete-hosted-zone
+
+Kind: Write, destructive.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--hosted-zone-id` | `string` | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode dns delete-hosted-zone --hosted-zone-id <hosted-zone-id> --yes
+```
+
+## delete-record
+
+Kind: Write, destructive.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--hosted-zone-id` | `string` | yes      |
+| `--record-id`      | `string` | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode dns delete-record --hosted-zone-id <hosted-zone-id> --record-id <record-id> --yes
+```
+
 ## get-hosted-zone
 
 Kind: Read.
@@ -59,4 +136,54 @@ parameters remain unverified.
 
 ```sh
 greennode dns list-records --hosted-zone-id <hosted-zone-id>
+```
+
+## update-hosted-zone
+
+Kind: Write.
+
+Reads a matching zone with a description and a non-null VPC list before
+replacing either field. Use `--cli-input-json '{"VPCIDs":[]}'` to detach all
+VPCs.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+| Flag               | Type        | Required |
+| ------------------ | ----------- | -------- |
+| `--hosted-zone-id` | `string`    | yes      |
+| `--vpc-ids`        | `*[]string` |          |
+| `--description`    | `*string`   |          |
+| `--no-wait`        | `bool`      |          |
+
+```sh
+greennode dns update-hosted-zone --hosted-zone-id <hosted-zone-id> --description <description>
+```
+
+## update-record
+
+Kind: Write.
+
+Each readiness or settlement wait shares the earlier of the caller's deadline
+and 60 seconds. Sends the write once. Read the current state before another
+write if the outcome is uncertain.
+
+TXT values compare exactly during settlement. `--no-wait` still reads the record
+once after the update.
+
+| Flag                                   | Type                 | Required |
+| -------------------------------------- | -------------------- | -------- |
+| `--hosted-zone-id`                     | `string`             | yes      |
+| `--record-id`                          | `string`             | yes      |
+| `--sub-domain`                         | `*string`            |          |
+| `--type`                               | `*string`            |          |
+| `--ttl`                                | `*int`               |          |
+| `--routing-policy`                     | `*string`            |          |
+| `--sticky-session`                     | `*bool`              |          |
+| `--no-wait`                            | `bool`               |          |
+| `Values` (via `--cli-input-json` only) | `*[]dns.RecordValue` |          |
+
+```sh
+greennode dns update-record --hosted-zone-id <hosted-zone-id> --record-id <record-id> --ttl <ttl>
 ```

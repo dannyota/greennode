@@ -1,0 +1,27 @@
+{
+  "Record": {
+    "ID": "record-1",
+    "SubDomain": "\u003chostname\u003e",
+    "HostedZoneID": "zone-1",
+    "Status": "CREATING",
+    "Type": "TXT",
+    "RoutingPolicy": "simple-routing",
+    "Value": [
+      {
+        "Value": "\u003csecret\u003e",
+        "Location": null,
+        "Weight": null
+      },
+      {
+        "Value": "\u003csecret\u003e",
+        "Location": null,
+        "Weight": null
+      }
+    ],
+    "TTL": 300,
+    "EnableStickySession": null,
+    "CreatedAt": "0001-01-01T00:00:00Z",
+    "DeletedAt": null,
+    "UpdatedAt": "0001-01-01T00:00:00Z"
+  }
+}
