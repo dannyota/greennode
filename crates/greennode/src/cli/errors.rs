@@ -129,7 +129,10 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
                 || code == "RequestFailed"
                 || code == api.map_or("", |api| api.code())) =>
         {
-            (status, api.map(|api| api.operation()))
+            (
+                status,
+                api.map(|api| api.operation()).filter(|op| !op.is_empty()),
+            )
         }
         None => (None, None),
     };

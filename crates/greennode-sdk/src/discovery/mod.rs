@@ -5,7 +5,7 @@ use crate::wire::product::{
     operation::{self, Operation, Output},
     redirect::{Classification, Retry},
     retry,
-    sender::{BearerSource, Runtime},
+    sender::{BearerSource, Response, Runtime, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{ApiError, Error, ErrorClass, Project};
@@ -102,13 +102,15 @@ pub(crate) async fn read_projects(
             && error.detail::<StatusCode>() == Some(&StatusCode::OK)
             && !error.is_body_too_large()
         {
-            invalid_response()
+            invalid_response(StatusCode::OK)
         } else {
             Box::new(error)
         }
     })?;
     let mut ids = HashSet::new();
-    let mut projects = inventory.projects.ok_or_else(invalid_response)?;
+    let mut projects = inventory
+        .projects
+        .ok_or_else(|| invalid_response(StatusCode::OK))?;
     if inventory.extra.keys().any(|key| {
         matches!(
             key.as_str(),
@@ -128,7 +130,7 @@ pub(crate) async fn read_projects(
         .iter()
         .any(|project| project.id.is_empty() || !ids.insert(&project.id))
     {
-        return Err(invalid_response());
+        return Err(invalid_response(StatusCode::OK));
     }
     projects.retain_mut(|project| {
         if project.region.is_empty() {
@@ -136,21 +138,30 @@ pub(crate) async fn read_projects(
         }
         project.region == region
     });
+    let credentials = &inventory.credentials;
+    if (!projects.is_empty() && credentials.reflects(region.as_bytes()))
+        || projects.iter().any(|project| {
+            credentials.reflects(project.user_id.to_string().as_bytes())
+                || crate::output_number::reflects(project.user_id as f64, credentials, false)
+        })
+    {
+        return Err(invalid_response(StatusCode::OK));
+    }
     Ok(projects)
 }
 
 const LIST_PROJECTS: &str = "project.ListProjects";
 
-fn invalid_response() -> Box<Error> {
+fn invalid_response(status: StatusCode) -> Box<Error> {
     Box::new(
         Error::from_api(ApiError::without_fallback(
             LIST_PROJECTS,
-            Some(StatusCode::OK.as_u16()),
+            Some(status.as_u16()),
             SafeText::new("InvalidResponse", &[]),
             SafeText::new("invalid discovery response; body withheld", &[]),
             false,
         ))
-        .with_outer_detail(StatusCode::OK),
+        .with_outer_detail(status),
     )
 }
 
@@ -189,6 +200,8 @@ fn projects_operation() -> Operation {
 #[derive(Default, serde::Deserialize)]
 struct Inventory {
     projects: Option<Vec<Project>>,
+    #[serde(skip)]
+    credentials: SentCredentials,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
@@ -223,6 +236,19 @@ impl Output for Inventory {
             },
         ])),
     }]);
+
+    fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        if !operation.success.contains(&response.status)
+            && operation::reflects_json(&response.body, &response.credentials, false)
+                .unwrap_or(false)
+        {
+            return Err(invalid_response(response.status));
+        }
+        Ok(Self {
+            credentials: response.credentials.clone(),
+            ..operation::decode_response(operation, response)?
+        })
+    }
 }
 
 #[cfg(test)]

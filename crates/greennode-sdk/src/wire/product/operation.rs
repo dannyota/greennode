@@ -117,11 +117,14 @@ pub(crate) async fn execute<T: Output>(
             }
             let status = failure.status;
             let overflow = matches!(&failure.error, sender::Error::Send(error) if matches!(error.kind(), send::Error::BodyTooLarge));
-            if overflow
-                && !operation.overflow_overrides_status
-                && status.is_some_and(|s| s.is_client_error() || s.is_server_error())
+            let refused_redirect =
+                operation.keep_status && matches!(&failure.error, sender::Error::Redirect(_));
+            if let Some(status) = status
+                && (refused_redirect
+                    || (overflow
+                        && !operation.overflow_overrides_status
+                        && (status.is_client_error() || status.is_server_error())))
             {
-                let status = status.ok_or_else(invalid)?;
                 let error = super::response::classify(
                     operation.id,
                     status,
@@ -133,14 +136,19 @@ pub(crate) async fn execute<T: Output>(
                 .err()
                 .map(|error| *error)
                 .unwrap_or_else(|| api_error(operation.id, Some(status), crate::ErrorClass::Api));
+                let error = if refused_redirect {
+                    error.with_outer_detail(status)
+                } else {
+                    error
+                };
                 return Err(crate::Failure::new(error, None, failure.dispatch));
             }
             if overflow {
                 let api = crate::ApiError::without_fallback(
-                    operation.id,
+                    "",
                     None,
                     crate::error::SafeText::new("", &[]),
-                    crate::error::SafeText::new("", &[]),
+                    crate::error::SafeText::new("transport: response body exceeds limit", &[]),
                     false,
                 );
                 let error = crate::Error::new(crate::ErrorClass::Api)
@@ -209,7 +217,8 @@ pub(crate) fn decode_response<T: Output>(
         &response.credentials,
     )?;
     if operation.reject_reflected_credentials
-        && reflects_json(&body, &response.credentials, T::CHECK_RENDERED_NUMBERS)
+        && (reflects_json(&body, &response.credentials, T::CHECK_RENDERED_NUMBERS).unwrap_or(true)
+            || serde_json::from_slice::<&serde_json::value::RawValue>(&body).is_err())
     {
         return Err(invalid());
     }
@@ -219,15 +228,13 @@ pub(crate) fn decode_response<T: Output>(
     decode(&body, operation.allow_empty, operation.cap).map_err(|_| invalid())
 }
 
-fn reflects_json(
+pub(crate) fn reflects_json(
     body: &[u8],
     credentials: &sender::SentCredentials,
     check_rendered_numbers: bool,
-) -> bool {
-    if credentials.reflects(body)
-        || serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err()
-    {
-        return true;
+) -> Option<bool> {
+    if credentials.reflects(body) {
+        return Some(true);
     }
     let numeric_match_possible = check_rendered_numbers
         && credentials.values().iter().any(|secret| {
@@ -254,7 +261,7 @@ fn reflects_json(
                             && crate::output_number::reflects(number, credentials, false)
                     })
                 {
-                    return true;
+                    return Some(true);
                 }
                 continue;
             }
@@ -269,18 +276,13 @@ fn reflects_json(
             }
             index += 1;
         }
-        if index >= body.len() {
-            return true;
-        }
-        let Ok(value) = serde_json::from_slice::<String>(&body[start..=index]) else {
-            return true;
-        };
+        let value = serde_json::from_slice::<String>(body.get(start..=index)?).ok()?;
         if credentials.reflects(value.as_bytes()) {
-            return true;
+            return Some(true);
         }
         index += 1;
     }
-    false
+    Some(false)
 }
 
 fn encode_query(input: &str, output: &mut String) {
