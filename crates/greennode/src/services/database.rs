@@ -148,10 +148,14 @@ macro_rules! operation {
         }
     };
 }
+mod writes;
+
 pub(super) const SERVICE: Service = Service {
     name: "database",
     error_rules: &[],
     operations: &[
+        writes::CREATE,
+        writes::DELETE,
         operation!(
             "get-database-instance",
             "database.GetDatabaseInstance",

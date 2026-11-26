@@ -4,18 +4,21 @@ pub mod errors;
 mod gendocs;
 pub mod input;
 pub mod op;
+pub(crate) mod password;
 mod query;
 pub mod render;
 mod root;
 pub(crate) mod secret_file;
+mod stdin;
 
 pub use root::command_with_registry;
+pub use stdin::{BlockingStdin, Stdin};
 
 pub struct Invocation<'a> {
     pub args: Vec<std::ffi::OsString>,
     pub source: &'a dyn greennode_sdk::ConfigSource,
     pub config_options: greennode_sdk::ConfigOptions,
-    pub stdin: &'a mut dyn std::io::Read,
+    pub stdin: &'a mut dyn Stdin,
     pub stdout: &'a mut dyn std::io::Write,
     pub stderr: &'a mut dyn std::io::Write,
     pub stdin_terminal: bool,

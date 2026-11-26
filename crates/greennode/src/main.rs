@@ -54,14 +54,34 @@ impl Input<'_> {
 #[cfg(unix)]
 impl Read for Input<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        use rustix::event::{PollFd, PollFlags, poll};
+        self.read_wait(bytes, None)
+    }
+}
+
+#[cfg(unix)]
+impl Input<'_> {
+    fn read_wait(
+        &mut self,
+        bytes: &mut [u8],
+        deadline: Option<tokio::time::Instant>,
+    ) -> io::Result<usize> {
+        use greennode_sdk::Clock;
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
         let mut fds = [
             PollFd::new(self.stdin, PollFlags::IN),
             PollFd::new(&self.cancellation, PollFlags::IN),
         ];
         loop {
             self.check()?;
-            match poll(&mut fds, None) {
+            let timeout = deadline.map(|deadline| {
+                let remaining = deadline.saturating_duration_since(SystemClock.monotonic_now());
+                Timespec {
+                    tv_sec: remaining.as_secs().try_into().unwrap_or(i64::MAX),
+                    tv_nsec: remaining.subsec_nanos().into(),
+                }
+            });
+            match poll(&mut fds, timeout.as_ref()) {
+                Ok(0) => return Err(io::ErrorKind::TimedOut.into()),
                 Ok(_) => {
                     self.check()?;
                     return Ok(rustix::io::read(self.stdin, bytes)?);
@@ -72,6 +92,20 @@ impl Read for Input<'_> {
         }
     }
 }
+
+#[cfg(unix)]
+impl greennode::cli::Stdin for Input<'_> {
+    fn read_before(
+        &mut self,
+        bytes: &mut [u8],
+        deadline: tokio::time::Instant,
+    ) -> io::Result<usize> {
+        self.read_wait(bytes, Some(deadline))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl greennode::cli::Stdin for Input<'_> {}
 
 #[cfg(unix)]
 struct StdinTerminal<'a> {
@@ -182,7 +216,7 @@ fn main() -> ExitCode {
             },
         };
         #[cfg(windows)]
-        let mut input = stdin;
+        let mut input = greennode::cli::BlockingStdin::new(stdin);
         let stdout_terminal = stdout.is_terminal();
         let stderr_terminal = stderr.is_terminal();
         let invocation = greennode::cli::Invocation {

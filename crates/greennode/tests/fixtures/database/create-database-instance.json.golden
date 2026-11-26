@@ -1,0 +1,22 @@
+{
+  "Instance": {
+    "ID": "db-1",
+    "Name": "demo-db",
+    "Status": "ACTIVE",
+    "DatastoreType": "MySQL",
+    "DatastoreVersion": "8.0",
+    "ZoneID": "zone-1",
+    "ProjectID": "project-1",
+    "SubnetID": "subnet-1",
+    "VolumeType": "SSD",
+    "VolumeSize": 20,
+    "QuotaPackageID": "1",
+    "PublicAccess": false,
+    "BackupAuto": false,
+    "Owner": true,
+    "Role": "",
+    "ReplicaSourceID": "",
+    "Replicas": [],
+    "Deleted": false
+  }
+}
