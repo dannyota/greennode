@@ -10,6 +10,7 @@ use super::op::Field;
 pub type FlagSetter<T> = fn(&mut T, &ArgMatches) -> Result<(), ()>;
 pub type ProjectSetter<T> = fn(&mut T, &str);
 pub type InputGuard<T> = fn(&T, &ArgMatches) -> Result<(), InputError>;
+pub type ArgvGuard = fn(&ArgMatches, Option<&str>) -> Result<(), InputError>;
 
 #[derive(Clone, Copy)]
 pub enum Requirement<T> {
@@ -34,6 +35,7 @@ pub struct InputDescriptor<T: 'static> {
     pub allow_json: bool,
     pub allow_query: bool,
     pub project_binding: Option<(&'static str, ProjectSetter<T>)>,
+    pub pre_guard: Option<ArgvGuard>,
     pub guard: Option<InputGuard<T>>,
 }
 
@@ -51,6 +53,9 @@ pub fn parse<T: 'static>(
     json: Option<&str>,
     project: Option<&str>,
 ) -> Result<ParsedOperationInput<T>, InputError> {
+    if let Some(guard) = descriptor.pre_guard {
+        guard(matches, json)?;
+    }
     let mut value = (descriptor.defaults)();
     let mut present = HashSet::new();
     if let Some(raw) = json.filter(|raw| !raw.is_empty()) {
@@ -132,7 +137,10 @@ pub fn validate_descriptor<T: 'static>(descriptor: &InputDescriptor<T>) -> Resul
         }
     }
     if let Some((field, _)) = descriptor.project_binding
-        && !names.contains(field)
+        && !descriptor
+            .fields
+            .iter()
+            .any(|item| item.json_name == field && !item.secret)
     {
         return Err(InputError("invalid project binding"));
     }
@@ -241,6 +249,7 @@ mod tests {
             allow_json: true,
             allow_query: true,
             project_binding: None,
+            pre_guard: None,
             guard: None,
         }
     }
@@ -282,6 +291,47 @@ mod tests {
         }
         assert!(parse(&descriptor(), &args, Some(r#"{"Name":"ok"}"#), None).is_ok());
     }
+    #[test]
+    fn argv_guard_precedes_opening_json_file() {
+        fn guard(args: &ArgMatches, json: Option<&str>) -> Result<(), InputError> {
+            if args
+                .get_one::<String>("password-file")
+                .is_some_and(|v| v == "-")
+                && json.is_some_and(|v| v.starts_with("file://"))
+            {
+                return Err(InputError("conflicting input sources"));
+            }
+            Ok(())
+        }
+        let args = Command::new("toy")
+            .arg(Arg::new("name").long("name"))
+            .arg(Arg::new("password-file").long("password-file"))
+            .try_get_matches_from(["toy", "--password-file", "-"])
+            .unwrap();
+        let mut desc = descriptor();
+        desc.pre_guard = Some(guard);
+        assert!(matches!(
+            parse(&desc, &args, Some("file:///missing-input"), None),
+            Err(InputError("conflicting input sources"))
+        ));
+        assert!(parse(&desc, &args, Some(r#"{"Name":"ok"}"#), None).is_ok());
+    }
+
+    #[test]
+    fn project_binding_cannot_target_secret() {
+        fn project(input: &mut Staged, value: &str) {
+            input.name = value.to_owned();
+        }
+        let mut desc = descriptor();
+        desc.project_binding = Some(("Secret", project));
+        assert_eq!(
+            validate_descriptor(&desc),
+            Err(InputError("invalid project binding"))
+        );
+        desc.project_binding = Some(("Name", project));
+        assert!(validate_descriptor(&desc).is_ok());
+    }
+
     #[test]
     fn required_presence_and_descriptor_validation() {
         const REQUIRED: &[InputField<Staged>] = &[InputField {

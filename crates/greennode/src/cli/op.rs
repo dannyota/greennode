@@ -124,12 +124,28 @@ fn parse_int(value: &str) -> Result<i64, &'static str> {
 }
 
 fn parse_float(value: &str) -> Result<f64, &'static str> {
-    value.parse().map_err(|_| "invalid number")
+    let number: f64 = value.parse().map_err(|_| "invalid number")?;
+    let spelling = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if number.is_infinite()
+        && !spelling.eq_ignore_ascii_case("inf")
+        && !spelling.eq_ignore_ascii_case("infinity")
+    {
+        return Err("invalid number");
+    }
+    Ok(number)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_int;
+    use super::{parse_float, parse_int};
+
+    #[test]
+    fn floating_point_overflow_is_rejected() {
+        assert!(parse_float("1e309").is_err());
+        assert!(parse_float("-1e309").is_err());
+        assert_eq!(parse_float("1e308"), Ok(1e308));
+        assert_eq!(parse_float("Inf"), Ok(f64::INFINITY));
+    }
 
     #[test]
     fn integers_follow_go_base_zero_rules() {
