@@ -186,24 +186,24 @@ impl Client {
         let mut reader = Reader::new(self, ctx, OPERATION);
         let mut rows = Vec::with_capacity(kinds.len());
         let mut causes = Vec::new();
+        let mut row_ids = Vec::with_capacity(kinds.len());
         for kind in kinds {
             let retained_ids = reader.decision_ids.len();
             match status_row(*kind, now, &mut reader).await {
                 Ok(row) => rows.push(row),
                 Err(error) => {
                     reader.decision_ids.truncate(retained_ids);
-                    let api = error.api_error();
-                    let mut row = empty_row(*kind, "unavailable", "");
-                    row.error = Some(QuotaStatusError {
-                        code: api.map_or("RequestFailed", |api| api.code()).to_owned(),
-                        operation: OPERATION.to_owned(),
-                        status: ResponseField::Value(
-                            api.and_then(|api| api.status()).map_or(0, i64::from),
-                        ),
-                    });
+                    rows.push(unavailable_row(*kind, &error));
                     causes.push(error);
-                    rows.push(row);
                 }
+            }
+            row_ids.push(reader.decision_ids[retained_ids..].to_vec());
+        }
+        for (index, ids) in row_ids.iter().enumerate() {
+            if ids.iter().any(|id| reader.evidence.id_reflects(id)) {
+                let error = reader.invalid();
+                rows[index] = unavailable_row(kinds[index], &error);
+                causes.push(error);
             }
         }
         let mut output = GetQuotaStatusOutput {
@@ -211,32 +211,21 @@ impl Client {
             items: rows,
             complete: ResponseField::Value(causes.is_empty()),
         };
-        if reader
-            .evidence
-            .credentials()
-            .has_numeric_product_credential()
-        {
-            for row in &mut output.items {
-                if let Some(ResponseField::Value(seconds)) = row.time_left_seconds {
-                    let minutes = (seconds / 60).unsigned_abs();
-                    let display = format!(
-                        "{}d {}h {}m",
-                        minutes / 1440,
-                        minutes % 1440 / 60,
-                        minutes % 60
-                    );
-                    if reader.evidence.text_reflects(&display) {
-                        row.time_left_seconds = Some(ResponseField::Redacted);
-                    }
+        for row in &mut output.items {
+            if let Some(ResponseField::Value(seconds)) = row.time_left_seconds {
+                let minutes = (seconds / 60).unsigned_abs();
+                let display = format!(
+                    "{}d {}h {}m",
+                    minutes / 1440,
+                    minutes % 1440 / 60,
+                    minutes % 60
+                );
+                if reader.evidence.text_reflects(&display) {
+                    row.time_left_seconds = Some(ResponseField::Redacted);
                 }
             }
         }
-        let safe_output = reader.evidence.can_retain_partial()
-            && !reader
-                .decision_ids
-                .iter()
-                .any(|id| reader.evidence.id_reflects(id))
-            && output.screen(&reader.evidence);
+        let safe_output = reader.evidence.can_retain_partial() && output.screen(&reader.evidence);
         if !causes.is_empty() {
             let mut error =
                 Error::new(ErrorClass::Api).with_outer_detail(ErrorDetail::QuotaStatusIncomplete);
@@ -287,6 +276,17 @@ impl Kind {
             Self::Email | Self::Sms => "monitor get-notification-quota",
         }
     }
+}
+
+fn unavailable_row(kind: Kind, error: &Error) -> QuotaStatusRow {
+    let api = error.api_error();
+    let mut row = empty_row(kind, "unavailable", "");
+    row.error = Some(QuotaStatusError {
+        code: api.map_or("RequestFailed", |api| api.code()).to_owned(),
+        operation: OPERATION.to_owned(),
+        status: ResponseField::Value(api.and_then(|api| api.status()).map_or(0, i64::from)),
+    });
+    row
 }
 
 fn empty_row(kind: Kind, status: &str, next: &str) -> QuotaStatusRow {

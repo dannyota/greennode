@@ -153,3 +153,40 @@ fn invalid_quota_kind_reports_go_usage_error_without_a_request() {
     assert_eq!(stderr, b"{\"error\":{\"code\":\"InvalidUsage\",\"message\":\"monitor.GetQuotaStatus: Kind must be synthetic, email, or sms: vngcloud: invalid input\"}}\n");
     assert_eq!(server.requests(), 0);
 }
+
+#[test]
+fn quota_status_incomplete_names_the_operation_when_cancelled_before_any_request() {
+    use greennode::cli::errors::classify;
+    use greennode_sdk::monitor::{Client, GetQuotaStatusInput};
+    use greennode_sdk::testing::{Product, with_product_loopback};
+    use greennode_sdk::{Config, ConfigOptions, RequestContext, Secret};
+
+    let server = Server::start(Vec::new());
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new("toy-monitor-token"));
+    let client = Client::new(
+        &Config::new(with_product_loopback(Product::Monitor, options, &server)).unwrap(),
+    );
+    let (context, cancel) = RequestContext::new();
+    cancel.cancel();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let failure = runtime
+        .block_on(client.get_quota_status(&context, GetQuotaStatusInput::default()))
+        .unwrap_err();
+    let registry = greennode::services::registered().unwrap();
+    let service = registry
+        .services()
+        .iter()
+        .find(|service| service.name == "monitor")
+        .unwrap();
+    let classified = classify(failure.error(), service.error_rules);
+    assert_eq!(classified.envelope.code, "QuotaStatusIncomplete");
+    assert_eq!(
+        classified.envelope.operation,
+        Some("monitor.GetQuotaStatus")
+    );
+}

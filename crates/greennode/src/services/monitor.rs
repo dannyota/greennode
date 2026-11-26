@@ -197,7 +197,7 @@ pub(super) const SERVICE: Service = Service {
             name: Some(RuleName {
                 rank: 1,
                 code: "QuotaStatusIncomplete",
-                operation: RuleOperation::Api,
+                operation: RuleOperation::Fixed("monitor.GetQuotaStatus"),
                 include_api_status: false,
             }),
             exit: Some(RuleExit::Failure),

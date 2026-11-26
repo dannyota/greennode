@@ -20,6 +20,14 @@ impl ConfigSource for Source {
 
 fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
+    invoke_with(args, server, &context)
+}
+
+fn invoke_with(
+    args: &[&str],
+    server: &Server,
+    context: &RequestContext,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let options = ConfigOptions::default().with_static_token(Secret::new(TOKEN));
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -41,7 +49,7 @@ fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
         stdout_terminal: false,
         stderr_terminal: false,
         clock: &SystemClock,
-        context: &context,
+        context,
     }));
     for stream in [&stdout, &stderr] {
         assert!(!String::from_utf8_lossy(stream).contains(TOKEN));

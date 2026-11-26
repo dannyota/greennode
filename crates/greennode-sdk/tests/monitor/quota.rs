@@ -168,7 +168,6 @@ async fn quota_catalog_refuses_reflected_catalog_ids_before_projection() {
 }
 
 #[tokio::test]
-#[ignore = "shared identifier matcher does not yet screen hexadecimal credentials"]
 async fn synthetic_catalog_rejects_hex_credential_in_class_id_before_request() {
     let classes = CLASSES.replace("class-1", "prefix746f792d736563726574suffix");
     let server = Server::start(
@@ -197,6 +196,29 @@ async fn quota_status_redacts_credential_in_formatted_time_left() {
     let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
     let (ctx, _) = RequestContext::new();
     let output = client_with_token(&server, "12345")
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "email".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let output = serde_json::to_value(output).unwrap();
+    assert_eq!(output["Items"][0]["TimeLeftSeconds"], "<redacted>");
+}
+
+#[tokio::test]
+async fn quota_status_redacts_bearer_ending_in_day_suffix() {
+    let end =
+        time::OffsetDateTime::now_utc() + time::Duration::days(12345) + time::Duration::hours(12);
+    let end = end
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let quota = QUOTA.replace("2000-02-01T00:00:00Z", &end);
+    let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
+    let (ctx, _) = RequestContext::new();
+    let output = client_with_token(&server, "12345d")
         .get_quota_status(
             &ctx,
             GetQuotaStatusInput {
@@ -250,6 +272,8 @@ async fn truncated_quota_source_404_is_unavailable() {
     let output = serde_json::to_value(failure.partial().unwrap()).unwrap();
     assert_eq!(output["Complete"], false);
     assert_eq!(output["Items"][0]["Status"], "unavailable");
+    assert_eq!(output["Items"][0]["Error"]["Code"], "InvalidResponse");
+    assert_eq!(output["Items"][0]["Error"]["Status"], 0);
 }
 
 #[tokio::test]
@@ -277,7 +301,14 @@ async fn quota_status_rechecks_ids_after_token_refresh() {
         .get_quota_status(&ctx, GetQuotaStatusInput::default())
         .await
         .unwrap_err();
-    assert!(failure.partial().is_none());
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::QuotaStatusIncomplete)
+    );
+    let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    assert_eq!(partial["Complete"], false);
+    assert_eq!(partial["Items"][1]["Status"], "unavailable");
+    assert!(!partial.to_string().contains("prefixYWJjsuffix"));
 }
 
 #[tokio::test]
