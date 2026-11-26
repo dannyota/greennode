@@ -105,9 +105,28 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
     let mut encoded_needles: Vec<Zeroizing<String>> = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
-        for part in std::iter::once(value)
-            .chain(value.lines().map(str::trim).filter(|line| line.len() >= 8))
-        {
+        if !value.is_empty() && value.len() < 6 {
+            for encoding in [
+                data_encoding::BASE64,
+                data_encoding::BASE64_NOPAD,
+                data_encoding::BASE64URL,
+                data_encoding::BASE64URL_NOPAD,
+            ] {
+                let encoded = Zeroizing::new(encoding.encode(value.as_bytes()));
+                if !encoded_needles
+                    .iter()
+                    .any(|existing| existing.as_str() == encoded.as_str())
+                {
+                    encoded_needles.push(encoded);
+                }
+            }
+        }
+        for part in std::iter::once(value).chain(
+            value
+                .lines()
+                .map(str::trim)
+                .filter(|line| line.len() >= 8 && *line != value),
+        ) {
             if part.is_empty() {
                 continue;
             }
@@ -205,11 +224,25 @@ fn matches_forms(
             ) {
                 return true;
             }
-            let needle = &state.encoded_needles[index];
-            if input
-                .utf8_chunks()
-                .any(|chunk| chunk.valid().contains(needle.as_str()))
-            {
+            let needle = state.encoded_needles[index].as_str();
+            if input.utf8_chunks().any(|chunk| {
+                let text = chunk.valid();
+                text.match_indices(needle).any(|(start, _)| {
+                    let end = start + needle.len();
+                    let is_alphabet = |byte: u8| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_')
+                    };
+                    needle.len() >= 8
+                        || (start
+                            .checked_sub(1)
+                            .and_then(|i| text.as_bytes().get(i))
+                            .is_none_or(|&byte| !is_alphabet(byte))
+                            && text
+                                .as_bytes()
+                                .get(end)
+                                .is_none_or(|&byte| !is_alphabet(byte)))
+                })
+            }) {
                 return true;
             }
         }
@@ -926,6 +959,83 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn large_clean_error_message_remains_visible() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("toy-token")]);
+        let message = format!("ordinary {}", "z".repeat(650 * 1024));
+        assert!(!unsafe_message(&message, &credentials));
+        let body = serde_json::json!({"message": message}).to_string();
+        let failure = classify(
+            "test",
+            StatusCode::FORBIDDEN,
+            Bytes::from(body),
+            &[StatusCode::OK],
+            (true, false, Retry::Repeatable),
+            &credentials,
+        )
+        .unwrap_err();
+        assert!(failure.api_error().unwrap().message() == &message[..512]);
+    }
+
+    #[test]
+    fn short_base64_matches_require_token_boundaries() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("1")]);
+        let failure = error(
+            403,
+            br#"{"message":"AMQP connection failed"}"#,
+            true,
+            false,
+            &credentials,
+        );
+        assert_eq!(
+            failure.api_error().unwrap().message(),
+            "AMQP connection failed"
+        );
+        for encoding in [
+            data_encoding::BASE64,
+            data_encoding::BASE64_NOPAD,
+            data_encoding::BASE64URL,
+            data_encoding::BASE64URL_NOPAD,
+        ] {
+            let text = format!("code={};", encoding.encode(b"1"));
+            assert!(reflects_credential(&text, &credentials));
+            assert!(sanitize_error_text(&text, &credentials).as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn embedded_complete_short_base64_credentials_are_withheld() {
+        for secret in ["a?bcd", "123456"] {
+            let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+            for encoding in [
+                data_encoding::BASE64,
+                data_encoding::BASE64_NOPAD,
+                data_encoding::BASE64URL,
+                data_encoding::BASE64URL_NOPAD,
+            ] {
+                let encoded = encoding.encode(secret.as_bytes());
+                let text = format!("prefix {encoded} suffix");
+                assert!(reflects_credential(&text, &credentials));
+                let body = serde_json::json!({"message": text}).to_string();
+                let failure = classify(
+                    "test",
+                    StatusCode::FORBIDDEN,
+                    Bytes::from(body),
+                    &[StatusCode::OK],
+                    (true, false, Retry::Repeatable),
+                    &credentials,
+                )
+                .unwrap_err();
+                assert_eq!(failure.api_error().unwrap().message(), "Forbidden");
+            }
+            assert!(!reflects_credential("ordinary text", &credentials));
+            assert_eq!(
+                sanitize_error_text("ordinary text", &credentials).as_str(),
+                "ordinary text"
+            );
+        }
     }
 
     #[test]
