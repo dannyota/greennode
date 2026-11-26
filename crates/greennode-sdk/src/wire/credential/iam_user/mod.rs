@@ -1,5 +1,5 @@
 pub(crate) mod flow;
-pub(crate) mod signin;
+mod signin;
 mod token;
 pub(crate) mod totp;
 

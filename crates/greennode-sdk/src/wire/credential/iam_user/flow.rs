@@ -1,10 +1,31 @@
-use crate::{LoginError, Token};
+use crate::{Clock, LoginError, Secret, Token};
 
-pub(crate) async fn run(
-    login: super::signin::Login<'_>,
-    token_url: &url::Url,
-    source: Option<super::totp::Source<'_>>,
-) -> Result<Token, LoginError> {
+pub(crate) struct Login<'a> {
+    pub(crate) origin: &'a url::Url,
+    pub(crate) dashboard: &'a url::Url,
+    pub(crate) root_email: &'a str,
+    pub(crate) username: &'a str,
+    pub(crate) password: &'a Secret,
+    pub(crate) totp: Option<super::totp::Source<'a>>,
+    pub(crate) clock: &'a dyn Clock,
+    pub(crate) deadline: tokio::time::Instant,
+}
+
+pub(crate) async fn run(login: Login<'_>, token_url: &url::Url) -> Result<Token, LoginError> {
+    use crate::wire::connection::{HeadLimit, OneSendClient, Trust};
+    let client = OneSendClient::new(HeadLimit::Api, Trust::webpki())
+        .map_err(|_| LoginError::new("signin page", None, false))?;
+    let source = login.totp;
+    let login = super::signin::Login {
+        client: &client,
+        origin: login.origin,
+        dashboard: login.dashboard,
+        root_email: login.root_email,
+        username: login.username,
+        password: login.password,
+        clock: login.clock,
+        deadline: login.deadline,
+    };
     run_with_rng(login, token_url, source, &mut |bytes| {
         getrandom::fill(bytes).map_err(|_| ())
     })

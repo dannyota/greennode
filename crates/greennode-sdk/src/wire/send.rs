@@ -276,6 +276,9 @@ async fn once_inner(
     if clock.monotonic_now() >= deadline {
         return Err(Error::Deadline.with_head(head));
     }
+    if head.status == StatusCode::SWITCHING_PROTOCOLS {
+        return Err(Error::SwitchingProtocols.with_head(head));
+    }
     if expected.is_some_and(|statuses| !statuses.contains(&head.status)) {
         drop(guard);
         drop(body);
@@ -284,9 +287,6 @@ async fn once_inner(
             headers,
             body: Vec::new(),
         });
-    }
-    if head.status == StatusCode::SWITCHING_PROTOCOLS {
-        return Err(Error::SwitchingProtocols.with_head(head));
     }
     let values = headers.get_all(header::CONTENT_ENCODING);
     let mut values = values.iter();

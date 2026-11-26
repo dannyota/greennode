@@ -438,6 +438,44 @@ async fn switching_protocols_is_refused() {
 }
 
 #[tokio::test]
+async fn switching_protocols_is_refused_before_head_only_return() {
+    let server = Server::start(vec![
+        response(
+            "101 Switching Protocols",
+            &[("Connection", "upgrade"), ("Upgrade", "websocket")],
+            b"",
+        ),
+        response("302 Found", &[("Content-Length", "0")], b""),
+    ]);
+    let client = client(&server);
+    let clock = crate::SystemClock;
+    let mut evidence = send::Evidence::default();
+    let result = send::once_with_expected(
+        &client,
+        req(Method::POST, &server.origin),
+        10,
+        Encoding::Identity,
+        &clock,
+        clock.monotonic_now() + Duration::from_secs(5),
+        (&mut evidence, &[]),
+    )
+    .await;
+    assert!(matches!(result, Err(error) if error.kind() == &Error::SwitchingProtocols));
+    let mut evidence = send::Evidence::default();
+    let result = send::once_with_expected(
+        &client,
+        req(Method::POST, &server.origin),
+        10,
+        Encoding::Identity,
+        &clock,
+        clock.monotonic_now() + Duration::from_secs(5),
+        (&mut evidence, &[]),
+    )
+    .await;
+    assert!(matches!(result, Ok(reply) if reply.status == http::StatusCode::FOUND));
+}
+
+#[tokio::test]
 async fn nonidentity_encoding_is_refused() {
     let server = Server::start(vec![
         response(

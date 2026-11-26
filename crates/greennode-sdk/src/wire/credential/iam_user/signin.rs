@@ -46,15 +46,15 @@ pub(super) fn classify(
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Login<'a> {
-    pub(crate) client: &'a crate::wire::connection::OneSendClient,
-    pub(crate) origin: &'a Url,
-    pub(crate) dashboard: &'a Url,
-    pub(crate) root_email: &'a str,
-    pub(crate) username: &'a str,
-    pub(crate) password: &'a Secret,
-    pub(crate) clock: &'a dyn crate::Clock,
-    pub(crate) deadline: tokio::time::Instant,
+pub(super) struct Login<'a> {
+    pub(super) client: &'a crate::wire::connection::OneSendClient,
+    pub(super) origin: &'a Url,
+    pub(super) dashboard: &'a Url,
+    pub(super) root_email: &'a str,
+    pub(super) username: &'a str,
+    pub(super) password: &'a Secret,
+    pub(super) clock: &'a dyn crate::Clock,
+    pub(super) deadline: tokio::time::Instant,
 }
 
 pub(super) struct Session {
