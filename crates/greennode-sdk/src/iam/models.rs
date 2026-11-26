@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::{Value, value::RawValue};
 
-use super::wire::{self, REDACTED, Screen, Wire};
+use super::wire::{self, REDACTED, Screen, ScreenId, Wire};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::{Shape, ShapeField};
 
@@ -25,9 +25,18 @@ macro_rules! projected {
     };
 }
 
+macro_rules! screen_field {
+    ($value:expr, $evidence:expr) => {
+        $value.screen($evidence)
+    };
+    ($value:expr, $evidence:expr, $method:ident) => {
+        $value.$method($evidence)
+    };
+}
+
 macro_rules! record {
     ($(#[$meta:meta])* $name:ident $(<$item:ident>)? {
-        $($(#[$field_meta:meta])* $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)? $(=> $projection:path)?;) +
+        $($(#[$field_meta:meta])* $(@ $screen:ident)? $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)? $(=> $projection:path)?;) +
     }) => {
         $(#[$meta])*
         #[derive(Clone, Debug, Default, PartialEq)]
@@ -57,7 +66,7 @@ macro_rules! record {
 
         impl $(<$item: Screen>)? Screen for $name $(<$item>)? {
             fn screen(&mut self, evidence: &Evidence) -> bool {
-                $(if self.$field.screen(evidence) { self.masked.push($go); })+
+                $(if screen_field!(self.$field, evidence $(, $screen)?) { self.masked.push($go); })+
                 false
             }
         }
@@ -98,13 +107,13 @@ record! {
     /// Identity associated with the current sign-in.
     GetCallerIdentityOutput {
         /// Identifier of the caller.
-        user_id: String => "userId", "UserID";
+        @ screen_id user_id: String => "userId", "UserID";
         /// IAM principal type.
         user_type: String => "userType", "UserType";
         /// Account name supplied by the IAM API.
         username: String => "username", "Username";
         /// Owning account number.
-        account_id: i64 => "accountId", "AccountID";
+        @ screen_id account_id: i64 => "accountId", "AccountID";
     }
 }
 
@@ -112,7 +121,7 @@ record! {
     /// IAM user summary from the accounts API.
     User {
         /// User identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// User name.
         username: String => "username", "Username";
         /// Creation time in the API's RFC 3339 string form.
@@ -144,7 +153,7 @@ record! {
     /// User details and the states of supported MFA factors.
     UserDetail {
         /// User identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// User name.
         username: String => "username", "Username";
         /// Creation time in epoch milliseconds.
@@ -164,9 +173,9 @@ record! {
     /// Account identifier and metadata from an IAM service-account read.
     ServiceAccount {
         /// Service-account resource identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// OAuth client identifier.
-        client_id: String => "clientId", "ClientID";
+        @ screen_id client_id: String => "clientId", "ClientID";
         /// Display name.
         name: String => "name", "Name";
         /// Service-account description.
@@ -198,7 +207,7 @@ record! {
     /// Entry from an IAM policy list.
     PolicySummary {
         /// Policy identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// Display name.
         name: String => "name", "Name";
         /// Creation time in epoch milliseconds.
@@ -224,7 +233,7 @@ record! {
     /// Full IAM policy and its statements.
     Policy {
         /// Policy identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// Display name.
         name: String => "name", "Name";
         /// Policy description.
@@ -234,7 +243,7 @@ record! {
         /// Scope of the policy.
         scope: String => "scope", "Scope";
         /// Owning account number as text, or empty when unreported.
-        root: String => "root", "Root", wire::root;
+        @ screen_id root: String => "root", "Root", wire::root;
         /// Rules in policy order.
         statements: Vec<Statement> => "statements", "Statements";
         /// Creation time in epoch milliseconds.
@@ -253,7 +262,7 @@ record! {
     /// Entry from an IAM group list.
     GroupSummary {
         /// Group identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// Display name.
         name: String => "name", "Name";
         /// Creation time in epoch milliseconds.
@@ -265,7 +274,7 @@ record! {
     /// IAM group with its members and attached policies.
     Group {
         /// Group identifier.
-        id: String => "id", "ID";
+        @ screen_id id: String => "id", "ID";
         /// Display name.
         name: String => "name", "Name";
         /// Group description.
@@ -273,11 +282,11 @@ record! {
         /// Membership mode supplied by IAM.
         mode: String => "mode", "Mode";
         /// Owning account number as text, or empty when unreported.
-        root: String => "root", "Root", wire::root;
+        @ screen_id root: String => "root", "Root", wire::root;
         /// IDs of the group's users.
-        user_ids: Vec<String> => "iamUsers", "UserIDs";
+        @ screen_id user_ids: Vec<String> => "iamUsers", "UserIDs";
         /// IDs of the group's policies.
-        policy_ids: Vec<String> => "policies", "PolicyIDs";
+        @ screen_id policy_ids: Vec<String> => "policies", "PolicyIDs";
         /// Creation time in epoch milliseconds.
         created_at: i64 => "createdAt", "CreatedAt", wire::epoch;
     }

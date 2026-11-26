@@ -295,9 +295,6 @@ impl Client {
         if require_name && (!has_name || evidence.text_reflects(&group.name)) {
             return Err(guard_refusal(message, None));
         }
-        if evidence.id_reflects(&group.id) {
-            group.id = wire::REDACTED.to_owned();
-        }
         group.screen(evidence);
         Ok(group)
     }

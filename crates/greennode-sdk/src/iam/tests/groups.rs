@@ -171,7 +171,7 @@ async fn path_invalid_group_id_is_retained_without_a_confirmation_request() {
 
 struct ConfirmationProvider {
     attempts: AtomicUsize,
-    tokens: &'static [&'static str],
+    tokens: Vec<&'static str>,
 }
 
 fn confirmation_client(server: &Server, provider: Arc<ConfirmationProvider>) -> Client {
@@ -222,7 +222,7 @@ async fn failed_confirmation_sign_in_withholds_id_from_recovery_advice() {
     ]);
     let provider = Arc::new(ConfirmationProvider {
         attempts: AtomicUsize::new(0),
-        tokens: &["toy-bearer", "toy-bearer"],
+        tokens: vec!["toy-bearer", "toy-bearer"],
     });
     let client = confirmation_client(&server, provider.clone());
     let (ctx, _) = RequestContext::new();
@@ -295,6 +295,15 @@ async fn a_new_bearer_before_confirmation_blocks_the_group_id_and_partial() {
         "group-{}",
         data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes())
     );
+    check_new_bearer_during_confirmation(&id, bearer).await;
+}
+
+#[tokio::test]
+async fn a_bearer_equal_to_the_group_id_never_reaches_recovery_output() {
+    check_new_bearer_during_confirmation("group-1", "group-1").await;
+}
+
+async fn check_new_bearer_during_confirmation(id: &str, bearer: &'static str) {
     let body = json!({"id": id}).to_string();
     let server = Server::start(vec![
         response("201 Created", body.as_bytes()),
@@ -304,7 +313,7 @@ async fn a_new_bearer_before_confirmation_blocks_the_group_id_and_partial() {
         &server,
         Arc::new(ConfirmationProvider {
             attempts: AtomicUsize::new(0),
-            tokens: &["toy-bearer", "ab>de"],
+            tokens: ["toy-bearer", bearer].into(),
         }),
     );
     let (ctx, _) = RequestContext::new();
@@ -322,6 +331,53 @@ async fn a_new_bearer_before_confirmation_blocks_the_group_id_and_partial() {
             .detail::<RecoveryAdvice>()
             .unwrap()
             .message()
-            .contains(&id)
+            .contains(id)
     );
+}
+
+#[tokio::test]
+async fn scoped_group_ids_are_screened_in_updates_and_partials() {
+    let bearer = "ab>de";
+    let encoded = data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes());
+    let body = json!({
+        "id": "group-1",
+        "name": "team",
+        "iamUsers": [format!("user-{encoded}"), "user-1".to_owned()],
+        "policies": [format!("policy-{encoded}"), "policy-1".to_owned()],
+    })
+    .to_string();
+    let (ctx, _) = RequestContext::new();
+    for confirmed in [true, false] {
+        let server = Server::start(vec![
+            response("200 OK", body.as_bytes()),
+            response("204 No Content", b""),
+            if confirmed {
+                response("200 OK", body.as_bytes())
+            } else {
+                response("404 Not Found", b"{}")
+            },
+        ]);
+        let client = confirmation_client(
+            &server,
+            Arc::new(ConfirmationProvider {
+                attempts: AtomicUsize::new(0),
+                tokens: vec!["toy-bearer", "toy-bearer", bearer],
+            }),
+        );
+        let result = client
+            .update_group(&ctx, UpdateGroupInput::new("group-1"))
+            .await;
+        let group = if confirmed {
+            result.unwrap().group
+        } else {
+            let (error, partial, dispatch) = result.unwrap_err().into_parts();
+            assert!(error.has_identity(ErrorClass::NotSettled));
+            assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+            partial.unwrap().group
+        };
+        let output = serde_json::to_value(group).unwrap();
+        assert!(output["UserIDs"] == json!(["<redacted>", "user-1"]));
+        assert!(output["PolicyIDs"] == json!(["<redacted>", "policy-1"]));
+        assert_eq!(server.requests(), 3);
+    }
 }

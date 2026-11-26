@@ -465,3 +465,28 @@ async fn redirect_path_refuses_short_base64_credentials() {
         assert_eq!(server.requests(), 1);
     }
 }
+
+#[tokio::test]
+async fn redirect_query_keys_and_values_refuse_short_base64_credentials() {
+    let bearer = "ab>de";
+    let encoded = data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes());
+    let encoded = encoded.replace('-', "%2D");
+    for location in [
+        format!("/next?key-{encoded}-rest=ok"),
+        format!("/next?key=value-{encoded}-rest"),
+    ] {
+        let server = Server::start(vec![
+            response("302 Found", &[("Location", &location)]),
+            response("200 OK", &[]),
+        ]);
+        let outcome = send_with_short_bearer(&server, bearer, "/start", &[]).await;
+        assert!(matches!(
+            outcome,
+            Err(Failure {
+                error: Error::Redirect(_),
+                ..
+            })
+        ));
+        assert_eq!(server.requests(), 1);
+    }
+}

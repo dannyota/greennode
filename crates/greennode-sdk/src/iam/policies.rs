@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::wire::Screen;
+use super::wire::{Screen, ScreenId};
 use super::{
     Action, Api, Client, DEFAULT_CAP, Group, GroupSummary, LIST_CAP, OBJECT_CAP, Page, PageQuery,
     Policy, PolicySummary, id_input, page_input, read_operation, require_identity,
@@ -248,8 +248,8 @@ impl Client {
             )
             .await?;
         groups.screen(&evidence);
-        user_ids.screen(&evidence);
-        service_account_ids.screen(&evidence);
+        user_ids.screen_id(&evidence);
+        service_account_ids.screen_id(&evidence);
         Ok(ListPolicyAttachmentsOutput {
             groups,
             user_ids,

@@ -252,7 +252,8 @@ async fn acquire_bearer(
         source.token(ctx)
     })
     .await
-    .and_then(|result| result.map_err(|error| Error::Provider(Box::new(error))));
+    .and_then(|result| result.map_err(|error| Error::Provider(Box::new(error))))
+    .inspect(|bearer| credentials.record(&bearer.token.access_token));
     if started && result.is_err() {
         credentials.mark_incomplete_signin();
     }
@@ -623,8 +624,17 @@ async fn run_inner(
                             next.path_segments().into_iter().flatten().any(|segment| {
                                 super::response::reflects_identifier(segment, &credentials)
                             });
+                        let reflected_query = next.query().is_some_and(|query| {
+                            query.split('&').any(|pair| {
+                                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                                [key, value].into_iter().any(|part| {
+                                    super::response::reflects_identifier(part, &credentials)
+                                })
+                            })
+                        });
                         if reflected
                             || reflected_path
+                            || reflected_query
                             || uri_contains_credential(&next, &credentials, &[])
                         {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
