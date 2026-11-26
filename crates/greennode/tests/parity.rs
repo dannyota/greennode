@@ -148,6 +148,7 @@ fn inherited_project_binding_matches_storage_baseline() {
     };
     let registry = Registry::new(&[Service {
         name: "storage",
+        error_rules: &[],
         operations: &[ATTACH],
     }])
     .unwrap();
@@ -369,6 +370,7 @@ fn comparison_rejects_extra_clap_flag() {
 fn comparison_rejects_empty_registered_service() {
     let registry = Registry::new(&[Service {
         name: "toy",
+        error_rules: &[],
         operations: &[],
     }])
     .unwrap();
@@ -412,6 +414,7 @@ const OP: Operation = Operation {
 fn toy() -> Registry {
     Registry::new(&[Service {
         name: "toy",
+        error_rules: &[],
         operations: &[OP],
     }])
     .unwrap()

@@ -20,8 +20,8 @@ pub struct InheritedBinding {
     pub input_field: &'static str,
 }
 
-pub type Execute = for<'a> fn(
-    &'a Operation,
+pub(crate) type Execute = for<'a> fn(
+    SelectedOperation,
     &'a clap::ArgMatches,
     &'a mut super::Invocation<'_>,
 ) -> super::dispatch::FutureResult<'a, u8>;
@@ -33,7 +33,7 @@ pub struct Handler {
 }
 
 impl Handler {
-    pub const fn new<T>(input: &super::input::InputDescriptor<T>, execute: Execute) -> Self {
+    pub(crate) const fn new<T>(input: &super::input::InputDescriptor<T>, execute: Execute) -> Self {
         Self {
             execute,
             allow_json: input.allow_json,
@@ -61,6 +61,13 @@ pub struct Operation {
 pub struct Service {
     pub name: &'static str,
     pub operations: &'static [Operation],
+    pub error_rules: &'static [super::errors::Rule],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SelectedOperation {
+    pub operation: &'static Operation,
+    pub error_rules: &'static [super::errors::Rule],
 }
 
 pub(crate) fn argument(field: &Field) -> clap::Arg {

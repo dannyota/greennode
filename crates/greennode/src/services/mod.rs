@@ -3,7 +3,7 @@ mod billing;
 mod project;
 mod vks;
 
-use crate::cli::op::{Handler, Operation, Service};
+use crate::cli::op::{Handler, SelectedOperation, Service};
 
 pub const GLOBAL_FLAGS: &[&str] = &[
     "profile",
@@ -18,6 +18,7 @@ pub const GLOBAL_FLAGS: &[&str] = &[
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RegistryError {
+    InvalidErrorRules(&'static str),
     DuplicateService(&'static str),
     DuplicateOperation(&'static str, &'static str),
     GlobalFlagCollision(&'static str, &'static str, &'static str),
@@ -61,6 +62,9 @@ impl Registry {
             }
             if !service_names.insert(service.name) {
                 return Err(RegistryError::DuplicateService(service.name));
+            }
+            if !crate::cli::errors::validate_rules(service.error_rules) {
+                return Err(RegistryError::InvalidErrorRules(service.name));
             }
             let mut operation_names = std::collections::HashSet::new();
             for operation in service.operations {
@@ -119,17 +123,25 @@ impl Registry {
     pub(crate) fn select<'a>(
         &self,
         matches: &'a clap::ArgMatches,
-    ) -> Option<(&'static Operation, Handler, &'a clap::ArgMatches)> {
+    ) -> Option<(SelectedOperation, Handler, &'a clap::ArgMatches)> {
         let (service_name, service_matches) = matches.subcommand()?;
         let (operation_name, operation_matches) = service_matches.subcommand()?;
-        let operation = self
+        let service = self
             .services
             .iter()
-            .find(|service| service.name == service_name)?
+            .find(|service| service.name == service_name)?;
+        let operation = service
             .operations
             .iter()
             .find(|operation| operation.name == operation_name)?;
-        Some((operation, operation.handler?, operation_matches))
+        Some((
+            SelectedOperation {
+                operation,
+                error_rules: service.error_rules,
+            },
+            operation.handler?,
+            operation_matches,
+        ))
     }
 }
 
@@ -145,7 +157,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::op::{Field, Kind};
+    use crate::cli::op::{Field, Kind, Operation};
 
     const OP: Operation = Operation {
         name: "inspect",
@@ -163,6 +175,7 @@ mod tests {
     };
     const TOY: Service = Service {
         name: "toy",
+        error_rules: &[],
         operations: &[OP],
     };
 
@@ -180,6 +193,7 @@ mod tests {
         assert!(Registry::new(&[TOY]).is_ok());
         const DUP: Service = Service {
             name: "toy",
+            error_rules: &[],
             operations: &[OP, OP],
         };
         assert!(matches!(
@@ -220,6 +234,7 @@ mod tests {
         assert!(
             Registry::new(&[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD]
             }])
             .is_err()
@@ -249,10 +264,12 @@ mod tests {
             }][..],
             &[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD_OP],
             }],
             &[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD_FIELD_OP],
             }],
         ] {
@@ -279,6 +296,7 @@ mod tests {
         assert!(
             Registry::new(&[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD]
             }])
             .is_err()
@@ -301,6 +319,7 @@ mod tests {
         assert!(
             Registry::new(&[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD]
             }])
             .is_err()
@@ -326,6 +345,7 @@ mod tests {
         assert!(matches!(
             Registry::new(&[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD_OP]
             }]),
             Err(RegistryError::GlobalFlagCollision(
@@ -335,6 +355,7 @@ mod tests {
         assert!(matches!(
             Registry::new(&[Service {
                 name: "toy",
+                error_rules: &[],
                 operations: &[BAD_EXTRA]
             }]),
             Err(RegistryError::GlobalFlagCollision(

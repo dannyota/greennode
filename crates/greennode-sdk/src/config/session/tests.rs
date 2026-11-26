@@ -1,3 +1,5 @@
+mod queries;
+
 use super::*;
 use crate::{
     Config, ConfigOptions, ConfigSource, CredentialsProvider, IamUserAuth, ServiceAccountAuth,
@@ -70,7 +72,12 @@ async fn auth_selection_and_shared_session() {
     assert!(Arc::ptr_eq(&config.session, &config.clone().session));
     assert_eq!(config.region(), "hcm-3");
     assert_eq!(
-        config.session._project_id.as_deref(),
+        config
+            .session
+            .project_id_context(&RequestContext::new().0)
+            .await
+            .unwrap()
+            .as_deref(),
         Some("project-canary")
     );
     assert_eq!(config.session._profile, "profile-canary");
@@ -301,15 +308,15 @@ async fn loaded_config_keeps_endpoint_overrides() {
     .await
     .unwrap();
     assert_eq!(
-        config.session._endpoints.signin.as_deref(),
+        config.session.endpoints().signin.as_deref(),
         Some("https://signin.test")
     );
     assert_eq!(
-        config.session._endpoints.token.as_deref(),
+        config.session.endpoints().token.as_deref(),
         Some("https://token.test/path")
     );
     assert_eq!(
-        config.session._endpoints.dashboard.as_deref(),
+        config.session.endpoints().dashboard.as_deref(),
         Some("https://dashboard.test/")
     );
 }
@@ -390,7 +397,7 @@ async fn authenticate_builtin_sources_against_loopback() {
     )
     .unwrap();
     assert_eq!(
-        config.session._endpoints.vserver.as_deref(),
+        config.session.endpoints().vserver.as_deref(),
         Some("https://vserver.test/")
     );
     if let Auth::IamUser(source) = &mut Arc::get_mut(&mut config.session).unwrap().auth {
