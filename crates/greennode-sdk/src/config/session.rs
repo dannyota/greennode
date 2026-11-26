@@ -6,7 +6,7 @@ use crate::wire::product::sender::BearerSource;
 use crate::{Error, ErrorClass, RequestContext, Secret};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-pub(super) struct Session {
+pub(crate) struct Session {
     auth: Auth,
     _endpoints: crate::endpoint::EndpointSet,
     _profile: String,
@@ -19,6 +19,60 @@ enum Auth {
     Static(Secret),
     ServiceAccount(Box<crate::session::service_account::ServiceAccount>),
     IamUser(Box<crate::session::iam_user::IamUser>),
+}
+
+impl BearerSource for Session {
+    fn refreshable(&self) -> bool {
+        !matches!(self.auth, Auth::Static(_))
+    }
+
+    fn token<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<crate::wire::product::sender::BearerToken, Error>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            match &self.auth {
+                Auth::Static(token) => Ok(crate::wire::product::sender::BearerToken {
+                    token: crate::Token::new(token.clone(), None),
+                    obtained_at: None,
+                }),
+                Auth::Provider(provider) => {
+                    crate::wire::product::sender::PublicSource(provider.as_ref())
+                        .token(ctx)
+                        .await
+                }
+                Auth::ServiceAccount(source) => source.token(ctx).await,
+                Auth::IamUser(source) => source.token(ctx).await,
+            }
+        })
+    }
+
+    fn rejected<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        sent: &'a Secret,
+        evict: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async move {
+            match &self.auth {
+                Auth::Static(_) => Ok(()),
+                Auth::Provider(provider) => {
+                    crate::wire::product::sender::PublicSource(provider.as_ref())
+                        .rejected(ctx, sent, evict)
+                        .await
+                }
+                Auth::ServiceAccount(source) => source.rejected(ctx, sent, evict).await,
+                Auth::IamUser(source) => source.rejected(ctx, sent, evict).await,
+            }
+        })
+    }
 }
 
 impl Session {

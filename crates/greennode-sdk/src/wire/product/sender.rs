@@ -15,6 +15,9 @@ pub(crate) struct BearerToken {
     pub(crate) obtained_at: Option<unauthorized::ObtainedAt>,
 }
 pub(crate) trait BearerSource: Send + Sync {
+    fn refreshable(&self) -> bool {
+        true
+    }
     fn token<'a>(
         &'a self,
         ctx: &'a RequestContext,
@@ -506,6 +509,7 @@ async fn run_inner(
                 }
                 if decision.resend
                     && let Auth::Bearer(source) = auth
+                    && source.refreshable()
                 {
                     bearer = Some(
                         bounded(&ctx, clock, || source.token(&ctx))

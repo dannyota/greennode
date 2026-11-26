@@ -29,6 +29,15 @@ impl CredentialsProvider for Provider {
     }
 }
 
+#[tokio::test]
+async fn operation_source_uses_selected_static_token() {
+    let config = Config::new(options().with_static_token(Secret::new("toy-token"))).unwrap();
+    let (ctx, _) = RequestContext::new();
+    assert!(!config.session.refreshable());
+    let token = config.session.token(&ctx).await.unwrap();
+    assert!(token.token.access_token.expose_secret() == "toy-token");
+}
+
 fn options() -> ConfigOptions {
     ConfigOptions::default().with_region("hcm-3".into())
 }

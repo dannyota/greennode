@@ -586,6 +586,57 @@ mod tests {
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
     }
 
+    struct StaticSource;
+    impl sender::BearerSource for StaticSource {
+        fn token<'a>(
+            &'a self,
+            _: &'a crate::RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<sender::BearerToken, crate::Error>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(sender::BearerToken {
+                    token: crate::Token::new(crate::Secret::new("toy-token"), None),
+                    obtained_at: None,
+                })
+            })
+        }
+        fn rejected<'a>(
+            &'a self,
+            _: &'a crate::RequestContext,
+            _: &'a crate::Secret,
+            _: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn refreshable(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn static_bearer_is_not_retried_on_unauthorized() {
+        let server = Server::start(vec![
+            response("401 Unauthorized", b"{}"),
+            response("200 OK", br#"{"id":"one"}"#),
+        ]);
+        let mut op = declaration();
+        op.retry = redirect::Retry::Repeatable;
+        op.allow_recovery = true;
+        assert!(
+            call_with_source(
+                &server,
+                &op,
+                &["one"],
+                &[],
+                bytes::Bytes::new(),
+                &StaticSource
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(server.requests(), 1);
+    }
+
     #[tokio::test]
     async fn failed_invalidation_keeps_unauthorized_status() {
         let server = Server::start(vec![response("401 Unauthorized", b"{}")]);
