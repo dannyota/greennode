@@ -245,7 +245,9 @@ the approved bytes. A version with different bytes needs a new shared tag.
   with the individual publish operation's checksums before and after the SDK is
   indexed, and no upload on mismatch. Test both secret sources. Cargo rebuilds
   the packaged lockfile, so byte equality is not guaranteed. A mismatch blocks
-  release; do not weaken the gate.
+  release; do not weaken the gate. `scripts/test/loopback-registry-proof.py`
+  runs it; it passed on macOS on 2026-11-26 for both secret sources. Ubuntu is
+  still to run.
 - Environment and Trusted Publishers stay untested until the first CI publish.
   The environment and run-approval reads rely on GitHub's documented repository
   read access, as duolane's do; the first dispatch confirms them.
