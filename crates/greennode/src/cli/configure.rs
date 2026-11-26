@@ -323,7 +323,10 @@ mod tests {
             clock: &greennode_sdk::SystemClock,
             context: &context,
         };
-        assert_eq!(run(&mut invocation), ExitCode::FAILURE);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(runtime.block_on(run(&mut invocation)), ExitCode::FAILURE);
         std::fs::remove_dir(home).unwrap();
     }
 }
