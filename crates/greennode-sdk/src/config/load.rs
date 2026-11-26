@@ -178,7 +178,7 @@ fn load_local(
             }
         }),
         source.home.filter(|path| path.is_absolute()),
-        options.iam_details,
+        (options.iam_details, options.endpoint_overrides),
     )?;
     if let Some(end) = check() {
         return Err(end.into());

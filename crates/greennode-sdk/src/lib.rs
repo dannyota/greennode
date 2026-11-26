@@ -21,8 +21,8 @@ mod wire;
 
 pub use clock::*;
 pub use config::{
-    Config, ConfigOptions, IamUserAuth, ResolvedProfile, SecretTotp, ServiceAccountAuth, TotpFn,
-    TotpProvider,
+    Config, ConfigOptions, EndpointOverrides, IamUserAuth, ResolvedProfile, SecretTotp,
+    ServiceAccountAuth, TotpFn, TotpProvider,
 };
 pub use context::*;
 pub use error::*;

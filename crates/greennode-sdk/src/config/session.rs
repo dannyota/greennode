@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests;
 
-use super::{IamUserAuth, credentials};
+use super::{EndpointOverrides, IamUserAuth, credentials};
 use crate::wire::product::sender::BearerSource;
 use crate::{Error, ErrorClass, RequestContext, Secret};
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -33,8 +33,9 @@ impl Session {
         project_id: Option<String>,
         directory: Option<PathBuf>,
         home: Option<PathBuf>,
-        iam_details: Option<IamUserAuth>,
+        auth_options: (Option<IamUserAuth>, EndpointOverrides),
     ) -> Result<Self, Error> {
+        let (iam_details, overrides) = auth_options;
         let invalid = || Error::new(ErrorClass::InvalidConfig);
         let details = if selected.source == credentials::Source::Options
             && matches!(&selected.kind, credentials::Kind::IamUser(_))
@@ -44,7 +45,7 @@ impl Session {
             None
         };
         let endpoints =
-            crate::endpoint::defaults(region, Default::default()).map_err(|_| invalid())?;
+            crate::endpoint::defaults(region, overrides.into()).map_err(|_| invalid())?;
         let directory = if matches!(
             &selected.kind,
             credentials::Kind::ServiceAccount(_) | credentials::Kind::IamUser(_)
@@ -55,6 +56,12 @@ impl Session {
         } else {
             None
         };
+        if matches!(&selected.kind, credentials::Kind::ServiceAccount(_))
+            && let Some(path) = &directory
+        {
+            crate::cache::checked_directory(home.as_deref(), &path.join("service-account-v1"))
+                .map_err(|e| *e)?;
+        }
         let clock: Arc<dyn crate::Clock> = Arc::new(crate::SystemClock);
         let timeout = Duration::from_secs(120);
         let auth = match selected.kind {

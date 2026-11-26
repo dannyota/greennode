@@ -208,6 +208,115 @@ async fn refuses_legacy_cache_for_builtins_before_io() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn refuses_service_account_namespace_in_legacy_tree() {
+    let home = env::temp_dir().join(format!("greennode-namespace-{}", std::process::id()));
+    let legacy = home.join(".vngcloud");
+    let cache = home.join("cache");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::create_dir(&cache).unwrap();
+    std::os::unix::fs::symlink(&legacy, cache.join("service-account-v1")).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let result = Config::load(
+        &ctx,
+        options()
+            .with_service_account(service())
+            .with_token_cache(cache),
+        &Home(home.clone()),
+    )
+    .await;
+    assert!(matches!(result, Err(error) if error.class() == ErrorClass::TokenCache));
+    assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 0);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rechecks_service_namespace_before_cache_io() {
+    let home = env::temp_dir().join(format!(
+        "greennode-namespace-recheck-{}",
+        std::process::id()
+    ));
+    let legacy = home.join(".vngcloud");
+    let cache = home.join("cache");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::create_dir(&cache).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let mut config = Config::load(
+        &ctx,
+        options()
+            .with_service_account(service())
+            .with_token_cache(cache.clone()),
+        &Home(home.clone()),
+    )
+    .await
+    .unwrap();
+    std::os::unix::fs::symlink(&legacy, cache.join("service-account-v1")).unwrap();
+    let peer = crate::wire::test_server::Server::start(vec![]);
+    if let Auth::ServiceAccount(source) = &mut Arc::get_mut(&mut config.session).unwrap().auth {
+        source.set_test_endpoint(peer.origin.clone(), peer.root_der.clone());
+    } else {
+        panic!("wrong auth kind");
+    }
+    assert!(
+        matches!(config.authenticate(&ctx).await, Err(error) if error.class() == ErrorClass::TokenCache)
+    );
+    assert_eq!(peer.requests(), 0);
+    assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 0);
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
+async fn loaded_config_keeps_endpoint_overrides() {
+    struct Empty;
+    impl ConfigSource for Empty {
+        fn var_os(&self, _: &OsStr) -> Option<OsString> {
+            None
+        }
+    }
+    let (ctx, _) = RequestContext::new();
+    let overrides = EndpointOverrides {
+        signin: Some("https://signin.test".into()),
+        token: Some("https://token.test/path".into()),
+        dashboard: Some("https://dashboard.test/".into()),
+        ..Default::default()
+    };
+    let config = Config::load(
+        &ctx,
+        options()
+            .with_iam_user(iam())
+            .with_endpoint_overrides(overrides),
+        &Empty,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        config.session._endpoints.signin.as_deref(),
+        Some("https://signin.test")
+    );
+    assert_eq!(
+        config.session._endpoints.token.as_deref(),
+        Some("https://token.test/path")
+    );
+    assert_eq!(
+        config.session._endpoints.dashboard.as_deref(),
+        Some("https://dashboard.test/")
+    );
+}
+
+#[tokio::test]
+async fn totp_fn_constructor_adapts_callback() {
+    fn callback(
+        _: &RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Secret, Error>> + Send + '_>> {
+        Box::pin(async { Ok(Secret::new("123456")) })
+    }
+    let provider = crate::TotpFn::new(callback);
+    let (ctx, _) = RequestContext::new();
+    assert!(crate::TotpProvider::code(&provider, &ctx).await.is_ok());
+}
+
 fn response(
     status: &str,
     location: Option<&str>,
@@ -248,7 +357,7 @@ async fn authenticate_builtin_sources_against_loopback() {
         response("200 OK", None, page),
         response(
             "302 Found",
-            Some("https://dashboard.test/return?code=toy"),
+            Some("https://dashboard.test/return/?code=toy"),
             "",
         ),
     ]);
@@ -257,11 +366,24 @@ async fn authenticate_builtin_sources_against_loopback() {
         None,
         r#"{"accessToken":"token-canary","expiresIn":3600}"#,
     )]);
-    let auth = iam()
-        .with_signin_base_url(signin.origin.clone())
-        .with_dashboard_uri("https://dashboard.test/return".into())
-        .with_token_url(format!("{}/token", token.origin));
-    let mut config = Config::new(options().with_iam_user(auth)).unwrap();
+    let auth = iam().with_signin_base_url(signin.origin.clone());
+    let overrides = EndpointOverrides {
+        signin: Some("https://unused-signin.test".into()),
+        dashboard: Some("https://dashboard.test/return/".into()),
+        token: Some(format!("{}/token", token.origin)),
+        vserver: Some("https://vserver.test/".into()),
+        ..Default::default()
+    };
+    let mut config = Config::new(
+        options()
+            .with_endpoint_overrides(overrides)
+            .with_iam_user(auth),
+    )
+    .unwrap();
+    assert_eq!(
+        config.session._endpoints.vserver.as_deref(),
+        Some("https://vserver.test/")
+    );
     if let Auth::IamUser(source) = &mut Arc::get_mut(&mut config.session).unwrap().auth {
         source.set_test_roots(vec![signin.root_der.clone(), token.root_der.clone()]);
     } else {

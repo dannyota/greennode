@@ -1,8 +1,10 @@
 mod auth;
 mod credentials;
+mod endpoints;
 mod session;
 
 pub use auth::{IamUserAuth, SecretTotp, ServiceAccountAuth, TotpFn, TotpProvider};
+pub use endpoints::EndpointOverrides;
 mod file;
 mod ini;
 mod load;
@@ -39,6 +41,7 @@ pub struct ConfigOptions {
     cdn_key: Option<crate::Secret>,
     token_cache: Option<std::path::PathBuf>,
     iam_details: Option<IamUserAuth>,
+    endpoint_overrides: EndpointOverrides,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -58,6 +61,11 @@ impl ConfigOptions {
             iam_user: self.iam_user.clone(),
             cdn_key: self.cdn_key.clone(),
         }
+    }
+    /// Overrides management service and IAM endpoint bases.
+    pub fn with_endpoint_overrides(mut self, overrides: EndpointOverrides) -> Self {
+        self.endpoint_overrides = overrides;
+        self
     }
     /// Supplies service-account credentials.
     pub fn with_service_account(mut self, auth: ServiceAccountAuth) -> Self {
@@ -226,7 +234,7 @@ impl Config {
             options.project_id,
             options.token_cache,
             None,
-            options.iam_details,
+            (options.iam_details, options.endpoint_overrides),
         )?;
         Ok(Self {
             region,

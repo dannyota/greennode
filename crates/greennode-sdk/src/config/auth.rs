@@ -34,7 +34,14 @@ pub trait TotpProvider: Send + Sync {
 }
 
 /// Adapts an asynchronous function to a TOTP provider.
-pub struct TotpFn<F>(pub F);
+pub struct TotpFn<F>(F);
+
+impl<F> TotpFn<F> {
+    /// Wraps an asynchronous code function.
+    pub fn new(function: F) -> Self {
+        Self(function)
+    }
+}
 
 impl<F> TotpProvider for TotpFn<F>
 where
