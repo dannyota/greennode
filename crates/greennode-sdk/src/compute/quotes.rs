@@ -176,16 +176,10 @@ impl Client {
             action: action.into(),
             resource_info: Some(info),
         };
-        let result = if component {
-            self.pricing
-                .component_quote_with_evidence(&ctx, input, evidence)
-                .await
-        } else {
-            self.pricing
-                .quote_with_evidence(&ctx, input, evidence)
-                .await
-        };
-        result.map_err(|error| Box::new(error.into_parts().0))
+        self.pricing
+            .compute_quote_with_evidence(&ctx, input, evidence, component)
+            .await
+            .map_err(|error| Box::new(error.into_parts().0))
     }
 }
 

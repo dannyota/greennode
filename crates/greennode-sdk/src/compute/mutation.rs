@@ -142,9 +142,10 @@ impl Client {
             check(&wait, clock)?;
             match result {
                 Err(error)
-                    if error.error().api_error().is_some_and(|api| {
-                        api.operation() == "compute.GetServer" && api.status() == Some(404)
-                    }) =>
+                    if error.error().detail::<StatusCode>().is_none()
+                        && error.error().api_error().is_some_and(|api| {
+                            api.operation() == "compute.GetServer" && api.status() == Some(404)
+                        }) =>
                 {
                     if matches!(mode, Settlement::Deleted) {
                         return Ok(());
@@ -227,15 +228,13 @@ pub(super) fn settlement_error(
     } else {
         "NotSettled"
     };
-    Error::new(class)
-        .with_cause(api(
-            "",
-            None,
-            code,
-            &format!("{operation}: {message}"),
-            evidence,
-        ))
-        .with_cause(error)
+    Error::new(class).with_cause(error).with_cause(api(
+        "",
+        None,
+        code,
+        &format!("{operation}: {message}"),
+        evidence,
+    ))
 }
 
 pub(super) fn status(error: &Error) -> Option<u16> {

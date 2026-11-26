@@ -174,7 +174,7 @@ fn read_user_data(path: &str) -> std::io::Result<greennode_sdk::Secret> {
     }
     let mut data = zeroize::Zeroizing::new(Vec::new());
     file.take(MAX as u64 + 1).read_to_end(&mut data)?;
-    if data.len() > MAX {
+    if data.is_empty() || data.len() > MAX {
         return Err(Error::from(ErrorKind::InvalidInput));
     }
     Ok(greennode_sdk::Secret::new(
@@ -616,6 +616,19 @@ server_operation!(
         USER_DATA_PATH
     ],
 );
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn empty_user_data_file_is_rejected() {
+        let path =
+            std::env::temp_dir().join(format!("greennode-empty-user-data-{}", std::process::id()));
+        std::fs::write(&path, "").unwrap();
+        let result = super::read_user_data(path.to_str().unwrap());
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_err());
+    }
+}
 
 server_operation!(
     DELETE_SERVER,

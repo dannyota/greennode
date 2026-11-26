@@ -76,6 +76,101 @@ async fn quote_server_actions_only_send_priced_fields_to_portal() {
 }
 
 #[tokio::test]
+async fn delete_rejects_reflected_credential_in_server_detail_before_volume_listing() {
+    let server = TestServer::start(vec![
+        response(r#"{"data":{"uuid":"server-1","name":"toy%2Dsecret"}}"#),
+        response("[]"),
+        http("202 Accepted", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .delete_server(
+            &ctx,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                no_wait: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
+async fn delete_rejects_reflection_in_unknown_server_detail_field() {
+    let server = TestServer::start(vec![
+        response(r#"{"data":{"uuid":"server-1","unknown":"toy%2Dsecret"}}"#),
+        response("[]"),
+        http("202 Accepted", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .delete_server(
+            &ctx,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                no_wait: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
+async fn delete_does_not_confirm_truncated_not_found_response() {
+    let server = TestServer::start(vec![
+        response(r#"{"data":{"uuid":"server-1"}}"#),
+        response("[]"),
+        http("202 Accepted", ""),
+        Response::Http {
+            status: "404 Not Found".into(),
+            headers: vec![("Content-Length".into(), "10".into())],
+            body: Vec::new(),
+        },
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .delete_server(
+            &ctx,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+}
+
+#[tokio::test]
+async fn oversized_not_found_confirms_server_deletion() {
+    let server = TestServer::start(vec![
+        response(r#"{"data":{"uuid":"server-1"}}"#),
+        response("[]"),
+        http("202 Accepted", ""),
+        http("404 Not Found", &"x".repeat((8 << 20) + 1)),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .delete_server(
+                &ctx,
+                DeleteServerInput {
+                    server_id: "server-1".into(),
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn deletes_server_and_reports_attached_nonboot_volumes() {
     let server = TestServer::start(vec![
         response(r#"{"data":{"uuid":"server-1","bootVolumeId":"vol-boot"}}"#),
@@ -149,6 +244,42 @@ async fn create_server_reports_disk_zone_advice_and_withholds_user_data() {
     let heads = server.heads();
     assert!(heads[1].starts_with(b"POST /portal/v1/price "));
     assert!(heads[2].starts_with(b"POST /v2/project-1/servers "));
+}
+
+#[tokio::test]
+async fn compute_quote_keeps_safe_provider_error_code() {
+    let server = TestServer::start(vec![http(
+        "500 Internal Server Error",
+        r#"{"code":"QuoteUnavailable"}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = server_order_client(&server)
+        .quote_create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "QuoteUnavailable"
+    );
+}
+
+#[tokio::test]
+async fn negative_floating_component_is_unpriced() {
+    let server = TestServer::start(vec![response(
+        r#"{"optimumPrice":-1,"originalPrice":20,"discountPrice":0,"discountPercent":0}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let error = server_order_client(&server)
+        .quote_create_server(
+            &ctx,
+            CreateServerInput {
+                attach_floating_ip: true,
+                ..server_order()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.error().has_class(ErrorClass::Unpriced));
 }
 
 #[tokio::test]
@@ -231,6 +362,109 @@ fn inventory() -> Response {
     response(include_str!(
         "../../../tests/fixtures/compute/server-order-inventory.json"
     ))
+}
+
+#[tokio::test]
+async fn create_gateway_failure_keeps_reason_in_recovery_advice() {
+    let server = TestServer::start(vec![
+        inventory(),
+        response(r#"{"optimumPrice":20}"#),
+        http("502 Bad Gateway", "{}"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = server_order_client(&server)
+        .create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    let advice = failure
+        .error()
+        .detail::<crate::error::RecoveryAdvice>()
+        .unwrap()
+        .message();
+    assert!(advice.contains("Bad Gateway"));
+    assert!(advice.contains("match the name exactly"));
+}
+
+#[tokio::test]
+async fn settlement_error_exposes_confirmation_api_status() {
+    let server = TestServer::start(vec![
+        inventory(),
+        response(r#"{"optimumPrice":20}"#),
+        http("202 Accepted", r#"{"data":{"uuid":"server-1"}}"#),
+        http("403 Forbidden", "{}"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = server_order_client(&server)
+        .create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(403));
+}
+
+#[tokio::test]
+async fn confirmation_bearer_is_redacted_from_create_partial() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct Provider(AtomicUsize);
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            Box::pin(async move {
+                let token = if self.0.fetch_add(1, Ordering::SeqCst) >= 3 {
+                    "server-1"
+                } else {
+                    "initial-token"
+                };
+                Ok(crate::Token::new(Secret::new(token), None))
+            })
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let server = TestServer::start(vec![
+        inventory(),
+        response(r#"{"optimumPrice":20}"#),
+        http("202 Accepted", r#"{"data":{"uuid":"server-1"}}"#),
+    ]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_credentials_provider(Arc::new(Provider(AtomicUsize::new(0))))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let (ctx, _) = RequestContext::new();
+    let failure = Client::new(&config)
+        .create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .partial()
+            .is_none_or(|partial| partial.server.uuid == "<redacted>")
+    );
+    assert_eq!(server.heads().len(), 3);
 }
 
 #[tokio::test]

@@ -366,6 +366,50 @@ async fn quotes_and_server_orders_match_go_goldens() {
 }
 
 #[tokio::test]
+async fn create_server_rejects_empty_user_data_file_before_network() {
+    let path = std::env::temp_dir().join(format!(
+        "greennode-compute-empty-user-data-{}",
+        std::process::id()
+    ));
+    std::fs::write(&path, "").unwrap();
+    let server = Server::start(vec![]);
+    let args = [
+        "create-server",
+        "--project-id",
+        "proj-1",
+        "--name",
+        "example",
+        "--zone-id",
+        "zone-1",
+        "--flavor-id",
+        "flavor-1",
+        "--image-id",
+        "image-1",
+        "--vpc-id",
+        "vpc-1",
+        "--subnet-id",
+        "subnet-1",
+        "--security-group-id",
+        "group-1",
+        "--ssh-key-id",
+        "key-1",
+        "--root-disk-size",
+        "20",
+        "--root-disk-type-id",
+        "disk-1",
+        "--max-price",
+        "20",
+        "--user-data-file",
+        path.to_str().unwrap(),
+    ];
+    let (status, stdout, _) = invoke(&server, &args, false).await;
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
 async fn delete_server_checks_confirmation_and_read_only_before_network() {
     let server = Server::start(vec![]);
     let args = [

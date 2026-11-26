@@ -106,9 +106,22 @@ impl Client {
         id: &str,
         evidence: &mut Evidence,
     ) -> Result<Server, Failure<O>> {
+        self.server_detail_checked(ctx, id, evidence, false).await
+    }
+
+    pub(super) async fn server_detail_checked<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+        reject_reflection: bool,
+    ) -> Result<Server, Failure<O>> {
         GET_SERVER.path("ServerID", id).map_err(failure)?;
         let ctx = self.server_deadline(ctx);
         let envelope = self.read(&ctx, &GET_SERVER, &[id], &[], evidence).await?;
+        if reject_reflection && envelope.reflects(evidence) {
+            return Err(failure(GET_SERVER.invalid(evidence)));
+        }
         let server: Server = envelope.field("data", &GET_SERVER, evidence)?;
         if server.uuid != id {
             return Err(failure(GET_SERVER.invalid(evidence)));

@@ -182,9 +182,12 @@ impl Client {
         self.guard_write(ctx, &json!([id, body]), &mut evidence)
             .map_err(|error| not_sent(*error))?;
         let mut server = self
-            .server_detail::<()>(ctx, id, &mut evidence)
+            .server_detail_checked::<()>(ctx, id, &mut evidence, true)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
+        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
+            return Err(not_sent(delete_inventory_error(&evidence)));
+        }
         let volumes = self
             .volume
             .list_volumes_by_server_with_evidence(ctx, id, &mut evidence)
@@ -491,7 +494,19 @@ fn create_error(
         && !remote_status.is_some_and(|status| (400..500).contains(&status))
         && !evidence.text_reflects(CREATE_AMBIGUOUS)
     {
-        error.with_detail(crate::error::RecoveryAdvice::new(CREATE_AMBIGUOUS))
+        let reason = error.api_error().map_or("", ApiError::message);
+        let reason = if evidence.text_reflects(reason) {
+            ""
+        } else {
+            reason
+        };
+        let end = reason.floor_char_boundary(512 - CREATE_AMBIGUOUS.len() - 2);
+        let advice = if reason.is_empty() {
+            CREATE_AMBIGUOUS.to_owned()
+        } else {
+            format!("{}; {CREATE_AMBIGUOUS}", &reason[..end])
+        };
+        error.with_detail(crate::error::RecoveryAdvice::new(&advice))
     } else {
         error
     };
