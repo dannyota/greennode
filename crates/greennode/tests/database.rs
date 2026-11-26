@@ -100,6 +100,16 @@ fn database_json_pagination_and_local_guards() {
 fn database_matches_baseline_goldens() {
     let cases = [
         Case {
+            command: "get-database-instance",
+            flags: &["--id", "db_one"],
+            response: include_str!("fixtures/database/get-database-instance.response.json"),
+            goldens: [
+                include_bytes!("fixtures/database/get-database-instance.json.golden"),
+                include_bytes!("fixtures/database/get-database-instance.table.golden"),
+                include_bytes!("fixtures/database/get-database-instance.text.golden"),
+            ],
+        },
+        Case {
             command: "list-database-engine-versions",
             flags: &[],
             response: include_str!("fixtures/database/list-database-engine-versions.response.json"),
@@ -219,5 +229,10 @@ fn database_matches_baseline_goldens() {
             assert!(stderr.is_empty());
         }
         assert_eq!(server.requests(), 3);
+        if case.command == "get-database-instance" {
+            assert!(server.heads().iter().all(|head| {
+                head.starts_with(b"GET /vdb-relational/v1/database-instances/id/db_one ")
+            }));
+        }
     }
 }

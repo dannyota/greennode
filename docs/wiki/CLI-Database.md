@@ -2,6 +2,18 @@
 
 # CLI: Database
 
+## get-database-instance
+
+Kind: Read.
+
+| Flag   | Type     | Required |
+| ------ | -------- | -------- |
+| `--id` | `string` | yes      |
+
+```sh
+greennode database get-database-instance --id <id>
+```
+
 ## list-database-engine-versions
 
 Kind: Read.

@@ -9,7 +9,9 @@ pub use model::{EngineVersion, Flavor, Instance, Network, Page, StorageType, Sub
 
 use crate::config::Session;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation},
+    options::{Options, PathIds},
     redirect::{Classification, Retry},
     retry,
 };
@@ -92,6 +94,21 @@ pub struct ListDatabaseInstancesOutput {
     /// Page metadata reported by the service.
     #[serde(rename = "Page")]
     pub page: Page,
+}
+
+/// Selects one relational instance by ID.
+#[derive(Clone, Debug, Default)]
+pub struct GetDatabaseInstanceInput {
+    /// Exact instance ID, using ASCII letters, digits, hyphens, or underscores.
+    pub id: String,
+}
+
+/// The requested relational database instance.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct GetDatabaseInstanceOutput {
+    /// Instance details returned by the service.
+    #[serde(rename = "Instance")]
+    pub instance: Instance,
 }
 
 #[expect(
@@ -250,10 +267,40 @@ impl Client {
             page: data.page_object,
         })
     }
+    /// Reads an instance by exact ID and checks the returned ID.
+    pub async fn get_database_instance(
+        &self,
+        ctx: &RequestContext,
+        input: GetDatabaseInstanceInput,
+    ) -> Result<GetDatabaseInstanceOutput, Failure<GetDatabaseInstanceOutput>> {
+        if !valid_id(&input.id) {
+            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+        }
+        let operation = read_operation(
+            "database.GetDatabaseInstance",
+            "vdb-relational/v1/database-instances/id/{}",
+        );
+        let instance: Instance = self.read_path(ctx, &operation, &[&input.id], &[]).await?;
+        if instance.id != input.id {
+            return Err(failure(wire::invalid_response(&operation)));
+        }
+        Ok(GetDatabaseInstanceOutput { instance })
+    }
+
     async fn read<T: Data, O>(
         &self,
         ctx: &RequestContext,
         operation: &Operation,
+        query: &[(&str, &str)],
+    ) -> Result<T, Failure<O>> {
+        self.read_path(ctx, operation, &[], query).await
+    }
+
+    async fn read_path<T: Data, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
         query: &[(&str, &str)],
     ) -> Result<T, Failure<O>> {
         let base = self
@@ -268,14 +315,19 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|error| failure(*error))?;
-        operation::execute::<Envelope<T>>(
+        operation::execute_with_evidence::<Envelope<T>>(
             runtime,
             base,
             operation,
-            &[],
+            &Options {
+                path_ids: PathIds::WithUnderscore,
+                ..Options::DEFAULT
+            },
+            path,
             query,
             self.session.bearer_source(),
             bytes::Bytes::new(),
+            &mut Evidence::new(),
         )
         .await
         .map(|(_, envelope)| envelope.data)

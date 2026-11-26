@@ -18,6 +18,7 @@ func TestDatabaseGoldens(t *testing.T) {
 		command, body string
 		flags         []string
 	}{
+		{"get-database-instance", `{"code":200,"data":{"id":"db_one","name":"db","status":"ACTIVE","volumeSize":10,"publicAccess":false}}`, []string{"--id", "db_one"}},
 		{"list-database-engine-versions", `{"code":200,"data":[{"name":"MySQL","type":"mysql","versionName":"MySQL 8","version":"8.0","licenseName":"GPL"}]}`, nil},
 		{"list-database-zones", `{"code":200,"data":[{"uuid":"zone-1","name":"Zone A","status":"ACTIVE","zoneType":"LOCAL"}]}`, nil},
 		{"list-database-flavors", `{"code":200,"data":[{"id":1,"name":"small","flavorId":"f-1","vcpus":2,"ram":4,"monthlyCost":123.45}]}`, []string{"--engine", "mysql", "--engine-version", "8.0", "--zone-id", "zone-1"}},

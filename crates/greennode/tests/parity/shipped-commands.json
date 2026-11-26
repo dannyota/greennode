@@ -31,6 +31,7 @@
   "greennode configure list",
   "greennode configure set",
   "greennode database",
+  "greennode database get-database-instance",
   "greennode database list-database-engine-versions",
   "greennode database list-database-flavors",
   "greennode database list-database-instances",

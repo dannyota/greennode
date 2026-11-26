@@ -27,6 +27,54 @@ fn client(server: &Server) -> Client {
 }
 
 #[tokio::test]
+async fn instance_detail_checks_id_and_errors() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            br#"{"code":200,"data":{"id":"db_one","name":"db","status":"ACTIVE"}}"#,
+        ),
+        response(
+            "200 OK",
+            br#"{"code":200,"data":{"id":"other","name":"db","status":"ACTIVE"}}"#,
+        ),
+        response("404 Not Found", b"{}"),
+    ]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let input = || GetDatabaseInstanceInput {
+        id: "db_one".into(),
+    };
+    assert_eq!(
+        client
+            .get_database_instance(&ctx, input())
+            .await
+            .unwrap()
+            .instance
+            .id,
+        "db_one"
+    );
+    let error = client
+        .get_database_instance(&ctx, input())
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().api_error().unwrap().code(), "InvalidResponse");
+    let error = client
+        .get_database_instance(&ctx, input())
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().class(), ErrorClass::NotFound);
+    for id in ["", "../bad", "a.b"] {
+        let error = client
+            .get_database_instance(&ctx, GetDatabaseInstanceInput { id: id.into() })
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().class(), ErrorClass::InvalidInput);
+    }
+    assert_eq!(server.requests(), 3);
+    assert!(server.heads()[0].starts_with(b"GET /vdb-relational/v1/database-instances/id/db_one "));
+}
+
+#[tokio::test]
 async fn database_rejects_reflection_and_missing_subnets() {
     let server = Server::start(vec![
         response(

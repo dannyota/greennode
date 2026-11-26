@@ -1,0 +1,22 @@
+{
+  "Instance": {
+    "ID": "db_one",
+    "Name": "db",
+    "Status": "ACTIVE",
+    "DatastoreType": "",
+    "DatastoreVersion": "",
+    "ZoneID": "",
+    "ProjectID": "",
+    "SubnetID": "",
+    "VolumeType": "",
+    "VolumeSize": 10,
+    "QuotaPackageID": "",
+    "PublicAccess": false,
+    "BackupAuto": null,
+    "Owner": null,
+    "Role": "",
+    "ReplicaSourceID": "",
+    "Replicas": [],
+    "Deleted": null
+  }
+}

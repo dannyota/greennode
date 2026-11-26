@@ -5,6 +5,11 @@ use clap::ArgMatches;
 use greennode_sdk::database::{self, Client};
 use greennode_sdk::{Config, RequestContext};
 
+const ID: Field = Field {
+    name: "id",
+    go_type: "string",
+    required: true,
+};
 const ENGINE: Field = Field {
     name: "engine",
     go_type: "string",
@@ -86,6 +91,11 @@ macro_rules! integer_field {
         }
     };
 }
+descriptor!(
+    GET_INPUT,
+    database::GetDatabaseInstanceInput,
+    [string_field!("ID", ID, id)]
+);
 descriptor!(ENGINES_INPUT, database::ListDatabaseEngineVersionsInput, []);
 descriptor!(ZONES_INPUT, database::ListDatabaseZonesInput, []);
 descriptor!(
@@ -142,6 +152,15 @@ pub(super) const SERVICE: Service = Service {
     name: "database",
     error_rules: &[],
     operations: &[
+        operation!(
+            "get-database-instance",
+            "database.GetDatabaseInstance",
+            "Get database instance",
+            &[ID],
+            &[],
+            GET_INPUT,
+            get
+        ),
         operation!(
             "list-database-engine-versions",
             "database.ListDatabaseEngineVersions",
@@ -214,6 +233,11 @@ macro_rules! handler {
         }
     };
 }
+handler!(
+    get,
+    database::GetDatabaseInstanceInput,
+    get_database_instance
+);
 handler!(
     engines,
     database::ListDatabaseEngineVersionsInput,
