@@ -233,11 +233,9 @@ fn matches_credential_forms(
                     }
                 }
             }
-            for encoding in [data_encoding::HEXLOWER, data_encoding::HEXUPPER] {
-                let encoded = Zeroizing::new(encoding.encode(part.as_bytes()));
-                if !hex_needles.contains(&encoded) {
-                    hex_needles.push(encoded);
-                }
+            let hex = Zeroizing::new(data_encoding::HEXLOWER.encode(part.as_bytes()));
+            if !hex_needles.contains(&hex) {
+                hex_needles.push(hex);
             }
             let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
             if !needles
@@ -324,14 +322,14 @@ fn matches_forms(
                 return true;
             }
         }
+        let lower = Zeroizing::new(input.to_ascii_lowercase());
         for index in 0..state.hex_needles.len() {
-            if !state.charge(input.len().saturating_add(state.hex_needles[index].len()))
-                || contains_hex(input, &state.hex_needles[index])
+            if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
+                || contains_hex(&lower, &state.hex_needles[index])
             {
                 return true;
             }
         }
-        let lower = Zeroizing::new(input.to_ascii_lowercase());
         if state.error_text {
             let normalized = Zeroizing::new(
                 lower
@@ -1186,6 +1184,13 @@ mod tests {
                 assert_eq!(error.api_error().unwrap().message(), "Forbidden");
             }
         }
+    }
+
+    #[test]
+    fn short_hex_credential_matches_only_as_the_whole_value() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("jkl")]);
+        assert!(reflects_credential("6A6b6C", &credentials));
+        assert!(!reflects_credential("prefix-6A6b6C-suffix", &credentials));
     }
 
     #[test]

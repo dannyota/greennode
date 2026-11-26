@@ -187,39 +187,45 @@ async fn resize_skips_the_current_package_and_requires_a_complete_acceptance() {
 
 #[tokio::test]
 async fn regression_import_screens_hex_passphrase_in_metadata_and_error_code() {
-    let subject = format!(
-        "before-{}-after",
-        data_encoding::HEXLOWER.encode(PASSPHRASE.as_bytes())
-    );
-    let code = format!(
-        "before-{}-after",
-        data_encoding::HEXUPPER.encode(PASSPHRASE.as_bytes())
-    );
-    let server = Server::start(vec![
-        response(
-            "201 Created",
-            serde_json::json!({"data": {"uuid": "cert-1", "subject": subject}}).to_string(),
-        ),
-        response(
-            "400 Bad Request",
-            serde_json::json!({"code": code}).to_string(),
-        ),
-        response("400 Bad Request", r#"{"code":"ToyRefusal"}"#),
-    ]);
-    let client = client(&server, CANARY);
-    let (ctx, _) = RequestContext::new();
-    let output = client.import_certificate(&ctx, tls_input()).await.unwrap();
-    let reflected = client
-        .import_certificate(&ctx, tls_input())
-        .await
-        .unwrap_err();
-    let safe = client
-        .import_certificate(&ctx, tls_input())
-        .await
-        .unwrap_err();
-    let reflected = reflected.error().api_error().unwrap();
-    assert!(output.certificate.subject == "<redacted>" && reflected.code() != code);
-    assert_eq!(safe.error().api_error().unwrap().code(), "ToyRefusal");
+    let encoded = data_encoding::HEXLOWER.encode(PASSPHRASE.as_bytes());
+    let mixed_case = encoded.replacen('f', "F", 1);
+    assert!(mixed_case != encoded && mixed_case != encoded.to_ascii_uppercase());
+    for value in [mixed_case, encoded.to_ascii_uppercase(), encoded] {
+        let subject = format!("before-{value}-after");
+        let code = format!("error-{value}-rejected");
+        let server = Server::start(vec![
+            response(
+                "201 Created",
+                serde_json::json!({"data": {"uuid": "cert-1", "subject": subject}}).to_string(),
+            ),
+            response(
+                "400 Bad Request",
+                serde_json::json!({"code": code}).to_string(),
+            ),
+            response("400 Bad Request", r#"{"code":"ToyRefusal"}"#),
+        ]);
+        let client = client(&server, CANARY);
+        let (ctx, _) = RequestContext::new();
+        let output = client.import_certificate(&ctx, tls_input()).await.unwrap();
+        let reflected = client
+            .import_certificate(&ctx, tls_input())
+            .await
+            .unwrap_err();
+        let safe = client
+            .import_certificate(&ctx, tls_input())
+            .await
+            .unwrap_err();
+        let reflected = reflected.error().api_error().unwrap();
+        assert_eq!(
+            (
+                output.certificate.subject == "<redacted>",
+                !reflected.code().contains(&value)
+            ),
+            (true, true),
+            "expected both the subject and the error code to withhold the passphrase"
+        );
+        assert_eq!(safe.error().api_error().unwrap().code(), "ToyRefusal");
+    }
 }
 
 #[tokio::test]
