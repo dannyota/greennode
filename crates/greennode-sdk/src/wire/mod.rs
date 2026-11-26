@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 mod connection;
 #[allow(dead_code)]
-mod credential;
+pub(crate) mod credential;
 #[allow(dead_code)]
 mod product;
 #[allow(dead_code)]

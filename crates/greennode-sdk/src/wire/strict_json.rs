@@ -12,12 +12,16 @@ pub(crate) struct Field<'a> {
     pub(crate) children: &'a [Field<'a>],
 }
 
-pub(crate) fn validate(body: &[u8], fields: &[Field<'_>]) -> Result<(), Error> {
-    if body.len() > 64 * 1024 {
+pub(crate) fn validate(body: &[u8], fields: &[Field<'_>], limit: usize) -> Result<(), Error> {
+    if body.len() > limit {
         return Err(Error);
     }
     let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
     validate_value(raw.get(), fields, 0)
+}
+
+pub(crate) fn field_matches(left: &str, right: &str) -> bool {
+    fold(left).eq(fold(right))
 }
 
 fn fold(value: &str) -> impl Iterator<Item = char> + '_ {
@@ -98,7 +102,7 @@ mod tests {
                 children: &[],
             })
             .collect();
-        validate(body, &fields)
+        validate(body, &fields, 64 * 1024)
     }
 
     #[test]
@@ -137,8 +141,8 @@ mod tests {
                 children: &[],
             }],
         }];
-        assert!(validate(br#"{"data":[{"id":1,"ID":2}]}"#, &fields).is_err());
-        assert!(validate(br#"{"data":[{"id":1},{"ID":2}]}"#, &fields).is_ok());
+        assert!(validate(br#"{"data":[{"id":1,"ID":2}]}"#, &fields, 64 * 1024).is_err());
+        assert!(validate(br#"{"data":[{"id":1},{"ID":2}]}"#, &fields, 64 * 1024).is_ok());
     }
 
     #[test]
@@ -147,6 +151,14 @@ mod tests {
         let too_large = format!("\"{}\"", "a".repeat(65535));
         assert!(check(valid.as_bytes(), &[]).is_ok());
         assert!(check(too_large.as_bytes(), &[]).is_err());
+    }
+
+    #[test]
+    fn iam_body_limit() {
+        let valid = format!("\"{}\"", "a".repeat(1024 * 1024 - 2));
+        let too_large = format!("\"{}\"", "a".repeat(1024 * 1024 - 1));
+        assert!(validate(valid.as_bytes(), &[], 1024 * 1024).is_ok());
+        assert!(validate(too_large.as_bytes(), &[], 1024 * 1024).is_err());
     }
 
     #[test]

@@ -133,11 +133,14 @@ the injected CSPRNG for PKCE. Pass the secret only to the configured sign-in
 origin; retain only its cookies for the life of the flow, respecting path,
 secure and expiry attributes with the injected clock. The dashboard is an auth
 parameter, not a request destination. Accept a 2FA location only if it matches
-the sign-in origin and the recognized 2FA route. Read an expected callback's
-one-time code as data without visiting its URL. Send that code and verifier only
-to the preselected token URL. Unlike Go's login page GET handler, no page fetch
-follows a redirect. Treat a moved sign-in page as an auth failure. Do not
-surface HTML, cookies, parameters or upstream error objects.
+the sign-in origin and the recognized 2FA route. An expected callback resolves
+to exactly the authorization request's redirect URI (scheme, host, effective
+port and path) with one non-empty `code`; unlike Go, any other location fails.
+Read an expected callback's one-time code as data without visiting its URL. Send
+that code and verifier only to the preselected token URL. Unlike Go's login page
+GET handler, no page fetch follows a redirect. Treat a moved sign-in page as an
+auth failure. Do not surface HTML, cookies, parameters or upstream error
+objects.
 
 ### Product API
 
