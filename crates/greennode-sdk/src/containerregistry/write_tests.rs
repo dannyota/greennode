@@ -306,3 +306,26 @@ async fn sensitive_preflight_distinguishes_invalid_json_and_shape() {
         assert_eq!(server.requests(), 1);
     }
 }
+
+#[tokio::test]
+async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"[{"uuid":"policy-1","action":"synthetic-registry-\u0007token"}]"#,
+    )]);
+    let failure = client(&server)
+        .create_user(
+            &RequestContext::new().0,
+            CreateUserInput::new(
+                "app-ci",
+                vec![UserPermission::new("repo-1", vec!["unknown".into()])],
+            ),
+        )
+        .await
+        .unwrap_err();
+    let message = failure.error().api_error().unwrap().message();
+    assert!(!message.contains("synthetic-registry-token"));
+    assert!(message.contains("unknown action"));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}

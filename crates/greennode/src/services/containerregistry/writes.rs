@@ -7,12 +7,12 @@ use crate::cli::{render, secret_file};
 use clap::ArgMatches;
 use greennode_sdk::containerregistry::{
     Client, CreateRepositoryInput, CreateUserInput, CreateUserOutput, DeleteRepositoryInput,
-    DeleteUserInput, ErrorDetail, User, UserPermission,
+    DeleteUserInput, ErrorDetail, User, UserPermission, issued_user_secret,
 };
 use greennode_sdk::{Config, RequestContext, Secret};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
+use std::{cell::OnceCell, path::Path};
 
 const NAME: Field = Field {
     required: true,
@@ -93,6 +93,7 @@ struct Input {
     duration: Option<i64>,
     permissions: Vec<UserPermission>,
     secret_file: String,
+    secret_destination: OnceCell<secret_file::Destination>,
 }
 
 macro_rules! string_field {
@@ -272,7 +273,11 @@ fn permission(value: &Value) -> Result<UserPermission, ()> {
 }
 
 fn check_secret_file(input: &Input, _: &ArgMatches) -> Result<(), InputError> {
-    secret_file::check(Path::new(&input.secret_file))
+    let destination = secret_file::Destination::check(Path::new(&input.secret_file))?;
+    input
+        .secret_destination
+        .set(destination)
+        .map_err(|_| InputError("--secret-file destination was already checked"))
 }
 
 macro_rules! write {
@@ -402,25 +407,37 @@ fn create_user<'a>(
     input: &'a Input,
 ) -> FutureResult<'a, ExecutionResult> {
     Box::pin(async move {
-        let path = Path::new(&input.secret_file);
+        let destination = input
+            .secret_destination
+            .get()
+            .ok_or_else(|| secret_file::failure(SAVE_FAILED))?;
         let mut staged = CreateUserInput::new(&input.name, input.permissions.clone());
         staged.description.clone_from(&input.description);
         staged.duration_days = input.duration;
         let result = Client::new(config).create_user(ctx, staged).await;
-        let save = |output: &CreateUserOutput| {
-            secret_file::write(path, output.secret_key())
-                .map_err(|_| secret_file::failure(SAVE_FAILED))?;
-            Ok::<_, dispatch::LocalError>(render::project(&SavedUser {
+        let project = |output: &CreateUserOutput| {
+            render::project(&SavedUser {
                 user: &output.user,
                 secret_key: output.secret_key(),
                 path: output.redact_reflections(&input.secret_file),
-            }))
+            })
+        };
+        let save = |secret: &Secret| {
+            destination
+                .write(secret)
+                .map_err(|_| secret_file::failure(SAVE_FAILED))
         };
         match result {
-            Ok(output) => Ok(Some(save(&output)?)),
+            Ok(output) => {
+                save(output.secret_key())?;
+                Ok(Some(project(&output)))
+            }
             Err(failure) => {
+                if let Some(secret) = issued_user_secret(&failure) {
+                    save(secret)?;
+                }
                 let (error, partial, dispatch) = failure.into_parts();
-                let partial = partial.as_ref().map(save).transpose()?.and_then(Result::ok);
+                let partial = partial.as_ref().and_then(|output| project(output).ok());
                 Err(OperationFailure {
                     error,
                     partial,

@@ -1,6 +1,8 @@
 use super::reads::{Users, complete_absence, valid_id};
 use super::*;
 use crate::Secret;
+use crate::error::SafeText;
+use crate::wire::product::response::reflects_credential_forms;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -74,12 +76,28 @@ impl CreateUserOutput {
 
     /// Masks a string if it contains a credential from this operation or the issued secret.
     pub fn redact_reflections<'a>(&self, text: &'a str) -> &'a str {
-        if self.evidence.credentials().reflects(text.as_bytes()) {
+        if reflects_credential_forms(text, self.evidence.credentials()) {
             "<redacted>"
         } else {
             text
         }
     }
+}
+
+struct IssuedUserSecret(Secret);
+
+/// Borrows the issued key from a failed create for private storage.
+/// The key can remain available here when the failure has no public partial output.
+pub fn issued_user_secret(failure: &Failure<CreateUserOutput>) -> Option<&Secret> {
+    failure
+        .partial()
+        .map(CreateUserOutput::secret_key)
+        .or_else(|| {
+            failure
+                .error()
+                .detail::<IssuedUserSecret>()
+                .map(|issued| &issued.0)
+        })
 }
 
 /// Identifies a registry user by UUID for deletion.
@@ -121,7 +139,7 @@ impl Output for DeleteUserOutput {
 )]
 impl Client {
     /// Validates permissions and complete name-search results, then sends one create.
-    /// A secret-only response returns `UserNotFound` with the secret as partial output.
+    /// A secret-only response returns `UserNotFound` with the key available through [`issued_user_secret`].
     /// An exact-name match does not give authority to delete a user.
     pub async fn create_user(
         &self,
@@ -141,7 +159,7 @@ impl Client {
             )
             .await
             .map_err(before_write)?;
-        let body = create_body(&input, &permissions.0)?;
+        let body = create_body(&input, &permissions.0, &evidence)?;
         let found = self.find_user_name(ctx, &input.name, &mut evidence).await.map_err(|failure| {
             let (error, _, _) = failure.into_parts();
             let Some(api) = error.api_error() else {
@@ -200,15 +218,23 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             )
             .into_parts();
-        Err(Failure::new(
-            error,
-            partial.map(|_| CreateUserOutput {
-                user: User::default(),
-                secret_key,
-                evidence,
-            }),
-            dispatch,
-        ))
+        if partial.is_some() {
+            Err(Failure::new(
+                error,
+                Some(CreateUserOutput {
+                    user: User::default(),
+                    secret_key,
+                    evidence,
+                }),
+                dispatch,
+            ))
+        } else {
+            Err(Failure::new(
+                error.with_outer_detail(IssuedUserSecret(secret_key)),
+                None,
+                dispatch,
+            ))
+        }
     }
 
     /// Deletes a user once. Confirms absence after an ambiguous server error.
@@ -390,6 +416,7 @@ fn validate_create(input: &CreateUserInput) -> Result<(), Failure<CreateUserOutp
 fn create_body(
     input: &CreateUserInput,
     permissions: &[Permission],
+    evidence: &Evidence,
 ) -> Result<Value, Failure<CreateUserOutput>> {
     let policies: BTreeMap<_, _> = permissions
         .iter()
@@ -403,8 +430,19 @@ fn create_body(
             .map(|action| policies.get(action))
             .collect();
         let ids = ids.ok_or_else(|| {
-            let known = policies.keys().map(|action| action.as_str()).collect::<Vec<_>>().join(", ");
-            invalid_input(&format!("containerregistry.CreateUser: Permissions[{i}] names an unknown action; known actions: {known}"))
+            let known = policies
+                .keys()
+                .map(|action| action.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let prefix =
+                format!("containerregistry.CreateUser: Permissions[{i}] names an unknown action");
+            let message = SafeText::new(&format!("{prefix}; known actions: {known}"), &[]);
+            if reflects_credential_forms(message.as_str(), evidence.credentials()) {
+                invalid_input(&format!("{prefix}; known actions withheld"))
+            } else {
+                invalid_input(message.as_str())
+            }
         })?;
         requests.push(json!({"repoId": permission.repository_id, "policyIdList": ids}));
     }
