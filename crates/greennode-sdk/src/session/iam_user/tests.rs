@@ -420,11 +420,17 @@ async fn expiry_uses_token_step_clock_sample_after_wall_jump() {
     let mut source = source(&signin, &token, None, Duration::from_secs(5));
     source.clock = clock.clone();
     source.seed = None;
-    let shifted = clock.clone();
-    source.provider = Some(Arc::new(move || {
-        shifted.jump.store(4000, Ordering::SeqCst);
-        Box::pin(async { Ok(Secret::new("123456")) })
-    }));
+    struct Provider(Arc<JumpClock>);
+    impl crate::config::TotpProvider for Provider {
+        fn code<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Secret, Error>> + Send + 'a>> {
+            self.0.jump.store(4000, Ordering::SeqCst);
+            Box::pin(async { Ok(Secret::new("123456")) })
+        }
+    }
+    source.provider = Some(Arc::new(Provider(clock.clone())));
     let (ctx, _) = RequestContext::new();
     assert!(source.token(&ctx).await.is_ok());
     let state = source.state.lock().await;
