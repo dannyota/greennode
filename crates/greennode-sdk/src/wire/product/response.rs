@@ -1,5 +1,8 @@
+mod encoded;
+
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
+use encoded::{Base64Alphabet, EncodedNeedle};
 use http::StatusCode;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -125,63 +128,6 @@ enum MatchContext {
     Identifier,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Base64Alphabet {
-    Standard,
-    UrlSafe,
-    Both,
-}
-
-struct EncodedNeedle {
-    value: Zeroizing<String>,
-    alphabet: Base64Alphabet,
-}
-
-impl EncodedNeedle {
-    fn insert(needles: &mut Vec<Self>, value: Zeroizing<String>, alphabet: Base64Alphabet) {
-        if let Some(needle) = needles
-            .iter_mut()
-            .find(|needle| needle.value.as_str() == value.as_str())
-        {
-            if needle.alphabet != alphabet {
-                needle.alphabet = Base64Alphabet::Both;
-            }
-        } else {
-            needles.push(Self { value, alphabet });
-        }
-    }
-
-    fn matches(&self, input: &[u8], strict: bool) -> bool {
-        let needle = self.value.as_str();
-        input.utf8_chunks().any(|chunk| {
-            let text = chunk.valid();
-            text.match_indices(needle).any(|(start, _)| {
-                if strict || needle.len() >= 8 {
-                    return true;
-                }
-                let left = start
-                    .checked_sub(1)
-                    .and_then(|index| text.as_bytes().get(index));
-                let right = text.as_bytes().get(start + needle.len());
-                let bounded = |symbols: &[u8]| {
-                    [left, right]
-                        .into_iter()
-                        .flatten()
-                        .all(|byte| !byte.is_ascii_alphanumeric() && !symbols.contains(byte))
-                };
-                (matches!(
-                    self.alphabet,
-                    Base64Alphabet::Standard | Base64Alphabet::Both
-                ) && bounded(b"+/"))
-                    || (matches!(
-                        self.alphabet,
-                        Base64Alphabet::UrlSafe | Base64Alphabet::Both
-                    ) && bounded(b"-_"))
-            })
-        })
-    }
-}
-
 fn matches_credential_forms(
     text: &str,
     credentials: &SentCredentials,
@@ -233,10 +179,7 @@ fn matches_credential_forms(
                     }
                 }
             }
-            let hex = Zeroizing::new(data_encoding::HEXLOWER.encode(part.as_bytes()));
-            if !hex_needles.contains(&hex) {
-                hex_needles.push(hex);
-            }
+            encoded::insert_hex(&mut hex_needles, part);
             let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
             if !needles
                 .iter()
@@ -314,7 +257,7 @@ fn matches_forms(
             if !state.charge(
                 input
                     .len()
-                    .saturating_add(state.encoded_needles[index].value.len()),
+                    .saturating_add(state.encoded_needles[index].len()),
             ) {
                 return true;
             }
@@ -325,7 +268,7 @@ fn matches_forms(
         let lower = Zeroizing::new(input.to_ascii_lowercase());
         for index in 0..state.hex_needles.len() {
             if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
-                || contains_hex(&lower, &state.hex_needles[index])
+                || encoded::contains_hex(&lower, &state.hex_needles[index])
             {
                 return true;
             }
@@ -421,16 +364,6 @@ fn matches_forms(
         }
     }
     false
-}
-
-fn contains_hex(input: &[u8], needle: &str) -> bool {
-    if needle.len() < 8 {
-        input == needle.as_bytes()
-    } else {
-        input
-            .utf8_chunks()
-            .any(|chunk| chunk.valid().contains(needle))
-    }
 }
 
 fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
