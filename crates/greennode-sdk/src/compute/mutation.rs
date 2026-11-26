@@ -28,6 +28,24 @@ pub(super) struct Mutation {
     pub(super) overflow_overrides_status: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ReplyPolicy {
+    Ordinary,
+    UserData,
+    PrivateKey,
+    SshPublic,
+}
+
+impl From<bool> for ReplyPolicy {
+    fn from(sensitive: bool) -> Self {
+        if sensitive {
+            Self::UserData
+        } else {
+            Self::Ordinary
+        }
+    }
+}
+
 pub(super) enum Settlement<'a> {
     Created,
     Deleted,
@@ -63,9 +81,10 @@ impl Client {
         mutation: &Mutation,
         ids: &[&str],
         body: Option<&Value>,
-        sensitive: bool,
+        policy: impl Into<ReplyPolicy>,
         evidence: &mut Evidence,
     ) -> Result<Bytes, Failure<O>> {
+        let policy = policy.into();
         let project = self
             .session
             .require_project_id_with_evidence(ctx, evidence)
@@ -104,7 +123,7 @@ impl Client {
             no_output: false,
             keep_status: true,
             overflow_overrides_status: mutation.overflow_overrides_status,
-            sensitive,
+            sensitive: !matches!(policy, ReplyPolicy::Ordinary),
             reject_reflected_credentials: false,
             no_redirect: true,
             retry_config: retry::Config::default(),
@@ -129,12 +148,16 @@ impl Client {
                 dispatch,
             )
         })?;
+        let withhold = matches!(policy, ReplyPolicy::PrivateKey)
+            || (matches!(policy, ReplyPolicy::SshPublic)
+                && !operation.success.contains(&reply.status)
+                && super::ssh_keys::withhold_key_error(&reply.body));
         response::classify(
             operation.id,
             reply.status,
             Bytes::copy_from_slice(&reply.body),
             operation.success,
-            (true, false, operation.retry),
+            (true, withhold, operation.retry),
             evidence.credentials(),
         )
         .map_err(|error| {

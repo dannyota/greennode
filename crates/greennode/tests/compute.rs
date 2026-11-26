@@ -1,3 +1,7 @@
+#[cfg(unix)]
+#[path = "compute/ssh_keys.rs"]
+mod ssh_keys;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -25,6 +29,21 @@ fn response(status: &str, body: &str) -> Response {
 }
 
 async fn invoke(server: &Server, args: &[&str], terminal: bool) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_options(
+        server,
+        args,
+        terminal,
+        ConfigOptions::default().with_static_token(Secret::new(BEARER)),
+    )
+    .await
+}
+
+async fn invoke_with_options(
+    server: &Server,
+    args: &[&str],
+    terminal: bool,
+    options: ConfigOptions,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let status = run_invocation(Invocation {
@@ -36,13 +55,11 @@ async fn invoke(server: &Server, args: &[&str], terminal: bool) -> (ExitCode, Ve
         source: &Source,
         config_options: with_product_loopback(
             Product::Vserver,
-            ConfigOptions::default()
-                .with_static_token(Secret::new(BEARER))
-                .with_endpoint_overrides(EndpointOverrides {
-                    vserver: Some(format!("{}/", server.origin)),
-                    portal: Some(format!("{}/portal/", server.origin)),
-                    ..Default::default()
-                }),
+            options.with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
             server,
         ),
         stdin: &mut stdin,

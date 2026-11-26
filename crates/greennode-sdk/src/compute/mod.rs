@@ -10,6 +10,7 @@ mod quotes;
 mod server_actions;
 mod server_groups;
 mod server_writes;
+mod ssh_keys;
 mod wire;
 
 #[cfg(test)]
@@ -27,6 +28,7 @@ pub use quotes::{CreateServerInput, ResizeServerInput};
 pub use server_actions::*;
 pub use server_groups::*;
 pub use server_writes::{CreateServerOutput, DeleteServerInput, DeleteServerOutput};
+pub use ssh_keys::*;
 
 use std::sync::Arc;
 
