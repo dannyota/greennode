@@ -77,7 +77,7 @@ impl Client {
         } else {
             &ids
         };
-        validate_ids(OP, ids, PathIds::WithUnderscore).map_err(failure)?;
+        validate_ids(OP, ids, PathIds::Strict).map_err(failure)?;
         let details = create_quote_info(&input);
         self.request_quote(ctx, &mut evidence, "create", details)
             .await
@@ -98,7 +98,7 @@ impl Client {
                 ("LoadBalancerID", &input.load_balancer_id),
                 ("PackageID", &input.package_id),
             ],
-            PathIds::WithUnderscore,
+            PathIds::Strict,
         )
         .map_err(failure)?;
         let details = resize_quote_info(&input);
@@ -152,6 +152,8 @@ pub(super) fn create_quote_info(
         ("packageId".into(), json!(input.package_id)),
         ("zoneId".into(), json!(input.zone_id)),
         ("isBuyMorePoc".into(), json!(false)),
+        ("period".into(), json!(1)),
+        ("isPoc".into(), json!(false)),
     ])
 }
 

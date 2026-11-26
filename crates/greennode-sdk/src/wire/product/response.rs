@@ -189,6 +189,7 @@ fn matches_credential_forms(
 ) -> bool {
     let mut needles = Vec::new();
     let mut encoded_needles = Vec::new();
+    let mut hex_needles = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
         if !value.is_empty() && value.len() < 6 {
@@ -232,6 +233,12 @@ fn matches_credential_forms(
                     }
                 }
             }
+            for encoding in [data_encoding::HEXLOWER, data_encoding::HEXUPPER] {
+                let encoded = Zeroizing::new(encoding.encode(part.as_bytes()));
+                if !hex_needles.contains(&encoded) {
+                    hex_needles.push(encoded);
+                }
+            }
             let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
             if !needles
                 .iter()
@@ -247,6 +254,7 @@ fn matches_credential_forms(
         forms: Vec::new(),
         visited: Vec::new(),
         encoded_needles,
+        hex_needles,
         error_text,
         strict_base64: matches!(context, MatchContext::Identifier),
     };
@@ -267,6 +275,7 @@ struct MatchState {
     forms: Vec<Zeroizing<Vec<u8>>>,
     visited: Vec<(usize, [u8; 4])>,
     encoded_needles: Vec<EncodedNeedle>,
+    hex_needles: Vec<Zeroizing<String>>,
     error_text: bool,
     strict_base64: bool,
 }
@@ -312,6 +321,13 @@ fn matches_forms(
                 return true;
             }
             if state.encoded_needles[index].matches(input, state.strict_base64) {
+                return true;
+            }
+        }
+        for index in 0..state.hex_needles.len() {
+            if !state.charge(input.len().saturating_add(state.hex_needles[index].len()))
+                || contains_hex(input, &state.hex_needles[index])
+            {
                 return true;
             }
         }
@@ -407,6 +423,16 @@ fn matches_forms(
         }
     }
     false
+}
+
+fn contains_hex(input: &[u8], needle: &str) -> bool {
+    if needle.len() < 8 {
+        input == needle.as_bytes()
+    } else {
+        input
+            .utf8_chunks()
+            .any(|chunk| chunk.valid().contains(needle))
+    }
 }
 
 fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
@@ -1232,6 +1258,7 @@ mod tests {
             forms: Vec::new(),
             visited: Vec::new(),
             encoded_needles: Vec::new(),
+            hex_needles: Vec::new(),
             error_text: true,
             strict_base64: false,
         };

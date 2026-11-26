@@ -184,3 +184,215 @@ async fn resize_skips_the_current_package_and_requires_a_complete_acceptance() {
     assert!(heads[3].starts_with(b"POST /billing/v1/price "));
     assert!(heads[4].starts_with(b"PUT /regional/v2/proj-1/loadBalancers/lb-1/resize "));
 }
+
+#[tokio::test]
+async fn regression_import_screens_hex_passphrase_in_metadata_and_error_code() {
+    let subject = format!(
+        "before-{}-after",
+        data_encoding::HEXLOWER.encode(PASSPHRASE.as_bytes())
+    );
+    let code = format!(
+        "before-{}-after",
+        data_encoding::HEXUPPER.encode(PASSPHRASE.as_bytes())
+    );
+    let server = Server::start(vec![
+        response(
+            "201 Created",
+            serde_json::json!({"data": {"uuid": "cert-1", "subject": subject}}).to_string(),
+        ),
+        response(
+            "400 Bad Request",
+            serde_json::json!({"code": code}).to_string(),
+        ),
+        response("400 Bad Request", r#"{"code":"ToyRefusal"}"#),
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let output = client.import_certificate(&ctx, tls_input()).await.unwrap();
+    let reflected = client
+        .import_certificate(&ctx, tls_input())
+        .await
+        .unwrap_err();
+    let safe = client
+        .import_certificate(&ctx, tls_input())
+        .await
+        .unwrap_err();
+    let reflected = reflected.error().api_error().unwrap();
+    assert!(output.certificate.subject == "<redacted>" && reflected.code() != code);
+    assert_eq!(safe.error().api_error().unwrap().code(), "ToyRefusal");
+}
+
+#[tokio::test]
+async fn regression_import_allows_base64_shared_by_public_certificate_and_key() {
+    let server = Server::start(vec![response(
+        "201 Created",
+        r#"{"data":{"uuid":"cert-1"}}"#,
+    )]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let mut input = tls_input();
+    input.certificate =
+        "-----BEGIN CERTIFICATE-----\nY2VydGZpeHR1cmU0\ndG95LWtleQ==\n-----END CERTIFICATE-----\n"
+            .into();
+    input.certificate_chain = input.certificate.clone();
+    let mut wrong_file = input.clone();
+    wrong_file.certificate = KEY.into();
+    let rejected = client
+        .import_certificate(&ctx, wrong_file)
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+    assert!(client.import_certificate(&ctx, input).await.is_ok());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn regression_create_quote_sends_exact_priced_fields_and_go_defaults() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response("202 Accepted", r#"{"uuid":"lb-1"}"#),
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    client
+        .quote_create_load_balancer(&ctx, create())
+        .await
+        .unwrap();
+    client.create_load_balancer(&ctx, create()).await.unwrap();
+    let expected = serde_json::json!({"resourceType":"load-balancer","action":"create","resourceInfo":{
+        "packageId":"package-1","zoneId":"zone-1","isBuyMorePoc":false,"period":1,"isPoc":false
+    }});
+    assert_eq!(server.requests(), 3);
+    for (head, body) in server.heads().iter().zip(server.bodies()).take(2) {
+        assert!(head.starts_with(b"POST /billing/v1/price "));
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body, expected);
+    }
+}
+
+#[tokio::test]
+async fn regression_resize_no_wait_rejects_foreign_id_and_accepts_empty_acknowledgement() {
+    let server = Server::start(
+        [r#"{"uuid":"lb-other"}"#, "", r#"{"uuid":"lb-1"}"#]
+            .into_iter()
+            .flat_map(resize_replies)
+            .collect(),
+    );
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let input = resize(true);
+    let failure = client
+        .resize_load_balancer(&ctx, input.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    for _ in 0..2 {
+        let output = client
+            .resize_load_balancer(&ctx, input.clone())
+            .await
+            .unwrap();
+        assert!(output.changed);
+        assert_eq!(output.load_balancer.uuid, "lb-1");
+        assert_eq!(output.load_balancer.package_id, "package-2");
+    }
+    assert_eq!(server.requests(), 12);
+}
+
+#[tokio::test]
+async fn regression_paid_load_balancers_require_strict_go_ids_before_io() {
+    let server = Server::start(vec![]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    for input in [
+        CreateLoadBalancerInput {
+            package_id: "package_1".into(),
+            ..create()
+        },
+        CreateLoadBalancerInput {
+            subnet_id: "subnet_1".into(),
+            ..create()
+        },
+    ] {
+        let error = client
+            .create_load_balancer(&ctx, input.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().class(), ErrorClass::InvalidInput);
+        assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(
+            client
+                .quote_create_load_balancer(&ctx, input)
+                .await
+                .unwrap_err()
+                .error()
+                .class(),
+            ErrorClass::InvalidInput
+        );
+    }
+    let input = ResizeLoadBalancerInput {
+        package_id: "package_2".into(),
+        ..resize(true)
+    };
+    let error = client
+        .resize_load_balancer(&ctx, input.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().class(), ErrorClass::InvalidInput);
+    assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        client
+            .quote_resize_load_balancer(&ctx, input)
+            .await
+            .unwrap_err()
+            .error()
+            .class(),
+        ErrorClass::InvalidInput
+    );
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn regression_resize_error_status_precedes_the_confirmation_package_requirement() {
+    let mut replies = Vec::new();
+    for confirmation in [
+        r#"{"data":{"uuid":"lb-1","progressStatus":"ERROR"}}"#,
+        r#"{"data":{"uuid":"lb-1","progressStatus":"CREATED"}}"#,
+    ] {
+        replies.extend(resize_replies(""));
+        replies.push(response("200 OK", confirmation));
+    }
+    let server = Server::start(replies);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    for class in [ErrorClass::Failed, ErrorClass::NotSettled] {
+        let error = client
+            .resize_load_balancer(&ctx, resize(false))
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().class(), class);
+        assert_eq!(error.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    }
+    assert_eq!(server.requests(), 10);
+}
+
+fn resize(no_wait: bool) -> ResizeLoadBalancerInput {
+    ResizeLoadBalancerInput {
+        load_balancer_id: "lb-1".into(),
+        package_id: "package-2".into(),
+        no_wait,
+        ..Default::default()
+    }
+}
+
+fn resize_replies(acknowledgement: &str) -> [Response; 4] {
+    let current = r#"{"data":{"uuid":"lb-1","packageId":"package-1","progressStatus":"CREATED"}}"#;
+    [
+        response("200 OK", current),
+        response("200 OK", current),
+        response("200 OK", r#"{"optimumPrice":-3}"#),
+        response("202 Accepted", acknowledgement),
+    ]
+}

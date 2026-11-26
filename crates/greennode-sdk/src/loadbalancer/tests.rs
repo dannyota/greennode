@@ -205,7 +205,7 @@ async fn quote_posts_only_priced_fields_to_portal() {
     let (ctx, _) = RequestContext::new();
     let create = CreateLoadBalancerInput {
         name: "demo".into(),
-        package_id: "package_1".into(),
+        package_id: "package-1".into(),
         r#type: "Layer 4".into(),
         scheme: "Internal".into(),
         subnet_id: "subnet-1".into(),
@@ -235,7 +235,7 @@ async fn quote_posts_only_priced_fields_to_portal() {
             &ctx,
             ResizeLoadBalancerInput {
                 load_balancer_id: "lb-1".into(),
-                package_id: "package_1".into(),
+                package_id: "package-1".into(),
                 ..Default::default()
             },
         )
@@ -249,8 +249,8 @@ async fn quote_posts_only_priced_fields_to_portal() {
             .all(|head| head.starts_with(b"POST /billing/v1/price "))
     );
     let expected = [
-        serde_json::json!({"resourceType":"load-balancer","action":"create","resourceInfo":{"packageId":"package_1","zoneId":"zone_1","isBuyMorePoc":false}}),
-        serde_json::json!({"resourceType":"load-balancer","action":"resize","resourceInfo":{"loadBalancerId":"lb-1","packageId":"package_1"}}),
+        serde_json::json!({"resourceType":"load-balancer","action":"create","resourceInfo":{"packageId":"package-1","zoneId":"zone_1","isBuyMorePoc":false,"period":1,"isPoc":false}}),
+        serde_json::json!({"resourceType":"load-balancer","action":"resize","resourceInfo":{"loadBalancerId":"lb-1","packageId":"package-1"}}),
     ];
     for (raw, expected) in portal.bodies().iter().zip(expected) {
         let body: serde_json::Value = serde_json::from_slice(raw).unwrap();

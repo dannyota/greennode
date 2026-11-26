@@ -137,14 +137,7 @@ impl Client {
                 ))));
             }
         }
-        evidence.add_redaction(&input.private_key);
         evidence.add_redaction(&input.passphrase);
-        for line in body.private_key.lines() {
-            let line = line.trim();
-            if line.len() >= 8 && !line.starts_with("-----") && !line.contains(':') {
-                evidence.add_redaction(&Secret::new(line));
-            }
-        }
         for (field, value) in public {
             if value.contains("PRIVATE KEY") || (!value.is_empty() && evidence.text_reflects(value))
             {
@@ -188,6 +181,15 @@ impl Client {
                 "PrivateKey, Passphrase, and CertificateChain must be empty unless Type is TLS/SSL",
             ));
         }
+        evidence.add_redaction(&input.private_key);
+        for line in body.private_key.lines() {
+            let line = line.trim();
+            if line.len() >= 8 && !line.starts_with("-----") && !line.contains(':') {
+                evidence.add_redaction(&Secret::new(line));
+            }
+        }
+        screen_input(&evidence, [body.name, body.r#type])
+            .map_err(|error| super::write::not_sent(*error))?;
         let result = self
             .send_once(ctx, &REQUEST, &[], body, &mut evidence)
             .await;

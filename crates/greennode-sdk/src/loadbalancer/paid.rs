@@ -105,7 +105,7 @@ impl Client {
                 ("PackageID", &input.package_id),
                 ("SubnetID", &input.subnet_id),
             ],
-            PathIds::WithUnderscore,
+            PathIds::Strict,
         )
         .map_err(|error| not_sent(*error))?;
         check_max_price(CREATE, input.max_price, &evidence).map_err(|error| not_sent(*error))?;
@@ -214,12 +214,12 @@ impl Client {
         screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;
         validate_ids(RESIZE, &[("LoadBalancerID", id)], PathIds::Strict)
             .map_err(|error| not_sent(*error))?;
-        validate_ids(RESIZE, &[("PackageID", package)], PathIds::WithUnderscore)
+        validate_ids(RESIZE, &[("PackageID", package)], PathIds::Strict)
             .map_err(|error| not_sent(*error))?;
         check_max_price(RESIZE, input.max_price, &evidence).map_err(|error| not_sent(*error))?;
         let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
         let mut current = self
-            .read_state(ctx, id, &mut evidence, true)
+            .read_state(ctx, id, &mut evidence, PackageRequirement::Required)
             .await
             .map_err(|error| not_sent(*error))?;
         if current.package_id == *package {
@@ -271,29 +271,34 @@ impl Client {
                     .iter()
                     .any(|part| message.contains(part))
             });
-        if let Err(failure) =
-            reject::<ResizeLoadBalancerOutput>(&RESIZE_WRITE, status, raw, &evidence, None)
-        {
-            if busy && let Some(api_error) = failure.error().api_error() {
-                let message = format!(
-                    "loadbalancer: resource busy: {RESIZE}: load balancer {id}: {RESIZE}: {} (status {status_code})",
-                    api_error.message(),
-                    status_code = status.as_u16()
-                );
-                let (error, _, dispatch) = failure.into_parts();
-                let error = outcome(ErrorClass::Api, &message, &evidence)
-                    .with_outer_detail(ResourceBusy)
-                    .with_cause(error);
-                return Err(Failure::new(error, None, dispatch));
+        let acknowledgement = match reject(&RESIZE_WRITE, status, raw, &evidence, None) {
+            Ok(acknowledgement) => acknowledgement,
+            Err(failure) => {
+                if busy && let Some(api_error) = failure.error().api_error() {
+                    let message = format!(
+                        "loadbalancer: resource busy: {RESIZE}: load balancer {id}: {RESIZE}: {} (status {status_code})",
+                        api_error.message(),
+                        status_code = status.as_u16()
+                    );
+                    let (error, _, dispatch) = failure.into_parts();
+                    let error = outcome(ErrorClass::Api, &message, &evidence)
+                        .with_outer_detail(ResourceBusy)
+                        .with_cause(error);
+                    return Err(Failure::new(error, None, dispatch));
+                }
+                return Err(if status.is_client_error() {
+                    failure
+                } else {
+                    advise(failure, &advice, &evidence)
+                });
             }
-            return Err(if status.is_client_error() {
-                failure
-            } else {
-                advise(failure, &advice, &evidence)
-            });
-        }
+        };
         let target = Target::Resize(package);
         let (load_balancer, error) = if input.no_wait {
+            check_resize_acknowledgement(&acknowledgement, id, &evidence).map_err(|error| {
+                let failure = Failure::new(*error, None, WriteDispatch::MayHaveBeenSent);
+                advise(failure, &advice, &evidence)
+            })?;
             current.package_id.clone_from(package);
             (current, None)
         } else {
@@ -318,22 +323,27 @@ impl Client {
         ctx: &RequestContext,
         id: &str,
         evidence: &mut Evidence,
-        require_package: bool,
+        package_requirement: PackageRequirement,
     ) -> Result<LoadBalancer, Box<Error>> {
         let text = self
             .read_text(ctx, &GET, &[("LoadBalancerID", id)], &[], evidence, true)
             .await?;
         let envelope = Envelope::parse(&text, &GET, evidence)?;
         let ZonedLoadBalancer(row) = GET.parse(envelope.raw(&GET, evidence, "data")?, evidence)?;
+        let require_package = match package_requirement {
+            PackageRequirement::Required => true,
+            PackageRequirement::UnlessFailed => row.progress_status != "ERROR",
+            PackageRequirement::Optional => false,
+        };
         if row.uuid != id
             || row.progress_status.is_empty()
             || (require_package && row.package_id.is_empty())
         {
             return Err(GET.decode_error(evidence, DecodeError::InvalidShape));
         }
-        if [&row.uuid, &row.package_id, &row.progress_status]
-            .into_iter()
-            .any(|text| evidence.text_reflects(text))
+        if evidence.text_reflects(&row.uuid)
+            || evidence.text_reflects(&row.progress_status)
+            || (require_package && evidence.text_reflects(&row.package_id))
         {
             return Err(GET.decode_error(evidence, DecodeError::ReflectedCredential));
         }
@@ -356,7 +366,10 @@ impl Client {
             if clock.monotonic_now() >= bound {
                 return Err(outcome(ErrorClass::Api, &format!("loadbalancer: resource busy: {RESIZE}: load balancer {id} is not ready within 10m0s; nothing sent"), evidence).with_outer_detail(ResourceBusy));
             }
-            match self.read_state(&wait, id, evidence, true).await {
+            match self
+                .read_state(&wait, id, evidence, PackageRequirement::Required)
+                .await
+            {
                 Ok(row)
                     if !matches!(
                         row.progress_status.as_str(),
@@ -388,6 +401,10 @@ impl Client {
         let wait =
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
         let op = target.operation();
+        let package_requirement = match target {
+            Target::Create => PackageRequirement::Optional,
+            Target::Resize(_) => PackageRequirement::UnlessFailed,
+        };
         let why = format!("vngcloud: write outcome not confirmed: {op}: load balancer {id}");
         let error = loop {
             if let Some(end) = wait.check(clock) {
@@ -395,7 +412,7 @@ impl Client {
                 break outcome(ErrorClass::NotSettled, &msg, evidence).with_cause(Error::from(end));
             }
             match self
-                .read_state(&wait, id, evidence, matches!(target, Target::Resize(_)))
+                .read_state(&wait, id, evidence, package_requirement)
                 .await
             {
                 Ok(row) => {
@@ -499,6 +516,43 @@ impl Client {
         }
         Ok(price)
     }
+}
+
+#[derive(Clone, Copy)]
+enum PackageRequirement {
+    Required,
+    UnlessFailed,
+    Optional,
+}
+
+fn check_resize_acknowledgement(
+    body: &[u8],
+    id: &str,
+    evidence: &Evidence,
+) -> Result<(), Box<Error>> {
+    let text = go_json(body);
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+    let read = Read {
+        id: RESIZE,
+        route: RESIZE_WRITE.route,
+    };
+    serde_json::from_str::<&serde_json::value::RawValue>(text)
+        .map_err(|_| read.decode_error(evidence, DecodeError::MalformedJson))?;
+    crate::wire::strict_json::validate(text.as_bytes(), &[], text.len())
+        .map_err(|_| read.decode_error(evidence, DecodeError::InvalidShape))?;
+    let envelope = Envelope::parse(text, &read, evidence)?;
+    let acknowledged: Option<String> =
+        read.parse(envelope.raw(&read, evidence, "uuid")?, evidence)?;
+    if acknowledged
+        .as_deref()
+        .is_some_and(|acknowledged| acknowledged != id)
+    {
+        return Err(read.decode_error(evidence, DecodeError::InvalidShape));
+    }
+    Ok(())
 }
 
 fn check_max_price(op: &str, price: f64, evidence: &Evidence) -> Result<(), Box<Error>> {
