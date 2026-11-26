@@ -1,3 +1,5 @@
+mod writes;
+
 use clap::ArgMatches;
 use greennode_sdk::cdn::{self, Client, ErrorDetail};
 
@@ -211,6 +213,22 @@ pub(super) const SERVICE: Service = Service {
             message: None,
         },
         Rule {
+            identity: "cdn:status-unconfirmed",
+            matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::StatusUnconfirmed),
+            name: name(1, "StatusUnconfirmed"),
+            exit: Some(RuleExit::Failure),
+            message: Some(
+                "cdn: CDN status change not confirmed: the toggle was sent, or may have been sent, but no read showed the CDN changing; read the CDN before doing anything else",
+            ),
+        },
+        Rule {
+            identity: "cdn:unexpected-status",
+            matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::UnexpectedStatus),
+            name: name(2, "UnexpectedStatus"),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
             identity: "cdn:busy",
             matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::ResourceBusy),
             name: name(3, "ResourceBusy"),
@@ -338,5 +356,10 @@ pub(super) const SERVICE: Service = Service {
                 "greennode cdn get-traffic-report --from <from> --to <to> --cli-input-json '{\"CDNDomains\":[\"<cdn-domain>\"]}' --query Items"
             )
         ),
+        writes::UPDATE,
+        writes::DELETE,
+        writes::ENABLE,
+        writes::DISABLE,
+        writes::PURGE,
     ],
 };

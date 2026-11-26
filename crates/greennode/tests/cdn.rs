@@ -1,3 +1,6 @@
+#[path = "cdn/writes.rs"]
+mod writes;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
