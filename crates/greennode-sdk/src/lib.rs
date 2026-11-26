@@ -24,8 +24,10 @@ mod model;
 #[allow(missing_docs)]
 pub mod output_number;
 pub mod portal;
+pub mod pricing;
 pub mod project;
 mod provider;
+mod quote;
 mod secret;
 mod session;
 mod source;

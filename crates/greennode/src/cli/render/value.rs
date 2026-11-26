@@ -146,7 +146,7 @@ pub(super) fn rows(value: &Value) -> &[Value] {
     }
 }
 
-pub(super) fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
         match c {

@@ -2,7 +2,7 @@ use super::*;
 use crate::{Error as SdkError, WriteDispatch};
 use http::StatusCode;
 
-fn write(method: Method, retry: redirect::Retry) -> Operation {
+fn write(method: Method, retry: redirect::Retry) -> Operation<'static> {
     let mut op = operation(method, retry);
     op.class = redirect::Classification::Write;
     op

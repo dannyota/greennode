@@ -54,7 +54,7 @@ impl sender::BearerSource for EvidenceSource {
 async fn call_evidence(
     server: &Server,
     op: &Operation,
-    options: &Options,
+    options: &Options<'_>,
     path: &str,
     token: &'static str,
     evidence: &mut Evidence,
@@ -75,7 +75,7 @@ async fn call_evidence(
 async fn call_evidence_with(
     server: &Server,
     op: &Operation,
-    options: &Options,
+    options: &Options<'_>,
     path: &str,
     query: &[(&str, &str)],
     source: EvidenceSource,
@@ -211,7 +211,11 @@ async fn fixed_header_is_sent_and_invalid_declarations_are_refused() {
     let mut evidence = Evidence::new();
     let op = declaration();
     let options = Options {
-        headers: &[("user-type", "IAM_USER")],
+        headers: &[
+            ("user-type", "IAM_USER"),
+            ("region", "r-1"),
+            ("region_id", "r-1"),
+        ],
         ..Options::default()
     };
     assert!(
@@ -221,8 +225,16 @@ async fn fixed_header_is_sent_and_invalid_declarations_are_refused() {
     );
     let head = String::from_utf8_lossy(&server.heads()[0]).to_ascii_lowercase();
     assert!(head.contains("user-type: iam_user"));
+    assert!(head.contains("region: r-1"));
+    assert!(head.contains("region_id: r-1"));
     const INVALID: &[&[(&str, &str)]] = &[
         &[("authorization", "v")],
+        &[("region", "a b")],
+        &[("region_id", "")],
+        &[(
+            "region",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )],
         &[("user-type", "a\nb")],
         &[("user-type", "a"), ("user-type", "b")],
     ];

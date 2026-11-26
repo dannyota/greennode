@@ -30,6 +30,7 @@ struct PasswordInput<'a, T> {
 
 struct ManagementInput<'a, T: 'static> {
     descriptor: &'static InputDescriptor<T>,
+    check_json: Option<input::JsonChecks>,
     matches: &'a ArgMatches,
     source: &'a dyn ConfigSource,
     operation: &'static crate::cli::op::Operation,
@@ -76,6 +77,7 @@ impl<T: Send + 'static> ParsedInput for ManagementInput<'_, T> {
         Box::pin(async {
             let descriptor = self.descriptor;
             let matches = self.matches;
+            let check_json = self.check_json;
             let json = matches
                 .try_get_one::<String>("cli-input-json")
                 .ok()
@@ -84,16 +86,23 @@ impl<T: Send + 'static> ParsedInput for ManagementInput<'_, T> {
             let merged = if let Some(json) = json.filter(|json| json.starts_with("file://")) {
                 let (matches, json) = (matches.clone(), json.clone());
                 tokio::task::spawn_blocking(move || {
-                    input::merge(descriptor, &matches, Some(&json), project.as_deref())
+                    input::merge_checked(
+                        descriptor,
+                        &matches,
+                        Some(&json),
+                        project.as_deref(),
+                        check_json,
+                    )
                 })
                 .await
                 .map_err(|_| LocalError::usage("--cli-input-json: cannot read file"))?
             } else {
-                input::merge(
+                input::merge_checked(
                     descriptor,
                     matches,
                     json.map(String::as_str),
                     project.as_deref(),
+                    check_json,
                 )
             };
             self.value = Some(merged.map_err(|error| LocalError::usage(error.0))?);
@@ -298,6 +307,21 @@ pub(crate) async fn management_with_view<T: Send + 'static>(
     execute: ManagementOperation<T>,
     view: OutputView,
 ) -> u8 {
+    management_custom(
+        invocation, selected, matches, descriptor, execute, view, None,
+    )
+    .await
+}
+
+pub(crate) async fn management_custom<T: Send + 'static>(
+    invocation: &mut Invocation<'_>,
+    selected: SelectedOperation,
+    matches: &ArgMatches,
+    descriptor: &'static InputDescriptor<T>,
+    execute: ManagementOperation<T>,
+    view: OutputView,
+    check_json: Option<input::JsonChecks>,
+) -> u8 {
     run_management(
         invocation,
         selected,
@@ -306,6 +330,7 @@ pub(crate) async fn management_with_view<T: Send + 'static>(
         execute,
         Hooks {
             view,
+            check_json,
             bind: None,
             confirmation: None,
         },
@@ -329,6 +354,7 @@ pub(crate) async fn management_with_password<T: Send + 'static>(
         execute,
         Hooks {
             view: OutputView::default(),
+            check_json: None,
             bind: Some(bind),
             confirmation: None,
         },
@@ -352,6 +378,7 @@ pub(crate) async fn management_with_confirmation<T: Send + 'static>(
         execute,
         Hooks {
             view: OutputView::default(),
+            check_json: None,
             bind: None,
             confirmation: Some(confirmation),
         },
@@ -361,6 +388,7 @@ pub(crate) async fn management_with_confirmation<T: Send + 'static>(
 
 struct Hooks<T> {
     view: OutputView,
+    check_json: Option<input::JsonChecks>,
     bind: Option<fn(&mut T, greennode_sdk::Secret)>,
     confirmation: Option<&'static str>,
 }
@@ -376,6 +404,7 @@ async fn run_management<T: Send + 'static>(
     let operation = selected.operation;
     let mut input = ManagementInput {
         descriptor,
+        check_json: hooks.check_json,
         matches,
         source: invocation.source,
         operation,

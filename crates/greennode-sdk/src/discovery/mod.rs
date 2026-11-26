@@ -2,7 +2,7 @@ use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
-    options::Options,
+    options::{Options, Pacing},
     redirect::{Classification, Retry},
     retry,
     sender::{BearerSource, Response, Runtime, SentCredentials},
@@ -20,6 +20,12 @@ use tokio::sync::{Mutex, MutexGuard};
 pub(crate) enum ProjectRead {
     Id,
     Metadata,
+}
+
+pub(crate) trait InventoryLimits: Send {
+    fn reserve(&mut self) -> Result<(), Box<Error>>;
+    fn account(&mut self, rows: usize, bytes: usize) -> Result<(), Box<Error>>;
+    fn pacing(&self) -> &Pacing;
 }
 
 #[derive(Default)]
@@ -96,6 +102,24 @@ impl Discovery {
         read: ProjectRead,
         evidence: &mut Evidence,
     ) -> Result<Project, Box<Error>> {
+        self.require_with_limits(runtime, base, source, region, read, evidence, None)
+            .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A project read uses the existing operation inputs and optional inventory limits"
+    )]
+    pub(crate) async fn require_with_limits(
+        &self,
+        runtime: Runtime<'_>,
+        base: &crate::endpoint::Base,
+        source: &dyn BearerSource,
+        region: &str,
+        read: ProjectRead,
+        evidence: &mut Evidence,
+        mut limits: Option<&mut dyn InventoryLimits>,
+    ) -> Result<Project, Box<Error>> {
         let ctx = runtime.ctx.child_with_deadline(runtime.deadline);
         let clock = runtime.clock;
         let mut state = self.lock(&ctx, clock).await?;
@@ -104,7 +128,21 @@ impl Discovery {
         {
             return Ok(project.clone());
         }
-        let projects = read_projects_with_evidence(runtime, base, source, region, evidence).await?;
+        if let Some(limits) = limits.as_deref_mut() {
+            limits.reserve()?;
+        }
+        let (projects, rows, bytes) = read_projects_with_evidence(
+            runtime,
+            base,
+            source,
+            region,
+            evidence,
+            limits.as_ref().map(|limit| limit.pacing()),
+        )
+        .await?;
+        if let Some(limits) = limits {
+            limits.account(rows, bytes)?;
+        }
         let selected = select(projects, region, state.as_ref())?;
         #[cfg(test)]
         if let Some(hook) = &self.before_publish {
@@ -124,7 +162,9 @@ pub(crate) async fn read_projects(
     source: &dyn BearerSource,
     region: &str,
 ) -> Result<Vec<Project>, Box<Error>> {
-    read_projects_with_evidence(runtime, base, source, region, &mut Evidence::new()).await
+    read_projects_with_evidence(runtime, base, source, region, &mut Evidence::new(), None)
+        .await
+        .map(|(projects, _, _)| projects)
 }
 
 async fn read_projects_with_evidence(
@@ -133,12 +173,17 @@ async fn read_projects_with_evidence(
     source: &dyn BearerSource,
     region: &str,
     evidence: &mut Evidence,
-) -> Result<Vec<Project>, Box<Error>> {
+    pacing: Option<&Pacing>,
+) -> Result<(Vec<Project>, usize, usize), Box<Error>> {
     let (_, inventory) = operation::execute_with_evidence::<Inventory>(
         runtime,
         base,
         &projects_operation(),
-        &Options::DEFAULT,
+        &Options {
+            pacing,
+            response_guard: pacing.map(|_| guard_estimate_project_response as _),
+            ..Options::DEFAULT
+        },
         &[],
         &[],
         source,
@@ -182,6 +227,7 @@ async fn read_projects_with_evidence(
     {
         return Err(invalid_response(StatusCode::OK));
     }
+    let rows = projects.len();
     projects.retain_mut(|project| {
         if project.region.is_empty() {
             project.region = region.to_owned();
@@ -197,7 +243,7 @@ async fn read_projects_with_evidence(
     {
         return Err(invalid_response(StatusCode::OK));
     }
-    Ok(projects)
+    Ok((projects, rows, inventory.bytes))
 }
 
 const LIST_PROJECTS: &str = "project.ListProjects";
@@ -265,11 +311,16 @@ struct Inventory {
     projects: Option<Vec<Project>>,
     #[serde(skip)]
     credentials: SentCredentials,
+    #[serde(skip)]
+    bytes: usize,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl Output for Inventory {
+    const RESPONSE_GUARD: Option<crate::wire::product::sender::ResponseGuard> =
+        Some(guard_project_response);
+
     const SCHEMA: Shape<'static> = Shape::Object(&[ShapeField {
         name: "projects",
         shape: Shape::Array(&Shape::Object(&[
@@ -309,6 +360,7 @@ impl Output for Inventory {
         }
         Ok(Self {
             credentials: response.credentials.clone(),
+            bytes: response.body.len(),
             ..operation::decode_response(operation, response)?
         })
     }
@@ -316,3 +368,24 @@ impl Output for Inventory {
 
 #[cfg(test)]
 mod tests;
+
+fn guard_project_response(
+    _: &'static str,
+    status: StatusCode,
+    body: &[u8],
+    known: &crate::wire::product::sender::SentCredentials,
+    sent: &crate::wire::product::sender::SentCredentials,
+) -> Option<Box<Error>> {
+    operation::unsafe_json_response(body, known, sent, status.is_success())
+        .then(|| invalid_response(status))
+}
+
+fn guard_estimate_project_response(
+    _: &'static str,
+    status: StatusCode,
+    body: &[u8],
+    known: &SentCredentials,
+    sent: &SentCredentials,
+) -> Option<Box<Error>> {
+    operation::unsafe_json_response(body, known, sent, true).then(|| invalid_response(status))
+}

@@ -9,6 +9,7 @@ mod value;
 pub use redaction::DynamicMap;
 pub use table::write_table;
 pub(crate) use table::{TableView, write_projected_table};
+pub(crate) use value::escape;
 pub use value::{Value, write_text};
 
 use std::fmt;

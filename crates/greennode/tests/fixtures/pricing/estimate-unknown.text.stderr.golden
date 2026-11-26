@@ -1,0 +1,19 @@
+monthly, VAT as returned, account-scoped estimate; not a commitment
+Processing complete: true; requested complete: false; cost complete: false
+Coverage	bandwidth-packages	setup	excluded	outside-estimate-scope
+Coverage	software-licenses	setup	excluded	outside-estimate-scope
+Coverage	nat	setup	excluded	outside-estimate-scope
+Coverage	load-balancers	setup	excluded	outside-estimate-scope
+Coverage	backups	setup	excluded	outside-estimate-scope
+Coverage	snapshots	setup	excluded	outside-estimate-scope
+Coverage	payg	setup	excluded	outside-estimate-scope
+Coverage	negotiated-discounts-credits	setup	excluded	outside-estimate-scope
+Coverage	vserver-traffic	setup	excluded	outside-estimate-scope
+Coverage	object-egress-requests	setup	excluded	outside-estimate-scope
+Coverage	floating-ip	unknown	unknown	ip-price-unverified
+account-scope: Quotes reflect the current account. Returned discounts do not establish eligibility for a program.
+terms: Tested monthly quotes showed no term discount on the observed account. This is not a universal discount policy or proof that a term was honored.
+egress: Published egress rules conflict. Egress and request charges remain unknown and are excluded from quota quotes.
+bandwidth: Bandwidth tariffs and capacity units are unverified and excluded from public-IP prices.
+estimate: monthly, VAT as returned, account-scoped estimate; not a commitment
+quantity: Quantities project independent unit quotes without bulk discounts or shared allowances. Quotes do not establish deployment feasibility or capacity.

@@ -11,7 +11,8 @@ use greennode_sdk::{Clock, Error, Failure, RequestContext};
 
 use super::{errors, query, render};
 pub(crate) use management::{
-    management, management_with_confirmation, management_with_password, management_with_view,
+    management, management_custom, management_with_confirmation, management_with_password,
+    management_with_view,
 };
 pub use output::{ExecutionFailure, ExecutionResult, OutputView, RenderFailure};
 use output::{OutputError, render_output};
@@ -145,7 +146,7 @@ fn refuse<I: ParsedInput, A: Adapter<I>>(
             .output()
             .and_then(Format::parse)
             .unwrap_or(Format::Json);
-        let _ = render_output(stdout, &output, format, None, OutputView::default());
+        let _ = render_output(stdout, stderr, &output, format, None, OutputView::default());
     }
     local(stderr, error)
 }
@@ -303,7 +304,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     match result {
         Ok(Some(output)) => match output
             .map_err(OutputError::from)
-            .and_then(|output| render_output(stdout, &output, format, query.as_ref(), view))
+            .and_then(|output| render_output(stdout, stderr, &output, format, query.as_ref(), view))
         {
             Ok(()) => 0,
             Err(error) => {
@@ -379,6 +380,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             if let Some(partial) = &failure.partial {
                 let _ = render_output(
                     stdout,
+                    stderr,
                     partial,
                     format,
                     if failure.query_partial {
@@ -386,7 +388,11 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     } else {
                         None
                     },
-                    OutputView::default(),
+                    if failure.query_partial {
+                        view
+                    } else {
+                        OutputView::default()
+                    },
                 );
             }
             let mut classified = errors::classify(&failure.error, adapter.rules());

@@ -168,6 +168,7 @@ pub(super) const LIST_TRANSACTIONS: Operation = Operation {
                 &HISTORY_INPUT,
                 list_transactions,
                 OutputView {
+                    custom: None,
                     table: Some(TableView {
                         columns: &[
                             "CreatedAt",
@@ -207,6 +208,7 @@ pub(super) const LIST_PAYMENTS: Operation = Operation {
                 &HISTORY_INPUT,
                 list_payments,
                 OutputView {
+                    custom: None,
                     table: Some(TableView {
                         columns: &["CreatedAt", "Gateway", "Status", "TypeCode", "Amount"],
                         show_empty_headers: true,
@@ -243,6 +245,7 @@ pub(super) const LIST_RESOURCES: Operation = Operation {
                 &RESOURCES_INPUT,
                 list_resources,
                 OutputView {
+                    custom: None,
                     table: Some(TableView {
                         columns: &[
                             "ArtifactID",

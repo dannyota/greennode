@@ -101,6 +101,13 @@ impl Evidence {
         response::reflects_credential(text, &self.credentials)
     }
 
+    pub(crate) fn reflects_fixed_two(&self, amount: f64) -> bool {
+        may_reflect_rendered_number(&self.credentials)
+            && self
+                .credentials
+                .reflects(crate::output_number::fixed_two(amount).as_bytes())
+    }
+
     fn literal_reflects(&self, value: &Value) -> bool {
         let text: &[u8] = match value {
             Value::Null => b"null",
