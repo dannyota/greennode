@@ -1,6 +1,7 @@
 mod backup;
 mod billing;
 mod cdn;
+mod compute;
 mod containerregistry;
 mod database;
 mod dns;
@@ -160,6 +161,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         backup::SERVICE,
         billing::SERVICE,
         cdn::SERVICE,
+        compute::SERVICE,
         containerregistry::SERVICE,
         database::SERVICE,
         dns::SERVICE,

@@ -328,6 +328,37 @@ impl Error {
             cause: None,
         }
     }
+    pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
+        if let Some(api) = self.api.as_mut() {
+            if api
+                .status
+                .is_some_and(|status| reflects(&status.to_string()))
+            {
+                api.status = None;
+                self.identity = true;
+            }
+            if reflects(api.operation) {
+                api.operation = "";
+            }
+            if reflects(&api.code) {
+                api.code.clear();
+            }
+            if reflects(&api.message) {
+                api.message.clear();
+            }
+        }
+        if self
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.downcast_ref::<http::StatusCode>())
+            .is_some_and(|status| reflects(status.as_str()))
+        {
+            self.detail = None;
+        }
+        self.cause = self.cause.map(|cause| Box::new(cause.screen_api(reflects)));
+        self
+    }
+
     pub(crate) fn with_cause(mut self, cause: Error) -> Self {
         match self.cause.as_mut() {
             Some(existing) => {

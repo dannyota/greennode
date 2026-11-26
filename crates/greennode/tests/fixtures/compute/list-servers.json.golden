@@ -1,0 +1,107 @@
+{
+  "Items": [
+    {
+      "BootVolumeID": "disk-1",
+      "CreatedAt": "",
+      "Description": "",
+      "EncryptionVolume": false,
+      "EnableLog": false,
+      "EnableMetric": false,
+      "Licence": false,
+      "LicenseKey": "",
+      "Location": "",
+      "Metadata": "",
+      "MigrateState": "",
+      "MigrationStatus": "",
+      "Name": "web",
+      "Product": "",
+      "ServerGroupID": null,
+      "ServerGroupName": "",
+      "SSHKeyName": "",
+      "Status": "ACTIVE",
+      "StopBeforeMigrate": false,
+      "User": "",
+      "UUID": "server-1",
+      "Image": {
+        "FlavorZoneIDs": [],
+        "ID": "",
+        "ImageType": "",
+        "ImageVersion": "",
+        "Licence": false,
+        "PackageLimit": {
+          "CPU": 0,
+          "DiskSize": 0,
+          "Memory": 0
+        }
+      },
+      "Flavor": {
+        "Bandwidth": 0,
+        "BandwidthUnit": "",
+        "CPU": 0,
+        "CPUPlatformDescription": "",
+        "FlavorID": "",
+        "FlavorZoneID": "",
+        "GPU": 0,
+        "Group": "",
+        "IsSoldOut": false,
+        "Memory": 0,
+        "Metadata": "",
+        "Name": "",
+        "RemainingVMs": 0,
+        "ZoneID": ""
+      },
+      "SecurityGroups": [
+        {
+          "Name": "web",
+          "UUID": "group_1"
+        }
+      ],
+      "ExternalInterfaces": [],
+      "InternalInterfaces": [
+        {
+          "CreatedAt": "",
+          "FixedIP": "",
+          "FloatingIP": "::ffff:192.0.2.1",
+          "FloatingIPID": "",
+          "InterfaceType": "",
+          "MAC": "",
+          "NetworkUUID": "",
+          "PortUUID": "",
+          "Product": "",
+          "ServerUUID": "",
+          "Status": "",
+          "SubnetUUID": "",
+          "Type": "",
+          "UpdatedAt": "",
+          "UUID": ""
+        }
+      ],
+      "ZoneID": "",
+      "Zone": {
+        "UUID": "",
+        "Name": "",
+        "ZoneType": "",
+        "IsDefault": false,
+        "Description": "",
+        "IsEnabled": false,
+        "OpenStackZone": "",
+        "IPRanges": [],
+        "ServerCount": 0,
+        "VolumeCount": 0
+      },
+      "AppLicense": null,
+      "AppLicenseName": "",
+      "AppPackageVersionName": "",
+      "DefaultTagIDs": [],
+      "FlavorZoneID": "",
+      "FlavorZones": null,
+      "GPUMemory": null,
+      "HostGroupID": "",
+      "PublicIP": "192.0.2.1"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10000,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

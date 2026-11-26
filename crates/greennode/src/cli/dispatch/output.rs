@@ -37,6 +37,13 @@ pub struct OutputView {
     pub(crate) table: Option<render::TableView>,
     pub(crate) withhold: Option<&'static str>,
     pub(crate) custom: Option<CustomOutput>,
+    pub(crate) raw_text: Option<RawText>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RawText {
+    pub(crate) terminal: bool,
+    pub(crate) unqueried_field: &'static str,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -97,6 +104,30 @@ fn write_output(
     let mut value = projected.for_query()?;
     if let Some(query) = query {
         value = query::evaluate(query, &value).map_err(|_| OutputError::Query)?;
+    }
+    if let (Format::Text, Some(raw)) = (format, view.raw_text) {
+        let candidate = match (&value, query) {
+            (render::Value::Object(fields), None) => fields.get(raw.unqueried_field),
+            _ => Some(&value),
+        };
+        if let Some(render::Value::String(text)) = candidate {
+            if raw.terminal {
+                for chunk in text.split_inclusive(['\n', '\t']) {
+                    let plain = chunk.trim_end_matches(['\n', '\t']);
+                    writer
+                        .write_all(render::escape(plain).as_bytes())
+                        .map_err(render::Error::Io)?;
+                    writer
+                        .write_all(&chunk.as_bytes()[plain.len()..])
+                        .map_err(render::Error::Io)?;
+                }
+            } else {
+                writer
+                    .write_all(text.as_bytes())
+                    .map_err(render::Error::Io)?;
+            }
+            return Ok(());
+        }
     }
     match format {
         Format::Json => render::write_json(&mut writer, &render::project(&value)?),

@@ -8,6 +8,7 @@ mod cache;
 #[allow(clippy::result_large_err)]
 pub mod cdn;
 mod clock;
+pub mod compute;
 mod config;
 pub mod containerregistry;
 mod context;

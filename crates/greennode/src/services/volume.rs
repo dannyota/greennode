@@ -119,6 +119,7 @@ const DEFAULT_VIEW: dispatch::OutputView = dispatch::OutputView {
     table: None,
     withhold: None,
     custom: None,
+    raw_text: None,
 };
 
 descriptor!(

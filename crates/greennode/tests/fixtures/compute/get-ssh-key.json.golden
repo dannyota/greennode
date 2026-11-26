@@ -1,0 +1,9 @@
+{
+  "SSHKey": {
+    "ID": "key-1",
+    "Name": "toy",
+    "CreatedAt": "",
+    "PublicKey": "",
+    "Status": ""
+  }
+}

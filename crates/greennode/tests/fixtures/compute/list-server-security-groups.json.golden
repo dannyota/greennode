@@ -1,0 +1,9 @@
+{
+  "Items": [
+    {
+      "ServerID": "server-1",
+      "Name": "web",
+      "UUID": "group-1"
+    }
+  ]
+}

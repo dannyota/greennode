@@ -1,0 +1,6 @@
+account-scope: Quotes reflect the current account. Returned discounts do not establish eligibility for a program.
+terms: Tested monthly quotes showed no term discount on the observed account. This is not a universal discount policy or proof that a term was honored.
+units: The byte definition of raw RAM is unverified. GiB amounts and rates remain unknown.
+exclusions: Instance prices exclude root and data disks, CES, licensing, IPs, bandwidth, traffic, snapshots, backups, and NAT.
+visibility: Console-family scope excludes custom, partner, and legacy catalogs unless requested. Catalog visibility establishes no sale eligibility.
+reference-component: Each price is the instance component of its recorded reference configuration. The root disk and other excluded costs are not included.

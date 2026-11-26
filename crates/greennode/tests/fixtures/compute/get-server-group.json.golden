@@ -1,0 +1,12 @@
+{
+  "ServerGroup": {
+    "UUID": "group-1",
+    "ServerGroupID": 3,
+    "Name": "web",
+    "Description": "",
+    "PolicyID": "",
+    "PolicyName": "",
+    "CreatedAt": "",
+    "Servers": []
+  }
+}

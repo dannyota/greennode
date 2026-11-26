@@ -123,9 +123,19 @@ impl<'a> Catalog<'a> {
     }
 
     pub(crate) fn rows(&mut self, count: usize) -> Result<(), Box<Error>> {
+        self.rows_with_bytes(count, 0)
+    }
+
+    pub(crate) fn rows_with_bytes(
+        &mut self,
+        count: usize,
+        retained_bytes: usize,
+    ) -> Result<(), Box<Error>> {
         self.check()?;
-        self.budget
-            .account(count, std::mem::take(&mut self.unaccepted_bytes))
+        self.budget.account(
+            count,
+            retained_bytes.saturating_add(std::mem::take(&mut self.unaccepted_bytes)),
+        )
     }
 
     fn check(&self) -> Result<(), Box<Error>> {
@@ -142,6 +152,18 @@ impl<'a> Catalog<'a> {
 
     pub(crate) async fn exchange(&mut self, req: Request<'_>) -> Result<Box<RawValue>, Box<Error>> {
         self.check()?;
+        if req
+            .path
+            .iter()
+            .copied()
+            .chain(req.query.iter().map(|(_, value)| *value))
+            .any(|value| self.evidence.text_reflects(value))
+            || req
+                .body
+                .is_some_and(|body| self.evidence.reflected_in(body))
+        {
+            return Err(request::invalid(req.operation, 200));
+        }
         self.budget.reserve()?;
         self.unaccepted_bytes = 0;
         let raw = request::exchange(

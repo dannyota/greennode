@@ -102,7 +102,7 @@ pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> 
 
 fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_text: bool) -> bool {
     let mut needles = Vec::new();
-    let mut encoded_needles = Vec::new();
+    let mut encoded_needles: Vec<Zeroizing<String>> = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
         for part in std::iter::once(value)
@@ -119,8 +119,12 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
                 if end.saturating_sub(start) >= 8 {
                     for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
                         let encoded = Zeroizing::new(encoding.encode(&aligned));
-                        if let Some(stable) = encoded.as_bytes().get(start..end) {
-                            encoded_needles.push(Zeroizing::new(stable.to_vec()));
+                        if let Some(stable) = encoded.get(start..end)
+                            && !encoded_needles
+                                .iter()
+                                .any(|needle| needle.as_str() == stable)
+                        {
+                            encoded_needles.push(Zeroizing::new(stable.to_owned()));
                         }
                     }
                 }
@@ -135,7 +139,7 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
         }
     }
     let mut state = MatchState {
-        work: 8 << 20,
+        work: matching_work_limit(text.len(), error_text),
         forms: Vec::new(),
         visited: Vec::new(),
         encoded_needles,
@@ -144,11 +148,20 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
     matches_forms(text.as_bytes(), &needles, [0; 4], &mut state)
 }
 
+fn matching_work_limit(length: usize, error_text: bool) -> usize {
+    const LIMIT: usize = 8 << 20;
+    if error_text {
+        LIMIT
+    } else {
+        (length.min(LIMIT) * 24).max(LIMIT)
+    }
+}
+
 struct MatchState {
     work: usize,
     forms: Vec<Zeroizing<Vec<u8>>>,
     visited: Vec<(usize, [u8; 4])>,
-    encoded_needles: Vec<Zeroizing<Vec<u8>>>,
+    encoded_needles: Vec<Zeroizing<String>>,
     error_text: bool,
 }
 
@@ -194,8 +207,8 @@ fn matches_forms(
             }
             let needle = &state.encoded_needles[index];
             if input
-                .windows(needle.len())
-                .any(|window| window == needle.as_slice())
+                .utf8_chunks()
+                .any(|chunk| chunk.valid().contains(needle.as_str()))
             {
                 return true;
             }
@@ -990,6 +1003,19 @@ mod tests {
             assert!(!reflects_credential(&ordinary, &credentials));
         }
         assert!(!reflects_credential("glb-1", &credentials));
+    }
+
+    #[test]
+    fn output_matching_caps_work_and_fails_closed_on_pathological_input() {
+        assert_eq!(matching_work_limit(usize::MAX, false), 192 << 20);
+        assert_eq!(matching_work_limit(usize::MAX, true), 8 << 20);
+        let credentials = SentCredentials::for_test(
+            (0..20)
+                .map(|index| crate::Secret::new(format!("sample-{index}")))
+                .collect(),
+        );
+        let text = "ordinary%2520".repeat(1 << 18);
+        assert!(reflects_credential(&text, &credentials));
     }
 
     #[test]

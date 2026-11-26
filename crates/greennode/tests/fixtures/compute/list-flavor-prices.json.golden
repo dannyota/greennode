@@ -1,0 +1,52 @@
+{
+  "Items": [
+    {
+      "Family": "general",
+      "FamilyName": "General",
+      "Flavor": {
+        "Bandwidth": 0,
+        "BandwidthUnit": "",
+        "CPU": 2,
+        "CPUPlatformDescription": "",
+        "FlavorID": "flavor-1",
+        "FlavorZoneID": "offer-1",
+        "GPU": 0,
+        "Group": "",
+        "IsSoldOut": false,
+        "Memory": 4,
+        "Metadata": "{\"imageTypeSupport\":[\"ubuntu\"]}",
+        "Name": "small",
+        "RemainingVMs": 1,
+        "ZoneID": "zone-1"
+      },
+      "Platform": "cpu",
+      "Price": {
+        "Basis": "instance-type-line",
+        "Currency": "VND",
+        "DiscountPercent": null,
+        "DiscountPrice": null,
+        "MonthlyPrice": 20,
+        "OriginalPrice": null,
+        "Source": "pricing.GetQuote",
+        "Status": "quoted",
+        "Tax": "as-returned"
+      },
+      "PricePerGiB": null,
+      "PricePerRAMUnit": 5,
+      "RAMGiB": null,
+      "RAMUnit": "unknown",
+      "Reference": {
+        "ImageID": "image-1",
+        "ImageType": "ubuntu",
+        "ImageVersion": "1",
+        "RootDiskSizeGB": 15,
+        "RootDiskTypeID": "disk-1"
+      },
+      "Visibility": "console-family",
+      "ZoneEnabled": false,
+      "ZoneID": "zone-1",
+      "ZoneName": "disabled"
+    }
+  ],
+  "Requests": 8
+}
