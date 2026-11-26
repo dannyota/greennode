@@ -1,6 +1,6 @@
 use crate::Secret;
 
-pub(super) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
+pub(crate) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
     use hmac::{Hmac, KeyInit, Mac};
     use zeroize::Zeroizing;
     let raw = seed.expose_secret().trim();
@@ -39,8 +39,15 @@ pub(super) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
     Ok(Secret::new(format!("{:06}", number % 1_000_000)))
 }
 
-pub(crate) type Provider<'a> = dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send + 'a>>
-    + Send
+#[derive(Debug)]
+pub(crate) enum ProviderError {
+    Failed,
+    TokenCache,
+}
+
+pub(crate) type Provider<'a> = dyn Fn() -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Secret, ProviderError>> + Send + 'a>,
+    > + Send
     + Sync
     + 'a;
 
@@ -53,15 +60,15 @@ async fn provider_code(
     provider: &Provider<'_>,
     clock: &dyn crate::Clock,
     deadline: tokio::time::Instant,
-) -> Result<Secret, ()> {
+) -> Result<Secret, ProviderError> {
     if clock.monotonic_now() >= deadline {
-        return Err(());
+        return Err(ProviderError::Failed);
     }
     let mut timer = clock.sleep_until(deadline);
     let mut future = provider();
     std::future::poll_fn(|cx| {
         if clock.monotonic_now() >= deadline || timer.as_mut().poll(cx).is_ready() {
-            return std::task::Poll::Ready(Err(()));
+            return std::task::Poll::Ready(Err(ProviderError::Failed));
         }
         future.as_mut().poll(cx)
     })
@@ -137,14 +144,27 @@ pub(super) async fn complete(
     let csrf = super::signin::extract_csrf(&String::from_utf8_lossy(&page.body))
         .ok_or_else(|| LoginError::new("totp page", Some(page.status.as_u16()), false))?;
     let code = match source {
-        Source::Seed(seed) => code(seed, login.clock.utc_now().unix_timestamp()),
+        Source::Seed(seed) => {
+            code(seed, login.clock.utc_now().unix_timestamp()).map_err(|_| ProviderError::Failed)
+        }
         Source::Provider(provider) => provider_code(provider, login.clock, login.deadline).await,
     }
-    .map_err(|_| LoginError::new("totp code", None, false))?;
-    let mut form = url::form_urlencoded::Serializer::new(String::new());
-    form.append_pair("_csrf", csrf.expose_secret())
-        .append_pair("token", code.expose_secret());
-    let form = Secret::new(form.finish());
+    .map_err(|error| {
+        LoginError::new(
+            match error {
+                ProviderError::Failed => "totp code",
+                ProviderError::TokenCache => "token cache",
+            },
+            None,
+            false,
+        )
+    })?;
+    let form = {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("_csrf", csrf.expose_secret())
+            .append_pair("token", code.expose_secret());
+        Secret::new(form.finish())
+    };
     let mut request = Request::post(target.as_str())
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(header::ORIGIN, login.origin.origin().ascii_serialization())
@@ -258,8 +278,8 @@ mod tests {
                 .unwrap_or_else(|| format!("{}/ap/auth/iam/google", server.origin)),
         );
         let invalid = Secret::new("invalid-seed-canary!");
-        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
-        let failed = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send>> { Box::pin(async { Err(()) }) };
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ProviderError>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
+        let failed = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ProviderError>> + Send>> { Box::pin(async { Err(ProviderError::Failed) }) };
         let source = match mode {
             1 => Some(Source::Seed(&seed)),
             2 => Some(Source::Seed(&invalid)),
@@ -348,7 +368,7 @@ mod tests {
         }
         let clock = ReadyClock(tokio::time::Instant::now());
         let calls = std::sync::atomic::AtomicUsize::new(0);
-        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send + '_>> {
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ProviderError>> + Send + '_>> {
             Box::pin(async { calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(Secret::new("toy")) })
         };
         assert!(

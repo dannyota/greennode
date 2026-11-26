@@ -12,8 +12,30 @@ pub(crate) struct Login<'a> {
 }
 
 pub(crate) async fn run(login: Login<'_>, token_url: &url::Url) -> Result<Token, LoginError> {
-    use crate::wire::connection::{HeadLimit, OneSendClient, Trust};
-    let client = OneSendClient::new(HeadLimit::Api, Trust::webpki())
+    run_with_trust(login, token_url, crate::wire::connection::Trust::webpki()).await
+}
+
+#[cfg(test)]
+pub(crate) async fn run_test(
+    login: Login<'_>,
+    token_url: &url::Url,
+    roots: Vec<rustls::pki_types::CertificateDer<'static>>,
+) -> Result<Token, LoginError> {
+    run_with_trust(
+        login,
+        token_url,
+        crate::wire::connection::Trust::test_roots(roots),
+    )
+    .await
+}
+
+async fn run_with_trust(
+    login: Login<'_>,
+    token_url: &url::Url,
+    trust: crate::wire::connection::Trust,
+) -> Result<Token, LoginError> {
+    use crate::wire::connection::{HeadLimit, OneSendClient};
+    let client = OneSendClient::new(HeadLimit::Api, trust)
         .map_err(|_| LoginError::new("signin page", None, false))?;
     let source = login.totp;
     let login = super::signin::Login {
@@ -153,7 +175,7 @@ mod tests {
             clock: &SystemClock,
             deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
         };
-        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, super::super::totp::ProviderError>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
         let result = run_with_rng(
             login,
             &token_url,
@@ -262,7 +284,7 @@ mod tests {
             clock: &SystemClock,
             deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
         };
-        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send>> { Box::pin(async { Ok(Secret::new("toy-code")) }) };
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, super::super::totp::ProviderError>> + Send>> { Box::pin(async { Ok(Secret::new("toy-code")) }) };
         let result = run_with_rng(
             login,
             &token_url,
