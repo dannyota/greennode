@@ -1,0 +1,2 @@
+example-time	web	ingress	IPv4	rule-1	80	80	tcp	true
+example-time	secure	ingress	IPv4	rule-2	443	443	tcp	true

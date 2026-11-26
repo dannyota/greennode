@@ -1,0 +1,11 @@
+{
+  "Items": [
+    {
+      "ID": "package-1",
+      "Name": "Example",
+      "Type": "FUTURE",
+      "Description": "Synthetic offer",
+      "Bandwidth": 100
+    }
+  ]
+}

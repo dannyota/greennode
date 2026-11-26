@@ -20,12 +20,13 @@ pub(crate) struct Session {
     endpoint_overrides_used: bool,
     default_auth_endpoints: bool,
     #[cfg(any(test, feature = "test-support"))]
-    write_fixtures: OnceLock<Vec<crate::testing::Product>>,
+    product_fixtures: OnceLock<Vec<(crate::testing::Product, bool)>>,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
     _profile: String,
     region: String,
+    configured_project_id: Option<String>,
     discovery: Discovery,
     cdn_key: Option<Secret>,
 }
@@ -128,9 +129,23 @@ impl Session {
     pub(crate) fn is_write_fixture(&self, product: crate::testing::Product) -> bool {
         self.auth_kind() == AuthKind::Static
             && self
-                .write_fixtures
+                .product_fixtures
                 .get()
-                .is_some_and(|products| products.contains(&product))
+                .is_some_and(|fixtures| fixtures.contains(&(product, true)))
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn has_product_fixture(&self, product: crate::testing::Product) -> bool {
+        cfg!(debug_assertions)
+            && self.auth_kind() == AuthKind::Static
+            && self
+                .product_fixtures
+                .get()
+                .is_some_and(|fixtures| fixtures.iter().any(|(fixture, _)| *fixture == product))
+    }
+
+    pub(crate) fn configured_project_id(&self) -> Option<&str> {
+        self.configured_project_id.as_deref()
     }
 
     pub(crate) async fn project_id_context(
@@ -309,12 +324,11 @@ impl Session {
         })
         .map_err(|_| invalid())?;
         self.clients.set(Ok(clients)).map_err(|_| invalid())?;
-        self.write_fixtures
+        self.product_fixtures
             .set(
                 fixtures
                     .iter()
-                    .filter(|fixture| fixture.write)
-                    .map(|fixture| fixture.product)
+                    .map(|fixture| (fixture.product, fixture.write))
                     .collect(),
             )
             .map_err(|_| invalid())?;
@@ -458,12 +472,13 @@ impl Session {
             endpoint_overrides_used,
             default_auth_endpoints,
             #[cfg(any(test, feature = "test-support"))]
-            write_fixtures: OnceLock::new(),
+            product_fixtures: OnceLock::new(),
             clients: OnceLock::new(),
             clock,
             timeout,
             _profile: profile,
             region: region.to_owned(),
+            configured_project_id: project_id.clone().filter(|id| !id.is_empty()),
             discovery: Discovery::new(project_id, region),
             cdn_key: selected.cdn_key,
         })

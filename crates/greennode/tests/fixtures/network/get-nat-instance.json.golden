@@ -1,0 +1,14 @@
+{
+  "NAT": {
+    "ID": "nat-1",
+    "Name": "example",
+    "Status": "ACTIVE",
+    "GatewayIP": "192.0.2.1",
+    "PublicIP": "198.51.100.1",
+    "CreatedAt": "example-time",
+    "PackageID": "pkg-1",
+    "PackageName": "small",
+    "VPCID": "vpc-1",
+    "VPCName": "example-vpc"
+  }
+}

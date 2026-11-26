@@ -24,6 +24,7 @@ pub mod iam;
 pub mod loadbalancer;
 mod model;
 pub mod monitor;
+pub mod network;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod output_number;
