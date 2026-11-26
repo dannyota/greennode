@@ -314,6 +314,7 @@ mod tests {
                 .map(OsString::from)
                 .to_vec(),
             source: &source,
+            config_options: greennode_sdk::ConfigOptions::default(),
             stdin: &mut input,
             stdout: &mut output,
             stderr: &mut error,

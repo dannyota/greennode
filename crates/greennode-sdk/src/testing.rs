@@ -21,3 +21,12 @@ pub fn login(reason: &'static str, status: Option<u16>) -> Error {
 pub fn cause(error: Error, child: Error) -> Error {
     error.with_cause(child)
 }
+
+pub use crate::wire::test_server::{Response, Server};
+
+pub fn with_billing_loopback(
+    options: crate::ConfigOptions,
+    server: &Server,
+) -> crate::ConfigOptions {
+    options.with_billing_loopback(server)
+}

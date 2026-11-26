@@ -10,7 +10,8 @@ mod send;
 mod send_tests;
 #[allow(dead_code)]
 pub(crate) mod strict_json;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
+#[allow(missing_docs)]
 pub(crate) mod test_server;
 #[cfg(test)]
 mod tests;

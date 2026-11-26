@@ -123,7 +123,7 @@ impl Session {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn set_test_product_root(&self, root: rustls::pki_types::CertificateDer<'static>) {
         assert!(
             self.clients

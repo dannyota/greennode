@@ -47,6 +47,8 @@ pub struct ConfigOptions {
     token_cache: Option<std::path::PathBuf>,
     iam_details: Option<IamUserAuth>,
     endpoint_overrides: EndpointOverrides,
+    #[cfg(feature = "test-support")]
+    test_product_root: Option<rustls::pki_types::CertificateDer<'static>>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -58,6 +60,20 @@ struct ParseHooks {
 }
 
 impl ConfigOptions {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn with_billing_loopback(mut self, server: &crate::testing::Server) -> Self {
+        if self
+            .endpoint_overrides
+            .billing
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            self.endpoint_overrides.billing = Some(server.origin.clone());
+        }
+        self.test_product_root = Some(server.root_der.clone());
+        self
+    }
+
     fn credential_options(&self) -> credentials::Options {
         credentials::Options {
             provider: self.provider.clone(),
@@ -245,6 +261,10 @@ impl Config {
             None,
             (options.iam_details, options.endpoint_overrides),
         )?;
+        #[cfg(feature = "test-support")]
+        if let Some(root) = options.test_product_root {
+            session.set_test_product_root(root);
+        }
         Ok(Self {
             region,
             settings: Default::default(),

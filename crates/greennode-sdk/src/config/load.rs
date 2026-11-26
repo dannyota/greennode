@@ -183,6 +183,10 @@ fn load_local(
     if let Some(end) = check() {
         return Err(end.into());
     }
+    #[cfg(feature = "test-support")]
+    if let Some(root) = options.test_product_root {
+        session.set_test_product_root(root);
+    }
     Ok(Config {
         region: region.clone(),
         settings: resolved.profile_settings,

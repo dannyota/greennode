@@ -100,7 +100,7 @@ impl Trust {
         Self(store)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn test(root: rustls::pki_types::CertificateDer<'static>) -> Self {
         let mut roots = RootCertStore::empty();
         roots.add(root).unwrap();

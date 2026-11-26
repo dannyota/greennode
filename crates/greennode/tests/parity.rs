@@ -144,6 +144,7 @@ fn inherited_project_binding_matches_storage_baseline() {
         json_fields: &[REGION],
         extra_flags: &[],
         notes: &[],
+        handler: None,
     };
     let registry = Registry::new(&[Service {
         name: "storage",
@@ -405,6 +406,7 @@ const OP: Operation = Operation {
     json_fields: &[JSON],
     extra_flags: &[],
     notes: &[],
+    handler: None,
 };
 
 fn toy() -> Registry {

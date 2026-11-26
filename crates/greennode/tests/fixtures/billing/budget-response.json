@@ -1,0 +1,16 @@
+{
+  "uuid": "b-1",
+  "id": 1,
+  "name": "monthly",
+  "periodType": "MONTHLY",
+  "type": "ACTUAL",
+  "limitAmount": 100,
+  "currency": "VND",
+  "status": "ACTIVE",
+  "periodKey": "2026-01",
+  "periodStart": "2026-01-01",
+  "periodEnd": "2026-01-31",
+  "startDate": "2026-01-01",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "updatedAt": "2026-01-01T00:00:00Z"
+}
