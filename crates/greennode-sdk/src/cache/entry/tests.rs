@@ -159,12 +159,14 @@ fn expired_token_is_miss() {
 }
 
 #[test]
-fn escaped_timestamp_is_accepted() {
-    let raw = crate::Secret::new(format!(
-        r#"{{"accessToken":"toy","expiresAt":"{}u0032100-01-01T00:00:00Z"}}"#,
-        char::from(92)
+fn escaped_timestamp_is_miss() {
+    let slash = char::from(92);
+    rejected(&format!(
+        r#"{{"accessToken":"toy","expiresAt":"{slash}u0032100-01-01T00:00:00Z"}}"#
     ));
-    assert!(decode(&raw, OffsetDateTime::UNIX_EPOCH, None).is_some());
+    rejected(&format!(
+        r#"{{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","obtainedAt":"{slash}u0031970-01-01T00:00:00Z"}}"#
+    ));
 }
 
 #[test]

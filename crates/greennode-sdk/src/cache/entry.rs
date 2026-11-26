@@ -189,40 +189,10 @@ impl<'de> Deserialize<'de> for Strict {
 
 fn timestamp(raw: &serde_json::value::RawValue) -> Option<OffsetDateTime> {
     let text = raw.get().strip_prefix('"')?.strip_suffix('"')?;
-    if !text.contains(char::from(92)) {
-        return OffsetDateTime::parse(text, &Rfc3339).ok();
+    if text.contains(char::from(92)) {
+        return None;
     }
-    let mut decoded = Zeroizing::new(String::with_capacity(text.len()));
-    let mut chars = text.chars();
-    while let Some(character) = chars.next() {
-        let value = if character == char::from(92) {
-            match chars.next()? {
-                '"' => '"',
-                '\\' => '\\',
-                '/' => '/',
-                'b' => '\u{0008}',
-                'f' => '\u{000c}',
-                'n' => '\n',
-                'r' => '\r',
-                't' => '\t',
-                'u' => {
-                    let mut code = 0u32;
-                    for _ in 0..4 {
-                        code = code * 16 + chars.next()?.to_digit(16)?;
-                    }
-                    char::from_u32(code)?
-                }
-                _ => return None,
-            }
-        } else {
-            character
-        };
-        if !value.is_ascii() {
-            return None;
-        }
-        decoded.push(value);
-    }
-    OffsetDateTime::parse(&decoded, &Rfc3339).ok()
+    OffsetDateTime::parse(text, &Rfc3339).ok()
 }
 
 #[allow(dead_code)]

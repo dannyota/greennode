@@ -55,7 +55,9 @@ async fn acquire_with(
         match result? {
             Attempt::Acquired(file) => return Ok(file),
             Attempt::Busy(file) => retained = Some(file),
-            Attempt::Changed => continue,
+            Attempt::Changed => {
+                return Err(Box::new(crate::Error::new(crate::ErrorClass::TokenCache)));
+            }
         }
         let wake = clock.monotonic_now() + delay;
         on_wait();
@@ -225,13 +227,11 @@ mod tests {
         assert!(still_waiting);
         drop(first);
         clock.advance(Duration::from_millis(20));
-        let acquired = tokio::time::timeout(Duration::from_secs(2), worker)
+        let result = tokio::time::timeout(Duration::from_secs(2), worker)
             .await
             .unwrap()
-            .unwrap()
             .unwrap();
-        assert!(try_once(&store, "entry.lock").unwrap().is_none());
-        drop(acquired);
+        assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::TokenCache));
         assert!(try_once(&store, "entry.lock").unwrap().is_some());
     }
 
