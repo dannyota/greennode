@@ -219,15 +219,14 @@ impl IamUser {
                 state.rejected = None;
                 return Ok(result);
             }
-            let wall = clock.utc_now();
-            let mono = clock.monotonic_now();
-            let token = self
+            let timed = self
                 .login(
                     ctx,
                     Some((store.clone(), format!("{stem}.totp"), lock.clone())),
                     &mut state,
                 )
                 .await?;
+            let token = timed.token;
             let obtained = clock.utc_now();
             let obtained_mono = clock.monotonic_now();
             let expires = token
@@ -258,13 +257,17 @@ impl IamUser {
                 Ok((lock, result))
             })
             .await?;
-            result?;
+            if let Err(error) = result
+                && error.class() != ErrorClass::TokenCache
+            {
+                return Err(error);
+            }
             if let Some(end) = ctx.check(clock) {
                 return Err(Box::new(end.into()));
             }
-            let expires_monotonic = Duration::try_from(expires - wall)
+            let expires_monotonic = Duration::try_from(expires - timed.started_wall)
                 .ok()
-                .and_then(|duration| mono.checked_add(duration));
+                .and_then(|duration| timed.started_monotonic.checked_add(duration));
             let cached = Cached {
                 token,
                 obtained: ObtainedAt::InProcess(obtained_mono),
@@ -283,16 +286,15 @@ impl IamUser {
             state.rejected = None;
             return Ok(result);
         }
-        let wall = clock.utc_now();
-        let mono = clock.monotonic_now();
-        let token = self.login(ctx, None, &mut state).await?;
+        let timed = self.login(ctx, None, &mut state).await?;
+        let token = timed.token;
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
         }
         let expires_monotonic = token
             .expires_at
-            .and_then(|expiry| Duration::try_from(expiry - wall).ok())
-            .and_then(|duration| mono.checked_add(duration));
+            .and_then(|expiry| Duration::try_from(expiry - timed.started_wall).ok())
+            .and_then(|duration| timed.started_monotonic.checked_add(duration));
         let cached = Cached {
             token,
             obtained: ObtainedAt::InProcess(clock.monotonic_now()),
@@ -309,7 +311,7 @@ impl IamUser {
         #[cfg(unix)] marker: Option<(Arc<crate::cache::store::Store>, String, Arc<std::fs::File>)>,
         #[cfg(not(unix))] _marker: Option<()>,
         state: &mut State,
-    ) -> Result<Token, Box<Error>> {
+    ) -> Result<flow::TimedToken, Box<Error>> {
         let clock = self.clock.as_ref();
         if let Some((at, reason, status, captcha)) = state.failure {
             let age = clock.utc_now() - at;

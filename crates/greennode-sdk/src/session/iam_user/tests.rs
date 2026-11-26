@@ -352,3 +352,82 @@ async fn secrets_are_redacted_from_debug_and_errors() {
         assert!(!text.contains(canary));
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cache_write_failure_keeps_token_for_next_caller() {
+    let dir = Dir::new();
+    let page = "<input name=\"_csrf\" value=\"csrf\">";
+    let signin = Server::start(vec![
+        response("200 OK", None, page),
+        response(
+            "302 Found",
+            Some("https://dashboard.test/return?code=toy"),
+            "",
+        ),
+    ]);
+    let body = format!(
+        r#"{{"accessToken":"{}","expiresIn":3600}}"#,
+        "a".repeat(65_537)
+    );
+    let token = Server::start(vec![response("200 OK", None, &body)]);
+    let source = source(
+        &signin,
+        &token,
+        Some(dir.0.join("cache")),
+        Duration::from_secs(5),
+    );
+    let (ctx, _) = RequestContext::new();
+    let (first, second) = tokio::join!(source.token(&ctx), source.token(&ctx));
+    assert!(first.is_ok());
+    assert!(second.is_ok());
+    assert_eq!(signin.requests(), 2);
+    assert_eq!(token.requests(), 1);
+}
+
+#[tokio::test]
+async fn expiry_uses_token_step_clock_sample_after_wall_jump() {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    struct JumpClock {
+        inner: crate::TestClock,
+        jump: AtomicI64,
+    }
+    impl Clock for JumpClock {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            self.inner.utc_now() + time::Duration::seconds(self.jump.load(Ordering::SeqCst))
+        }
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            self.inner.monotonic_now()
+        }
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+            self.inner.sleep_until(deadline)
+        }
+    }
+    let (signin, token) = peers(true);
+    let clock = Arc::new(JumpClock {
+        inner: crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH + time::Duration::days(1)),
+        jump: AtomicI64::new(0),
+    });
+    let mut source = source(&signin, &token, None, Duration::from_secs(5));
+    source.clock = clock.clone();
+    source.seed = None;
+    let shifted = clock.clone();
+    source.provider = Some(Arc::new(move || {
+        shifted.jump.store(4000, Ordering::SeqCst);
+        Box::pin(async { Ok(Secret::new("123456")) })
+    }));
+    let (ctx, _) = RequestContext::new();
+    assert!(source.token(&ctx).await.is_ok());
+    let state = source.state.lock().await;
+    let remaining = state
+        .cached
+        .as_ref()
+        .unwrap()
+        .expires_monotonic
+        .unwrap()
+        .duration_since(clock.monotonic_now());
+    assert_eq!(remaining, Duration::from_secs(3600));
+}
