@@ -1,6 +1,6 @@
 use super::{redirect, retry, sender};
 use crate::wire::send;
-use crate::wire::strict_json::Field;
+use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 
@@ -265,9 +265,7 @@ fn api_error(
 
 #[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
-    const FIELDS: &'static [Field<'static>];
-    const SHAPE: crate::wire::strict_json::Shape<'static> =
-        crate::wire::strict_json::Shape::Object(&[]);
+    const SCHEMA: Shape<'static>;
 }
 
 #[allow(dead_code)]
@@ -275,8 +273,7 @@ fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()
     if allow_empty && body.is_empty() {
         return Ok(T::default());
     }
-    crate::wire::strict_json::validate(body, T::FIELDS, cap).map_err(|_| ())?;
-    crate::wire::strict_json::validate_shape(body, &T::SHAPE).map_err(|_| ())?;
+    crate::wire::strict_json::validate_shape(body, &T::SCHEMA, cap).map_err(|_| ())?;
     serde_json::from_slice(body).map_err(|_| ())
 }
 
@@ -290,16 +287,16 @@ mod tests {
     use crate::{Clock, TestClock};
     use std::{future::Future, pin::Pin, time::Duration};
 
-    struct Source(bool);
+    struct Source(bool, &'static str);
     impl sender::BearerSource for Source {
         fn token<'a>(
             &'a self,
             _: &'a crate::RequestContext,
         ) -> Pin<Box<dyn Future<Output = Result<sender::BearerToken, crate::Error>> + Send + 'a>>
         {
-            Box::pin(async {
+            Box::pin(async move {
                 Ok(sender::BearerToken {
-                    token: crate::Token::new(crate::Secret::new("toy-token"), None),
+                    token: crate::Token::new(crate::Secret::new(self.1), None),
                     obtained_at: None,
                 })
             })
@@ -376,7 +373,7 @@ mod tests {
         query: &[(&str, &str)],
         body: bytes::Bytes,
     ) -> Result<(StatusCode, Example), crate::Failure<Example>> {
-        call_with_source(server, op, path, query, body, &Source(false)).await
+        call_with_source(server, op, path, query, body, &Source(false, "toy-token")).await
     }
     #[allow(clippy::result_large_err)]
     async fn call_with_source(
@@ -414,6 +411,24 @@ mod tests {
             body,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn bearer_matching_static_json_headers_sends() {
+        let server = Server::start(vec![response("200 OK", br#"{"id":"one"}"#)]);
+        assert!(
+            call_with_source(
+                &server,
+                &declaration(),
+                &["one"],
+                &[],
+                bytes::Bytes::from_static(b"{}"),
+                &Source(false, "json")
+            )
+            .await
+            .is_ok()
+        );
+        assert_eq!(server.requests(), 1);
     }
 
     #[tokio::test]
@@ -458,10 +473,10 @@ mod tests {
     }
 
     impl Output for Example {
-        const FIELDS: &'static [Field<'static>] = &[Field {
+        const SCHEMA: Shape<'static> = Shape::Object(&[crate::wire::strict_json::ShapeField {
             name: "id",
-            children: &[],
-        }];
+            shape: Shape::Any,
+        }]);
     }
 
     #[tokio::test]
@@ -537,7 +552,7 @@ mod tests {
             &["one"],
             &[],
             bytes::Bytes::new(),
-            &Source(true),
+            &Source(true, "toy-token"),
         )
         .await
         .unwrap_err();
@@ -651,6 +666,35 @@ mod tests {
         assert!(send_retry_hint(&failed, redirect::Retry::Once));
         assert!(retryable_error("test").api_error().unwrap().retryable());
         assert!(!send_retry_hint(&body, redirect::Retry::Once));
+    }
+
+    #[derive(Default, serde::Deserialize)]
+    struct Wrapped {
+        inner: Example,
+    }
+    impl Output for Wrapped {
+        const SCHEMA: Shape<'static> = Shape::Object(&[crate::wire::strict_json::ShapeField {
+            name: "inner",
+            shape: Shape::Object(&[crate::wire::strict_json::ShapeField {
+                name: "id",
+                shape: Shape::Any,
+            }]),
+        }]);
+    }
+    #[test]
+    fn nested_schema_rejects_sequence_form() {
+        assert!(decode::<Wrapped>(br#"{"inner":["one"]}"#, false, 128).is_err());
+        assert!(decode::<Wrapped>(br#"{"inner":{"id":"one","ID":"two"}}"#, false, 128).is_err());
+        assert!(
+            decode::<Wrapped>(
+                br#"{"inner":{"id":"one"},"unknown":{"a":1,"a":2}}"#,
+                false,
+                128
+            )
+            .is_err()
+        );
+        let valid = decode::<Wrapped>(br#"{"inner":{"id":"one"}}"#, false, 128).unwrap();
+        assert_eq!(valid.inner.id, "one");
     }
 
     #[test]

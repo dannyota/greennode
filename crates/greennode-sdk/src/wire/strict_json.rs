@@ -16,7 +16,8 @@ pub(crate) struct ShapeField<'a> {
     pub(crate) name: &'a str,
     pub(crate) shape: Shape<'a>,
 }
-pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>) -> Result<(), Error> {
+pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>, limit: usize) -> Result<(), Error> {
+    validate(body, &[], limit)?;
     let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
     shape_value(raw, shape)
 }
@@ -29,13 +30,23 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
         Shape::Object(fields) => {
             let values: std::collections::BTreeMap<String, &RawValue> =
                 serde_json::from_str(raw.get()).map_err(|_| Error)?;
+            let mut assigned = HashSet::new();
             for (name, value) in values {
-                if let Some(field) = fields
+                let index = fields
                     .iter()
-                    .find(|field| field.name == name)
-                    .or_else(|| fields.iter().find(|field| field_matches(field.name, &name)))
-                {
-                    shape_value(value, &field.shape)?;
+                    .position(|field| field.name == name)
+                    .or_else(|| {
+                        fields
+                            .iter()
+                            .position(|field| field_matches(field.name, &name))
+                    });
+                if let Some(index) = index {
+                    if !assigned.insert(index) {
+                        return Err(Error);
+                    }
+                    if let Some(field) = fields.get(index) {
+                        shape_value(value, &field.shape)?;
+                    }
                 }
             }
             Ok(())
@@ -154,9 +165,9 @@ mod tests {
             name: "items",
             shape: Shape::Array(&Shape::Object(&[])),
         }]);
-        assert!(validate_shape(br#"{"items":[{"id":1}]}"#, &shape).is_ok());
-        assert!(validate_shape(br#"{"items":[[1]]}"#, &shape).is_err());
-        assert!(validate_shape(br#"{"items":{}}"#, &shape).is_err());
+        assert!(validate_shape(br#"{"items":[{"id":1}]}"#, &shape, 1024).is_ok());
+        assert!(validate_shape(br#"{"items":[[1]]}"#, &shape, 1024).is_err());
+        assert!(validate_shape(br#"{"items":{}}"#, &shape, 1024).is_err());
     }
 
     #[test]

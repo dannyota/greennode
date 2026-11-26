@@ -65,7 +65,8 @@ pub(crate) fn classify(
 
 fn contains_url(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    lower.contains("://")
+    lower.contains(":/")
+        || lower.contains("//")
         || lower.contains("www.")
         || lower.split_whitespace().any(|token| {
             token
@@ -493,6 +494,24 @@ mod tests {
             credentials,
         )
         .unwrap_err()
+    }
+
+    #[test]
+    fn redacts_partial_and_casefolded_urls() {
+        for url in ["//example.test/p", "https:/example.test", "HTTPS://X"] {
+            assert!(contains_url(url));
+        }
+        assert!(!contains_url("access denied"));
+        for body in [
+            br#"{"code":"//example.test/p","message":"//example.test/p"}"#.as_slice(),
+            br#"{"code":"https:/example.test","message":"https:/example.test"}"#,
+            br#"{"code":"HTTPS://X","message":"HTTPS://X"}"#,
+        ] {
+            let failure = error(403, body, false, false, &SentCredentials::default());
+            let detail = failure.api_error().unwrap();
+            assert_eq!(detail.code(), "Forbidden");
+            assert_eq!(detail.message(), "Forbidden");
+        }
     }
 
     #[test]
