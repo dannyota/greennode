@@ -185,6 +185,27 @@ pub(super) fn select(
     cwd: Option<&Path>,
     probe: impl Fn(&Path) -> Presence,
 ) -> Result<Selection, Box<crate::Error>> {
+    select_inner(config, credentials, source, cwd, probe, false)
+}
+
+pub(super) fn select_for_configure(
+    config: Option<&Path>,
+    credentials: Option<&Path>,
+    source: &dyn ConfigSource,
+    cwd: Option<&Path>,
+    probe: impl Fn(&Path) -> Presence,
+) -> Result<Selection, Box<crate::Error>> {
+    select_inner(config, credentials, source, cwd, probe, true)
+}
+
+fn select_inner(
+    config: Option<&Path>,
+    credentials: Option<&Path>,
+    source: &dyn ConfigSource,
+    cwd: Option<&Path>,
+    probe: impl Fn(&Path) -> Presence,
+    defer_legacy_missing: bool,
+) -> Result<Selection, Box<crate::Error>> {
     let invalid = |slot: ConfigSlot| {
         Box::new(crate::Error::new(crate::ErrorClass::InvalidConfig).with_detail(slot))
     };
@@ -355,7 +376,8 @@ pub(super) fn select(
             ConfigSlot::Credentials
         }));
     }
-    if named[1] && states[1] == Presence::Absent {
+    if named[1] && states[1] == Presence::Absent && !(defer_legacy_missing && mode == Mode::Legacy)
+    {
         return Err(credentials_error(labels[1], "not found"));
     }
     Ok(Selection {

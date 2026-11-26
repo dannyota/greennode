@@ -16,7 +16,7 @@ pub fn select(
     source: &dyn ConfigSource,
     cwd: Option<&Path>,
 ) -> Result<mode::Selection, Error> {
-    mode::select(config, credentials, source, cwd, |path| {
+    mode::select_for_configure(config, credentials, source, cwd, |path| {
         mode::probe_checked(path, &|| false)
     })
     .map_err(|error| *error)
@@ -24,16 +24,24 @@ pub fn select(
 
 /// Parsed sections and values from one configuration slot.
 ///
-/// Credential fields in a config file retain the existing empty/nonempty mask.
+/// Secret fields retain only an empty/nonempty mask.
 #[derive(Default, Debug)]
 pub struct ProfileFile {
     sections: BTreeMap<String, BTreeMap<String, Secret>>,
 }
 
 impl ProfileFile {
-    /// Returns sections keyed by their stored names, with values protected as secrets.
+    /// Returns sections keyed by their stored names; secret fields contain only an empty/nonempty mask.
     pub fn sections(&self) -> &BTreeMap<String, BTreeMap<String, Secret>> {
         &self.sections
+    }
+
+    /// Reports whether a stored key has a nonempty value.
+    pub fn is_set(&self, section: &str, key: &str) -> bool {
+        self.sections
+            .get(section)
+            .and_then(|values| values.get(key))
+            .is_some_and(|value| !value.expose_secret().is_empty())
     }
 
     /// Returns the named profile's validated file latch, rejecting malformed values.
@@ -61,6 +69,14 @@ impl ProfileFile {
     reason = "The public API returns Error by value"
 )]
 pub fn read_slot(selection: &mode::Selection, slot: FileSlot) -> Result<ProfileFile, Error> {
+    if slot == FileSlot::Credentials
+        && selection.credentials_named
+        && !selection.credentials_present
+    {
+        return Err(Error::new(ErrorClass::CredentialsFile).with_detail(
+            FileDiagnostic::from_text(slot, selection.credentials_source, "credentials: not found"),
+        ));
+    }
     let (file, source) = match slot {
         FileSlot::Config => (
             file::open_settings_checked(selection, || None).map_err(|error| *error)?,
@@ -83,26 +99,24 @@ pub fn read_slot(selection: &mode::Selection, slot: FileSlot) -> Result<ProfileF
         };
         Error::new(class).with_detail(FileDiagnostic::from_text(slot, source, &diagnostic))
     };
-    let sections = match slot {
-        FileSlot::Config => ini::parse_checked(Slot::Config, file, &|| false)
-            .map_err(error)?
-            .iter()
-            .map(|(section, values)| {
-                (
-                    section.clone(),
-                    values
-                        .iter()
-                        .map(|(key, value)| (key.clone(), Secret::new(value.clone())))
-                        .collect(),
-                )
-            })
-            .collect(),
-        FileSlot::Credentials => {
-            ini::parse_secrets_checked(file, &|| false)
-                .map_err(error)?
-                .0
-        }
+    let parse_slot = match slot {
+        FileSlot::Config => Slot::Config,
+        FileSlot::Credentials => Slot::Credentials,
     };
+    let mut sections = ini::parse_profile_checked(parse_slot, file, &|| false)
+        .map_err(error)?
+        .0;
+    for values in sections.values_mut() {
+        for key in ["password", "totp_secret", "vcdn_api_key", "client_secret"] {
+            if let Some(value) = values.get_mut(key) {
+                *value = Secret::new(if value.expose_secret().is_empty() {
+                    ""
+                } else {
+                    "1"
+                });
+            }
+        }
+    }
     Ok(ProfileFile { sections })
 }
 
@@ -162,6 +176,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn missing_legacy_credentials_keeps_mode_before_read() {
+        struct Legacy(PathBuf);
+        impl ConfigSource for Legacy {
+            fn var_os(&self, name: &OsStr) -> Option<OsString> {
+                (name == OsStr::new("VNGCLOUD_SHARED_CREDENTIALS_FILE"))
+                    .then(|| self.0.join("missing").into_os_string())
+            }
+            fn home_dir(&self) -> Option<PathBuf> {
+                Some(self.0.clone())
+            }
+        }
+        let root = env::temp_dir().join(format!("select-legacy-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let selected = select(None, None, &Legacy(root.clone()), None).unwrap();
+        assert_eq!(selected.mode, mode::Mode::Legacy);
+        assert!(!selected.present(FileSlot::Credentials));
+        assert_eq!(
+            read_slot(&selected, FileSlot::Credentials)
+                .unwrap_err()
+                .class(),
+            ErrorClass::CredentialsFile
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn reader_enforces_alias_permissions_and_parses_latch() {
@@ -173,7 +213,7 @@ mod tests {
         let credentials = dir.join("credentials");
         std::fs::write(
             &config,
-            "[default]\nread_only=true\n[profile dev]\nread_only=0\n",
+            "[default]\nread_only=true\nusername=visible\nclient_id=public-id\n[profile dev]\nread_only=0\n",
         )
         .unwrap();
         std::fs::hard_link(&config, &credentials).unwrap();
@@ -184,7 +224,7 @@ mod tests {
             ErrorClass::InvalidConfig
         );
         std::fs::remove_file(&credentials).unwrap();
-        std::fs::write(&credentials, "[default]\npassword=toy\n").unwrap();
+        std::fs::write(&credentials, "[default]\npassword=toy-canary\ntotp_secret=toy-canary\nvcdn_api_key=toy-canary\nclient_secret=toy-canary\nusername=visible\n").unwrap();
         std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert_eq!(
             read_slot(&selected, FileSlot::Credentials)
@@ -194,9 +234,29 @@ mod tests {
         );
         std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
         let parsed = read_slot(&selected, FileSlot::Credentials).unwrap();
-        assert!(parsed.sections()["default"]["password"].expose_secret() == "toy");
-        assert!(!format!("{parsed:?}").contains("toy"));
+        for key in ["password", "totp_secret", "vcdn_api_key", "client_secret"] {
+            assert!(parsed.is_set("default", key));
+            assert!(
+                !parsed.sections()["default"][key]
+                    .expose_secret()
+                    .contains("toy-canary")
+            );
+        }
+        assert!(!parsed.is_set("default", "missing"));
+        assert_eq!(
+            parsed.sections()["default"]["username"].expose_secret(),
+            "visible"
+        );
+        assert!(!format!("{parsed:?}").contains("toy-canary"));
         let parsed = read_slot(&selected, FileSlot::Config).unwrap();
+        assert_eq!(
+            parsed.sections()["default"]["username"].expose_secret(),
+            "visible"
+        );
+        assert_eq!(
+            parsed.sections()["default"]["client_id"].expose_secret(),
+            "public-id"
+        );
         assert!(parsed.read_only("default").unwrap());
         assert!(!parsed.read_only("dev").unwrap());
         std::fs::write(&config, "[default]\nread_only=maybe\n").unwrap();

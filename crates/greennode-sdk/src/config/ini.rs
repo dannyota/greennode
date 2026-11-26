@@ -63,7 +63,16 @@ pub(super) fn parse_secrets_checked(
     input: impl Read,
     check: &dyn Fn() -> bool,
 ) -> Result<SecretsIni, String> {
-    let (bytes, used) = read_limited(input, Slot::Credentials)?;
+    parse_profile_checked(Slot::Credentials, input, check)
+}
+
+pub(super) fn parse_profile_checked(
+    slot: Slot,
+    input: impl Read,
+    check: &dyn Fn() -> bool,
+) -> Result<SecretsIni, String> {
+    let (bytes, used) = read_limited(input, slot)?;
+    let label = slot.label();
     let mut result = SecretsIni::default();
     let mut section: Option<String> = None;
     for (index, raw) in bytes[..used]
@@ -71,10 +80,10 @@ pub(super) fn parse_secrets_checked(
         .enumerate()
     {
         if index % 64 == 0 && check() {
-            return Err("credentials: read failed".into());
+            return Err(format!("{label}: read failed"));
         }
         let number = index + 1;
-        let error = |reason| format!("credentials:{number}: {reason}");
+        let error = |reason| format!("{label}:{number}: {reason}");
         if raw.len() > 65_536 || (raw.len() == 65_536 && !raw.ends_with(b"\n")) {
             return Err(error("line too long"));
         }
@@ -90,7 +99,7 @@ pub(super) fn parse_secrets_checked(
         }
         if let Some(header) = trimmed.strip_prefix('[') {
             if index % 64 != 0 && check() {
-                return Err("credentials: read failed".into());
+                return Err(format!("{label}: read failed"));
             }
             let name = header
                 .strip_suffix(']')
