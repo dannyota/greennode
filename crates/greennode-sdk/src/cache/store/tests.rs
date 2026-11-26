@@ -36,6 +36,50 @@ fn windows_store_is_unavailable() {
 
 #[cfg(unix)]
 #[test]
+fn creates_cache_and_namespace() {
+    let dir = Dir::new();
+    let cache = dir.0.join("cache");
+    let store = Store::create(&cache).unwrap();
+    let _namespace = store.create_child("service-account-v1").unwrap();
+    assert!(cache.join("service-account-v1").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_namespace() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    std::fs::create_dir(dir.0.join("target")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir.0.join("target"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink("target", dir.0.join("service-account-v1")).unwrap();
+    assert!(store.create_child("service-account-v1").is_err());
+    assert!(store.create_child("other").is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_group_writable_namespace() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    std::fs::create_dir(dir.0.join("service-account-v1")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        dir.0.join("service-account-v1"),
+        std::fs::Permissions::from_mode(0o770),
+    )
+    .unwrap();
+    assert!(store.create_child("service-account-v1").is_err());
+    std::fs::set_permissions(
+        dir.0.join("service-account-v1"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert!(store.create_child("service-account-v1").is_ok());
+}
+
+#[cfg(unix)]
+#[test]
 fn missing_entry_is_a_cache_miss() {
     let dir = Dir::new();
     let store = Store::open(&dir.0).unwrap();

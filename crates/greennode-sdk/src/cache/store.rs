@@ -38,6 +38,68 @@ impl fmt::Debug for Store {
 #[allow(dead_code)]
 impl Store {
     #[cfg(unix)]
+    pub(crate) fn create(path: &Path) -> Result<Self, Box<crate::Error>> {
+        let parent = path.parent().ok_or_else(unavailable)?;
+        let name = path.file_name().ok_or_else(unavailable)?;
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|_| unavailable())?;
+        let parent = rustix::fs::open(
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| unavailable())?;
+        match rustix::fs::mkdirat(&parent, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+            Err(_) => return Err(unavailable()),
+        }
+        Self::from_directory(
+            rustix::fs::openat(
+                &parent,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| unavailable())?,
+        )
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn create_child(&self, name: &str) -> Result<Self, Box<crate::Error>> {
+        validate_name(name)?;
+        match rustix::fs::mkdirat(&self.directory, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+            Err(_) => return Err(unavailable()),
+        }
+        Self::from_directory(
+            rustix::fs::openat(
+                &self.directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| unavailable())?,
+        )
+    }
+
+    #[cfg(unix)]
+    fn from_directory(fd: rustix::fd::OwnedFd) -> Result<Self, Box<crate::Error>> {
+        let directory = File::from(fd);
+        let metadata = directory.metadata().map_err(|_| unavailable())?;
+        if !metadata.is_dir()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(unavailable());
+        }
+        Ok(Self { directory })
+    }
+
+    #[cfg(unix)]
     pub(crate) fn open(path: &Path) -> Result<Self, Box<crate::Error>> {
         let fd = rustix::fs::open(
             path,

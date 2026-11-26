@@ -162,6 +162,19 @@ fn decode_at_clock(
     )
 }
 
+#[cfg(test)]
+pub(crate) async fn exchange_test(
+    id: &str,
+    secret: &Secret,
+    url: &str,
+    trust: Trust,
+    context: &RequestContext,
+    clock: &dyn Clock,
+    timeout: Duration,
+) -> Result<Token, Box<Error>> {
+    exchange_at(id, secret, url, trust, context, clock, timeout).await
+}
+
 async fn exchange_at(
     id: &str,
     secret: &Secret,
