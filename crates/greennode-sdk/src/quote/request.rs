@@ -1,0 +1,184 @@
+pub(crate) mod decode;
+
+use crate::config::session::Session;
+use crate::wire::product::{
+    evidence::Evidence,
+    operation::{self, Operation, Output},
+    options::{Options, Pacing},
+    redirect::{Classification, Retry},
+    retry, sender,
+};
+use crate::wire::strict_json::{self, Shape};
+use crate::{ApiError, Error, ErrorClass, RequestContext, error::SafeText};
+use bytes::Bytes;
+use http::{Method, StatusCode};
+use serde::Deserialize;
+use serde_json::Value;
+use serde_json::value::RawValue;
+
+#[derive(Clone, Copy)]
+pub(crate) enum Product<'a> {
+    Portal,
+    Regional,
+    Storage(Option<&'a str>),
+}
+
+pub(crate) struct Request<'a> {
+    pub(crate) operation: &'static str,
+    pub(crate) template: &'static str,
+    pub(crate) product: Product<'a>,
+    pub(crate) path: &'a [&'a str],
+    pub(crate) query: &'a [(&'a str, &'a str)],
+    pub(crate) body: Option<&'a Value>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Document(pub(crate) Option<Box<RawValue>>);
+
+pub(crate) fn api(
+    operation: &'static str,
+    status: Option<u16>,
+    code: &str,
+    message: &str,
+    retryable: bool,
+) -> Error {
+    Error::from_api(ApiError::without_fallback(
+        operation,
+        status,
+        SafeText::new(code, &[]),
+        SafeText::new(message, &[]),
+        retryable,
+    ))
+}
+
+pub(crate) fn invalid(operation: &'static str, status: u16) -> Box<Error> {
+    Box::new(api(
+        operation,
+        Some(status),
+        "InvalidResponse",
+        "invalid discovery response; body withheld",
+        false,
+    ))
+}
+
+impl Output for Document {
+    const SCHEMA: Shape<'static> = Shape::Any;
+    const RESPONSE_GUARD: Option<sender::ResponseGuard> = Some(guard_discovery);
+
+    fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
+        let status = response.status.as_u16();
+        let body = response_body(op, response)?;
+        let raw = serde_json::from_slice::<Box<RawValue>>(&body).map_err(|_| {
+            if op.id == "pricing.GetQuote" {
+                return invalid(op.id, status);
+            }
+            Box::new(api(
+                op.id,
+                None,
+                "",
+                "response failed to decode; body withheld",
+                false,
+            ))
+        })?;
+        if strict_json::validate(&body, &[], op.cap).is_err()
+            || operation::reflects_json(&body, &response.credentials, true).unwrap_or(true)
+        {
+            return Err(invalid(op.id, status));
+        }
+        Ok(Self(Some(raw)))
+    }
+}
+
+fn guard_discovery(
+    op: &'static str,
+    status: StatusCode,
+    body: &[u8],
+    known: &sender::SentCredentials,
+    sent: &sender::SentCredentials,
+) -> Option<Box<Error>> {
+    (op != "pricing.GetQuote" && operation::unsafe_json_response(body, known, sent, true))
+        .then(|| invalid(op, status.as_u16()))
+}
+
+fn response_body(op: &Operation, response: &sender::Response) -> Result<Bytes, Box<Error>> {
+    crate::wire::product::response::classify(
+        op.id,
+        response.status,
+        Bytes::copy_from_slice(&response.body),
+        op.success,
+        (true, op.sensitive, op.retry),
+        &response.credentials,
+    )
+}
+
+pub(crate) async fn exchange(
+    session: &Session,
+    ctx: &RequestContext,
+    evidence: &mut Evidence,
+    req: Request<'_>,
+    pacing: Option<&Pacing>,
+) -> Result<Box<RawValue>, Box<Error>> {
+    let direct = pacing.is_none();
+    let endpoints = session.endpoints();
+    let (base, region) = match req.product {
+        Product::Portal => (&endpoints.portal, None),
+        Product::Regional => (&endpoints.vserver, None),
+        Product::Storage(region) => (&endpoints.storage, region),
+    };
+    let base = base
+        .as_ref()
+        .ok_or_else(|| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+    let headers = region.map(|id| [("region", id), ("region_id", id)]);
+    let options = Options {
+        pacing,
+        headers: headers.as_ref().map_or(&[], |headers| headers.as_slice()),
+        ..Options::DEFAULT
+    };
+    let operation = Operation {
+        id: req.operation,
+        template: req.template,
+        method: if req.body.is_some() {
+            Method::POST
+        } else {
+            Method::GET
+        },
+        class: Classification::Read,
+        retry: Retry::Repeatable,
+        success: &[StatusCode::OK],
+        cap: if direct { 1 << 20 } else { 8 << 20 },
+        allow_recovery: true,
+        allow_empty: false,
+        no_output: false,
+        keep_status: true,
+        overflow_overrides_status: false,
+        sensitive: true,
+        reject_reflected_credentials: false,
+        no_redirect: true,
+        retry_config: retry::Config::default(),
+    };
+    let body = req
+        .body
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|_| Box::new(Error::new(ErrorClass::InvalidInput)))?
+        .map_or_else(Bytes::new, Bytes::from);
+    let mut jitter = || session.retry_jitter();
+    let runtime = session.runtime(ctx, &mut jitter)?;
+    let result = operation::execute_with_evidence::<Document>(
+        runtime,
+        base,
+        &operation,
+        &options,
+        req.path,
+        req.query,
+        session.bearer_source(),
+        body,
+        evidence,
+    )
+    .await;
+    match result {
+        Ok((status, doc)) => doc.0.ok_or_else(|| invalid(req.operation, status.as_u16())),
+        Err(failure) => Err(Box::new(failure.into_parts().0)),
+    }
+}

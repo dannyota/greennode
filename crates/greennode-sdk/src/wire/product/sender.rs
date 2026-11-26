@@ -68,7 +68,17 @@ pub(crate) enum Auth<'a> {
     Key,
     None,
 }
-pub(crate) struct Operation {
+pub(crate) type ResponseGuard = fn(
+    &'static str,
+    http::StatusCode,
+    &[u8],
+    &SentCredentials,
+    &SentCredentials,
+) -> Option<Box<crate::Error>>;
+
+pub(crate) struct Operation<'a> {
+    pub(crate) pacing: Option<&'a super::options::Pacing>,
+    pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
     pub(crate) method: Method,
     pub(crate) class: redirect::Classification,
     pub(crate) retry: redirect::Retry,
@@ -321,7 +331,7 @@ fn system_time(time: time::OffsetDateTime) -> Option<std::time::SystemTime> {
 fn unauthorized_decision<'a>(
     auth: Auth<'_>,
     bearer: Option<&'a BearerToken>,
-    op: &Operation,
+    op: &Operation<'_>,
     body_error: bool,
     recovered: bool,
     clock: &dyn Clock,
@@ -389,7 +399,7 @@ impl RouteInputs<'_> {
 
 pub(super) async fn run(
     runtime: Runtime<'_>,
-    op: &Operation,
+    op: &Operation<'_>,
     auth: Auth<'_>,
     request: &Request,
     route_inputs: RouteInputs<'_>,
@@ -428,7 +438,7 @@ struct Evidence {
 
 async fn run_inner(
     runtime: Runtime<'_>,
-    op: &Operation,
+    op: &Operation<'_>,
     auth: Auth<'_>,
     request: &Request,
     route_inputs: RouteInputs<'_>,
@@ -539,6 +549,11 @@ async fn run_inner(
             if hops == 0 && uri_contains_credential(&url, sent, &pending) {
                 return Err(Error::InvalidRequest);
             }
+            if let Some(pacing) = op.pacing {
+                bounded(&ctx, clock, || pacing.before_send(&ctx, clock))
+                    .await?
+                    .map_err(Error::Context)?;
+            }
             for secret in pending {
                 sent.record_product_credential(secret);
             }
@@ -574,6 +589,11 @@ async fn run_inner(
                 evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
             }
             let result = result?;
+            if let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
+                && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
+            {
+                return Err(Error::Provider(error));
+            }
             let is_401 = match &result {
                 Ok(reply) => reply.status == http::StatusCode::UNAUTHORIZED,
                 Err(error) => error

@@ -1,0 +1,217 @@
+use super::{Cache, OP, QuoteRequest, Run, Shared, invalid_input};
+use crate::Error;
+use crate::pricing::{EstimateCoverage, EstimateServer, EstimateStorage, EstimateVolume};
+use crate::quote::{
+    catalog::{StorageRegion, VolumeType, storage_region, storage_region_name},
+    input,
+};
+use std::{future::Future, sync::Arc};
+
+async fn cached<T: Clone>(
+    slot: &mut Cache<T>,
+    load: impl Future<Output = Result<T, Box<Error>>>,
+) -> Shared<T> {
+    if let Some(value) = slot {
+        return value.clone();
+    }
+    let value = load.await.map_err(Arc::from);
+    *slot = Some(value.clone());
+    value
+}
+
+fn invalid(field: &'static str) -> Arc<Error> {
+    Arc::new(invalid_input(field))
+}
+
+impl Run<'_> {
+    async fn project(&mut self) -> Shared<String> {
+        cached(&mut self.memo.project, self.catalog.project()).await
+    }
+
+    async fn disks(&mut self, zone: &str) -> Shared<Vec<VolumeType>> {
+        let project = self.project().await?;
+        let zones = cached(&mut self.memo.zones, self.catalog.zones(&project)).await?;
+        if !zones.iter().any(|row| row.id == zone) {
+            return Err(invalid("ZoneID"));
+        }
+        cached(
+            &mut self.memo.volumes,
+            self.catalog.volume_catalog(&project),
+        )
+        .await
+    }
+
+    async fn encryption(&mut self, ids: &[&str]) -> Shared<()> {
+        if ids.iter().all(|id| id.is_empty()) {
+            return Ok(());
+        }
+        let project = self.project().await?;
+        let keys = cached(
+            &mut self.memo.encryption,
+            self.catalog.encryptions(&project),
+        )
+        .await?;
+        if ids
+            .iter()
+            .any(|id| !id.is_empty() && !keys.iter().any(|entry| entry.key == *id))
+        {
+            return Err(invalid("encryption type"));
+        }
+        Ok(())
+    }
+
+    async fn server(&mut self, row: &EstimateServer) -> Shared<Option<QuoteRequest>> {
+        let disks = self.disks(&row.zone_id).await?;
+        disk(&disks, &row.root_disk_type_id, row.root_disk_size)?;
+        if row.data_disk_size > 0 {
+            disk(&disks, &row.data_disk_type_id, row.data_disk_size)?;
+        }
+        self.encryption(&[
+            &row.root_disk_encryption_type_id,
+            &row.data_disk_encryption_type_id,
+        ])
+        .await?;
+        let project = self.project().await?;
+        let images = cached(
+            self.memo.images.entry(row.zone_id.clone()).or_default(),
+            self.catalog.images(&project, &row.zone_id),
+        )
+        .await?;
+        let image = images
+            .iter()
+            .find(|image| image.id == row.image_id)
+            .ok_or_else(|| invalid("ImageID"))?;
+        let Some(minimum) = image.root_minimum().filter(|_| image.unlicensed_ubuntu()) else {
+            return Ok(None);
+        };
+        if row.root_disk_size < minimum {
+            return Err(invalid("image root minimum"));
+        }
+        Ok(Some(QuoteRequest::regional(input::server(input::Server {
+            zone: &row.zone_id,
+            flavor: &row.flavor_id,
+            image: &row.image_id,
+            root_size: row.root_disk_size,
+            root_type: &row.root_disk_type_id,
+            data_size: row.data_disk_size,
+            data_type: &row.data_disk_type_id,
+            encrypted: !row.root_disk_encryption_type_id.is_empty()
+                || !row.data_disk_encryption_type_id.is_empty(),
+        }))))
+    }
+
+    async fn volume(&mut self, row: &EstimateVolume) -> Shared<QuoteRequest> {
+        let disks = self.disks(&row.zone_id).await?;
+        disk(&disks, &row.volume_type_id, row.size)?;
+        self.encryption(&[&row.encryption_type_id]).await?;
+        Ok(QuoteRequest::regional(input::volume(
+            &row.zone_id,
+            &row.volume_type_id,
+            row.size,
+            &row.encryption_type_id,
+        )))
+    }
+
+    async fn storage(&mut self, index: usize, row: &EstimateStorage) -> Shared<QuoteRequest> {
+        let name = storage_region_name(self.region, &row.region)
+            .ok_or_else(|| invalid("storage region"))?;
+        let regions = cached(&mut self.memo.regions, self.catalog.storage_regions()).await?;
+        let StorageRegion {
+            region_id,
+            region_name,
+        } = storage_region(&regions, &name).ok_or_else(|| invalid("storage region"))?;
+        if let Some(item) = self.output.items.get_mut(index) {
+            item.region = region_name.to_uppercase();
+        }
+        if self.memo.storage.len() >= 32 && !self.memo.storage.contains_key(region_id) {
+            return Err(invalid("storage region count"));
+        }
+        let catalog = cached(
+            self.memo.storage.entry(region_id.clone()).or_default(),
+            self.catalog.storage_catalog(OP, region_id),
+        )
+        .await?;
+        let (purchase, project) = catalog
+            .resolve(&row.r#type, row.quota_gb)
+            .ok_or_else(|| invalid("storage type or quota"))?;
+        Ok(QuoteRequest {
+            storage: Some(region_id.clone()),
+            body: input::storage(row.quota_gb, purchase, project),
+        })
+    }
+
+    fn unknown(&mut self, index: usize, reason: &str) {
+        if let Some(item) = self.output.items.get_mut(index) {
+            item.price.status = "unknown".into();
+            self.output.coverage.push(EstimateCoverage {
+                topic: item.kind.clone(),
+                scope: item.key.clone(),
+                status: "unknown".into(),
+                reason: reason.into(),
+            });
+        }
+    }
+
+    pub(super) async fn prepare(&mut self) -> Shared<Vec<Option<QuoteRequest>>> {
+        enum Row<'a> {
+            Server(&'a EstimateServer),
+            Volume(&'a EstimateVolume),
+            Ip(&'a crate::pricing::EstimatePublicIp),
+            Storage(&'a EstimateStorage),
+        }
+        let rows = self
+            .input
+            .servers
+            .iter()
+            .map(Row::Server)
+            .chain(self.input.volumes.iter().map(Row::Volume))
+            .chain(self.input.public_ips.iter().map(Row::Ip))
+            .chain(self.input.storage.iter().map(Row::Storage));
+        let mut requests = Vec::with_capacity(self.output.items.len());
+        for (index, row) in rows.enumerate() {
+            if self.stopped {
+                break;
+            }
+            let (key, result) = match row {
+                Row::Server(row) => {
+                    let result = self.server(row).await;
+                    if matches!(result, Ok(None)) {
+                        self.unknown(index, "image-price-unverified");
+                    }
+                    (&row.key, result)
+                }
+                Row::Volume(row) => (&row.key, self.volume(row).await.map(Some)),
+                Row::Ip(row) if row.kind == "public-vip" => (
+                    &row.key,
+                    self.project()
+                        .await
+                        .map(|_| Some(QuoteRequest::regional(input::public_ip(&row.r#type)))),
+                ),
+                Row::Ip(row) => {
+                    self.unknown(index, "ip-price-unverified");
+                    (&row.key, Ok(None))
+                }
+                Row::Storage(row) => (&row.key, self.storage(index, row).await.map(Some)),
+            };
+            match result {
+                Ok(request) => requests.push(request),
+                Err(error) => {
+                    self.handle(key, error)?;
+                    requests.push(None);
+                }
+            }
+        }
+        Ok(requests)
+    }
+}
+
+fn disk(types: &[VolumeType], id: &str, size: i64) -> Shared<()> {
+    let typ = types
+        .iter()
+        .find(|typ| typ.quote_id() == id)
+        .ok_or_else(|| invalid("disk type"))?;
+    if !(typ.min_size..=typ.max_size).contains(&size) {
+        return Err(invalid("disk size"));
+    }
+    Ok(())
+}

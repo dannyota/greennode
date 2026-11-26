@@ -37,6 +37,12 @@ pub enum ErrorClass {
     CredentialsFile,
     /// History completeness could not be confirmed.
     HistoryIncomplete,
+    /// Pricing discovery returned partial results.
+    DiscoveryIncomplete,
+    /// The estimate exhausted a request, row, or response limit.
+    EstimateLimit,
+    /// Local estimate arithmetic produced a non-finite amount.
+    EstimateOverflow,
     /// The quote exceeded the allowed price; nothing was ordered.
     PriceAboveMax,
     /// The paid resource quote was zero; nothing was ordered.

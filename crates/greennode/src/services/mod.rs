@@ -6,6 +6,7 @@ mod database;
 mod dns;
 mod globalloadbalancer;
 mod portal;
+mod pricing;
 mod project;
 mod tagging;
 mod vks;
@@ -162,6 +163,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         dns::SERVICE,
         globalloadbalancer::SERVICE,
         portal::SERVICE,
+        pricing::SERVICE,
         project::SERVICE,
         tagging::SERVICE,
         vks::SERVICE,

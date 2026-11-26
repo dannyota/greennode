@@ -170,6 +170,33 @@ impl Session {
             .map(|project| project.id)
     }
 
+    pub(crate) async fn require_project_id_with_limits(
+        &self,
+        ctx: &RequestContext,
+        evidence: &mut crate::wire::product::evidence::Evidence,
+        limits: &mut dyn crate::discovery::InventoryLimits,
+    ) -> Result<String, Box<Error>> {
+        let mut jitter = || self.retry_jitter();
+        let runtime = self.runtime(ctx, &mut jitter)?;
+        let base = self
+            .endpoints()
+            .vserver
+            .as_ref()
+            .ok_or_else(|| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+        self.discovery
+            .require_with_limits(
+                runtime,
+                base,
+                self.bearer_source(),
+                &self.region,
+                ProjectRead::Id,
+                evidence,
+                Some(limits),
+            )
+            .await
+            .map(|project| project.id)
+    }
+
     pub(crate) async fn require_project(
         &self,
         ctx: &RequestContext,

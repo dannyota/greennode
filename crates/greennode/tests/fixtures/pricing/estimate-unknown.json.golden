@@ -1,0 +1,181 @@
+{
+  "Items": [
+    {
+      "Key": "quoted",
+      "Kind": "public-vip",
+      "ServerKey": "",
+      "Region": "hcm-3",
+      "ZoneID": "",
+      "Quantity": 3,
+      "Price": {
+        "Status": "quoted",
+        "Basis": "monthly-total",
+        "Currency": "VND",
+        "Tax": "as-returned",
+        "Source": "pricing.Estimate",
+        "MonthlyPrice": 120000,
+        "OriginalPrice": 120000,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      },
+      "MonthlyAmount": 360000,
+      "Breakdown": [
+        {
+          "Name": "Public Virtual Ip Address",
+          "MonthlyPrice": 120000
+        }
+      ]
+    },
+    {
+      "Key": "unknown",
+      "Kind": "floating-ip",
+      "ServerKey": "",
+      "Region": "hcm-3",
+      "ZoneID": "",
+      "Quantity": 2,
+      "Price": {
+        "Status": "unknown",
+        "Basis": "",
+        "Currency": "",
+        "Tax": "",
+        "Source": "pricing.Estimate",
+        "MonthlyPrice": null,
+        "OriginalPrice": null,
+        "DiscountPrice": null,
+        "DiscountPercent": null
+      },
+      "MonthlyAmount": null,
+      "Breakdown": []
+    }
+  ],
+  "Total": {
+    "KnownMonthlySubtotal": 360000,
+    "RequestedMonthlyTotal": null,
+    "Currency": "VND",
+    "Tax": "as-returned",
+    "Basis": "sum-of-independent-monthly-quotes",
+    "Scope": "specified-recurring-components",
+    "RequestedComplete": false,
+    "CostComplete": false
+  },
+  "Coverage": [
+    {
+      "Topic": "bandwidth-packages",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "software-licenses",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "nat",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "load-balancers",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "backups",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "snapshots",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "payg",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "negotiated-discounts-credits",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "vserver-traffic",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "object-egress-requests",
+      "Scope": "setup",
+      "Status": "excluded",
+      "Reason": "outside-estimate-scope"
+    },
+    {
+      "Topic": "floating-ip",
+      "Scope": "unknown",
+      "Status": "unknown",
+      "Reason": "ip-price-unverified"
+    }
+  ],
+  "Metadata": {
+    "Region": "hcm-3",
+    "Complete": true,
+    "Requests": 1,
+    "QuotedAt": "2026-01-01T00:00:00Z",
+    "Failures": [],
+    "Notes": [
+      {
+        "Topic": "account-scope",
+        "Scope": "quotes",
+        "Text": "Quotes reflect the current account. Returned discounts do not establish eligibility for a program.",
+        "SourceURL": "https://docs.greennode.ai/partner-portal-user-guide/registration-of-partner-discount.md",
+        "Evidence": "published"
+      },
+      {
+        "Topic": "terms",
+        "Scope": "monthly",
+        "Text": "Tested monthly quotes showed no term discount on the observed account. This is not a universal discount policy or proof that a term was honored.",
+        "SourceURL": "",
+        "Evidence": "observed"
+      },
+      {
+        "Topic": "egress",
+        "Scope": "object-storage",
+        "Text": "Published egress rules conflict. Egress and request charges remain unknown and are excluded from quota quotes.",
+        "SourceURL": "https://docs.greennode.ai/vstorage/object-storage/cach-tinh-phi.md",
+        "Evidence": "conflicting"
+      },
+      {
+        "Topic": "bandwidth",
+        "Scope": "network",
+        "Text": "Bandwidth tariffs and capacity units are unverified and excluded from public-IP prices.",
+        "SourceURL": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/bandwidth.md",
+        "Evidence": "unverified"
+      },
+      {
+        "Topic": "estimate",
+        "Scope": "setup",
+        "Text": "monthly, VAT as returned, account-scoped estimate; not a commitment",
+        "SourceURL": "",
+        "Evidence": "projection"
+      },
+      {
+        "Topic": "quantity",
+        "Scope": "setup",
+        "Text": "Quantities project independent unit quotes without bulk discounts or shared allowances. Quotes do not establish deployment feasibility or capacity.",
+        "SourceURL": "",
+        "Evidence": "projection"
+      }
+    ],
+    "ExcludedGroups": null
+  }
+}

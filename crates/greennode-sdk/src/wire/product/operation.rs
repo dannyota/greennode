@@ -55,7 +55,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
     operation: &Operation,
-    options: &Options,
+    options: &Options<'_>,
     path: &[&str],
     query: &[(&str, &str)],
     source: &dyn sender::BearerSource,
@@ -260,6 +260,8 @@ async fn send_route<T>(
         body,
     };
     let policy = sender::Operation {
+        pacing: options.pacing,
+        response_guard: T::RESPONSE_GUARD.map(|guard| (operation.id, guard)),
         method: operation.method.clone(),
         class: operation.class,
         retry: operation.retry,
@@ -390,6 +392,25 @@ pub(crate) fn decode_response<T: Output>(
     decode(&body, operation.allow_empty, operation.cap).map_err(|_| invalid())
 }
 
+pub(crate) fn unsafe_json_response(
+    body: &[u8],
+    known: &sender::SentCredentials,
+    sent: &sender::SentCredentials,
+    validate: bool,
+) -> bool {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return false;
+    }
+    [known, sent].into_iter().any(|credentials| {
+        let match_ = reflects_json(body, credentials, true);
+        if validate {
+            match_ != Some(false)
+        } else {
+            match_ == Some(true)
+        }
+    }) || (validate && serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err())
+}
+
 pub(crate) fn reflects_json(
     body: &[u8],
     credentials: &sender::SentCredentials,
@@ -505,6 +526,7 @@ fn api_error(
 #[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
+    const RESPONSE_GUARD: Option<sender::ResponseGuard> = None;
     const CHECK_RENDERED_NUMBERS: bool = false;
 
     fn credential_error(

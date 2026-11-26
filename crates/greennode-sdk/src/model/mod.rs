@@ -1,3 +1,5 @@
+pub(crate) mod pricing;
+
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 

@@ -85,8 +85,10 @@ fn response(status: &str, headers: &[(&str, &str)]) -> Response {
         body: Vec::new(),
     }
 }
-fn operation(method: Method, retry: redirect::Retry) -> Operation {
+fn operation(method: Method, retry: redirect::Retry) -> Operation<'static> {
     Operation {
+        pacing: None,
+        response_guard: None,
         method,
         class: redirect::Classification::Read,
         retry,

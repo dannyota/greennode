@@ -10,6 +10,11 @@ use super::op::Field;
 pub type FlagSetter<T> = fn(&mut T, &ArgMatches) -> Result<(), ()>;
 pub type ProjectSetter<T> = fn(&mut T, &str);
 pub type InputGuard<T> = fn(&T, &ArgMatches) -> Result<(), InputError>;
+#[derive(Clone, Copy)]
+pub(crate) struct JsonChecks {
+    pub(crate) validate: fn(&[u8]) -> Result<(), InputError>,
+    pub(crate) read_error: fn(InputError) -> InputError,
+}
 pub type ArgvGuard = fn(&ArgMatches, Option<&str>) -> Result<(), InputError>;
 
 #[derive(Clone, Copy)]
@@ -76,13 +81,30 @@ pub(crate) fn merge<T>(
     json: Option<&str>,
     project: Option<&str>,
 ) -> Result<ParsedOperationInput<T>, InputError> {
+    merge_checked(descriptor, matches, json, project, None)
+}
+
+pub(crate) fn merge_checked<T>(
+    descriptor: &InputDescriptor<T>,
+    matches: &ArgMatches,
+    json: Option<&str>,
+    project: Option<&str>,
+    checks: Option<JsonChecks>,
+) -> Result<ParsedOperationInput<T>, InputError> {
     let mut value = (descriptor.defaults)();
     let mut present = HashSet::new();
     if let Some(raw) = json.filter(|raw| !raw.is_empty()) {
         if !descriptor.allow_json {
             return Err(InputError("--cli-input-json is disabled"));
         }
-        let bytes = read_input(raw)?;
+        let bytes = match checks {
+            Some(checks) => {
+                let bytes = read_input(raw).map_err(checks.read_error)?;
+                (checks.validate)(&bytes)?;
+                bytes
+            }
+            None => read_input(raw)?,
+        };
         let input: Option<HashMap<String, Value>> = serde_json::from_slice(&bytes)
             .map_err(|_| InputError("--cli-input-json: invalid JSON object"))?;
         if let Some(input) = input {

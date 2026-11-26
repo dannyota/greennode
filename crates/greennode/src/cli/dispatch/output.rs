@@ -24,10 +24,19 @@ impl From<LocalError> for ExecutionFailure {
 pub type ExecutionResult =
     Result<Option<Result<render::Projected, render::Error>>, ExecutionFailure>;
 
+pub(crate) type CustomOutput = fn(
+    &mut dyn Write,
+    &mut dyn Write,
+    &render::Projected,
+    Format,
+    bool,
+) -> Result<bool, render::Error>;
+
 #[derive(Clone, Copy, Default)]
 pub struct OutputView {
     pub(crate) table: Option<render::TableView>,
     pub(crate) withhold: Option<&'static str>,
+    pub(crate) custom: Option<CustomOutput>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,11 +60,17 @@ impl From<render::Error> for OutputError {
 
 pub(super) fn render_output(
     writer: &mut dyn Write,
+    stderr: &mut dyn Write,
     projected: &render::Projected,
     format: Format,
     query: Option<&query::CompiledQuery>,
     view: OutputView,
 ) -> Result<(), OutputError> {
+    if let Some(custom) = view.custom
+        && custom(writer, stderr, projected, format, query.is_some())?
+    {
+        return Ok(());
+    }
     if view.withhold.is_some() {
         let mut buffer = Vec::new();
         write_output(&mut buffer, projected, format, query, view)?;
