@@ -4,6 +4,9 @@
   "greennode --version",
   "greennode -h",
   "greennode -v",
+  "greennode configure",
+  "greennode configure get",
+  "greennode configure list",
   "greennode help",
   "greennode version"
 ]

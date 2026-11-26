@@ -1,3 +1,4 @@
+mod configure;
 pub mod dispatch;
 pub mod errors;
 mod gendocs;
@@ -43,5 +44,6 @@ pub async fn run_registered(
 }
 
 pub async fn run_invocation(invocation: Invocation<'_>) -> std::process::ExitCode {
-    run_registered(invocation, &mut []).await
+    let mut handler = configure::Handler;
+    run_registered(invocation, &mut [&mut handler]).await
 }

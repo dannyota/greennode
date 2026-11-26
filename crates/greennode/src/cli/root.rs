@@ -30,6 +30,17 @@ fn command() -> Command {
                 .about("Print the greennode version"),
         )
         .subcommand(
+            Command::new("configure")
+                .disable_help_flag(true)
+                .disable_help_subcommand(true)
+                .subcommand(
+                    Command::new("get")
+                        .disable_help_flag(true)
+                        .arg(Arg::new("key").required(true)),
+                )
+                .subcommand(Command::new("list").disable_help_flag(true)),
+        )
+        .subcommand(
             Command::new("help")
                 .disable_help_flag(true)
                 .about("Print this message or the help of the given subcommand(s)")
