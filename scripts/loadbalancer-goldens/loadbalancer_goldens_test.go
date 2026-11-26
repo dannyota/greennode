@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 )
 
@@ -88,6 +89,49 @@ func TestLoadBalancerPortGoldens(t *testing.T) {
 					t.Fatal("unexpected stderr")
 				}
 				if err := os.WriteFile(filepath.Join(os.Getenv("LOADBALANCER_GOLDEN_DIR"), fmt.Sprintf("%s.%s.golden", c.name, format)), stdout.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadBalancerPortDeletes(t *testing.T) {
+	for _, c := range []struct {
+		name, path, idFlag, id, detail string
+		status                         int
+	}{
+		{"delete-load-balancer", "/v2/proj-1/loadBalancers/lb-1", "--load-balancer-id", "lb-1", `{"data":{"uuid":"lb-1","progressStatus":"CREATED"}}`, http.StatusAccepted},
+		{"delete-certificate", "/v2/proj-1/cas/cert-1", "--certificate-id", "cert-1", `{"uuid":"cert-1","inUse":false}`, http.StatusNoContent},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				var deleted atomic.Bool
+				fixture := newSvcFixture(map[string]func(http.ResponseWriter, *http.Request){c.path: func(w http.ResponseWriter, r *http.Request) {
+					switch r.Method {
+					case http.MethodGet:
+						if deleted.Load() {
+							w.WriteHeader(http.StatusNotFound)
+							return
+						}
+						_, _ = w.Write([]byte(c.detail))
+					case http.MethodDelete:
+						deleted.Store(true)
+						w.WriteHeader(c.status)
+					default:
+						t.Error("unexpected method")
+					}
+				}})
+				root, stdout, stderr := newSvcRoot(t, fixture)
+				root.SetArgs([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "loadbalancer", c.name, c.idFlag, c.id, "--yes"})
+				if err := root.Execute(); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.Len() != 0 || !deleted.Load() {
+					t.Fatal("expected a successful delete")
+				}
+				name := fmt.Sprintf("%s.%s.golden", c.name, format)
+				if err := os.WriteFile(filepath.Join(os.Getenv("LOADBALANCER_GOLDEN_DIR"), name), stdout.Bytes(), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			})

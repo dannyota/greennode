@@ -1,5 +1,6 @@
 //! Read regional load balancers, their catalogs and children, and price quotes.
 
+mod deletes;
 mod models;
 mod quotes;
 mod types;
@@ -15,6 +16,7 @@ use crate::{
     Config, DEFAULT_PAGE, DEFAULT_PAGE_SIZE, Error, Failure, List, RequestContext, WriteDispatch,
 };
 
+pub use deletes::*;
 pub use models::*;
 pub use quotes::{CreateLoadBalancerInput, ResizeLoadBalancerInput};
 pub use types::*;
@@ -26,6 +28,7 @@ use wire::Read;
 pub struct Client {
     session: Arc<Session>,
     pricing: crate::pricing::Client,
+    writes: Arc<deletes::WriteLocks>,
 }
 
 #[expect(
@@ -81,6 +84,7 @@ impl Client {
         Self {
             session: Arc::clone(config.session()),
             pricing: crate::pricing::Client::new(config),
+            writes: Arc::default(),
         }
     }
 

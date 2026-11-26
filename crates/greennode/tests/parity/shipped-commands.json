@@ -141,6 +141,8 @@
   "greennode iam update-group",
   "greennode iam update-service-account",
   "greennode loadbalancer",
+  "greennode loadbalancer delete-certificate",
+  "greennode loadbalancer delete-load-balancer",
   "greennode loadbalancer get-certificate",
   "greennode loadbalancer get-listener",
   "greennode loadbalancer get-load-balancer",

@@ -2,6 +2,36 @@
 
 # CLI: LoadBalancer
 
+## delete-certificate
+
+Kind: Write, destructive.
+
+Reads the certificate before deleting it and refuses if a listener uses it.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--certificate-id` | `string` | yes      |
+
+```sh
+greennode loadbalancer delete-certificate --certificate-id <certificate-id> --yes
+```
+
+## delete-load-balancer
+
+Kind: Write, destructive.
+
+Waits up to 15 minutes for the load balancer to disappear. Use `--no-wait` to
+return after acceptance or when a deletion is already in progress.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes
+```
+
 ## get-certificate
 
 Kind: Read.

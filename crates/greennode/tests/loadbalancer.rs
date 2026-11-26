@@ -280,3 +280,126 @@ async fn errors_match_go_goldens() {
         assert_eq!(stderr, std::fs::read(golden).unwrap(), "{name}");
     }
 }
+
+#[tokio::test]
+async fn destructive_delete_requires_yes_and_obeys_read_only() {
+    let server = Server::start(vec![]);
+    for (command, flag, id) in [
+        ("delete-load-balancer", "--load-balancer-id", "lb-1"),
+        ("delete-certificate", "--certificate-id", "cert-1"),
+    ] {
+        let args = [command, flag, id, "--project-id", "proj-1"];
+        let (exit, stdout, stderr) = invoke(&server, &args, false).await;
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("--yes"));
+        let args = [args.as_slice(), &["--yes", "--read-only"]].concat();
+        let (exit, stdout, stderr) = invoke(&server, &args, false).await;
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+    }
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn deletes_match_go_goldens_and_regional_routes() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for format in ["json", "table", "text"] {
+        for (command, flag, id, route, detail, success) in [
+            (
+                "delete-load-balancer",
+                "--load-balancer-id",
+                "lb-1",
+                "/v2/proj-1/loadBalancers/lb-1",
+                r#"{"data":{"uuid":"lb-1","progressStatus":"CREATED"}}"#,
+                "202 Accepted",
+            ),
+            (
+                "delete-certificate",
+                "--certificate-id",
+                "cert-1",
+                "/v2/proj-1/cas/cert-1",
+                r#"{"uuid":"cert-1","inUse":false}"#,
+                "204 No Content",
+            ),
+        ] {
+            let mut responses = vec![response("200 OK", detail), response(success, "")];
+            let mut methods = vec!["GET", "DELETE"];
+            if id == "lb-1" {
+                responses.push(response("404 Not Found", "{}"));
+                methods.push("GET");
+            }
+            let server = Server::start(responses);
+            let (exit, stdout, stderr) = invoke(
+                &server,
+                &[
+                    command,
+                    flag,
+                    id,
+                    "--project-id",
+                    "proj-1",
+                    "--yes",
+                    "--output",
+                    format,
+                ],
+                false,
+            )
+            .await;
+            assert_eq!(exit, ExitCode::SUCCESS, "{command}/{format}");
+            assert!(stderr.is_empty());
+            let golden = root.join(format!(
+                "tests/fixtures/loadbalancer/{command}.{format}.golden"
+            ));
+            assert_eq!(stdout, std::fs::read(golden).unwrap(), "{command}/{format}");
+            assert_eq!(server.requests(), methods.len());
+            for (head, method) in server.heads().iter().zip(methods) {
+                assert!(head.starts_with(format!("{method} {route} ").as_bytes()));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn deletes_report_certificate_in_use_without_api_status() {
+    for (responses, message) in [
+        (
+            vec![response("200 OK", r#"{"uuid":"cert-1","inUse":true}"#)],
+            "loadbalancer: certificate in use: loadbalancer.DeleteCertificate: certificate cert-1 is in use",
+        ),
+        (
+            vec![
+                response("200 OK", r#"{"uuid":"cert-1","inUse":false}"#),
+                response(
+                    "409 Conflict",
+                    r#"{"message":"certificate is used by a listener"}"#,
+                ),
+            ],
+            "loadbalancer: certificate in use: loadbalancer.DeleteCertificate: certificate cert-1: loadbalancer.DeleteCertificate: certificate is used by a listener (status 409)",
+        ),
+    ] {
+        let requests = responses.len();
+        let server = Server::start(responses);
+        let (exit, stdout, stderr) = invoke(
+            &server,
+            &[
+                "delete-certificate",
+                "--certificate-id",
+                "cert-1",
+                "--project-id",
+                "proj-1",
+                "--yes",
+            ],
+            false,
+        )
+        .await;
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let envelope: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(envelope["error"]["code"], "ResourceInUse");
+        assert_eq!(envelope["error"]["message"], message);
+        assert!(envelope["error"].get("status").is_none());
+        assert!(envelope["error"].get("operation").is_none());
+        assert_eq!(server.requests(), requests);
+    }
+}

@@ -5,5 +5,5 @@ loadbalancer_goldens_test.go into its internal/cli directory. Set LOADBALANCER_G
 to an empty output directory, LOADBALANCER_WIRE_DIR to the absolute path of
 crates/greennode-sdk/tests/fixtures/loadbalancer and HOME to a temporary directory. With cached
 Go dependencies, GOPROXY=off and GOTOOLCHAIN=local, run
-`go test ./internal/cli -run '^TestLoadBalancerPort(Goldens|Errors)$' -count=1` from the archive.
+`go test ./internal/cli -run '^TestLoadBalancerPort(Goldens|Errors|Deletes)$' -count=1` from the archive.
 Copy the generated stdout and stderr files into crates/greennode/tests/fixtures/loadbalancer/.
