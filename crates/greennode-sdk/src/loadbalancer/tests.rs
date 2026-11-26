@@ -128,6 +128,19 @@ async fn credentials_are_screened_in_inputs_and_projected_output() {
 }
 
 #[tokio::test]
+async fn folded_envelope_variants_collide_without_exact_key() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"Page":1,"PAGE":2,"listData":[]}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server, CANARY)
+        .list_load_balancers(&ctx, ListLoadBalancersInput::default())
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn lone_case_variants_are_ignored_and_collisions_rejected() {
     let server = Server::start(vec![
         response("200 OK", r#"{"Page":7,"listData":[{"Name":"ignored"}]}"#),

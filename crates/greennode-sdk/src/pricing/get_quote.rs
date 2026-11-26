@@ -177,7 +177,7 @@ fn redact_marker(value: String) -> String {
     let normalized: String = value
         .chars()
         .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
         .collect();
     if normalized.contains("clientsecret") {
         "[redacted]".into()

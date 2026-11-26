@@ -160,6 +160,31 @@ async fn discovery_adds_bearer_to_caller_evidence() {
 }
 
 #[tokio::test]
+#[ignore = "requires strict identifier matcher from PR 88"]
+async fn short_base64url_credential_cannot_be_cached_as_project_id() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projects":[{"projectId":"prefixYT9iY2Qsuffix"}]}"#,
+    )]);
+    let discovery = Discovery::default();
+    let source = RotatingSource(std::sync::Mutex::new("a?bcd"));
+    let (ctx, _) = RequestContext::new();
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    assert!(
+        call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
+            .await
+            .is_err()
+    );
+    assert!(
+        discovery
+            .project_id_context(&ctx, &SystemClock)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn credential_project_id_is_not_cached_after_rotation() {
     let server = Server::start(vec![
         response("200 OK", br#"{"projects":[{"projectId":"toy%2Dtoken"}]}"#),
