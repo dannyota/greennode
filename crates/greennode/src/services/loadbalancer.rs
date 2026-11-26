@@ -2,6 +2,7 @@ use clap::ArgMatches;
 use greennode_sdk::loadbalancer as sdk;
 
 use crate::cli::dispatch::{self, OutputView};
+use crate::cli::errors::{Rule, RuleName, RuleOperation};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 
@@ -93,7 +94,10 @@ macro_rules! json_field {
 }
 
 macro_rules! operation {
-    ($input:ident, $method:ident, $name:literal, $go:literal,
+    ($input:ident, $method:ident, $name:literal, $go:literal, $help:literal, $example:literal, $notes:expr, $flags:tt $(, $json:tt)?) => {
+        operation!(@kind Kind::Read, $input, $method, $name, $go, $help, $example, $notes, $flags $(, $json)?)
+    };
+    (@kind $kind:expr, $input:ident, $method:ident, $name:literal, $go:literal,
      $help:literal, $example:literal, $notes:expr,
      [$($flag:ident => $field:expr),* $(,)?] $(, [$($hidden:expr => $json:expr),+ $(,)?])?) => {{
         const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
@@ -112,7 +116,7 @@ macro_rules! operation {
             example: Some($example),
             presence_required_fields: &[],
             inherited_bindings: &[],
-            kind: Kind::Read,
+            kind: $kind,
             flags: &[$($flag),*],
             json_fields: &[$($($hidden),*)?],
             extra_flags: &[],
@@ -131,6 +135,28 @@ macro_rules! operation {
     }};
 }
 
+macro_rules! optional_bool {
+    ($member:ident, $flag:ident, $name:literal) => {
+        InputField {
+            json_name: $name,
+            flag: Some($flag),
+            secret: false,
+            nullable: false,
+            set_json: |input: &mut _, value| {
+                input.$member = value.as_bool().ok_or(())?;
+                Ok(())
+            },
+            set_flag: Some(|input: &mut _, matches| {
+                input.$member = *matches.get_one::<bool>($flag.name).ok_or(())?;
+                Ok(())
+            }),
+            requirement: Requirement::Optional,
+        }
+    };
+}
+
+const NO_WAIT: Field = flag("no-wait", "bool", false);
+
 const CERTIFICATE_ID: Field = flag("certificate-id", "string", true);
 const LISTENER_ID: Field = flag("listener-id", "string", true);
 const LOAD_BALANCER_ID: Field = flag("load-balancer-id", "string", true);
@@ -148,8 +174,38 @@ const ZONE_ID: Field = flag("zone-id", "string", false);
 
 pub(super) const SERVICE: Service = Service {
     name: "loadbalancer",
-    error_rules: &[],
+    error_rules: &[Rule {
+        identity: "loadbalancer.resource-in-use",
+        matches: |error| error.detail::<sdk::WriteError>() == Some(&sdk::WriteError::ResourceInUse),
+        name: Some(RuleName {
+            rank: 34,
+            code: "ResourceInUse",
+            include_api_status: false,
+            operation: RuleOperation::Omit,
+        }),
+        exit: None,
+        message: None,
+    }],
     operations: &[
+        operation!(
+            @kind Kind::DestructiveWrite,
+            DeleteCertificateInput, delete_certificate, "delete-certificate", "DeleteCertificate",
+            "Delete an unused certificate",
+            "greennode loadbalancer delete-certificate --certificate-id <certificate-id> --yes",
+            &["Reads the certificate before deleting it and refuses if a listener uses it."], [
+                CERTIFICATE_ID => required_id!(sdk::DeleteCertificateInput, certificate_id, CERTIFICATE_ID, "CertificateID"),
+            ]
+        ),
+        operation!(
+            @kind Kind::DestructiveWrite,
+            DeleteLoadBalancerInput, delete_load_balancer, "delete-load-balancer", "DeleteLoadBalancer",
+            "Delete a regional load balancer",
+            "greennode loadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes",
+            &["Waits up to 15 minutes for the load balancer to disappear. Use `--no-wait` to return after acceptance or when a deletion is already in progress."], [
+                LOAD_BALANCER_ID => required_id!(sdk::DeleteLoadBalancerInput, load_balancer_id, LOAD_BALANCER_ID, "LoadBalancerID"),
+                NO_WAIT => optional_bool!(no_wait, NO_WAIT, "NoWait"),
+            ]
+        ),
         operation!(
             GetCertificateInput, get_certificate, "get-certificate", "GetCertificate",
             "Get certificate",

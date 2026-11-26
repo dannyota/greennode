@@ -255,3 +255,384 @@ async fn quote_posts_only_priced_fields_to_portal() {
         assert!(body == expected, "unexpected quote request shape");
     }
 }
+
+#[tokio::test]
+async fn load_balancer_delete_reports_preflight_absence_without_sending() {
+    let server = Server::start(vec![response("404 Not Found", "{}")]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await
+        .unwrap_err();
+    assert!(error.error().has_class(ErrorClass::NotFound));
+    assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+fn delete_input(no_wait: bool) -> DeleteLoadBalancerInput {
+    DeleteLoadBalancerInput {
+        load_balancer_id: "lb-1".into(),
+        no_wait,
+    }
+}
+
+fn lb_status(status: &str) -> Response {
+    response(
+        "200 OK",
+        format!(r#"{{"data":{{"uuid":"lb-1","progressStatus":"{status}"}}}}"#),
+    )
+}
+
+#[tokio::test]
+async fn load_balancer_delete_skips_an_in_progress_delete_and_obeys_no_wait() {
+    for (status, methods) in [("DELETING", &[][..]), ("ERROR", &["DELETE"][..])] {
+        let mut replies = vec![lb_status(status)];
+        replies.extend(methods.iter().map(|_| response("202 Accepted", "")));
+        let server = Server::start(replies);
+        let client = client(&server, CANARY);
+        let (ctx, _) = RequestContext::new();
+        client
+            .delete_load_balancer(&ctx, delete_input(true))
+            .await
+            .unwrap();
+        assert_eq!(server.requests(), 1 + methods.len());
+        for (head, method) in server
+            .heads()
+            .iter()
+            .zip(["GET"].into_iter().chain(methods.iter().copied()))
+        {
+            assert!(head.starts_with(
+                format!("{method} /regional/v2/proj-1/loadBalancers/lb-1 ").as_bytes()
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn load_balancer_delete_refuses_to_confirm_an_oversized_404() {
+    let overflow = Response::Http {
+        status: "404 Not Found".into(),
+        headers: vec![("Content-Length".into(), ((8 << 20) + 1).to_string())],
+        body: Vec::new(),
+    };
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("202 Accepted", ""),
+        overflow,
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await
+        .unwrap_err();
+    assert!(error.error().has_class(ErrorClass::NotSettled));
+    assert_eq!(error.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(error.partial(), Some(&DeleteLoadBalancerOutput {}));
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn certificate_absence_requires_a_complete_inventory_after_a_failure() {
+    for (body, absent) in [
+        (
+            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+            true,
+        ),
+        (
+            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
+            false,
+        ),
+        (
+            r#"{"listData":[{"uuid":"cert-1"}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
+            false,
+        ),
+        (
+            r#"{"listData":[{"uuid":"toy%2Dsecret"}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
+            false,
+        ),
+        (
+            r#"{"listData":null,"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+            false,
+        ),
+    ] {
+        let server = Server::start(vec![
+            response(
+                "400 Bad Request",
+                r#"{"message":"certificate detail failed"}"#,
+            ),
+            response("200 OK", body),
+        ]);
+        let client = client(&server, CANARY);
+        let (ctx, _) = RequestContext::new();
+        let error = client
+            .delete_certificate(
+                &ctx,
+                DeleteCertificateInput {
+                    certificate_id: "cert-1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().has_class(ErrorClass::NotFound), absent);
+        assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 2);
+        assert!(
+            server.heads()[1].starts_with(b"GET /regional/v2/proj-1/cas?name=&page=1&size=10000 ")
+        );
+    }
+}
+
+#[tokio::test]
+async fn delete_preflight_refuses_ambiguous_target_or_missing_usage() {
+    for (body, certificate) in [
+        (
+            r#"{"data":{"uuid":"toy-secret","progressStatus":"CREATED"}}"#,
+            false,
+        ),
+        (r#"{"uuid":"cert-1"}"#, true),
+        (r#"{"uuid":"cert-1","inUse":false,"InUse":false}"#, true),
+    ] {
+        let mut responses = vec![response("200 OK", body)];
+        if certificate {
+            responses.push(response(
+                "200 OK",
+                r#"{"listData":[{"uuid":"cert-1"}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
+            ));
+        }
+        let server = Server::start(responses);
+        let client = client(&server, CANARY);
+        let (ctx, _) = RequestContext::new();
+        let dispatch = if certificate {
+            client
+                .delete_certificate(
+                    &ctx,
+                    DeleteCertificateInput {
+                        certificate_id: "cert-1".into(),
+                    },
+                )
+                .await
+                .unwrap_err()
+                .write_dispatch()
+        } else {
+            client
+                .delete_load_balancer(&ctx, delete_input(false))
+                .await
+                .unwrap_err()
+                .write_dispatch()
+        };
+        assert_eq!(dispatch, WriteDispatch::NotSent);
+        assert_eq!(server.requests(), if certificate { 2 } else { 1 });
+        assert!(server.heads().iter().all(|head| head.starts_with(b"GET ")));
+    }
+}
+
+#[tokio::test]
+async fn load_balancer_delete_retries_the_delete_before_polling() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("502 Bad Gateway", "{}"),
+        response("202 Accepted", ""),
+        response("404 Not Found", "{}"),
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    client
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 4);
+    for (head, method) in server
+        .heads()
+        .iter()
+        .zip(["GET", "DELETE", "DELETE", "GET"])
+    {
+        assert!(
+            head.starts_with(
+                format!("{method} /regional/v2/proj-1/loadBalancers/lb-1 ").as_bytes()
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn certificate_absence_rejects_missing_or_null_pagination_totals() {
+    for totals in [
+        r#""#,
+        r#", "totalPage":0"#,
+        r#", "totalItem":0"#,
+        r#", "totalPage":null, "totalItem":0"#,
+        r#", "totalPage":0, "totalItem":null"#,
+    ] {
+        let inventory = format!(r#"{{"listData":[],"page":1,"pageSize":10000{totals}}}"#);
+        let server = Server::start(vec![
+            response("400 Bad Request", r#"{"message":"detail rejected"}"#),
+            response("200 OK", inventory),
+        ]);
+        let client = client(&server, CANARY);
+        let (ctx, _) = RequestContext::new();
+        let error = client
+            .delete_certificate(
+                &ctx,
+                DeleteCertificateInput {
+                    certificate_id: "cert-1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().api_error().unwrap().status(), Some(400));
+        assert_eq!(server.requests(), 2);
+    }
+}
+
+#[tokio::test]
+async fn waiting_for_an_existing_delete_preserves_this_calls_dispatch_state() {
+    let server = Server::start(vec![lb_status("DELETING"), response("403 Forbidden", "{}")]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await
+        .unwrap_err();
+    assert!(error.error().has_class(ErrorClass::NotSettled));
+    assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn complete_response_classification_precedes_public_redaction() {
+    let lb = Server::start(vec![
+        lb_status("CREATED"),
+        response("202 Accepted", ""),
+        response("404 Not Found", "{}"),
+    ]);
+    let cert = Server::start(vec![
+        response("200 OK", r#"{"uuid":"cert-1","inUse":false}"#),
+        response(
+            "409 Conflict",
+            r#"{"message":"certificate is in use by toy%2Dsecret"}"#,
+        ),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let deleted = client(&lb, "404")
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await;
+    let error = client(&cert, CANARY)
+        .delete_certificate(
+            &ctx,
+            DeleteCertificateInput {
+                certificate_id: "cert-1".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.error().detail::<WriteError>(),
+        Some(&WriteError::ResourceInUse)
+    );
+    assert!(
+        !error
+            .error()
+            .detail::<crate::RecoveryAdvice>()
+            .unwrap()
+            .message()
+            .contains("toy%2Dsecret")
+    );
+    assert!(deleted.is_ok());
+    assert_eq!(lb.requests(), 3);
+    assert_eq!(cert.requests(), 2);
+}
+
+#[tokio::test]
+async fn malformed_certificate_detail_reconciles_without_dispatching_delete() {
+    let server = Server::start(vec![
+        response("200 OK", "{"),
+        response(
+            "200 OK",
+            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+        ),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let error = client(&server, CANARY)
+        .delete_certificate(
+            &ctx,
+            DeleteCertificateInput {
+                certificate_id: "cert-1".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(error.error().has_class(ErrorClass::NotFound));
+    assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 2);
+    assert!(server.heads().iter().all(|head| head.starts_with(b"GET ")));
+}
+
+#[tokio::test]
+async fn delete_settlement_distinguishes_cancellation_poll_failure_and_bound() {
+    let (arrived, poll_started) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("202 Accepted", ""),
+        Response::StallBeforeHead(arrived),
+    ]);
+    let (ctx, cancel) = RequestContext::new();
+    let service = client(&server, CANARY);
+    let (result, ()) = tokio::join!(
+        service.delete_load_balancer(&ctx, delete_input(false)),
+        async {
+            poll_started.await.unwrap();
+            cancel.cancel();
+        }
+    );
+    let cancelled = result.unwrap_err();
+
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("202 Accepted", ""),
+        response("403 Forbidden", r#"{"message":"poll denied"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let refused = client(&server, CANARY)
+        .delete_load_balancer(&ctx, delete_input(false))
+        .await
+        .unwrap_err();
+
+    let (arrived, poll_started) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("202 Accepted", ""),
+        Response::StallBeforeHead(arrived),
+    ]);
+    let service = client(&server, CANARY);
+    let (result, ()) = tokio::join!(
+        service.delete_load_balancer(&ctx, delete_input(false)),
+        async {
+            poll_started.await.unwrap();
+            tokio::time::pause();
+            tokio::time::advance(std::time::Duration::from_secs(15 * 60)).await;
+        }
+    );
+    let expired = result.unwrap_err();
+
+    for (error, message) in [
+        (&cancelled, "cancelled"),
+        (&refused, "poll denied"),
+        (&expired, "did not reach 404 within 15m0s"),
+    ] {
+        assert!(error.error().has_class(ErrorClass::NotSettled));
+        assert!(
+            error
+                .error()
+                .detail::<crate::RecoveryAdvice>()
+                .unwrap()
+                .message()
+                .contains(message),
+            "missing settlement reason {message}"
+        );
+    }
+    assert!(cancelled.error().has_class(ErrorClass::Cancelled));
+    assert_eq!(refused.error().api_error().unwrap().status(), Some(403));
+    assert!(expired.error().has_class(ErrorClass::DeadlineExceeded));
+}

@@ -30,13 +30,15 @@ pub enum DecodeError {
     ReflectedCredential,
 }
 
+pub(super) struct CompleteNotFound;
+
 pub(super) struct Read {
     pub(super) id: &'static str,
     pub(super) route: &'static str,
 }
 
 impl Read {
-    fn decode_error(&self, evidence: &Evidence, detail: DecodeError) -> Box<Error> {
+    pub(super) fn decode_error(&self, evidence: &Evidence, detail: DecodeError) -> Box<Error> {
         let message = format!("{}: request failed: response failed to decode", self.id);
         Box::new(self.api("", &message, evidence).with_detail(detail))
     }
@@ -127,16 +129,29 @@ impl Document {
     }
 
     pub(super) fn object(&self, read: &Read) -> Result<Envelope<'_>, Box<Error>> {
-        serde_json::from_str::<Option<_>>(&self.text)
-            .map(|fields| Envelope(fields.unwrap_or_default()))
-            .map_err(|_| read.decode_error(&self.evidence, DecodeError::InvalidShape))
+        Envelope::parse(&self.text, read, &self.evidence)
     }
 }
 
 pub(super) struct Envelope<'a>(BTreeMap<String, &'a RawValue>);
 
 impl Envelope<'_> {
-    fn raw(&self, read: &Read, evidence: &Evidence, name: &str) -> Result<&str, Box<Error>> {
+    pub(super) fn parse<'a>(
+        text: &'a str,
+        read: &Read,
+        evidence: &Evidence,
+    ) -> Result<Envelope<'a>, Box<Error>> {
+        serde_json::from_str::<Option<_>>(text)
+            .map(|fields| Envelope(fields.unwrap_or_default()))
+            .map_err(|_| read.decode_error(evidence, DecodeError::InvalidShape))
+    }
+
+    pub(super) fn raw(
+        &self,
+        read: &Read,
+        evidence: &Evidence,
+        name: &str,
+    ) -> Result<&str, Box<Error>> {
         if self
             .0
             .keys()
@@ -198,24 +213,39 @@ impl Client {
         ids: &[(&str, &str)],
         query: &[(&str, &str)],
     ) -> Result<Document, Box<Error>> {
+        let mut evidence = Evidence::new();
+        let text = self
+            .read_text(ctx, read, ids, query, &mut evidence, false)
+            .await?;
+        Ok(Document { text, evidence })
+    }
+
+    pub(super) async fn read_text(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        ids: &[(&str, &str)],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        require_complete: bool,
+    ) -> Result<String, Box<Error>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session.runtime(ctx, &mut jitter)?;
-        let mut evidence = Evidence::new();
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
-        screen_input(&evidence, ids.iter().chain(query).map(|(_, value)| *value))?;
+        screen_input(evidence, ids.iter().chain(query).map(|(_, value)| *value))?;
         validate_ids(read.id, ids, PathIds::Strict)?;
         let project = session
-            .require_project_id_with_evidence(ctx, &mut evidence)
+            .require_project_id_with_evidence(ctx, evidence)
             .await
             .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(ids.iter().map(|(_, value)| *value))
             .collect();
         screen_input(
-            &evidence,
+            evidence,
             path.iter()
                 .copied()
                 .chain(query.iter().map(|(_, value)| *value)),
@@ -237,10 +267,10 @@ impl Client {
             allow_empty: true,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: false,
+            overflow_overrides_status: require_complete,
             sensitive: false,
             reject_reflected_credentials: false,
-            no_redirect: false,
+            no_redirect: require_complete,
             retry_config: retry::Config::default(),
         };
         let result = operation::execute_raw(
@@ -252,31 +282,39 @@ impl Client {
             query,
             RouteAuth::Bearer(session.bearer_source()),
             Bytes::new(),
-            &mut evidence,
+            evidence,
         )
         .await;
         let screen =
             |error: Error| Box::new(error.screen_api(&|text| evidence.text_reflects(text)));
         let received = result.map_err(|error| screen(error.into_parts().0))?;
+        let status = received.status;
         let body = response::classify(
             read.id,
-            received.status,
+            status,
             Bytes::from(received.reply.body),
             operation.success,
             (true, false, operation.retry),
             evidence.credentials(),
         )
-        .map_err(|error| screen(*error))?;
+        .map_err(|error| {
+            let error = screen(*error);
+            if require_complete && status == StatusCode::NOT_FOUND {
+                Box::new(error.with_outer_detail(CompleteNotFound))
+            } else {
+                error
+            }
+        })?;
         let text = if body.is_empty() {
             "null".into()
         } else {
             go_json(&body).into_owned()
         };
         serde_json::from_str::<&RawValue>(&text)
-            .map_err(|_| read.decode_error(&evidence, DecodeError::MalformedJson))?;
+            .map_err(|_| read.decode_error(evidence, DecodeError::MalformedJson))?;
         strict_json::validate(text.as_bytes(), &[], text.len())
-            .map_err(|_| read.decode_error(&evidence, DecodeError::InvalidShape))?;
-        Ok(Document { text, evidence })
+            .map_err(|_| read.decode_error(evidence, DecodeError::InvalidShape))?;
+        Ok(text)
     }
 }
 
