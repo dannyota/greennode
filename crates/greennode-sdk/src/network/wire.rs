@@ -150,9 +150,10 @@ fn guard_bandwidth(
 ) -> Option<Box<Error>> {
     let body = go_json(body);
     (operation::unsafe_json_response(body.as_bytes(), known, sent, true)
-        || [known, sent]
-            .into_iter()
-            .any(|credentials| reflects_credential_forms(&body, credentials)))
+        || (!status.is_success()
+            && [known, sent]
+                .into_iter()
+                .any(|credentials| reflects_credential_forms(&body, credentials))))
     .then(|| {
         let message = if status == StatusCode::OK {
             "invalid bandwidth response; body withheld"
@@ -172,9 +173,10 @@ fn guard_bandwidth_project(
 ) -> Option<Box<Error>> {
     let body = go_json(body);
     (operation::unsafe_json_response(body.as_bytes(), known, sent, status.is_success())
-        || [known, sent]
-            .into_iter()
-            .any(|credentials| reflects_credential_forms(&body, credentials)))
+        || (!status.is_success()
+            && [known, sent]
+                .into_iter()
+                .any(|credentials| reflects_credential_forms(&body, credentials))))
     .then(|| {
         Box::new(api(
             id,
@@ -343,7 +345,7 @@ impl Client {
             if !region.is_empty() && region != self.region {
                 continue;
             }
-            if !PathIds::Strict.allows(&id) || evidence.text_reflects(&id) {
+            if !PathIds::Strict.allows(&id) || evidence.id_reflects(&id) {
                 return Err(invalid());
             }
             if selected.replace(id).is_some() {

@@ -64,6 +64,31 @@ async fn nat_detail_discovers_zone_and_checks_returned_identity() {
 }
 
 #[tokio::test]
+async fn nat_retained_literal_credential_is_invalid_response() {
+    let body = include_str!("../../tests/fixtures/network/list_nat_inbound_rules_hcm.json")
+        .replace("toy%2Dsecret", "toy-secret");
+    let server = Server::start(vec![response("200 OK", &body)]);
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let mut input = ListNatInboundRulesInput::new("nat-1");
+    input.zone_id = "zone-1".into();
+    let failure = Client::new(&config)
+        .list_nat_inbound_rules(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
 async fn inbound_rules_accept_hcm_type_ids_and_refuse_incomplete_responses() {
     let body = include_str!("../../tests/fixtures/network/list_nat_inbound_rules_hcm.json");
     let incomplete = body.replace("\"code\":200", "\"totalPage\":2");
@@ -98,6 +123,164 @@ async fn inbound_rules_accept_hcm_type_ids_and_refuse_incomplete_responses() {
         server.heads()[0]
             .starts_with(b"GET /vnetwork/v1/zone-1/proj-1/nats/nat-1/sec-groups/rules ")
     );
+}
+
+#[tokio::test]
+async fn returned_identifiers_reject_embedded_encoded_credentials() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":[{"uuid":"abceHl6def","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"projects":[{"projectId":"abceHl6def","region":"hcm-3"}]}"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"success":true,"data":[{"uuid":"abceHl6def","protocol":"tcp","etherType":"IPv4","direction":"ingress","portRangeMin":1,"portRangeMax":2,"isSystem":false}]}"#,
+        ),
+    ]);
+    let opts = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new("xyz"));
+    let (ctx, _) = RequestContext::new();
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        opts.clone().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_err()
+    );
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        opts.clone(),
+        &server,
+    ))
+    .unwrap();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_err()
+    );
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        opts.with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let mut input = ListNatInboundRulesInput::new("nat-1");
+    input.zone_id = "zone-1".into();
+    assert!(
+        Client::new(&config)
+            .list_nat_inbound_rules(&ctx, input)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore = "shared hex matcher has not landed"]
+async fn returned_identifiers_reject_hex_credentials() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":[{"uuid":"prefix78797asuffix","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"projects":[{"projectId":"prefix78797asuffix","region":"hcm-3"}]}"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"success":true,"data":[{"uuid":"prefix78797asuffix","protocol":"tcp","etherType":"IPv4","direction":"ingress","portRangeMin":1,"portRangeMax":2,"isSystem":false}]}"#,
+        ),
+    ]);
+    let opts = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new("xyz"));
+    let (ctx, _) = RequestContext::new();
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        opts.clone().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_err()
+    );
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        opts.clone(),
+        &server,
+    ))
+    .unwrap();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_err()
+    );
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        opts.with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let mut input = ListNatInboundRulesInput::new("nat-1");
+    input.zone_id = "zone-1".into();
+    assert!(
+        Client::new(&config)
+            .list_nat_inbound_rules(&ctx, input)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn bandwidth_accepts_credential_words_in_description() {
+    let body = r#"{"data":[{"uuid":"pkg-1","name":"offer","type":"x","description":"client secret","bandwidth":100}]}"#;
+    let server = Server::start(vec![response("200 OK", body)]);
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn bandwidth_accepts_period_in_package_id() {
+    let body = r#"{"data":[{"uuid":"pkg.1","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#;
+    let server = Server::start(vec![response("200 OK", body)]);
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let output = Client::new(&config)
+        .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+        .await
+        .unwrap();
+    assert_eq!(output.items[0].id, "pkg.1");
 }
 
 #[tokio::test]

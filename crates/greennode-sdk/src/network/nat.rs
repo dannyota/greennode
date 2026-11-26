@@ -229,7 +229,7 @@ impl Client {
         }
         if [zone.as_str(), project.as_str()]
             .into_iter()
-            .any(|value| evidence.text_reflects(value))
+            .any(|value| evidence.id_reflects(value))
         {
             return Err(read.invalid(&evidence));
         }
@@ -330,7 +330,11 @@ fn decode_detail(text: &str, expected_id: &str, evidence: &Evidence) -> Result<N
     let package: Fields<'_> = fields.required("natPackage")?;
     let vpc: Fields<'_> = fields.required("vpc")?;
     let vpc_id: String = vpc.required("uuid")?;
-    if id != expected_id || !PathIds::WithUnderscore.allows(&vpc_id) {
+    if id != expected_id
+        || !PathIds::WithUnderscore.allows(&vpc_id)
+        || evidence.id_reflects(&id)
+        || evidence.id_reflects(&vpc_id)
+    {
         return Err(());
     }
     let display = |fields: &Fields<'_>, name| -> Result<String, ()> {
@@ -353,6 +357,9 @@ fn decode_detail(text: &str, expected_id: &str, evidence: &Evidence) -> Result<N
         vpc_name: display(&vpc, "name")?,
         status,
     };
+    if evidence.id_reflects(&nat.package_id) {
+        return Err(());
+    }
     redact_strings(
         evidence,
         [
@@ -423,7 +430,10 @@ fn decode_rules(text: &str, evidence: &Evidence) -> Result<Vec<NatInboundRule>, 
                     .unwrap_or_default(),
                 system: row.required("isSystem")?,
             };
-            if !PathIds::WithUnderscore.allows(&item.id) || !seen.insert(item.id.clone()) {
+            if !PathIds::WithUnderscore.allows(&item.id)
+                || evidence.id_reflects(&item.id)
+                || !seen.insert(item.id.clone())
+            {
                 return Err(());
             }
             redact_strings(
@@ -459,7 +469,7 @@ fn redact_strings<'a>(
 ) -> Result<(), ()> {
     strings
         .into_iter()
-        .all(|text| text.redact(evidence))
+        .all(|text| !evidence.credentials().reflects(text.as_bytes()) && text.redact(evidence))
         .then_some(())
         .ok_or(())
 }

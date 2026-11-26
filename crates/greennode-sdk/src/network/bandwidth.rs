@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::endpoint::Base;
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds};
+use crate::wire::product::evidence::Evidence;
 use crate::{Error, ErrorClass, Failure, List, RequestContext};
 
 use super::wire::{Fields, Read, Style};
@@ -126,7 +126,8 @@ fn decode_packages(text: &str, evidence: &Evidence) -> Result<Vec<BandwidthPacka
                     .0
                     .ok_or(())?,
             };
-            if !PathIds::WithUnderscore.allows(&item.id)
+            if item.id.is_empty()
+                || evidence.id_reflects(&item.id)
                 || !seen.insert(item.id.clone())
                 || [&item.id, &item.name, &item.kind, &item.description]
                     .into_iter()
