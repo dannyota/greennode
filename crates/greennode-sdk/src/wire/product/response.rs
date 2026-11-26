@@ -25,14 +25,7 @@ pub(crate) fn classify(
         decode(&body, !credentials.values().is_empty())
     };
     let secrets: Vec<_> = credentials.values().iter().collect();
-    let safe = |text: &str| {
-        let sanitized = crate::error::SafeText::new(text, &secrets);
-        if unsafe_message(text, credentials) || unsafe_message(sanitized.as_str(), credentials) {
-            crate::error::SafeText::new("", &secrets)
-        } else {
-            sanitized
-        }
-    };
+    let safe = |text: &str| sanitize_error_text(text, credentials);
     let fallback = fallback
         || contains_address_marker(&code)
         || contains_address_marker(crate::error::SafeText::new(&code, &secrets).as_str());
@@ -63,6 +56,21 @@ pub(crate) fn classify(
         )
     };
     Err(Box::new(crate::Error::from_api(api)))
+}
+
+pub(crate) fn sanitize_error_text(
+    text: &str,
+    credentials: &SentCredentials,
+) -> crate::error::SafeText {
+    use crate::error::SafeText;
+
+    let secrets: Vec<_> = credentials.values().iter().collect();
+    let sanitized = SafeText::new(text, &secrets);
+    if unsafe_message(text, credentials) || unsafe_message(sanitized.as_str(), credentials) {
+        SafeText::new("", &[])
+    } else {
+        sanitized
+    }
 }
 
 fn contains_address_marker(text: &str) -> bool {

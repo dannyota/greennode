@@ -1,10 +1,13 @@
-//! Read Kubernetes inventory, versions, and quota, and delete clusters.
+//! Read Kubernetes inventory, versions, and quota, and create or delete clusters.
 
+mod create;
 mod delete;
 mod models;
 #[cfg(test)]
 mod tests;
+mod write;
 
+pub use create::{CreateClusterInput, CreateClusterOutput};
 pub use delete::{DeleteClusterInput, DeleteClusterOutput};
 pub use models::{Cluster, ClusterVersion, Quota};
 
@@ -28,7 +31,7 @@ const CLUSTERS: &str = "vks.ListClusters";
 const VERSIONS: &str = "vks.ListClusterVersions";
 const QUOTA: &str = "vks.GetQuota";
 
-/// Client for account-wide Kubernetes reads in a supported region.
+/// Client for Kubernetes inventory and cluster orders in a supported region.
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,

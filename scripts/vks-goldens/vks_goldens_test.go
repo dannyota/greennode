@@ -2,14 +2,45 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"danny.vn/vngcloud/vks"
+	"github.com/spf13/cobra"
 )
+
+func TestVKSCreateGoldens(t *testing.T) {
+	for _, tc := range []struct {
+		name, status string
+		err          error
+	}{
+		{"create-cluster", "ACTIVE", nil},
+		{"create-cluster-partial", "CREATING", vks.ErrNotSettled},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.name+"/"+format, func(t *testing.T) {
+				h := newFakeHarness(t)
+				op := Write[vks.Client, vks.CreateClusterInput, vks.CreateClusterOutput]("create-cluster", (*vks.Client).CreateCluster, Guard(requireVKSCreateConsent))
+				op.call = func(_ *cobra.Command, _ *vks.Client, _ context.Context, _ any) (any, error) {
+					return &vks.CreateClusterOutput{ID: "cluster-1", Status: tc.status}, tc.err
+				}
+				root := newTestRoot(h.e)
+				root.AddCommand(Service(h.e, "vks", "test", vks.New, op))
+				root.SetArgs([]string{"--region", "hcm-3", "--yes", "--output", format, "vks", "create-cluster", "--cli-input-json", `{"Name":"cluster","Version":"v1","VPCID":"vpc-1","SubnetID":"subnet-1","PodCIDR":"10.20.0.0/16","NodeGroupName":"group","NumNodes":1,"FlavorID":"flavor-1","OS":"ubuntu","DiskSize":20,"DiskTypeID":"disk-1","SecurityGroupIDs":["sg-1"],"SSHKeyID":"key-1"}`})
+				if err := root.ExecuteContext(context.Background()); !errors.Is(err, tc.err) {
+					t.Fatal(err)
+				}
+				path := filepath.Join(os.Getenv("VKS_GOLDEN_DIR"), tc.name+"."+format+".golden")
+				if err := os.WriteFile(path, []byte(h.stdout.String()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
 
 func TestVKSDeleteGoldens(t *testing.T) {
 	for _, format := range []string{"json", "table", "text"} {

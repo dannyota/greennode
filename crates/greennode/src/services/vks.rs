@@ -1,3 +1,4 @@
+mod create;
 mod delete;
 
 use clap::ArgMatches;
@@ -87,6 +88,7 @@ pub(super) const SERVICE: Service = Service {
     name: "vks",
     error_rules: &[],
     operations: &[
+        create::CREATE_CLUSTER,
         delete::DELETE_CLUSTER,
         Operation {
             name: "list-clusters",
