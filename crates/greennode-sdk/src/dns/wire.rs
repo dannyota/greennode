@@ -113,7 +113,10 @@ impl<T: DeserializeOwned + Resource> Output for Detail<T> {
     }
 }
 
-fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Box<Error>> {
+pub(super) fn decode<T: Output>(
+    operation: &Operation,
+    response: &Response,
+) -> Result<T, Box<Error>> {
     if !operation.success.contains(&response.status) {
         return crate::wire::product::response::classify(
             operation.id,
@@ -125,7 +128,7 @@ fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Bo
         )
         .map(|_| T::default());
     }
-    if response.body.is_empty()
+    if (operation.allow_empty && response.body.is_empty())
         || (response.body.trim_ascii() == b"null"
             && serde_json::from_slice::<()>(&response.body).is_ok())
     {

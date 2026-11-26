@@ -290,3 +290,233 @@ async fn http_and_decode_failures_keep_go_envelope_fields() {
         assert_eq!(error["error"]["status"].as_u64(), status);
     }
 }
+
+#[tokio::test]
+async fn dns_writes_match_go_goldens() {
+    const CREATE_ZONE: &str =
+        include_str!("../../greennode-sdk/tests/fixtures/dns/create_hosted_zone.json");
+    const CREATE_RECORD: &str =
+        include_str!("../../greennode-sdk/tests/fixtures/dns/create_record.json");
+    let snapshot = CREATE_ZONE.replace("CREATING", "ACTIVE");
+    let replaced = snapshot.replace("<description>", "new description");
+    for (command, flags, sequence) in [
+        (
+            "create-hosted-zone",
+            &[
+                "--domain-name",
+                "example.test",
+                "--vpc-ids",
+                "vpc-1",
+                "--vpc-ids",
+                "vpc-2",
+            ][..],
+            vec![("200 OK", CREATE_ZONE)],
+        ),
+        (
+            "update-hosted-zone",
+            &[
+                "--hosted-zone-id",
+                "zone-1",
+                "--description",
+                "new description",
+            ],
+            vec![
+                ("200 OK", &snapshot),
+                ("204 No Content", ""),
+                ("200 OK", &replaced),
+            ],
+        ),
+        (
+            "delete-hosted-zone",
+            &["--hosted-zone-id", "zone-1", "--yes"],
+            vec![("200 OK", ZONE), ("204 No Content", "")],
+        ),
+        (
+            "create-record",
+            &[
+                "--hosted-zone-id",
+                "zone-1",
+                "--type",
+                "TXT",
+                "--cli-input-json",
+                r#"{"Values":[{"Value":"sample text","Weight":0}]}"#,
+            ],
+            vec![("200 OK", ZONE), ("200 OK", CREATE_RECORD)],
+        ),
+        (
+            "update-record",
+            &[
+                "--hosted-zone-id",
+                "zone-1",
+                "--record-id",
+                "record-1",
+                "--ttl",
+                "0",
+                "--sticky-session=false",
+                "--cli-input-json",
+                r#"{"TTL":300,"Values":[]}"#,
+            ],
+            vec![("200 OK", ZONE), ("204 No Content", ""), ("200 OK", RECORD)],
+        ),
+        (
+            "delete-record",
+            &[
+                "--hosted-zone-id",
+                "zone-1",
+                "--record-id",
+                "record-1",
+                "--yes",
+            ],
+            vec![("200 OK", ZONE), ("204 No Content", "")],
+        ),
+    ] {
+        for format in ["json", "table", "text"] {
+            let server = Server::start(
+                sequence
+                    .iter()
+                    .map(|(status, body)| response(status, body))
+                    .collect(),
+            );
+            let mut args = vec![command, "--no-wait", "--output", format];
+            args.extend_from_slice(flags);
+            let (status, stdout, stderr) = invoke(&server, BEARER, &args).await;
+            assert!(
+                stderr.is_empty(),
+                "{command}/{format}: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+            assert_eq!(status, ExitCode::SUCCESS, "{command}/{format}");
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/dns/{command}.{format}.golden"));
+            assert_eq!(stdout, std::fs::read(path).unwrap(), "{command}/{format}");
+            assert_eq!(server.requests(), sequence.len());
+            if command == "update-record" {
+                let body: serde_json::Value = serde_json::from_slice(&server.bodies()[1]).unwrap();
+                assert_eq!(
+                    body,
+                    serde_json::json!({"ttl":0,"enableStickySession":false,"value":[]})
+                );
+            }
+            if command == "create-hosted-zone" {
+                let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+                assert_eq!(body["assocVpcIds"], serde_json::json!(["vpc-1", "vpc-2"]));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn dns_write_guards_stop_before_preflight() {
+    let server = Server::start(vec![]);
+    for args in [
+        &[
+            "create-hosted-zone",
+            "--read-only",
+            "--domain-name",
+            "example.test",
+            "--vpc-ids",
+            "vpc-1",
+        ][..],
+        &[
+            "update-hosted-zone",
+            "--read-only",
+            "--hosted-zone-id",
+            "zone-1",
+            "--description",
+            "new",
+        ],
+        &[
+            "create-record",
+            "--read-only",
+            "--hosted-zone-id",
+            "zone-1",
+            "--type",
+            "A",
+            "--cli-input-json",
+            r#"{"Values":[{"Value":"192.0.2.1"}]}"#,
+        ],
+        &[
+            "update-record",
+            "--read-only",
+            "--hosted-zone-id",
+            "zone-1",
+            "--record-id",
+            "record-1",
+            "--ttl",
+            "30",
+        ],
+        &["delete-hosted-zone", "--hosted-zone-id", "zone-1"],
+        &[
+            "delete-record",
+            "--hosted-zone-id",
+            "zone-1",
+            "--record-id",
+            "record-1",
+        ],
+        &[
+            "delete-hosted-zone",
+            "--read-only",
+            "--hosted-zone-id",
+            "zone-1",
+            "--yes",
+        ],
+        &[
+            "delete-record",
+            "--read-only",
+            "--hosted-zone-id",
+            "zone-1",
+            "--record-id",
+            "record-1",
+            "--yes",
+        ],
+    ] {
+        let (status, stdout, stderr) = invoke(&server, BEARER, args).await;
+        assert_ne!(status, ExitCode::SUCCESS);
+        assert!(stdout.is_empty());
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains(if args.contains(&"--read-only") {
+            "ReadOnly"
+        } else {
+            "--yes"
+        }));
+    }
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn partial_dns_write_output_ignores_query_and_omits_nested_http_status() {
+    let server = Server::start(vec![
+        response("200 OK", ZONE),
+        response("204 No Content", ""),
+        response("404 Not Found", ""),
+    ]);
+    let (status, stdout, stderr) = invoke(
+        &server,
+        BEARER,
+        &[
+            "update-record",
+            "--hosted-zone-id",
+            "zone-1",
+            "--record-id",
+            "record-1",
+            "--ttl",
+            "40",
+            "--no-wait",
+            "--query",
+            "Record.TTL",
+        ],
+    )
+    .await;
+    assert_eq!(status, ExitCode::from(1));
+    let partial: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(partial["Record"]["ID"], "record-1");
+    assert_eq!(partial["Record"]["TTL"], 40);
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "NotSettled");
+    assert_eq!(
+        error["error"]["message"],
+        "vngcloud: write outcome not confirmed: dns.UpdateRecord: record record-1: dns.UpdateRecord: Not Found (status 404)"
+    );
+    assert!(error["error"].get("status").is_none());
+    assert!(error["error"].get("operation").is_none());
+}

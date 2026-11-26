@@ -1,3 +1,5 @@
+mod writes;
+
 use clap::ArgMatches;
 use greennode_sdk::dns::{
     Client, GetHostedZoneInput, GetRecordInput, ListHostedZonesInput, ListRecordsInput,
@@ -5,6 +7,7 @@ use greennode_sdk::dns::{
 use greennode_sdk::{Config, RequestContext};
 
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
+use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 
@@ -232,8 +235,29 @@ const LIST_RECORDS_INPUT: InputDescriptor<ListRecordsInput> = InputDescriptor {
 
 pub(super) const SERVICE: Service = Service {
     name: "dns",
-    error_rules: &[],
+    error_rules: &[Rule {
+        identity: "dns.ZoneBusy",
+        matches: |error| {
+            matches!(
+                error.detail::<greennode_sdk::dns::ErrorDetail>(),
+                Some(greennode_sdk::dns::ErrorDetail::ZoneBusy)
+            )
+        },
+        name: Some(RuleName {
+            rank: 17,
+            code: "ZoneBusy",
+            operation: RuleOperation::Omit,
+            include_api_status: false,
+        }),
+        exit: Some(RuleExit::Failure),
+    }],
     operations: &[
+        writes::CREATE_ZONE,
+        writes::CREATE_RECORD,
+        writes::DELETE_ZONE,
+        writes::DELETE_RECORD,
+        writes::UPDATE_ZONE,
+        writes::UPDATE_RECORD,
         Operation {
             name: "get-hosted-zone",
             sdk_operation: "dns.GetHostedZone",
