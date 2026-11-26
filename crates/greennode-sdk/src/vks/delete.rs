@@ -1,16 +1,18 @@
-use super::Client;
+use super::{
+    Client,
+    write::{not_sent, valid_id, wait_cluster},
+};
 use crate::RequestContext;
-use crate::config::session::AuthKind;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation, Output},
     redirect::{Classification, Retry},
     retry,
 };
-use crate::wire::strict_json::{Shape, ShapeField};
+use crate::wire::strict_json::Shape;
 use crate::{Error, ErrorClass, Failure, WriteDispatch};
 use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
 /// Selects an exact cluster for deletion.
 #[derive(Clone, Debug)]
@@ -40,26 +42,6 @@ pub struct DeleteClusterOutput {
 }
 
 #[derive(Default, Deserialize)]
-#[serde(default)]
-struct ClusterState {
-    id: String,
-    status: String,
-}
-
-impl Output for ClusterState {
-    const SCHEMA: Shape<'static> = Shape::Object(&[
-        ShapeField {
-            name: "id",
-            shape: Shape::Any,
-        },
-        ShapeField {
-            name: "status",
-            shape: Shape::Any,
-        },
-    ]);
-}
-
-#[derive(Default, Deserialize)]
 struct Acknowledgement {}
 
 impl Output for Acknowledgement {
@@ -78,7 +60,7 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteClusterInput,
     ) -> Result<DeleteClusterOutput, Failure<DeleteClusterOutput>> {
-        self.delete_provenance()?;
+        self.write_base()?;
         self.delete_cluster_inner(ctx, input).await
     }
 
@@ -87,17 +69,13 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteClusterInput,
     ) -> Result<DeleteClusterOutput, Failure<DeleteClusterOutput>> {
-        if input.cluster_id.is_empty()
-            || !input
-                .cluster_id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
+        if !valid_id(&input.cluster_id) {
             return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail("greennode: invalid input: vks.DeleteCluster: ClusterID must be non-empty and contain only letters, digits, and hyphens")));
         }
-        self.cluster_state(ctx, &input.cluster_id)
+        let mut evidence = Evidence::new();
+        self.cluster_state(ctx, &input.cluster_id, &mut evidence)
             .await
-            .map_err(not_sent)?;
+            .map_err(|error| not_sent(*error))?;
         let output = DeleteClusterOutput::default();
         let operation = delete_operation();
         let base = self
@@ -132,130 +110,20 @@ impl Client {
         if input.no_wait {
             return Ok(output);
         }
-        let clock = self.session.clock();
-        let deadline = clock.monotonic_now() + Duration::from_secs(30 * 60);
-        let wait = ctx.child_with_deadline(deadline);
-        loop {
-            if let Some(end) = wait.check(clock) {
-                return Err(unsettled(
-                    end.into(),
-                    output,
-                    WriteDispatch::MayHaveBeenSent,
-                ));
+        wait_cluster(ctx, self.session.clock(), async |wait| {
+            match self
+                .cluster_state(wait, &input.cluster_id, &mut evidence)
+                .await
+            {
+                Err(error) if error.has_class(ErrorClass::NotFound) => Ok(true),
+                Err(error) => Err(error),
+                Ok(_) => Ok(false),
             }
-            let result = self.cluster_state(&wait, &input.cluster_id).await;
-            if let Some(end) = wait.check(clock) {
-                return Err(unsettled(
-                    end.into(),
-                    output,
-                    WriteDispatch::MayHaveBeenSent,
-                ));
-            }
-            match result {
-                Err(error) if error.has_class(ErrorClass::NotFound) => {
-                    return Ok(DeleteClusterOutput { deleted: true });
-                }
-                Err(error) => return Err(unsettled(error, output, WriteDispatch::MayHaveBeenSent)),
-                Ok(()) => {}
-            }
-            let until = (clock.monotonic_now() + Duration::from_secs(10)).min(deadline);
-            let mut end = std::pin::pin!(wait.wait(clock));
-            let mut sleep = clock.sleep_until(until);
-            let stopped = std::future::poll_fn(|cx| {
-                use std::future::Future as _;
-                if let std::task::Poll::Ready(end) = end.as_mut().poll(cx) {
-                    return std::task::Poll::Ready(Some(end));
-                }
-                if sleep.as_mut().poll(cx).is_ready() {
-                    return std::task::Poll::Ready(None);
-                }
-                std::task::Poll::Pending
-            })
-            .await;
-            if let Some(end) = stopped {
-                return Err(unsettled(
-                    end.into(),
-                    output,
-                    WriteDispatch::MayHaveBeenSent,
-                ));
-            }
-        }
-    }
-
-    async fn cluster_state(&self, ctx: &RequestContext, id: &str) -> Result<(), Error> {
-        let base = self
-            .base::<()>()
-            .map_err(|failure| failure.into_parts().0)?;
-        let mut jitter = || self.session.retry_jitter();
-        let runtime = self
-            .session
-            .runtime(ctx, &mut jitter)
-            .map_err(|error| *error)?;
-        let mut op = super::read_operation("vks.GetCluster", "v1/clusters/{}");
-        op.no_redirect = true;
-        op.keep_status = true;
-        let (_, state) = operation::execute::<ClusterState>(
-            runtime,
-            base,
-            &op,
-            &[id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-        )
+        })
         .await
-        .map_err(|failure| super::safe_error(op.id, failure.error()))?;
-        let valid_status = state.status.len() <= 64
-            && state
-                .status
-                .bytes()
-                .next()
-                .is_some_and(|b| b.is_ascii_uppercase())
-            && state
-                .status
-                .bytes()
-                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
-        if state.id != id || !valid_status {
-            return Err(super::malformed(op.id));
-        }
-        Ok(())
+        .map_err(|error| unsettled(*error, output, WriteDispatch::MayHaveBeenSent))?;
+        Ok(DeleteClusterOutput { deleted: true })
     }
-
-    fn delete_provenance(&self) -> Result<(), Failure<DeleteClusterOutput>> {
-        let session = &self.session;
-        self.base::<DeleteClusterOutput>().map_err(|failure| {
-            let (error, _, _) = failure.into_parts();
-            Failure::new(error, None, WriteDispatch::NotSent)
-        })?;
-        if session.auth_kind() != AuthKind::IamUser
-            || !session.uses_default_auth_endpoints()
-            || session
-                .endpoints()
-                .vks
-                .as_ref()
-                .map(|base| base.configured_url())
-                != session
-                    .default_endpoints()
-                    .vks
-                    .as_ref()
-                    .map(|base| base.configured_url())
-        {
-            return Err(Failure::new(
-                super::local_error(
-                    ErrorClass::InvalidConfig,
-                    "InvalidConfig",
-                    "greennode: invalid config: VKS writes require SDK IAM-user login and default endpoints",
-                ),
-                None,
-                WriteDispatch::NotSent,
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn not_sent(error: Error) -> Failure<DeleteClusterOutput> {
-    Failure::new(error, None, WriteDispatch::NotSent)
 }
 
 fn unsettled(

@@ -262,3 +262,55 @@ fn help_describes_zero_based_pagination_without_sign_in() {
     }
     assert_eq!(server.connections(), 0);
 }
+
+const CREATE_INPUT: &str = r#"{"Name":"cluster","Version":"v1","VPCID":"vpc-1","SubnetID":"subnet-1","PodCIDR":"10.20.0.0/16","NodeGroupName":"group","NumNodes":1,"FlavorID":"flavor-1","OS":"ubuntu","DiskSize":20,"DiskTypeID":"disk-1","SecurityGroupIDs":["sg-1"],"SSHKeyID":"key-1"}"#;
+
+#[test]
+fn create_requires_confirmation_and_enforces_read_only() {
+    let server = Server::start(vec![]);
+    for (flags, code, message) in [
+        (
+            &[][..],
+            "InvalidUsage",
+            "create-cluster incurs charges; pass --yes to confirm",
+        ),
+        (
+            &["--yes", "--read-only"][..],
+            "ReadOnly",
+            "read-only: refused by --read-only",
+        ),
+    ] {
+        let mut args = vec!["create-cluster", "--cli-input-json", CREATE_INPUT];
+        args.extend(flags);
+        let (status, stdout, stderr) = invoke("hcm-3", &args, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], code);
+        assert_eq!(error["error"]["message"], message);
+    }
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn create_help_describes_charges_and_zone_constraints() {
+    let server = Server::start(vec![]);
+    let (status, stdout, stderr) = invoke("other", &["create-cluster", "--help"], &server);
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert!(stderr.is_empty());
+    let help = String::from_utf8(stdout).unwrap();
+    for text in [
+        "no quote API",
+        "four service endpoints",
+        "--yes",
+        "not workload ready",
+        "5 to 20",
+        "5 to 15",
+        "network get-subnet",
+        "volume get-default-volume-type",
+        "same zone",
+    ] {
+        assert!(help.contains(text), "missing {text}");
+    }
+    assert_eq!(server.connections(), 0);
+}
