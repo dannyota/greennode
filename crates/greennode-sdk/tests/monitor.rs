@@ -4,7 +4,17 @@ use greennode_sdk::monitor::{
     Client, GetDashboardInput, ListCheckResponseTimesInput, ListDashboardsInput,
 };
 use greennode_sdk::testing::{Product, Response, Server, with_product_loopback};
-use greennode_sdk::{Config, ConfigOptions, ErrorClass, RequestContext, Secret};
+use greennode_sdk::{
+    Config, ConfigOptions, CredentialsProvider, Error, ErrorClass, RequestContext, Secret, Token,
+};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 const CHECK: &str =
     r#"{"id":"chk-1","subtype":"HTTP","history_alarm":"alarm-1","locations":["loc-1"]}"#;
@@ -37,6 +47,195 @@ fn target(head: &[u8]) -> url::Url {
         .nth(1)
         .unwrap();
     url::Url::parse(&format!("https://example.test{target}")).unwrap()
+}
+
+struct Refresh(AtomicBool);
+
+impl CredentialsProvider for Refresh {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(Token::new(
+                Secret::new(if self.0.load(Ordering::SeqCst) {
+                    "abc"
+                } else {
+                    "toy-first"
+                }),
+                None,
+            ))
+        })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async move {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn statistics_does_not_send_refreshed_token_with_encoded_alarm() {
+    let snapshot = CHECK.replace("alarm-1", "prefixYWJjsuffix");
+    let server = Server::start(vec![
+        response("200 OK", &snapshot),
+        response("401 Unauthorized", ""),
+        response("200 OK", "[]"),
+    ]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_credentials_provider(Arc::new(Refresh(AtomicBool::new(false))));
+    let client = Client::new(
+        &Config::new(with_product_loopback(Product::Monitor, options, &server)).unwrap(),
+    );
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("chk-1"))
+            .await
+            .is_err()
+    );
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn statistics_retry_hints_match_status() {
+    for (status, retryable) in [
+        ("500 Internal Server Error", false),
+        ("503 Service Unavailable", true),
+    ] {
+        let mut responses = vec![response("200 OK", CHECK)];
+        responses.extend((0..5).map(|_| response(status, "")));
+        let server = Server::start(responses);
+        let (ctx, _) = RequestContext::new();
+        let failure = client(&server)
+            .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("chk-1"))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error().api_error().unwrap().retryable(), retryable);
+    }
+}
+
+#[tokio::test]
+async fn monitor_rejects_unsafe_returned_identifiers_and_raw_reflections() {
+    let page = include_str!("fixtures/monitor/list_dashboards_system.json");
+    let cases = [
+        (page.replace("dash-1", "dash_1"), "toy-token"),
+        (page.replace("dash-1", "prefix-abc-suffix"), "abc"),
+        (page.replace("Synthetic", "toy-token"), "toy-token"),
+    ];
+    for (body, token) in cases {
+        let server = Server::start(vec![response("200 OK", &body)]);
+        let (ctx, _) = RequestContext::new();
+        let failure = client_with_token(&server, token)
+            .list_dashboards(
+                &ctx,
+                ListDashboardsInput {
+                    system: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.error().api_error().unwrap().code(),
+            "InvalidResponse"
+        );
+    }
+    for snapshot in [
+        CHECK.replace("loc-1", "loc_1"),
+        CHECK.replace("alarm-1", "alarm_1"),
+        CHECK.replace("alarm-1", "prefix-abc-suffix"),
+    ] {
+        let server = Server::start(vec![response("200 OK", &snapshot)]);
+        let (ctx, _) = RequestContext::new();
+        let failure = client_with_token(&server, "abc")
+            .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("chk-1"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.error().api_error().unwrap().code(),
+            "InvalidResponse"
+        );
+        assert_eq!(server.requests(), 1);
+    }
+    let server = Server::start(vec![response("200 OK", CHECK), response("200 OK", TIMES)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = ListCheckResponseTimesInput::new("chk-1");
+    input.end = "2000-01-02T00:00:00Z".into();
+    let failure = client_with_token(&server, "12.5")
+        .list_check_response_times(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+}
+
+#[tokio::test]
+#[ignore = "shared identifier matcher does not yet screen hexadecimal credentials"]
+async fn dashboard_rejects_hex_encoded_credential_in_identifier() {
+    let page = include_str!("fixtures/monitor/list_dashboards_system.json")
+        .replace("dash-1", "prefix616263suffix");
+    let server = Server::start(vec![response("200 OK", &page)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client_with_token(&server, "abc")
+        .list_dashboards(
+            &ctx,
+            ListDashboardsInput {
+                system: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+}
+
+#[tokio::test]
+async fn response_times_limits_precede_bucket_validation() {
+    let buckets = format!(
+        "{},{{}}",
+        vec![r#"{"key":"2000-01-01T00:00:00Z","value":"1"}"#; 100_000].join(",")
+    );
+    let body = format!(
+        r#"[{{"name":"syntt.http.response_time","dimensions":{{"location_id":"loc-1"}},"statistics":[{buckets}]}}]"#
+    );
+    let server = Server::start(vec![response("200 OK", CHECK), response("200 OK", &body)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("chk-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "ResponseLimitExceeded"
+    );
+}
+
+#[tokio::test]
+async fn oversized_statistics_preserves_forbidden_status() {
+    let body = "x".repeat((16 << 20) + 1);
+    let server = Server::start(vec![
+        response("200 OK", CHECK),
+        response("403 Forbidden", &body),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("chk-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().code(), "Forbidden");
 }
 
 #[tokio::test]
@@ -213,16 +412,18 @@ async fn dashboard_redacts_reflected_booleans() {
 }
 
 #[tokio::test]
-async fn response_times_redact_reflected_rendered_numbers() {
+async fn response_times_reject_reflected_raw_numbers() {
     let body = TIMES.replace("12.5", "12.50");
     let server = Server::start(vec![response("200 OK", CHECK), response("200 OK", &body)]);
     let (ctx, _) = RequestContext::new();
     let mut input = ListCheckResponseTimesInput::new("chk-1");
     input.end = "2000-01-02T00:00:00Z".into();
-    let output = client_with_token(&server, "12.5")
+    let failure = client_with_token(&server, "12.5")
         .list_check_response_times(&ctx, input)
         .await
-        .unwrap();
-    let json = serde_json::to_value(output).unwrap();
-    assert_eq!(json["Items"][0]["Points"][0]["ValueMillis"], "<redacted>");
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
 }

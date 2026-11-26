@@ -244,7 +244,7 @@ fn page_output(
     let mut ids = HashSet::new();
     if !wire.items.iter().all(|dashboard| {
         dashboard.system == ResponseField::Value(system)
-            && PathIds::WithUnderscore.allows(&dashboard.id)
+            && PathIds::Strict.allows(&dashboard.id)
             && ids.insert(&dashboard.id)
     }) {
         return Err(invalid());
@@ -270,8 +270,8 @@ fn page_output(
 
 impl Dashboard {
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        self.id.redact(evidence)
-            && self.name.redact(evidence)
+        !evidence.id_reflects(&self.id)
+            && !evidence.text_reflects(&self.name)
             && self.system.redact(evidence)
             && self.favorite.redact(evidence)
             && self.created_at.redact(evidence)

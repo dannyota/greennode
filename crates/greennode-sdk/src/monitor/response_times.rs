@@ -189,9 +189,9 @@ impl Client {
             || locations.len() != snapshot.locations.len()
             || locations
                 .iter()
-                .any(|location| !PathIds::WithUnderscore.allows(location))
+                .any(|location| !PathIds::Strict.allows(location))
             || (!snapshot.history_alarm.is_empty()
-                && !PathIds::WithUnderscore.allows(&snapshot.history_alarm))
+                && !PathIds::Strict.allows(&snapshot.history_alarm))
             || snapshot.decision_reflects(&evidence)
         {
             return Err(failure(CHECK.invalid(&evidence)));
@@ -237,6 +237,7 @@ impl Client {
         {
             return Err(failure(CHECK.invalid(&evidence)));
         }
+        check_limits(&raw, &evidence).map_err(failure)?;
         let groups =
             decode(&raw, &Shape::Array(&GROUP), &STATISTICS, &evidence).map_err(failure)?;
         let items = series(groups, locations, &window, &evidence).map_err(failure)?;
@@ -250,11 +251,51 @@ impl Client {
 
 impl Snapshot {
     fn decision_reflects(&self, evidence: &Evidence) -> bool {
-        [&self.id, &self.subtype, &self.history_alarm]
-            .into_iter()
-            .chain(&self.locations)
-            .any(|value| evidence.text_reflects(value))
+        evidence.text_reflects(&self.subtype)
+            || [&self.id, &self.history_alarm]
+                .into_iter()
+                .chain(&self.locations)
+                .any(|value| evidence.id_reflects(value))
     }
+}
+
+fn check_limits(raw: &serde_json::value::RawValue, evidence: &Evidence) -> Result<(), Error> {
+    let Ok(groups) = serde_json::from_str::<Vec<&serde_json::value::RawValue>>(raw.get()) else {
+        return Ok(());
+    };
+    let limit = || {
+        CHECK.error(
+            Some(200),
+            "ResponseLimitExceeded",
+            "check alarm response rejected; body withheld",
+            false,
+            evidence,
+        )
+    };
+    if groups.len() > 64 {
+        return Err(limit());
+    }
+    let mut count = 0usize;
+    for group in groups {
+        let Ok(fields) = serde_json::from_str::<
+            std::collections::HashMap<&str, &serde_json::value::RawValue>,
+        >(group.get()) else {
+            return Ok(());
+        };
+        let Some(statistics) = fields.get("statistics") else {
+            return Ok(());
+        };
+        let Ok(buckets) =
+            serde_json::from_str::<Vec<&serde_json::value::RawValue>>(statistics.get())
+        else {
+            return Ok(());
+        };
+        count = count.saturating_add(buckets.len());
+        if count > 100_000 {
+            return Err(limit());
+        }
+    }
+    Ok(())
 }
 
 struct Window {
@@ -356,11 +397,10 @@ fn series(
                 early = true;
             }
             let number = decimal(&bucket.value).ok_or_else(invalid)?;
-            let mut value_millis = if evidence.text_reflects(&bucket.value) {
-                ResponseField::Redacted
-            } else {
-                ResponseField::Value(number)
-            };
+            if evidence.text_reflects(&bucket.value) {
+                return Err(invalid());
+            }
+            let mut value_millis = ResponseField::Value(number);
             if timestamp > window.end
                 || !timestamps.insert(timestamp)
                 || evidence.text_reflects(&bucket.key)

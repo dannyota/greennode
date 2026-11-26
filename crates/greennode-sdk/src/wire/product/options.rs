@@ -63,6 +63,7 @@ const ALLOWED_HEADERS: &[&str] = &["user-type", "region", "region_id"];
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
+    pub(crate) identifier_query_keys: &'a [&'a str],
     pub(crate) pacing: Option<&'a Pacing>,
     pub(crate) response_guard: Option<super::sender::ResponseGuard>,
     pub(crate) password_slot: Option<PasswordSlot<'a>>,
@@ -72,6 +73,7 @@ pub(crate) struct Options<'a> {
 impl Options<'_> {
     pub(crate) const DEFAULT: Self = Self {
         path_ids: PathIds::Strict,
+        identifier_query_keys: &[],
         pacing: None,
         response_guard: None,
         password_slot: None,

@@ -122,7 +122,7 @@ fn monitor_reads_match_go_goldens_in_every_format() {
 }
 
 #[test]
-fn dashboard_query_uses_typed_projection_after_reflection_redaction() {
+fn dashboard_rejects_reflected_name_before_query_output() {
     let reflected = body!("get_dashboard_system").replace("Synthetic", "toy%2Dmonitor%2Dtoken");
     let server = Server::start(vec![response(&reflected)]);
     let (status, output, stderr) = invoke(
@@ -135,7 +135,7 @@ fn dashboard_query_uses_typed_projection_after_reflection_redaction() {
         ],
         &server,
     );
-    assert_eq!(status, ExitCode::SUCCESS);
-    assert_eq!(output, b"\"\\u003credacted\\u003e\"\n");
-    assert!(stderr.is_empty());
+    assert_ne!(status, ExitCode::SUCCESS);
+    assert!(output.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("InvalidResponse"));
 }

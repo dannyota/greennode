@@ -137,7 +137,7 @@ impl Client {
             allow_empty: false,
             no_output: false,
             keep_status: true,
-            overflow_overrides_status: matches!(read.family, Family::CheckAlarm),
+            overflow_overrides_status: false,
             sensitive: true,
             reject_reflected_credentials: false,
             no_redirect: matches!(read.family, Family::Dashboard),
@@ -147,7 +147,15 @@ impl Client {
             runtime,
             base,
             &operation,
-            &Options::DEFAULT,
+            &Options {
+                identifier_query_keys: if read.route == "vmonitor-api/api/v1/statistics/synthetics"
+                {
+                    &["alarm", "dimensions"]
+                } else {
+                    &[]
+                },
+                ..Options::DEFAULT
+            },
             path,
             query,
             RouteAuth::Bearer(self.session.bearer_source()),
@@ -160,7 +168,7 @@ impl Client {
             Err(failure) => return Err(read.failure(failure.into_parts().0, evidence)),
         };
         if reply.status != StatusCode::OK {
-            let retryable = matches!(reply.status.as_u16(), 429 | 500..=599);
+            let retryable = matches!(reply.status.as_u16(), 429 | 502 | 503 | 504);
             return Err(read.request_failed(Some(reply.status.as_u16()), retryable, evidence));
         }
         let text = go_json(&reply.body);

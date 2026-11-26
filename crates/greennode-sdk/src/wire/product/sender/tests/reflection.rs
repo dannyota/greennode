@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn identifier_query_uses_strict_credential_matching() {
+    let credentials = SentCredentials::for_test(vec![Secret::new("abc")]);
+    let inputs = RouteInputs {
+        query: &[("alarm", "prefixYWJjsuffix")],
+        identifier_query_keys: &["alarm"],
+        ..Default::default()
+    };
+    assert!(inputs.reflects(&credentials));
+    let ordinary = RouteInputs {
+        query: &[("text", "prefixYWJjsuffix")],
+        ..Default::default()
+    };
+    assert!(!ordinary.reflects(&credentials));
+}
+
 #[tokio::test]
 async fn prior_bearer_remains_available_for_response_reflection() {
     let server = Server::start(vec![
