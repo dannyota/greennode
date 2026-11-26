@@ -178,14 +178,16 @@ async fn overview_refuses_credentials_reflected_in_rendered_numbers() {
 }
 
 #[tokio::test]
-async fn legacy_balances_accept_a_numeric_bearer_absent_from_output() {
+async fn legacy_balances_refuse_a_numeric_bearer_absent_from_output() {
     let server = Server::start(vec![response("200 OK", LEGACY_BALANCES)]);
     let (ctx, _) = RequestContext::new();
-    let output = client(&server, "987654321")
+    let Err(failure) = client(&server, "987654321")
         .get_balances(&ctx, GetBalancesInput {})
         .await
-        .unwrap();
-    assert_eq!(output.balances.cash, Some(1_000_000.0));
+    else {
+        panic!("numeric bearer returned legacy balances");
+    };
+    assert_invalid_response(failure);
 }
 
 #[tokio::test]

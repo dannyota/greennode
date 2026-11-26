@@ -176,6 +176,22 @@ fn resources_list_matches_baseline_goldens() {
 }
 
 #[test]
+fn resources_table_skips_unselected_raw_numbers() {
+    let body = RESOURCES.replacen(r#""level": "good""#, r#""level": 1e400"#, 1);
+    let server = Server::start(vec![response("200 OK", body)]);
+    let (status, stdout, stderr) = invoke(
+        &["billing", "list-resources", "--output", "table"],
+        Some(&server),
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(
+        stdout,
+        include_bytes!("../fixtures/billing/list-resources.table.golden")
+    );
+    assert!(stderr.is_empty());
+}
+
+#[test]
 fn history_help_explains_dates_and_query_root() {
     let (status, stdout, stderr) = invoke(&["billing", "list-payments", "--help"], None);
     assert_eq!(status, ExitCode::SUCCESS);

@@ -86,6 +86,9 @@ impl Output for BalancesResponse {
             if !fields.keys().any(|name| {
                 strict_json::field_matches("code", name) || strict_json::field_matches("data", name)
             }) {
+                if response.credentials.has_numeric_product_credential() {
+                    return Err(invalid());
+                }
                 let result: Self =
                     operation::decode_response(operation, response).map_err(|_| invalid())?;
                 if !result.0.valid(&response.credentials) {

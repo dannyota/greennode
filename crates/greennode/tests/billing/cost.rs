@@ -7,6 +7,35 @@ const RESOURCES: &str =
 const BALANCES: &str = include_str!("../../../greennode-sdk/src/billing/fixtures/GetBalances.json");
 
 #[test]
+fn cost_reads_reject_numeric_bearer_reflection() {
+    for (command, body, number) in [
+        ("get-cost-overview", OVERVIEW, "360.0"),
+        ("list-cost-resources", RESOURCES, "250000"),
+    ] {
+        assert_numeric_bearer_rejected(
+            &[
+                command,
+                "--start-date",
+                "2026-11-01",
+                "--end-date",
+                "2026-11-09",
+            ],
+            body,
+            number,
+        );
+    }
+}
+
+#[test]
+fn both_balance_response_shapes_reject_numeric_bearer_reflection() {
+    let legacy =
+        include_str!("../../../greennode-sdk/src/billing/fixtures/GetBalancesUnenveloped.json");
+    for body in [BALANCES, legacy] {
+        assert_numeric_bearer_rejected(&["get-balances"], body, "50000");
+    }
+}
+
+#[test]
 fn cost_and_balances_match_baseline_json_table_and_text() {
     let dates = [
         "--cli-input-json",

@@ -7,6 +7,25 @@ const THRESHOLDS: &str =
 const ALERTS: &str =
     include_str!("../../../greennode-sdk/src/billing/fixtures/ListBudgetAlerts.json");
 
+#[test]
+fn budget_reads_reject_numeric_bearer_reflection() {
+    for (args, body, number) in [
+        (&["get-current-period-cost"][..], COST, "4200000"),
+        (
+            &["list-budget-thresholds", "--budget-uuid", "budget-1"],
+            THRESHOLDS,
+            "100.0",
+        ),
+        (
+            &["list-budget-alerts", "--budget-uuid", "budget-1"],
+            ALERTS,
+            "4200000",
+        ),
+    ] {
+        assert_numeric_bearer_rejected(args, body, number);
+    }
+}
+
 macro_rules! golden_formats {
     ($command:literal) => {
         [

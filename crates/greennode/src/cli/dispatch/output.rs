@@ -48,17 +48,16 @@ fn write_output(
     if format == Format::Json && query.is_none() {
         return render::write_json(&mut writer, projected).map_err(Into::into);
     }
+    if let (Format::Table, None, Some(table)) = (format, query, view.table) {
+        return render::write_projected_table(&mut writer, projected, table).map_err(Into::into);
+    }
     let mut value = projected.for_query()?;
     if let Some(query) = query {
         value = query::evaluate(query, &value).map_err(|_| OutputError::Query)?;
     }
     match format {
         Format::Json => render::write_json(&mut writer, &render::project(&value)?),
-        Format::Table => render::write_table_with_columns(
-            &mut writer,
-            &value,
-            view.table.filter(|_| query.is_none()),
-        ),
+        Format::Table => render::write_table(&mut writer, &value),
         Format::Text => render::write_text(&mut writer, &value),
     }
     .map_err(Into::into)

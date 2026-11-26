@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use super::value::{cell, check_depth, escape, escape_write, rows, write_cell};
-use super::{Error, Value};
+use super::value::{cell, check_depth, convert, escape, escape_write, rows, write_cell};
+use super::{Error, Node, Projected, Value};
 
 #[cfg(test)]
 mod tests {
@@ -147,7 +147,37 @@ pub(crate) struct TableView {
     pub(crate) show_empty_headers: bool,
 }
 
-pub(crate) fn write_table_with_columns<W: Write>(
+pub(crate) fn write_projected_table<W: Write>(
+    w: &mut W,
+    projected: &Projected,
+    view: TableView,
+) -> Result<(), Error> {
+    let mut source = &projected.0;
+    if let Node::Object(fields) = source
+        && let Some((_, items @ Node::Array(_))) = fields.iter().rfind(|(name, _)| name == "Items")
+    {
+        source = items;
+    }
+    let project_row = |item: &Node| match item {
+        Node::Object(fields) => Ok(Value::Object(
+            fields
+                .iter()
+                .filter(|(name, _)| view.columns.contains(&name.as_str()))
+                .map(|(name, value)| Ok((name.clone(), convert(value)?)))
+                .collect::<Result<_, Error>>()?,
+        )),
+        _ => convert(item),
+    };
+    let value = match source {
+        Node::Array(items) => {
+            Value::Array(items.iter().map(project_row).collect::<Result<_, _>>()?)
+        }
+        item => project_row(item)?,
+    };
+    write_table_with_columns(w, &value, Some(view))
+}
+
+fn write_table_with_columns<W: Write>(
     w: &mut W,
     value: &Value,
     view: Option<TableView>,

@@ -75,6 +75,9 @@ impl<T: BudgetData> Output for Envelope<T> {
                 .map_err(|_| invalid())?;
             return Err(api_error(operation, response, header.not_found()));
         }
+        if response.credentials.has_numeric_product_credential() {
+            return Err(invalid());
+        }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
         if !output.data.valid(&response.credentials) {

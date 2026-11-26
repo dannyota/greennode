@@ -308,6 +308,7 @@ a typed field.
 
 ## Differences from the baseline
 
+- A hexadecimal billing balance may round differently from Go in the last bit.
 - Use async Rust clients, owned options and inputs, typed cancellation and
   failure with partial output and dispatch state. There is no Go-style nil
   input, zero `Config`, blocking API, pointer helper, or context value map.
