@@ -9,6 +9,7 @@ mod globalloadbalancer;
 mod iam;
 mod loadbalancer;
 mod monitor;
+mod network;
 mod portal;
 mod pricing;
 mod project;
@@ -171,6 +172,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         iam::SERVICE,
         loadbalancer::SERVICE,
         monitor::SERVICE,
+        network::SERVICE,
         portal::SERVICE,
         pricing::SERVICE,
         project::SERVICE,

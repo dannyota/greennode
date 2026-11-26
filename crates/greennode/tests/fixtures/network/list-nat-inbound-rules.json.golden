@@ -1,0 +1,26 @@
+{
+  "Items": [
+    {
+      "ID": "rule-1",
+      "Protocol": "tcp",
+      "EtherType": "IPv4",
+      "Direction": "ingress",
+      "PortRangeMin": 80,
+      "PortRangeMax": 80,
+      "Description": "web",
+      "CreatedAt": "example-time",
+      "System": true
+    },
+    {
+      "ID": "rule-2",
+      "Protocol": "tcp",
+      "EtherType": "IPv4",
+      "Direction": "ingress",
+      "PortRangeMin": 443,
+      "PortRangeMax": 443,
+      "Description": "secure",
+      "CreatedAt": "example-time",
+      "System": true
+    }
+  ]
+}

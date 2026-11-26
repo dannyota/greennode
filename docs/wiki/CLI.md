@@ -15,6 +15,7 @@
 - [IAM](CLI-IAM.md)
 - [LoadBalancer](CLI-LoadBalancer.md)
 - [Monitor](CLI-Monitor.md)
+- [Network](CLI-Network.md)
 - [Portal](CLI-Portal.md)
 - [Pricing](CLI-Pricing.md)
 - [Project](CLI-Project.md)
