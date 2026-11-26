@@ -609,6 +609,34 @@ async fn disruptive_server_actions_require_confirmation_and_refuse_read_only() {
 }
 
 #[tokio::test]
+async fn start_server_oversized_not_found_returns_exit_four_without_partial() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"server-1","status":"STOPPED"}}"#,
+        ),
+        response("404 Not Found", &"x".repeat((8 << 20) + 1)),
+    ]);
+    let (exit, stdout, stderr) = invoke(
+        &server,
+        &[
+            "start-server",
+            "--project-id",
+            "proj-1",
+            "--server-id",
+            "server-1",
+            "--no-wait",
+        ],
+        false,
+    )
+    .await;
+    assert_eq!(exit, ExitCode::from(4));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "NotFound");
+}
+
+#[tokio::test]
 async fn group_delete_in_use_404_keeps_provider_status_exit() {
     let server = Server::start(vec![
         response(
