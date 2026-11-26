@@ -8,6 +8,7 @@ mod wire;
 pub use model::{EngineVersion, Flavor, Instance, Network, Page, StorageType, Subnet, Zone};
 
 use crate::config::Session;
+use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation},
@@ -15,7 +16,7 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     retry,
 };
-use crate::{Config, Error, ErrorClass, Failure, List, RequestContext, WriteDispatch};
+use crate::{ApiError, Config, Error, ErrorClass, Failure, List, RequestContext, WriteDispatch};
 use http::{Method, StatusCode};
 use serde::Serialize;
 use std::sync::Arc;
@@ -169,7 +170,7 @@ impl Client {
     ) -> Result<ListDatabaseFlavorsOutput, Failure<ListDatabaseFlavorsOutput>> {
         if !valid_id(&input.engine) || input.engine_version.is_empty() || !valid_id(&input.zone_id)
         {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(invalid_input()));
         }
         let query = [
             ("type", input.engine.as_str()),
@@ -196,7 +197,7 @@ impl Client {
         input: ListDatabaseStorageTypesInput,
     ) -> Result<ListDatabaseStorageTypesOutput, Failure<ListDatabaseStorageTypesOutput>> {
         if !valid_id(&input.zone_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(invalid_input()));
         }
         let data: StorageData = self
             .read(
@@ -220,7 +221,7 @@ impl Client {
         input: ListDatabaseNetworksInput,
     ) -> Result<ListDatabaseNetworksOutput, Failure<ListDatabaseNetworksOutput>> {
         if !valid_id(&input.zone_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(invalid_input()));
         }
         Ok(List {
             items: self
@@ -242,7 +243,7 @@ impl Client {
         input: ListDatabaseInstancesInput,
     ) -> Result<ListDatabaseInstancesOutput, Failure<ListDatabaseInstancesOutput>> {
         if input.page_number < 0 || input.page_size < 0 {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(invalid_input()));
         }
         let page = input.page_number.max(1).to_string();
         let size = if input.page_size == 0 {
@@ -274,7 +275,7 @@ impl Client {
         input: GetDatabaseInstanceInput,
     ) -> Result<GetDatabaseInstanceOutput, Failure<GetDatabaseInstanceOutput>> {
         if !valid_id(&input.id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(invalid_input()));
         }
         let operation = read_operation(
             "database.GetDatabaseInstance",
@@ -333,16 +334,25 @@ impl Client {
         .map(|(_, envelope)| envelope.data)
         .map_err(|error| {
             let (error, _, dispatch) = error.into_parts();
-            Failure::new(error, None, dispatch)
+            Failure::new(wire::safe_error(operation, error), None, dispatch)
         })
     }
+}
+fn invalid_input() -> Error {
+    Error::new(ErrorClass::InvalidInput).with_cause(Error::from_api(ApiError::without_fallback(
+        "",
+        None,
+        SafeText::new("InvalidUsage", &[]),
+        SafeText::new("vngcloud: invalid input: invalid database selection", &[]),
+        false,
+    )))
 }
 fn failure<T>(error: Error) -> Failure<T> {
     Failure::new(error, None, WriteDispatch::NotAWrite)
 }
 fn read_operation(id: &'static str, template: &'static str) -> Operation {
     Operation {
-        id,
+        id: id.strip_prefix("database.").unwrap_or(id),
         template,
         method: Method::GET,
         class: Classification::Read,

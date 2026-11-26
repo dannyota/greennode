@@ -5,7 +5,7 @@ use crate::wire::product::{
     sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{ApiError, Error};
+use crate::{ApiError, Error, ErrorClass};
 use http::StatusCode;
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -44,7 +44,7 @@ impl<T: Data> Output for Envelope<T> {
             return Err(invalid());
         }
         let data = &header["data"];
-        if operation.id == "database.ListDatabaseNetworks"
+        if operation.id == "ListDatabaseNetworks"
             && data.as_array().is_none_or(|rows| {
                 rows.iter()
                     .any(|row| !row.get("subnets").is_some_and(serde_json::Value::is_array))
@@ -58,6 +58,27 @@ impl<T: Data> Output for Envelope<T> {
             return Err(invalid());
         }
         Ok(output)
+    }
+}
+
+pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
+    let Some(api) = error.api_error() else {
+        return error;
+    };
+    if api.operation() != operation.id || api.status() == Some(200) {
+        return error;
+    }
+    let safe = Error::from_api(ApiError::new(
+        operation.id,
+        api.status(),
+        SafeText::new("", &[]),
+        SafeText::new("request failed; response withheld", &[]),
+        api.retryable(),
+    ));
+    if error.class() == ErrorClass::Api {
+        safe
+    } else {
+        Error::new(error.class()).with_cause(safe)
     }
 }
 

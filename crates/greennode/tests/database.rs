@@ -52,6 +52,87 @@ fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
 }
 
 #[test]
+fn database_errors_match_baseline() {
+    let replies: [(&str, &[u8]); 2] = [
+        ("403 Forbidden", br#"{"message":"private"}"#),
+        ("200 OK", br#"{"code":200,"data":null}"#),
+    ];
+    let server = Server::start(
+        replies
+            .into_iter()
+            .map(|(status, body)| Response::Http {
+                status: status.into(),
+                headers: vec![("Content-Length".into(), body.len().to_string())],
+                body: body.to_vec(),
+            })
+            .collect(),
+    );
+    for (expected_status, expected_code, expected_message) in [
+        (403, "Forbidden", "request failed; response withheld"),
+        (200, "InvalidResponse", "invalid response; body withheld"),
+    ] {
+        let (status, stdout, stderr) = invoke(
+            &["database", "get-database-instance", "--id", "db_one"],
+            &server,
+        );
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["operation"], "GetDatabaseInstance");
+        assert_eq!(error["error"]["status"], expected_status);
+        assert_eq!(error["error"]["code"], expected_code);
+        assert_eq!(error["error"]["message"], expected_message);
+    }
+    let (status, _, stderr) = invoke(
+        &["database", "get-database-instance", "--id", "../invalid"],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(
+        error["error"]["message"],
+        "vngcloud: invalid input: invalid database selection"
+    );
+    assert_eq!(server.requests(), 2);
+}
+
+#[test]
+fn database_null_replicas_render_as_empty_arrays() {
+    let list = br#"{"code":200,"data":{"data":[{"id":"db_one","name":"db","status":"ACTIVE","replicas":null}],"pageObject":{}}}"#;
+    let detail =
+        br#"{"code":200,"data":{"id":"db_one","name":"db","status":"ACTIVE","replicas":null}}"#;
+    let server = Server::start(
+        [list.as_slice(), detail.as_slice()]
+            .into_iter()
+            .map(|body| Response::Http {
+                status: "200 OK".into(),
+                headers: vec![("Content-Length".into(), body.len().to_string())],
+                body: body.to_vec(),
+            })
+            .collect(),
+    );
+    for (args, key) in [
+        (&["database", "list-database-instances"][..], "Items"),
+        (
+            &["database", "get-database-instance", "--id", "db_one"][..],
+            "Instance",
+        ),
+    ] {
+        let (status, stdout, stderr) = invoke(args, &server);
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+        let instance = if key == "Items" {
+            &output[key][0]
+        } else {
+            &output[key]
+        };
+        assert_eq!(instance["Replicas"], serde_json::json!([]));
+    }
+}
+
+#[test]
 fn database_json_pagination_and_local_guards() {
     let body = include_bytes!("fixtures/database/list-database-instances.response.json");
     let server = Server::start(vec![Response::Http {
