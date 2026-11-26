@@ -309,9 +309,7 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Failure<()> {
         if failure.error().api_error().and_then(ApiError::status) == Some(401)
-            && let Err(read) = self
-                .read_web_detail_once(ctx, call.id, cdn_id, evidence)
-                .await
+            && let Err(read) = self.read_web_detail(ctx, call.id, cdn_id, evidence).await
             && read.error().has_class(ErrorClass::NotFound)
         {
             return Failure::new(read.into_parts().0, None, failure.write_dispatch());

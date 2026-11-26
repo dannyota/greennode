@@ -191,37 +191,7 @@ impl Client {
         cdn_id: &str,
         evidence: &mut Evidence,
     ) -> Result<WebDetail, Failure<()>> {
-        self.web_detail(ctx, Call { id, ..GET_WEB }, cdn_id, evidence)
-            .await
-    }
-
-    pub(super) async fn read_web_detail_once(
-        &self,
-        ctx: &RequestContext,
-        id: &'static str,
-        cdn_id: &str,
-        evidence: &mut Evidence,
-    ) -> Result<WebDetail, Failure<()>> {
-        self.web_detail(
-            ctx,
-            Call {
-                id,
-                retry: crate::wire::product::redirect::Retry::Once,
-                ..GET_WEB
-            },
-            cdn_id,
-            evidence,
-        )
-        .await
-    }
-
-    async fn web_detail(
-        &self,
-        ctx: &RequestContext,
-        call: Call,
-        cdn_id: &str,
-        evidence: &mut Evidence,
-    ) -> Result<WebDetail, Failure<()>> {
+        let call = Call { id, ..GET_WEB };
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;

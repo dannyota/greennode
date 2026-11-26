@@ -87,15 +87,9 @@ impl Call {
         )
     }
 
-    fn key_error(&self, status: u16) -> Error {
-        api_error(
-            self.id,
-            status,
-            "",
-            key_message(status).unwrap_or_default(),
-            error_class(status),
-            false,
-        )
+    fn key_error(&self, status: u16, error: &Error, message: &str) -> Error {
+        let code = error.api_error().map_or("", ApiError::code);
+        api_error(self.id, status, code, message, error_class(status), false)
     }
 
     fn short(&self) -> &str {
@@ -263,7 +257,9 @@ impl Client {
                     .map(StatusCode::as_u16)
                     .or_else(|| error.api_error().and_then(ApiError::status));
                 let error = match status {
-                    Some(status) if key_message(status).is_some() => call.key_error(status),
+                    Some(status) if let Some(message) = key_message(status) => {
+                        call.key_error(status, &error, message)
+                    }
                     Some(status) if (200..300).contains(&status) => call.unexpected(status),
                     Some(400) if error.class() == ErrorClass::Api => {
                         Error::new(ErrorClass::InvalidInput).with_cause(error)
@@ -280,24 +276,29 @@ impl Client {
             if reply.status.is_success() {
                 return Err(sent_failure(call.unexpected(status)));
             }
-            if key_message(status).is_some() {
-                return Err(sent_failure(call.key_error(status)));
-            }
+            let fixed_key_message = key_message(status);
             let error = classify(
                 call.id,
                 reply.status,
                 Bytes::from(reply.reply.body),
                 OK,
-                (true, call.sensitive, operation.retry),
+                (
+                    true,
+                    call.sensitive && fixed_key_message.is_none(),
+                    operation.retry,
+                ),
                 evidence.credentials(),
             )
             .err()
             .map_or_else(|| call.unexpected(status), |error| *error);
-            return Err(sent_failure(if status == 400 {
+            let error = if let Some(message) = fixed_key_message {
+                call.key_error(status, &error, message)
+            } else if status == 400 {
                 Error::new(ErrorClass::InvalidInput).with_cause(error)
             } else {
                 error
-            }));
+            };
+            return Err(sent_failure(error));
         }
         validate_shape(&reply.body, &ENVELOPE, RESPONSE_CAP)
             .map_err(|_| sent_failure(call.unexpected(status)))?;

@@ -1,3 +1,6 @@
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
+
 use greennode_sdk::cdn::{
     Client, DeleteWebAcceleratorInput, DisableWebAcceleratorInput, EnableWebAcceleratorInput,
     PurgePathsInput, UpdateWebAcceleratorInput,
@@ -122,15 +125,52 @@ const PURGE_INPUT: InputDescriptor<Input> = descriptor(&[
         None
     ),
 ]);
+fn nested_fields<T: DeserializeOwned>(value: Value, names: &[&str]) -> Result<Vec<T>, ()> {
+    let rows: Vec<Map<String, Value>> = serde_json::from_value(value).map_err(|_| ())?;
+    rows.into_iter()
+        .map(|row| {
+            let mut normalized = Map::new();
+            for (key, value) in row {
+                let name = names
+                    .iter()
+                    .find(|name| {
+                        key.chars()
+                            .map(fold_field_char)
+                            .eq(name.chars().map(fold_field_char))
+                    })
+                    .ok_or(())?;
+                if normalized.insert((*name).into(), value).is_some() {
+                    return Err(());
+                }
+            }
+            serde_json::from_value(Value::Object(normalized)).map_err(|_| ())
+        })
+        .collect()
+}
+
+fn fold_field_char(character: char) -> char {
+    match character {
+        '\u{017f}' => 's',
+        '\u{212a}' => 'k',
+        _ => character.to_ascii_lowercase(),
+    }
+}
+
 const UPDATE_INPUT: InputDescriptor<Input> = descriptor(&[
     ID_INPUT,
-    bind!(
-        SET_RULE_ACTIONS.name,
-        None,
-        Requirement::Optional,
-        update.set_rule_actions,
-        None
-    ),
+    InputField {
+        set_json: |input, value| {
+            input.update.set_rule_actions = nested_fields(value, &["Name", "Value"])?;
+            Ok(())
+        },
+        ..bind!(
+            SET_RULE_ACTIONS.name,
+            None,
+            Requirement::Optional,
+            update.set_rule_actions,
+            None
+        )
+    },
     bind!(
         REMOVE_RULE_ACTIONS.name,
         None,
@@ -138,13 +178,29 @@ const UPDATE_INPUT: InputDescriptor<Input> = descriptor(&[
         update.remove_rule_actions,
         None
     ),
-    bind!(
-        UPSTREAMS.name,
-        None,
-        Requirement::Optional,
-        update.upstreams,
-        None
-    ),
+    InputField {
+        set_json: |input, value| {
+            input.update.upstreams = nested_fields(
+                value,
+                &[
+                    "ID",
+                    "Priority",
+                    "IPAddress",
+                    "UpstreamType",
+                    "OriginValue",
+                    "UseSSL",
+                ],
+            )?;
+            Ok(())
+        },
+        ..bind!(
+            UPSTREAMS.name,
+            None,
+            Requirement::Optional,
+            update.upstreams,
+            None
+        )
+    },
     optional_string!("LBType", LB_TYPE, lb_type),
     bind!(
         FAIL_OVER_ERROR_CODES.name,

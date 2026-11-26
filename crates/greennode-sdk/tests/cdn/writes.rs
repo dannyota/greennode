@@ -363,3 +363,102 @@ async fn update_preserves_unmodeled_json_objects_and_number_spellings() {
     assert!(body.contains(r#""unknown":{"$serde_json::private::Number":"1e+6"}"#));
     assert!(body.contains(r#""large":123456789123456789123456789"#));
 }
+
+#[tokio::test]
+async fn write_preflight_rejects_object_identifiers() {
+    let (ctx, _) = RequestContext::new();
+    let object_id =
+        r#"{"success":true,"data":{"cdnId":{"$serde_json::private::Number":"12"},"status":1}}"#;
+    let server = Server::start(vec![reply(object_id), reply(TOGGLED)]);
+    let failure = client(&server, Some(CDN_KEY))
+        .delete_web_accelerator(&ctx, DeleteWebAcceleratorInput::new("12"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().code(), "EmptyResponse");
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+
+    let numeric_id = r#"{"success":true,"data":{"cdnId":12,"status":1}}"#;
+    let server = Server::start(vec![reply(numeric_id), reply(TOGGLED)]);
+    client(&server, Some(CDN_KEY))
+        .delete_web_accelerator(&ctx, DeleteWebAcceleratorInput::new("12"))
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn key_errors_keep_only_safe_service_codes() {
+    let (ctx, _) = RequestContext::new();
+    for (status, supplied, expected, message) in [
+        (
+            "401 Unauthorized",
+            "KeyExpired",
+            "KeyExpired",
+            "vCDN API key rejected: check the key and its expiry",
+        ),
+        (
+            "403 Forbidden",
+            "KeyScope",
+            "KeyScope",
+            "vCDN API key not allowed to call this API",
+        ),
+        (
+            "403 Forbidden",
+            "toy%2dcdn%2dkey",
+            "Forbidden",
+            "vCDN API key not allowed to call this API",
+        ),
+    ] {
+        let body = json!({"code": supplied, "message": CDN_KEY}).to_string();
+        let server = Server::start(vec![with_status(status, &body, "application/json")]);
+        let failure = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &ctx,
+                PurgePathsInput::new("cdn.example.test", vec!["/index.html".into()]),
+            )
+            .await
+            .unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert!(
+            api.code() == expected,
+            "expected the safe error code for {status}"
+        );
+        assert!(
+            api.message() == message,
+            "expected the fixed key error for {status}"
+        );
+        assert_eq!(server.requests(), 1);
+    }
+    let server = Server::start(vec![with_status(
+        "403 Forbidden",
+        r#"{"code":"KeyScope"}"#,
+        "application/json",
+    )]);
+    let failure = client(&server, Some(CDN_KEY))
+        .list_api_keys(&ctx, ListApiKeysInput)
+        .await
+        .unwrap_err();
+    assert!(failure.error().api_error().unwrap().code() == "KeyScope");
+}
+
+#[tokio::test]
+async fn purge_rejects_triply_percent_encoded_management_bearer() {
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![reply(include_str!(
+        "../fixtures/cdn/purge-success.json"
+    ))]);
+    let result = client(&server, Some(CDN_KEY))
+        .purge_paths(
+            &ctx,
+            PurgePathsInput::new(
+                "cdn.example.test",
+                vec!["/toy%25252dmanagement%25252dtoken".into()],
+            ),
+        )
+        .await;
+    assert_eq!(server.requests(), 0);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+}
