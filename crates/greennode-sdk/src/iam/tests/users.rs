@@ -202,7 +202,6 @@ const TOY_PASSWORD: &str = "Toy-pass9";
 const HEX_PASSWORD: &str = "546f792d7061737339";
 
 #[tokio::test]
-#[ignore = "requires the shared hex credential matcher"]
 async fn create_rejects_username_reflecting_hex_encoded_password() {
     let server = Server::start(Vec::new());
     let (ctx, _) = RequestContext::new();
@@ -218,7 +217,6 @@ async fn create_rejects_username_reflecting_hex_encoded_password() {
 }
 
 #[tokio::test]
-#[ignore = "requires the shared hex credential matcher"]
 async fn create_refuses_to_confirm_or_publish_created_id_reflecting_hex_encoded_password() {
     let body = format!(r#"{{"id":"id-{HEX_PASSWORD}"}}"#);
     let server = Server::start(vec![
@@ -247,7 +245,6 @@ async fn create_refuses_to_confirm_or_publish_created_id_reflecting_hex_encoded_
 }
 
 #[tokio::test]
-#[ignore = "requires the shared hex credential matcher"]
 async fn create_refuses_confirmation_redirect_reflecting_hex_encoded_password() {
     let server = Server::start(vec![
         response("201 Created", br#"{"id":"user-1"}"#),
