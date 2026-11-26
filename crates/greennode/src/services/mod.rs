@@ -1,6 +1,7 @@
 mod backup;
 mod billing;
 mod project;
+mod vks;
 
 use crate::cli::op::{Handler, Operation, Service};
 
@@ -133,7 +134,12 @@ impl Registry {
 }
 
 pub fn registered() -> Result<Registry, RegistryError> {
-    Registry::new(&[backup::SERVICE, billing::SERVICE, project::SERVICE])
+    Registry::new(&[
+        backup::SERVICE,
+        billing::SERVICE,
+        project::SERVICE,
+        vks::SERVICE,
+    ])
 }
 
 #[cfg(test)]

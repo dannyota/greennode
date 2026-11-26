@@ -1,0 +1,11 @@
++--------------+--------+--------+-------------+
+| DeprecatedAt | Enable | Stage  | Version     |
++--------------+--------+--------+-------------+
+|              | true   | STABLE | synthetic-0 |
+|              | true   | STABLE | synthetic-1 |
+|              | true   | RAPID  | synthetic-2 |
+|              | true   | STABLE | synthetic-3 |
+|              | true   | STABLE | synthetic-4 |
+|              | true   | STABLE | synthetic-5 |
+|              | true   | STABLE | synthetic-6 |
++--------------+--------+--------+-------------+

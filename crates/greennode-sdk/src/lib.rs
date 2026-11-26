@@ -27,6 +27,7 @@ mod source;
 #[allow(missing_docs)]
 pub mod testing;
 mod token;
+pub mod vks;
 mod wire;
 
 pub use clock::*;
