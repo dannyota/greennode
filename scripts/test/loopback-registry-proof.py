@@ -72,6 +72,10 @@ def run_case(root, cargo, rustup_home, source):
     workspace = root / "workspace"
     for path in (home, cargo_home, workspace):
         path.mkdir()
+    for directory in (workspace.resolve(), *workspace.resolve().parents):
+        for name in ("config", "config.toml"):
+            if os.path.lexists(directory / ".cargo" / name):
+                raise RuntimeError(f"Cargo configuration in workspace ancestor: {directory / '.cargo' / name}")
     for name in NAMES:
         crate = workspace / name
         (crate / "src").mkdir(parents=True)
@@ -141,6 +145,7 @@ def run_case(root, cargo, rustup_home, source):
                                            "toolchain": "1.100.0", "crates": crates}))
 
         def publish(name, success):
+            log.write_text("")
             cargo_run("publish", "--package", name, "--no-verify", "--locked", "--registry", "proof", success=success)
             requests = [json.loads(line) for line in log.read_text().splitlines()]
             matches = [r for r in requests if r.get("operation") == "publish" and r.get("name") == name]
