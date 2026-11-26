@@ -193,6 +193,7 @@ impl Client {
             .map_err(|error| *error)?;
         let mut op = super::read_operation("vks.GetCluster", "v1/clusters/{}");
         op.no_redirect = true;
+        op.keep_status = true;
         let (_, state) = operation::execute::<ClusterState>(
             runtime,
             base,
@@ -228,10 +229,23 @@ impl Client {
         })?;
         if session.auth_kind() != AuthKind::IamUser
             || !session.uses_default_auth_endpoints()
-            || session.endpoints().vks.as_deref() != session.default_endpoints().vks.as_deref()
+            || session
+                .endpoints()
+                .vks
+                .as_ref()
+                .map(|base| base.configured_url())
+                != session
+                    .default_endpoints()
+                    .vks
+                    .as_ref()
+                    .map(|base| base.configured_url())
         {
             return Err(Failure::new(
-                Error::new(ErrorClass::InvalidConfig),
+                super::local_error(
+                    ErrorClass::InvalidConfig,
+                    "InvalidConfig",
+                    "greennode: invalid config: VKS writes require SDK IAM-user login and default endpoints",
+                ),
                 None,
                 WriteDispatch::NotSent,
             ));
@@ -249,9 +263,27 @@ fn unsettled(
     output: DeleteClusterOutput,
     dispatch: WriteDispatch,
 ) -> Failure<DeleteClusterOutput> {
+    let mut message = String::from(
+        "vks.DeleteCluster: inspect inventory and billing before another mutation: greennode: write outcome not confirmed",
+    );
+    if let Some(api) = error.api_error() {
+        use std::fmt::Write as _;
+        let _ = write!(message, "\n{}: {}", api.operation(), api.message());
+        if let Some(status) = api.status() {
+            let _ = write!(message, " (status {status})");
+        }
+    } else {
+        let cause = match error.class() {
+            ErrorClass::Cancelled => "operation cancelled",
+            ErrorClass::DeadlineExceeded => "deadline exceeded",
+            _ => "request failed",
+        };
+        message.push('\n');
+        message.push_str(cause);
+    }
     Failure::new(
         Error::new(ErrorClass::NotSettled)
-            .with_detail("vks.DeleteCluster: inspect inventory and billing before another mutation")
+            .with_detail(message)
             .with_cause(error),
         Some(output),
         dispatch,

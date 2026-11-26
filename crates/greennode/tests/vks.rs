@@ -223,7 +223,7 @@ fn delete_requires_confirmation_and_refuses_read_only_before_connecting() {
     for (args, expected) in [
         (
             &["delete-cluster", "--cluster-id", "cluster-1"][..],
-            "confirmation requires --yes",
+            "vks delete-cluster is destructive; pass --yes to confirm",
         ),
         (
             &[
@@ -233,7 +233,7 @@ fn delete_requires_confirmation_and_refuses_read_only_before_connecting() {
                 "--yes",
                 "--read-only",
             ][..],
-            "read-only: write refused (--read-only)",
+            "read-only: refused by --read-only",
         ),
     ] {
         let (status, stdout, stderr) = invoke("hcm-3", args, &server);

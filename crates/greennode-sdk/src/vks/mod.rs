@@ -1,4 +1,4 @@
-//! Read Kubernetes cluster inventory, supported versions, and account quota.
+//! Read Kubernetes inventory, versions, and quota, and delete clusters.
 
 mod delete;
 mod models;

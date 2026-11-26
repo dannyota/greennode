@@ -8,6 +8,56 @@ const QUOTA: &str = include_str!("../../tests/fixtures/vks/hcm-quota.json");
 const BEARER: &str = "synthetic-vks-bearer-canary";
 
 #[tokio::test]
+async fn delete_provenance_rejects_explicit_default_port() {
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_iam_user(crate::IamUserAuth::new(
+                "root".into(),
+                "user".into(),
+                Secret::new("toy"),
+            ))
+            .with_endpoint_overrides(EndpointOverrides {
+                vks: Some("https://vks.console.greennode.ai:443/vks-api/".into()),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    let (ctx, cancel) = RequestContext::new();
+    cancel.cancel();
+    let failure = Client::new(&config)
+        .delete_cluster(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidConfig);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "greennode: invalid config: VKS writes require SDK IAM-user login and default endpoints"
+    );
+}
+
+#[tokio::test]
+async fn delete_preflight_redirect_preserves_status() {
+    let server = Server::start(vec![Response::Http {
+        status: "302 Found".into(),
+        headers: vec![
+            ("Content-Length".into(), "0".into()),
+            ("Location".into(), "/other".into()),
+        ],
+        body: Vec::new(),
+    }]);
+    let (ctx, _) = RequestContext::new();
+    let failure = test_client(&server, "hcm-3", BEARER)
+        .delete_cluster_inner(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(302));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn delete_requires_iam_user_and_default_endpoints_before_any_request() {
     let server = Server::start(vec![]);
     let client = test_client(&server, "hcm-3", BEARER);
@@ -63,6 +113,11 @@ async fn delete_failure_preserves_dispatch_and_partial_output() {
         .await
         .unwrap_err();
     assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(503));
+    let message = failure.error().detail::<String>().unwrap();
+    assert!(message.contains("write outcome not confirmed"));
+    assert!(message.contains("status 503"));
+    assert!(message.contains("inspect inventory and billing"));
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert!(!failure.partial().unwrap().deleted);
     assert_eq!(server.requests(), 2);
