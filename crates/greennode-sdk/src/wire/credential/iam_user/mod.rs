@@ -7,6 +7,10 @@ use crate::Secret;
 use data_encoding::BASE64URL_NOPAD;
 use sha2::{Digest, Sha256};
 
+fn is_two_factor_path(path: &str) -> bool {
+    path.contains("/ap/auth/iam/google")
+}
+
 fn challenge(verifier: &str) -> String {
     BASE64URL_NOPAD.encode(&Sha256::digest(verifier.as_bytes()))
 }

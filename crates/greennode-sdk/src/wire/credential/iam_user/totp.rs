@@ -51,7 +51,7 @@ pub(super) enum Source<'a> {
 
 fn allowed_target(target: &url::Url, origin: &url::Url) -> bool {
     target.origin() == origin.origin()
-        && target.path() == "/ap/auth/iam/google"
+        && super::is_two_factor_path(target.path())
         && target.username().is_empty()
         && target.password().is_none()
         && target.fragment().is_none()
@@ -141,13 +141,15 @@ pub(super) async fn complete(
             form.expose_secret().as_bytes(),
         )))
         .map_err(|_| LoginError::new("totp submission", None, false))?;
-    let reply = send::once(
+    let mut evidence = send::Evidence::default();
+    let reply = send::once_with_expected(
         login.client.as_client(),
         request,
         1 << 20,
         Encoding::Gzip,
         login.clock,
         login.deadline,
+        (&mut evidence, &[]),
     )
     .await
     .map_err(|error| {
@@ -264,6 +266,37 @@ mod tests {
         let result = run(&server, true).await;
         assert!(result.is_ok());
         assert_eq!(server.requests(), 2);
+    }
+
+    #[tokio::test]
+    async fn totp_verify_subroute_is_accepted() {
+        let server = Server::start(vec![
+            response("200 OK", None, "<input name=\"_csrf\" value=\"token\">"),
+            response(
+                "302 Found",
+                Some("https://dashboard.test/return?code=abc"),
+                "",
+            ),
+        ]);
+        let target = format!("{}/ap/auth/iam/google/verify", server.origin);
+        assert!(run_with(&server, 1, Some(&target)).await.is_ok());
+        assert_eq!(server.requests(), 2);
+    }
+
+    #[tokio::test]
+    async fn totp_redirect_is_classified_without_body() {
+        let (sent, _ready) = tokio::sync::oneshot::channel();
+        let (eof, _closed) = tokio::sync::oneshot::channel();
+        let stalled = Response::ObserveStall { head: b"HTTP/1.1 302 Found\r\nLocation: https://dashboard.test/return?code=abc\r\nContent-Length: 1\r\n\r\n".to_vec(), sent, eof };
+        let truncated = Response::RawClose(b"HTTP/1.1 302 Found\r\nLocation: https://dashboard.test/return?code=abc\r\nContent-Length: 1\r\n\r\n".to_vec());
+        for reply in [stalled, truncated] {
+            let server = Server::start(vec![
+                response("200 OK", None, "<input name=\"_csrf\" value=\"token\">"),
+                reply,
+            ]);
+            let result = tokio::time::timeout(Duration::from_millis(500), run(&server, true)).await;
+            assert!(matches!(result, Ok(Ok(_))));
+        }
     }
 
     #[tokio::test]
@@ -405,14 +438,6 @@ mod tests {
                     "",
                 ),
                 "authorization code",
-            ),
-            (
-                response(
-                    "302 Found",
-                    Some("https://dashboard.test/return?code=abc"),
-                    &"x".repeat((1 << 20) + 1),
-                ),
-                "totp submission",
             ),
         ] {
             let server = Server::start(vec![

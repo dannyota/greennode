@@ -29,10 +29,10 @@ pub(super) fn classify(
     if !target.username().is_empty() || target.password().is_some() || target.fragment().is_some() {
         return Err(failure("authorization code", false));
     }
-    if target.origin() == origin.origin() && target.path() == "/ap/auth/iam/google" {
-        return Ok(Next::TwoFactor(Secret::new(target.as_str())));
-    }
     if target.origin() != dashboard.origin() || target.path() != dashboard.path() {
+        if target.origin() == origin.origin() && super::is_two_factor_path(target.path()) {
+            return Ok(Next::TwoFactor(Secret::new(target.as_str())));
+        }
         return Err(failure("authorization code", false));
     }
     let mut codes = target.query_pairs().filter(|(key, _)| key == "code");
@@ -76,13 +76,18 @@ pub(super) async fn signin(
     if login.origin.scheme() != "https"
         || !login.origin.username().is_empty()
         || login.origin.password().is_some()
+        || login.origin.query().is_some()
+        || login.origin.fragment().is_some()
+        || (login.dashboard.origin() == login.origin.origin()
+            && super::is_two_factor_path(login.dashboard.path()))
     {
         return Err(page_error());
     }
-    let mut target = login
-        .origin
-        .join("/ap/auth/iam/login")
-        .map_err(|_| page_error())?;
+    let mut target = Url::parse(&format!(
+        "{}/ap/auth/iam/login",
+        login.origin.as_str().trim_end_matches('/')
+    ))
+    .map_err(|_| page_error())?;
     target
         .query_pairs_mut()
         .append_pair("clientId", "c9e78411-f2a2-41ba-a9e4-3c56263c181a")
@@ -145,13 +150,15 @@ pub(super) async fn signin(
             form.expose_secret().as_bytes(),
         )))
         .map_err(|_| LoginError::new("signin submission", None, false))?;
-    let reply = send::once(
+    let mut evidence = send::Evidence::default();
+    let reply = send::once_with_expected(
         login.client.as_client(),
         request,
         1 << 20,
         Encoding::Gzip,
         login.clock,
         login.deadline,
+        (&mut evidence, &[]),
     )
     .await
     .map_err(|e| {
@@ -390,7 +397,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn password_response_body_is_bounded() {
+    async fn password_response_body_is_ignored() {
         let server = Server::start(vec![
             response("200 OK", vec![], "<input name=\"_csrf\" value=\"token\">"),
             response(
@@ -400,8 +407,13 @@ mod tests {
             ),
         ]);
         let result = run(&server).await;
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap().reason(), "signin submission");
+        assert!(matches!(
+            result,
+            Ok(Session {
+                next: Next::Code(_),
+                ..
+            })
+        ));
     }
 
     #[tokio::test]
@@ -482,7 +494,7 @@ mod tests {
             "https://dashboard.test/return?code=",
             "https://dashboard.test/return",
             "https://other.test/ap/auth/iam/google",
-            "/ap/auth/iam/google/other",
+            "/ap/auth/iam/not-google",
         ] {
             let server = Server::start(vec![
                 response("200 OK", vec![], "<input name=\"_csrf\" value=\"token\">"),
@@ -521,6 +533,123 @@ mod tests {
     }
 
     #[test]
+    fn callback_on_two_factor_route_is_read_as_data() {
+        let origin = url("https://signin.test/");
+        let dashboard = url("https://signin.test/ap/auth/iam/google");
+        assert!(matches!(
+            classify(
+                &origin,
+                &dashboard,
+                http::StatusCode::FOUND,
+                Some("/ap/auth/iam/google?code=one")
+            ),
+            Ok(Next::Code(_))
+        ));
+    }
+
+    #[test]
+    fn baseline_two_factor_subroute_is_recognized() {
+        let origin = url("https://signin.test/");
+        let dashboard = url("https://dashboard.test/");
+        assert!(matches!(
+            classify(
+                &origin,
+                &dashboard,
+                http::StatusCode::FOUND,
+                Some("/ap/auth/iam/google/verify")
+            ),
+            Ok(Next::TwoFactor(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_overlapping_callback_before_network() {
+        let server = Server::start(vec![response(
+            "200 OK",
+            vec![],
+            "<input name=\"_csrf\" value=\"token\">",
+        )]);
+        let client =
+            OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
+        let origin = url(&server.origin);
+        let dashboard = origin.join("/ap/auth/iam/google/verify").unwrap();
+        let password = Secret::new("toy");
+        let result = signin(
+            Login {
+                client: &client,
+                origin: &origin,
+                dashboard: &dashboard,
+                root_email: "root",
+                username: "user",
+                password: &password,
+                clock: &SystemClock,
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            },
+            super::super::from_bytes(&[1; 32]),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(server.requests(), 0);
+    }
+
+    #[tokio::test]
+    async fn preserves_signin_base_path() {
+        let server = Server::start(vec![
+            response("200 OK", vec![], "<input name=\"_csrf\" value=\"token\">"),
+            response(
+                "302 Found",
+                vec![("Location", "https://dashboard.test/return?code=one")],
+                "",
+            ),
+        ]);
+        let client =
+            OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
+        let origin = url(&format!("{}/prefix", server.origin));
+        let dashboard = url("https://dashboard.test/return");
+        let password = Secret::new("toy");
+        let result = signin(
+            Login {
+                client: &client,
+                origin: &origin,
+                dashboard: &dashboard,
+                root_email: "root",
+                username: "user",
+                password: &password,
+                clock: &SystemClock,
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            },
+            super::super::from_bytes(&[1; 32]),
+        )
+        .await;
+        assert!(result.is_ok());
+        let heads = server.heads();
+        assert!(String::from_utf8_lossy(&heads[0]).starts_with("GET /prefix/ap/auth/iam/login?"));
+        assert!(String::from_utf8_lossy(&heads[1]).starts_with("POST /prefix/ap/auth/iam/login?"));
+    }
+
+    #[tokio::test]
+    async fn password_redirect_is_classified_without_body() {
+        let (sent, _ready) = tokio::sync::oneshot::channel();
+        let (eof, _closed) = tokio::sync::oneshot::channel();
+        let stalled = Response::ObserveStall { head: b"HTTP/1.1 302 Found\r\nLocation: https://dashboard.test/return?code=one\r\nContent-Length: 1\r\n\r\n".to_vec(), sent, eof };
+        let truncated = Response::RawClose(b"HTTP/1.1 302 Found\r\nLocation: https://dashboard.test/return?code=one\r\nContent-Length: 1\r\n\r\n".to_vec());
+        for reply in [stalled, truncated] {
+            let server = Server::start(vec![
+                response("200 OK", vec![], "<input name=\"_csrf\" value=\"token\">"),
+                reply,
+            ]);
+            let result = tokio::time::timeout(Duration::from_millis(500), run(&server)).await;
+            assert!(matches!(
+                result,
+                Ok(Ok(Session {
+                    next: Next::Code(_),
+                    ..
+                }))
+            ));
+        }
+    }
+
+    #[test]
     fn two_factor_route_is_same_origin_and_exact() {
         let origin = url("https://signin.test/");
         let dashboard = url("https://dashboard.test/return");
@@ -530,6 +659,6 @@ mod tests {
             Ok(Next::TwoFactor(_))
         ));
         assert!(classify_location("https://other.test/ap/auth/iam/google").is_err());
-        assert!(classify_location("/ap/auth/iam/google/other").is_err());
+        assert!(classify_location("/ap/auth/iam/not-google").is_err());
     }
 }
