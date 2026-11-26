@@ -68,14 +68,20 @@ fn request(id: &str, secret: &Secret, url: &str) -> Option<Request<Full<Bytes>>>
         .ok()
 }
 
+pub(crate) struct TimedToken {
+    pub(crate) token: Token,
+    pub(crate) started_wall: OffsetDateTime,
+    pub(crate) started_monotonic: tokio::time::Instant,
+}
+
 pub(crate) async fn exchange(
     id: &str,
     secret: &Secret,
     context: &RequestContext,
     clock: &dyn Clock,
     timeout: Duration,
-) -> Result<Token, Box<Error>> {
-    exchange_at(
+) -> Result<TimedToken, Box<Error>> {
+    exchange_timed_at(
         id,
         secret,
         TOKEN_URL,
@@ -162,6 +168,20 @@ fn decode_at_clock(
     )
 }
 
+#[cfg(test)]
+pub(crate) async fn exchange_test(
+    id: &str,
+    secret: &Secret,
+    url: &str,
+    trust: Trust,
+    context: &RequestContext,
+    clock: &dyn Clock,
+    timeout: Duration,
+) -> Result<TimedToken, Box<Error>> {
+    exchange_timed_at(id, secret, url, trust, context, clock, timeout).await
+}
+
+#[cfg(test)]
 async fn exchange_at(
     id: &str,
     secret: &Secret,
@@ -171,6 +191,20 @@ async fn exchange_at(
     clock: &dyn Clock,
     timeout: Duration,
 ) -> Result<Token, Box<Error>> {
+    exchange_timed_at(id, secret, url, trust, context, clock, timeout)
+        .await
+        .map(|timed| timed.token)
+}
+
+async fn exchange_timed_at(
+    id: &str,
+    secret: &Secret,
+    url: &str,
+    trust: Trust,
+    context: &RequestContext,
+    clock: &dyn Clock,
+    timeout: Duration,
+) -> Result<TimedToken, Box<Error>> {
     let failure = |reason, status| {
         let error = context
             .check(clock)
@@ -254,7 +288,11 @@ async fn exchange_at(
     if context.check(clock).is_some() {
         return Err(failed(status));
     }
-    Ok(token)
+    Ok(TimedToken {
+        token,
+        started_wall: start,
+        started_monotonic: started,
+    })
 }
 
 #[cfg(test)]

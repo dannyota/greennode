@@ -260,6 +260,17 @@ fn write_with_guard(
     entry: &Entry,
     guard: impl Fn() -> Result<(), Box<crate::Error>>,
 ) -> Result<(), Box<crate::Error>> {
+    write_hook(store, name, entry, guard, None, None)
+}
+
+pub(crate) fn write_hook(
+    store: &Store,
+    name: &str,
+    entry: &Entry,
+    guard: impl Fn() -> Result<(), Box<crate::Error>>,
+    hook: Option<&(dyn Fn() + Send + Sync)>,
+    live: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(), Box<crate::Error>> {
     guard()?;
     let token = entry.token.expose_secret();
     let error = || Box::new(crate::Error::new(crate::ErrorClass::TokenCache));
@@ -280,7 +291,7 @@ fn write_with_guard(
     let mut data = Zeroizing::new(Vec::with_capacity(65_536 + 512));
     serde_json::to_writer(&mut *data, &wire).map_err(|_| error())?;
     let text = std::str::from_utf8(&data).map_err(|_| error())?;
-    store.write_guarded(name, &crate::Secret::new(text), guard)
+    store.write_guarded_hook(name, &crate::Secret::new(text), guard, hook, live)
 }
 
 #[cfg(test)]

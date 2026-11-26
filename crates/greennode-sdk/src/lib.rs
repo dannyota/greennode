@@ -13,6 +13,7 @@ mod file_diagnostic;
 mod model;
 mod provider;
 mod secret;
+mod session;
 mod source;
 mod token;
 mod wire;

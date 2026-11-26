@@ -38,6 +38,104 @@ impl fmt::Debug for Store {
 #[allow(dead_code)]
 impl Store {
     #[cfg(unix)]
+    pub(crate) fn create(path: &Path) -> Result<Self, Box<crate::Error>> {
+        Self::create_avoiding(path, None)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn create_avoiding(
+        path: &Path,
+        home: Option<&Path>,
+    ) -> Result<Self, Box<crate::Error>> {
+        let legacy = match home {
+            Some(home) => match std::fs::metadata(home.join(".vngcloud")) {
+                Ok(metadata) if metadata.is_dir() => Some((metadata.dev(), metadata.ino())),
+                Ok(_) => return Err(unavailable()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err(unavailable()),
+            },
+            None => None,
+        };
+        let mut components = path.components();
+        if components.next() != Some(std::path::Component::RootDir) {
+            return Err(unavailable());
+        }
+        let mut current = File::from(
+            rustix::fs::open(
+                "/",
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| unavailable())?,
+        );
+        for component in components {
+            let std::path::Component::Normal(name) = component else {
+                return Err(unavailable());
+            };
+            let fd = match rustix::fs::openat(
+                &current,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(fd) => fd,
+                Err(rustix::io::Errno::NOENT) => {
+                    match rustix::fs::mkdirat(&current, name, Mode::RUSR | Mode::WUSR | Mode::XUSR)
+                    {
+                        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                        Err(_) => return Err(unavailable()),
+                    }
+                    rustix::fs::openat(
+                        &current,
+                        name,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )
+                    .map_err(|_| unavailable())?
+                }
+                Err(_) => return Err(unavailable()),
+            };
+            current = File::from(fd);
+            let metadata = current.metadata().map_err(|_| unavailable())?;
+            if legacy == Some((metadata.dev(), metadata.ino())) {
+                return Err(unavailable());
+            }
+        }
+        Self::from_directory(current.into())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn create_child(&self, name: &str) -> Result<Self, Box<crate::Error>> {
+        validate_name(name)?;
+        match rustix::fs::mkdirat(&self.directory, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
+            Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+            Err(_) => return Err(unavailable()),
+        }
+        Self::from_directory(
+            rustix::fs::openat(
+                &self.directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| unavailable())?,
+        )
+    }
+
+    #[cfg(unix)]
+    fn from_directory(fd: rustix::fd::OwnedFd) -> Result<Self, Box<crate::Error>> {
+        let directory = File::from(fd);
+        let metadata = directory.metadata().map_err(|_| unavailable())?;
+        if !metadata.is_dir()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(unavailable());
+        }
+        Ok(Self { directory })
+    }
+
+    #[cfg(unix)]
     pub(crate) fn open(path: &Path) -> Result<Self, Box<crate::Error>> {
         let fd = rustix::fs::open(
             path,
@@ -193,6 +291,18 @@ impl Store {
         data: &crate::Secret,
         guard: impl Fn() -> Result<(), Box<crate::Error>>,
     ) -> Result<(), Box<crate::Error>> {
+        self.write_guarded_hook(name, data, guard, None, None)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn write_guarded_hook(
+        &self,
+        name: &str,
+        data: &crate::Secret,
+        guard: impl Fn() -> Result<(), Box<crate::Error>>,
+        hook: Option<&(dyn Fn() + Send + Sync)>,
+        live: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<(), Box<crate::Error>> {
         guard()?;
         validate_name(name)?;
         if data.expose_secret().len() > LIMIT {
@@ -220,8 +330,14 @@ impl Store {
         let mut file = File::from(fd);
         file.write_all(data.expose_secret().as_bytes())
             .map_err(|_| unavailable())?;
+        if let Some(hook) = hook {
+            hook();
+        }
         file.sync_all().map_err(|_| unavailable())?;
         guard()?;
+        if live.is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Acquire)) {
+            return Err(unavailable());
+        }
         rustix::fs::renameat(&self.directory, temporary.as_str(), &self.directory, name)
             .map_err(|_| unavailable())?;
         cleanup.committed = true;

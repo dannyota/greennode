@@ -17,7 +17,7 @@ impl Dir {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        Self(path)
+        Self(std::fs::canonicalize(path).unwrap())
     }
 }
 
@@ -32,6 +32,74 @@ impl Drop for Dir {
 fn windows_store_is_unavailable() {
     let dir = Dir::new();
     assert!(Store::open(&dir.0).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn creates_cache_and_namespace() {
+    let dir = Dir::new();
+    let cache = dir.0.join("cache");
+    let store = Store::create(&cache).unwrap();
+    let _namespace = store.create_child("service-account-v1").unwrap();
+    assert!(cache.join("service-account-v1").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_ancestor_symlink_into_legacy_tree() {
+    let dir = Dir::new();
+    let legacy = dir.0.join(".vngcloud");
+    std::fs::create_dir(&legacy).unwrap();
+    std::os::unix::fs::symlink(&legacy, dir.0.join("redirect")).unwrap();
+    assert!(Store::create(&dir.0.join("redirect/cache")).is_err());
+    assert!(!legacy.join("cache").exists());
+    assert!(Store::create(&dir.0.join("safe")).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn refuses_resolved_cache_inside_legacy_root_by_inode() {
+    let home = Dir::new();
+    let legacy = home.0.join(".vngcloud");
+    std::fs::create_dir(&legacy).unwrap();
+    let cache = crate::cache::resolve(&legacy.join("cache"), true).unwrap();
+    assert!(Store::create_avoiding(&cache, Some(&home.0)).is_err());
+    assert!(!cache.exists());
+    assert!(Store::create_avoiding(&home.0.join("safe"), Some(&home.0)).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_namespace() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    std::fs::create_dir(dir.0.join("target")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir.0.join("target"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink("target", dir.0.join("service-account-v1")).unwrap();
+    assert!(store.create_child("service-account-v1").is_err());
+    assert!(store.create_child("other").is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_group_writable_namespace() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    std::fs::create_dir(dir.0.join("service-account-v1")).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        dir.0.join("service-account-v1"),
+        std::fs::Permissions::from_mode(0o770),
+    )
+    .unwrap();
+    assert!(store.create_child("service-account-v1").is_err());
+    std::fs::set_permissions(
+        dir.0.join("service-account-v1"),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    assert!(store.create_child("service-account-v1").is_ok());
 }
 
 #[cfg(unix)]
