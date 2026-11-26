@@ -1,0 +1,24 @@
+{
+  "Items": [
+    {
+      "ID": 1,
+      "Name": "small",
+      "FlavorID": "f-1",
+      "VCPUs": 2,
+      "RAM": 4,
+      "PackageSKU": "",
+      "LocateZoneID": "",
+      "MonthlyCost": 123.45,
+      "PriceKey": "",
+      "VolumeSize": 0,
+      "VolumeType": "",
+      "BackupSize": 0,
+      "Description": "",
+      "FamilyType": "",
+      "PlatformType": "",
+      "Bandwidth": 0,
+      "BandwidthUnit": "",
+      "ZoneUUID": ""
+    }
+  ]
+}

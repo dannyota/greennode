@@ -1,0 +1,10 @@
+{
+  "Items": [
+    {
+      "UUID": "zone-1",
+      "Name": "Zone A",
+      "Status": "ACTIVE",
+      "ZoneType": "LOCAL"
+    }
+  ]
+}
