@@ -362,13 +362,9 @@ impl<'a> Workflow<'a> {
     }
 
     pub(super) fn clean<T: Resource>(&self, mut resource: T) -> T {
+        resource.redact_ids(|id| self.can_show_id(id));
         resource.redact(self.evidence.credentials());
         resource
-    }
-
-    pub(super) fn clean_partial<T: Resource>(&self, mut resource: T) -> T {
-        resource.redact_ids(|id| self.can_show_id(id));
-        self.clean(resource)
     }
 
     fn finish<T: Resource, O>(
@@ -381,7 +377,7 @@ impl<'a> Workflow<'a> {
         match result {
             Ok(()) => Ok(output(self.clean(resource))),
             Err(error) => Err(self.after_write(self.wrap_outcome(*error, label), || {
-                output(self.clean_partial(resource))
+                output(self.clean(resource))
             })),
         }
     }

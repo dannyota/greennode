@@ -133,7 +133,7 @@ impl Client {
                 ))
                 .with_cause(error);
             return Err(flow.after_write(error, || UpdateHostedZoneOutput {
-                hosted_zone: flow.clean_partial(fallback),
+                hosted_zone: flow.clean(fallback),
             }));
         }
         let description = fallback.description.clone();

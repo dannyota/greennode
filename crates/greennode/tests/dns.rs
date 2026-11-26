@@ -659,3 +659,97 @@ async fn dns_create_preserves_empty_lists_and_rejects_missing_lists() {
     }
     assert!(outcomes.into_iter().all(std::convert::identity));
 }
+
+#[tokio::test]
+async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
+    let encoded = "%73ynthetic-dns-cli-bearer";
+    let created_zone = ZONE.replace("zone-1", encoded);
+    let created_record = RECORD
+        .replace("record-1", encoded)
+        .replace("zone-1", "invalid/zone");
+    let settled_zone = format!(
+        r#"{{"data":{{"hostedZoneId":"zone-1","status":"ACTIVE",
+        "description":"updated","assocVpcIds":["vpc-1","{encoded}"]}}}}"#
+    );
+    let mut screened = Vec::new();
+    for (flags, replies, query, expected) in [
+        (
+            &[
+                "create-hosted-zone",
+                "--domain-name",
+                "example.test",
+                "--vpc-ids",
+                "vpc-1",
+                "--no-wait",
+            ][..],
+            vec![("200 OK", created_zone.as_str())],
+            "HostedZone.ID",
+            serde_json::json!("<redacted>"),
+        ),
+        (
+            &[
+                "create-record",
+                "--hosted-zone-id",
+                "zone-1",
+                "--type",
+                "A",
+                "--cli-input-json",
+                r#"{"Values":[]}"#,
+                "--no-wait",
+            ],
+            vec![("200 OK", ZONE), ("200 OK", created_record.as_str())],
+            "Record.[ID, HostedZoneID]",
+            serde_json::json!(["<redacted>", "<redacted>"]),
+        ),
+        (
+            &[
+                "update-hosted-zone",
+                "--hosted-zone-id",
+                "zone-1",
+                "--description",
+                "updated",
+                "--cli-input-json",
+                r#"{"VPCIDs":["vpc-1","%73ynthetic-dns-cli-bearer"]}"#,
+            ],
+            vec![
+                ("200 OK", settled_zone.as_str()),
+                ("204 No Content", ""),
+                ("200 OK", settled_zone.as_str()),
+            ],
+            "HostedZone.AssociatedVPCIDs",
+            serde_json::json!(["vpc-1", "<redacted>"]),
+        ),
+    ] {
+        for query_enabled in [false, true] {
+            let server = Server::start(
+                replies
+                    .iter()
+                    .map(|(status, body)| response(status, body))
+                    .collect(),
+            );
+            let mut args = flags.to_vec();
+            if query_enabled {
+                args.extend(["--query", query]);
+            }
+            let (status, stdout, stderr) = invoke(&server, BEARER, &args).await;
+            assert_eq!(status, ExitCode::SUCCESS);
+            assert!(stderr.is_empty());
+            let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+            let actual = if query_enabled {
+                output
+            } else {
+                match flags[0] {
+                    "create-hosted-zone" => output["HostedZone"]["ID"].clone(),
+                    "create-record" => serde_json::json!([
+                        output["Record"]["ID"],
+                        output["Record"]["HostedZoneID"]
+                    ]),
+                    _ => output["HostedZone"]["AssociatedVPCIDs"].clone(),
+                }
+            };
+            screened.push(actual == expected);
+            assert_eq!(server.requests(), replies.len());
+        }
+    }
+    assert_eq!(screened, [true; 6]);
+}
