@@ -7,6 +7,8 @@ mod models;
 mod mutation;
 mod prices;
 mod quotes;
+mod server_actions;
+mod server_groups;
 mod server_writes;
 mod wire;
 
@@ -22,6 +24,8 @@ pub use prices::{
 };
 
 pub use quotes::{CreateServerInput, ResizeServerInput};
+pub use server_actions::*;
+pub use server_groups::*;
 pub use server_writes::{CreateServerOutput, DeleteServerInput, DeleteServerOutput};
 
 use std::sync::Arc;

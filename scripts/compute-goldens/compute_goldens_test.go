@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -140,6 +141,122 @@ func TestComputeServerPortGoldens(t *testing.T) {
 						reply(w, 200, "server-delete-inventory")
 					},
 					"/v2/proj-1/volumes/servers/server-1": func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-delete-volumes") },
+				}
+				root, stdout, stderr := newSvcRoot(t, newSvcFixture(routes))
+				root.SetArgs(append([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "compute", c.name}, c.flags...))
+				if err := root.ExecuteContext(computeDiscoveryCLIContext()); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.Len() != 0 {
+					t.Fatal("unexpected stderr")
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("COMPUTE_GOLDEN_DIR"), fmt.Sprintf("%s.%s.golden", c.name, format)), stdout.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestComputeActionPortGoldens(t *testing.T) {
+	for _, c := range []struct {
+		name, current string
+		flags         []string
+	}{
+		{"start-server", "server-action-stopped", []string{"--no-wait"}},
+		{"stop-server", "server-action-active", []string{"--no-wait", "--yes"}},
+		{"reboot-server", "server-action-active", []string{"--no-wait", "--yes"}},
+		{"rename-server", "server-action-renamed", []string{"--name", "renamed"}},
+		{"resize-server", "server-action-active", []string{"--flavor-id", "flavor-2", "--no-wait", "--yes"}},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				reply := func(w http.ResponseWriter, status int, name string) {
+					var body []byte
+					if name != "" {
+						var err error
+						body, err = os.ReadFile(filepath.Join(os.Getenv("COMPUTE_WIRE_DIR"), name+".json"))
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					w.WriteHeader(status)
+					_, _ = w.Write(body)
+				}
+				routes := map[string]func(http.ResponseWriter, *http.Request){
+					"/v1/price":                   func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-resize-quote") },
+					"/v2/proj-1/servers/server-1": func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, c.current) },
+					"/v2/proj-1/servers/server-1/" + strings.TrimSuffix(c.name, "-server"): func(w http.ResponseWriter, _ *http.Request) {
+						if c.name == "rename-server" {
+							reply(w, 200, c.current)
+							return
+						}
+						reply(w, 202, "")
+					},
+				}
+				root, stdout, stderr := newSvcRoot(t, newSvcFixture(routes))
+				root.SetArgs(append([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "compute", c.name, "--server-id", "server-1"}, c.flags...))
+				if err := root.ExecuteContext(computeDiscoveryCLIContext()); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.Len() != 0 {
+					t.Fatal("unexpected stderr")
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("COMPUTE_GOLDEN_DIR"), fmt.Sprintf("%s.%s.golden", c.name, format)), stdout.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestComputeGroupPortGoldens(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		flags []string
+	}{
+		{"create-server-group", []string{"--name", "example", "--policy-id", "policy-1", "--description", "toy"}},
+		{"update-server-group", []string{"--server-group-id", "group-1", "--description", "toy"}},
+		{"delete-server-group", []string{"--server-group-id", "group-1", "--yes"}},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				reply := func(w http.ResponseWriter, status int, name string) {
+					var body []byte
+					if name != "" {
+						var err error
+						body, err = os.ReadFile(filepath.Join(os.Getenv("COMPUTE_WIRE_DIR"), name+".json"))
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					w.WriteHeader(status)
+					_, _ = w.Write(body)
+				}
+				reads := 0
+				routes := map[string]func(http.ResponseWriter, *http.Request){
+					"/v2/proj-1/serverGroups": func(w http.ResponseWriter, r *http.Request) {
+						if r.Method == "POST" {
+							reply(w, 201, "group-result")
+							return
+						}
+						reply(w, 200, "group-empty-inventory")
+					},
+					"/v2/proj-1/serverGroups/group-1": func(w http.ResponseWriter, r *http.Request) {
+						switch r.Method {
+						case "DELETE":
+							reply(w, 204, "")
+						case "PUT":
+							reply(w, 200, "")
+						default:
+							reads++
+							if reads == 1 {
+								reply(w, 200, "group-current")
+								return
+							}
+							reply(w, 200, "group-result")
+						}
+					},
 				}
 				root, stdout, stderr := newSvcRoot(t, newSvcFixture(routes))
 				root.SetArgs(append([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "compute", c.name}, c.flags...))

@@ -1,0 +1,364 @@
+use http::{Method, StatusCode};
+use serde::Serialize;
+use serde_json::{Value, json};
+
+use crate::model::wire::WireField;
+use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
+use crate::{Error, Failure, RequestContext, WriteDispatch};
+
+use super::inventory::group_read_error;
+use super::mutation::{
+    Mutation, decode_data, invalid_mutation_response, not_sent, rejected, settlement_error,
+    with_screened_advice,
+};
+use super::quotes::{path_id, required};
+use super::wire::{api, invalid_input};
+use super::{Client, ListServerGroupsInput, ServerGroup};
+
+const CREATE: Mutation = Mutation {
+    id: "compute.CreateServerGroup",
+    template: "v2/{}/serverGroups",
+    method: Method::POST,
+    retry: Retry::NonIdempotent,
+    overflow_overrides_status: false,
+    success: &[StatusCode::CREATED],
+};
+const UPDATE: Mutation = Mutation {
+    id: "compute.UpdateServerGroup",
+    template: "v2/{}/serverGroups/{}",
+    method: Method::PUT,
+    retry: Retry::Repeatable,
+    overflow_overrides_status: false,
+    success: &[StatusCode::OK],
+};
+const DELETE: Mutation = Mutation {
+    id: "compute.DeleteServerGroup",
+    template: "v2/{}/serverGroups/{}",
+    method: Method::DELETE,
+    retry: Retry::Repeatable,
+    overflow_overrides_status: false,
+    success: &[StatusCode::NO_CONTENT],
+};
+
+/// The requested server group is in use.
+#[derive(Clone, Copy, Debug)]
+pub struct ServerGroupInUse;
+
+/// Name, placement policy and description for a new server group.
+#[derive(Clone, Debug, Default)]
+pub struct CreateServerGroupInput {
+    /// Unique group name within the project.
+    pub name: String,
+    /// Placement policy.
+    pub policy_id: String,
+    /// Group description.
+    pub description: String,
+}
+
+/// Mutable fields of a server group. Omitted fields retain their current values.
+#[derive(Clone, Debug, Default)]
+pub struct UpdateServerGroupInput {
+    /// Group to update.
+    pub server_group_id: String,
+    /// New nonempty group name.
+    pub name: Option<String>,
+    /// New description. An empty value clears it.
+    pub description: Option<String>,
+}
+
+/// Identifies a server group to delete.
+#[derive(Clone, Debug, Default)]
+pub struct DeleteServerGroupInput {
+    /// Group to delete.
+    pub server_group_id: String,
+}
+
+/// The group returned by a successful create.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct CreateServerGroupOutput {
+    /// The newly created group.
+    pub server_group: ServerGroup,
+}
+
+/// The group read after an update.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UpdateServerGroupOutput {
+    /// The confirmed group, or its requested fields on an unconfirmed update.
+    pub server_group: ServerGroup,
+}
+
+/// An acknowledgement of server-group deletion.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct DeleteServerGroupOutput {}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "The public API returns Failure by value"
+)]
+impl Client {
+    /// Creates a server group using the non-idempotent request policy.
+    pub async fn create_server_group(
+        &self,
+        ctx: &RequestContext,
+        input: CreateServerGroupInput,
+    ) -> Result<CreateServerGroupOutput, Failure<CreateServerGroupOutput>> {
+        required(
+            CREATE.id,
+            &[
+                ("Name", !input.name.is_empty()),
+                ("PolicyID", !input.policy_id.is_empty()),
+            ],
+        )
+        .map_err(|error| not_sent(*error))?;
+        path_id(CREATE.id, "PolicyID", &input.policy_id).map_err(|error| not_sent(*error))?;
+        let mut evidence = Evidence::new();
+        let body = json!({"name": input.name, "policyId": input.policy_id, "description": input.description});
+        self.guard_write(ctx, &body, &mut evidence)
+            .map_err(|error| not_sent(*error))?;
+        let raw = self
+            .send_mutation(ctx, &CREATE, &[], Some(&body), false, &mut evidence)
+            .await
+            .map_err(|error| ambiguous_create(error, &evidence))?;
+        let mut group = decode_data::<ServerGroup>(&raw, &CREATE, &evidence).map_err(|error| {
+            ambiguous_create(
+                Failure::new(*error, None, WriteDispatch::MayHaveBeenSent),
+                &evidence,
+            )
+        })?;
+        if group.uuid.is_empty() {
+            return Err(Failure::new(
+                api(
+                    CREATE.id,
+                    Some(201),
+                    "",
+                    "create response had no id; the group may exist, list server groups and match the name exactly before creating it again",
+                    &evidence,
+                ),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            ));
+        }
+        if !PathIds::WithUnderscore.allows(&group.uuid) || evidence.id_reflects(&group.uuid) {
+            return Err(Failure::new(
+                api(
+                    CREATE.id,
+                    Some(201),
+                    "InvalidResponse",
+                    "create response had no usable id; the group may exist, list server groups and match the name exactly before creating it again",
+                    &evidence,
+                ),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            ));
+        }
+        if !evidence.can_retain_partial()
+            || group_ids_reflect(&group, &evidence)
+            || !group.redact(&evidence)
+        {
+            return Err(Failure::new(
+                invalid_mutation_response(&CREATE, &evidence),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            ));
+        }
+        Ok(CreateServerGroupOutput {
+            server_group: group,
+        })
+    }
+
+    /// Merges and applies the group's mutable fields, then reads back the group.
+    pub async fn update_server_group(
+        &self,
+        ctx: &RequestContext,
+        input: UpdateServerGroupInput,
+    ) -> Result<UpdateServerGroupOutput, Failure<UpdateServerGroupOutput>> {
+        let id = &input.server_group_id;
+        path_id(UPDATE.id, "ServerGroupID", id).map_err(|error| not_sent(*error))?;
+        if input.name.is_none() && input.description.is_none() {
+            return Err(not_sent(invalid_input(
+                "compute.UpdateServerGroup requires at least one field to change",
+            )));
+        }
+        if input.name.as_deref() == Some("") {
+            return Err(not_sent(invalid_input(
+                "compute.UpdateServerGroup: Name must not be empty",
+            )));
+        }
+        let mut evidence = Evidence::new();
+        self.guard_write(
+            ctx,
+            &json!([id, input.name, input.description]),
+            &mut evidence,
+        )
+        .map_err(|error| not_sent(*error))?;
+        let mut group = self
+            .group_detail_checked::<()>(ctx, id, &mut evidence, true)
+            .await
+            .map_err(|error| not_sent(error.into_parts().0))?;
+        if group.uuid != *id
+            || group_ids_reflect(&group, &evidence)
+            || serde_json::to_value(&group).map_or(true, |value| evidence.reflected_in(&value))
+            || !group.redact(&evidence)
+        {
+            return Err(not_sent(group_read_error(
+                "compute.GetServerGroup",
+                &evidence,
+            )));
+        }
+        let mut fallback = ServerGroup {
+            uuid: id.clone(),
+            name: input.name.unwrap_or(group.name),
+            description: input.description.unwrap_or(group.description),
+            ..ServerGroup::default()
+        };
+        let body = json!({"name": fallback.name, "description": fallback.description, "serverGroupId": id});
+        self.send_mutation(ctx, &UPDATE, &[id], Some(&body), false, &mut evidence)
+            .await?;
+        let result = self.group_detail::<()>(ctx, id, &mut evidence).await;
+        let error = match result {
+            Ok(mut group)
+                if group.uuid == *id
+                    && !group_ids_reflect(&group, &evidence)
+                    && evidence.can_retain_partial() =>
+            {
+                if group.redact(&evidence) {
+                    return Ok(UpdateServerGroupOutput {
+                        server_group: group,
+                    });
+                }
+                group_read_error("compute.GetServerGroup", &evidence)
+            }
+            Ok(_) => group_read_error("compute.GetServerGroup", &evidence),
+            Err(error) => error.into_parts().0,
+        };
+        let partial = (evidence.can_retain_partial()
+            && !group_ids_reflect(&fallback, &evidence)
+            && fallback.redact(&evidence))
+        .then_some(UpdateServerGroupOutput {
+            server_group: fallback,
+        });
+        Err(Failure::new(
+            settlement_error(
+                UPDATE.id,
+                error,
+                "read get-server-group to confirm the update",
+                &evidence,
+            ),
+            partial,
+            WriteDispatch::MayHaveBeenSent,
+        ))
+    }
+
+    /// Deletes a group after checking its listed membership.
+    pub async fn delete_server_group(
+        &self,
+        ctx: &RequestContext,
+        input: DeleteServerGroupInput,
+    ) -> Result<DeleteServerGroupOutput, Failure<DeleteServerGroupOutput>> {
+        let id = &input.server_group_id;
+        path_id(DELETE.id, "ServerGroupID", id).map_err(|error| not_sent(*error))?;
+        let mut evidence = Evidence::new();
+        self.guard_write(ctx, &json!(id), &mut evidence)
+            .map_err(|error| not_sent(*error))?;
+        let groups = self
+            .group_page_checked::<()>(ctx, &ListServerGroupsInput::default(), &mut evidence, true)
+            .await
+            .map_err(|error| not_sent(error.into_parts().0))?;
+        if evidence.reflected_in(&json!([
+            groups.page,
+            groups.page_size,
+            groups.total_page,
+            groups.total_item
+        ])) {
+            return Err(not_sent(group_read_error(
+                "compute.ListServerGroups",
+                &evidence,
+            )));
+        }
+        for mut group in groups.items {
+            if !PathIds::WithUnderscore.allows(&group.uuid)
+                || group_ids_reflect(&group, &evidence)
+                || !group.redact(&evidence)
+            {
+                return Err(not_sent(group_read_error(
+                    "compute.ListServerGroups",
+                    &evidence,
+                )));
+            }
+            if group.uuid == *id
+                && let Some(members) = group.servers
+                && !members.is_empty()
+            {
+                let count = members.len();
+                let message = format!(
+                    "compute: server group in use: {}: server group {id} has {count} server(s) attached",
+                    DELETE.id
+                );
+                return Err(not_sent(in_use(&message, &evidence)));
+            }
+        }
+        self.send_mutation::<()>(ctx, &DELETE, &[id], None, false, &mut evidence)
+            .await
+            .map_err(|failure| {
+                let (error, _, dispatch) = failure.into_parts();
+                let error = if let Some(api) = error.api_error()
+                    && api
+                        .message()
+                        .to_ascii_lowercase()
+                        .contains("server group is in use")
+                {
+                    let message = format!("compute: server group in use: {}", api.message());
+                    error.with_cause(in_use(&message, &evidence))
+                } else {
+                    error
+                };
+                Failure::new(error, None, dispatch)
+            })?;
+        Ok(DeleteServerGroupOutput {})
+    }
+}
+
+fn group_ids_reflect(group: &ServerGroup, evidence: &Evidence) -> bool {
+    fn dynamic(value: &Value, evidence: &Evidence) -> bool {
+        match value {
+            Value::String(id) => evidence.id_reflects(id),
+            Value::Array(values) => values.iter().any(|value| dynamic(value, evidence)),
+            Value::Object(values) => values
+                .iter()
+                .any(|(key, value)| evidence.id_reflects(key) || dynamic(value, evidence)),
+            _ => evidence.reflected_in(value),
+        }
+    }
+    evidence.id_reflects(&group.uuid)
+        || evidence.id_reflects(&group.policy_id)
+        || dynamic(&group.server_group_id, evidence)
+        || group.servers.as_ref().is_some_and(|servers| {
+            servers
+                .iter()
+                .any(|server| evidence.id_reflects(&server.uuid))
+        })
+}
+
+fn in_use(message: &str, evidence: &Evidence) -> Error {
+    api("", None, "ServerGroupInUse", message, evidence).with_detail(ServerGroupInUse)
+}
+
+fn ambiguous_create(
+    failure: Failure<CreateServerGroupOutput>,
+    evidence: &Evidence,
+) -> Failure<CreateServerGroupOutput> {
+    let (error, _, dispatch) = failure.into_parts();
+    let error = if dispatch == WriteDispatch::MayHaveBeenSent && !rejected(&error) {
+        let reason = error.api_error().map_or("", |api| api.message());
+        let advice = format!(
+            "{}: create may have already reached the server; list server groups and match the name exactly before creating it again: {reason}",
+            CREATE.id
+        );
+        with_screened_advice(error, &advice, evidence)
+    } else {
+        error
+    };
+    Failure::new(error, None, dispatch)
+}

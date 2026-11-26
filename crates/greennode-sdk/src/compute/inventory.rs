@@ -214,6 +214,16 @@ impl Client {
         input: &ListServerGroupsInput,
         evidence: &mut Evidence,
     ) -> Result<PagedList<ServerGroup>, Failure<O>> {
+        self.group_page_checked(ctx, input, evidence, false).await
+    }
+
+    pub(super) async fn group_page_checked<O>(
+        &self,
+        ctx: &RequestContext,
+        input: &ListServerGroupsInput,
+        evidence: &mut Evidence,
+        reject_reflection: bool,
+    ) -> Result<PagedList<ServerGroup>, Failure<O>> {
         let offset = input.offset.max(0).to_string();
         let limit = positive_or(input.limit, DEFAULT_PAGE_SIZE).to_string();
         let envelope = self
@@ -229,6 +239,9 @@ impl Client {
                 evidence,
             )
             .await?;
+        if reject_reflection && envelope.reflects(evidence) {
+            return Err(failure(group_read_error(LIST_GROUPS.id, evidence)));
+        }
         parse_page(envelope, &LIST_GROUPS, evidence, true)
     }
 
@@ -238,31 +251,41 @@ impl Client {
         ctx: &RequestContext,
         input: GetServerGroupInput,
     ) -> Result<GetServerGroupOutput, Failure<GetServerGroupOutput>> {
-        GET_GROUP
-            .path("ServerGroupID", &input.server_group_id)
-            .map_err(failure)?;
         let mut evidence = Evidence::new();
-        let envelope = self
-            .read(
-                ctx,
-                &GET_GROUP,
-                &[&input.server_group_id],
-                &[],
-                &mut evidence,
-            )
+        let group = self
+            .group_detail(ctx, &input.server_group_id, &mut evidence)
             .await?;
-        let server_group: ServerGroup = envelope.field("data", &GET_GROUP, &evidence)?;
-        if server_group.uuid.is_empty() {
-            return Err(failure(not_found(
-                &GET_GROUP,
-                "server group",
-                &input.server_group_id,
-                &evidence,
-            )));
-        }
         Ok(GetServerGroupOutput {
-            server_group: GET_GROUP.retain(server_group, &evidence)?,
+            server_group: GET_GROUP.retain(group, &evidence)?,
         })
+    }
+
+    pub(super) async fn group_detail<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<ServerGroup, Failure<O>> {
+        self.group_detail_checked(ctx, id, evidence, false).await
+    }
+
+    pub(super) async fn group_detail_checked<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+        reject_reflection: bool,
+    ) -> Result<ServerGroup, Failure<O>> {
+        GET_GROUP.path("ServerGroupID", id).map_err(failure)?;
+        let envelope = self.read(ctx, &GET_GROUP, &[id], &[], evidence).await?;
+        if reject_reflection && envelope.reflects(evidence) {
+            return Err(failure(group_read_error(GET_GROUP.id, evidence)));
+        }
+        let group: ServerGroup = envelope.field("data", &GET_GROUP, evidence)?;
+        if group.uuid.is_empty() {
+            return Err(failure(not_found(&GET_GROUP, "server group", id, evidence)));
+        }
+        Ok(group)
     }
 
     /// Lists server-group placement policies and their localized descriptions.
@@ -357,6 +380,16 @@ impl Client {
         let page = parse_page(envelope, &LIST_USER_IMAGES, &evidence, false)?;
         retain_page(page, &LIST_USER_IMAGES, &evidence)
     }
+}
+
+pub(super) fn group_read_error(operation: &'static str, evidence: &Evidence) -> Error {
+    api(
+        operation,
+        Some(200),
+        "InvalidResponse",
+        "invalid server group response; body withheld",
+        evidence,
+    )
 }
 
 fn not_found(read: &Read, noun: &str, id: &str, evidence: &Evidence) -> Error {

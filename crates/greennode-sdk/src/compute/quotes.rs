@@ -161,7 +161,7 @@ impl Client {
         Ok(server)
     }
 
-    async fn server_quote(
+    pub(super) async fn server_quote(
         &self,
         ctx: &RequestContext,
         resource: &str,

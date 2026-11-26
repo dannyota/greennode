@@ -38,6 +38,23 @@ Checks inventory and price before placing one order. Supply an SSH key or
 greennode compute create-server --name <name> --zone-id <zone-id> --flavor-id <flavor-id> --image-id <image-id> --vpc-id <vpc-id> --subnet-id <subnet-id> --security-group-id <security-group-id> --root-disk-size <root-disk-size> --root-disk-type-id <root-disk-type-id>
 ```
 
+## create-server-group
+
+Kind: Write.
+
+Creates a group with a placement policy. Inspect `list-server-groups` after an
+unconfirmed create.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--policy-id`   | `string` | yes      |
+| `--description` | `string` |          |
+
+```sh
+greennode compute create-server-group --name <name> --policy-id <policy-id>
+```
+
 ## delete-server
 
 Kind: Write, destructive.
@@ -53,6 +70,20 @@ The boot volume is always deleted. Data volumes are retained unless
 
 ```sh
 greennode compute delete-server --server-id <server-id> --yes
+```
+
+## delete-server-group
+
+Kind: Write, destructive.
+
+Checks group membership before requesting deletion.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--server-group-id` | `string` | yes      |
+
+```sh
+greennode compute delete-server-group --server-group-id <server-group-id> --yes
 ```
 
 ## get-server
@@ -328,4 +359,99 @@ Quotes a server flavor change. A negative amount indicates a credit.
 
 ```sh
 greennode compute quote-resize-server --server-id <server-id> --flavor-id <flavor-id>
+```
+
+## reboot-server
+
+Kind: Write, destructive.
+
+Reboots an active server. Inspect `get-server` and the console after an
+unconfirmed reboot.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--server-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode compute reboot-server --server-id <server-id> --yes
+```
+
+## rename-server
+
+Kind: Write.
+
+Returns the server from the rename response.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--server-id` | `string` | yes      |
+| `--name`      | `string` | yes      |
+
+```sh
+greennode compute rename-server --server-id <server-id> --name <name>
+```
+
+## resize-server
+
+Kind: Write, destructive.
+
+Changes the flavor of an active or stopped server. The signed quote can be a
+credit. Inspect `get-server` after an unconfirmed resize.
+
+| Flag          | Type      | Required |
+| ------------- | --------- | -------- |
+| `--server-id` | `string`  | yes      |
+| `--flavor-id` | `string`  | yes      |
+| `--max-price` | `float64` |          |
+| `--no-wait`   | `bool`    |          |
+
+```sh
+greennode compute resize-server --server-id <server-id> --flavor-id <flavor-id> --yes
+```
+
+## start-server
+
+Kind: Write.
+
+Starts a stopped server. An active server returns with `Changed` set to false.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--server-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode compute start-server --server-id <server-id>
+```
+
+## stop-server
+
+Kind: Write, destructive.
+
+Stops an active server. A stopped server returns with `Changed` set to false.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--server-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode compute stop-server --server-id <server-id> --yes
+```
+
+## update-server-group
+
+Kind: Write.
+
+Changes the group name or description. An empty description clears it.
+
+| Flag                | Type      | Required |
+| ------------------- | --------- | -------- |
+| `--server-group-id` | `string`  | yes      |
+| `--name`            | `*string` |          |
+| `--description`     | `*string` |          |
+
+```sh
+greennode compute update-server-group --server-group-id <server-group-id>
 ```
