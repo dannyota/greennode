@@ -1,0 +1,1 @@
+{"error":{"code":"ServerError","message":"iam.CreateGroup: create may have already reached the server; check with list-groups before creating it again: iam.CreateGroup: Bad Gateway (status 502)","status":502,"operation":"iam.CreateGroup"}}

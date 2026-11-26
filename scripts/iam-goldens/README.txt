@@ -10,3 +10,9 @@ Go caches. Run from the archive with cached dependencies and loopback access.
     GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMPortGoldens$' -count=1
 
 Copy the generated `.golden` files back into `crates/greennode/tests/fixtures/iam`.
+
+For group writes, also copy `iam_writes_goldens_test.go` into `internal/cli`.
+It uses `writes/cases.json` from the same fixture directory and writes the
+results beside it. Run:
+
+    GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMWritePortGoldens$' -count=1

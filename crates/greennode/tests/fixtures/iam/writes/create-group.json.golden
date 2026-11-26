@@ -1,0 +1,12 @@
+{
+  "Group": {
+    "ID": "group-1",
+    "Name": "team",
+    "Description": "note",
+    "Mode": "iam",
+    "Root": "123",
+    "UserIDs": [],
+    "PolicyIDs": [],
+    "CreatedAt": 1000
+  }
+}

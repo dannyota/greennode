@@ -1,0 +1,12 @@
+{
+  "Group": {
+    "ID": "group-1",
+    "Name": "",
+    "Description": "",
+    "Mode": "",
+    "Root": "",
+    "UserIDs": [],
+    "PolicyIDs": [],
+    "CreatedAt": 0
+  }
+}

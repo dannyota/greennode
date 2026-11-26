@@ -206,6 +206,38 @@ pub(super) trait Screen {
     fn screen(&mut self, evidence: &Evidence) -> bool;
 }
 
+pub(super) trait ScreenId {
+    fn screen_id(&mut self, evidence: &Evidence) -> bool;
+}
+
+impl ScreenId for String {
+    fn screen_id(&mut self, evidence: &Evidence) -> bool {
+        if evidence.id_reflects(self) {
+            *self = REDACTED.to_owned();
+        }
+        false
+    }
+}
+
+impl ScreenId for i64 {
+    fn screen_id(&mut self, evidence: &Evidence) -> bool {
+        if evidence.id_reflects(&self.to_string()) {
+            *self = 0;
+            return true;
+        }
+        self.screen(evidence)
+    }
+}
+
+impl ScreenId for Vec<String> {
+    fn screen_id(&mut self, evidence: &Evidence) -> bool {
+        for id in self {
+            id.screen_id(evidence);
+        }
+        false
+    }
+}
+
 impl Screen for String {
     fn screen(&mut self, evidence: &Evidence) -> bool {
         if evidence.text_reflects(self) {
@@ -295,7 +327,7 @@ impl<T: Wire> Output for Body<T> {
             (true, label.is_some(), operation.retry),
             &response.credentials,
         )?;
-        if body.is_empty() && operation.allow_empty {
+        if operation.no_output || (body.is_empty() && operation.allow_empty) {
             return Ok(Self::default());
         }
         let body = text::go_json(&body);

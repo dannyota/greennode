@@ -1,3 +1,6 @@
+#[path = "iam/group_writes.rs"]
+mod group_writes;
+
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::ExitCode;

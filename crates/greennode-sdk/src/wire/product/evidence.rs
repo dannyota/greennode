@@ -273,6 +273,10 @@ impl Evidence {
         response::reflects_credential(text, &self.credentials)
     }
 
+    pub(crate) fn id_reflects(&self, id: &str) -> bool {
+        response::reflects_identifier(id, &self.credentials)
+    }
+
     pub(crate) fn reflects_fixed_two(&self, amount: f64) -> bool {
         may_reflect_rendered_number(&self.credentials)
             && self

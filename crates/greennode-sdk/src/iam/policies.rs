@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::wire::Screen;
+use super::wire::{Screen, ScreenId};
 use super::{
     Action, Api, Client, DEFAULT_CAP, Group, GroupSummary, LIST_CAP, OBJECT_CAP, Page, PageQuery,
     Policy, PolicySummary, id_input, page_input, read_operation, require_identity,
@@ -248,8 +248,8 @@ impl Client {
             )
             .await?;
         groups.screen(&evidence);
-        user_ids.screen(&evidence);
-        service_account_ids.screen(&evidence);
+        user_ids.screen_id(&evidence);
+        service_account_ids.screen_id(&evidence);
         Ok(ListPolicyAttachmentsOutput {
             groups,
             user_ids,
@@ -279,29 +279,9 @@ impl Client {
         ctx: &RequestContext,
         input: GetGroupInput,
     ) -> Result<GetGroupOutput, Failure<GetGroupOutput>> {
-        let operation = read_operation(
-            "iam.GetGroup",
-            "policies-api/v1/groups/{}",
-            OBJECT_CAP,
-            false,
-        );
-        let (id, mut evidence) = (input.group_id.as_str(), Evidence::new());
-        let mut group: Group = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &operation,
-                &[("GroupID", id)],
-                &[],
-                &mut evidence,
-            )
+        let group = self
+            .fetch_group(ctx, &input.group_id, false, &mut Evidence::new())
             .await?;
-        require_identity(
-            &group.id,
-            id,
-            "iam.GetGroup: group identity or required name is unproven",
-        )?;
-        group.screen(&evidence);
         Ok(GetGroupOutput { group })
     }
 

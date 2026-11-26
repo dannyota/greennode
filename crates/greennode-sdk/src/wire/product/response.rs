@@ -93,32 +93,104 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
 }
 
 pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
-    matches_credential_forms(text, credentials, true)
+    matches_credential_forms(text, credentials, MatchContext::ErrorText)
 }
 
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
-    !credentials.values().is_empty() && matches_credential_forms(text, credentials, false)
+    !credentials.values().is_empty()
+        && matches_credential_forms(text, credentials, MatchContext::Text)
 }
 
-fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_text: bool) -> bool {
+pub(super) fn reflects_identifier(value: &str, credentials: &SentCredentials) -> bool {
+    !credentials.values().is_empty()
+        && matches_credential_forms(value, credentials, MatchContext::Identifier)
+}
+
+#[derive(Clone, Copy)]
+enum MatchContext {
+    ErrorText,
+    Text,
+    Identifier,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Base64Alphabet {
+    Standard,
+    UrlSafe,
+    Both,
+}
+
+struct EncodedNeedle {
+    value: Zeroizing<String>,
+    alphabet: Base64Alphabet,
+}
+
+impl EncodedNeedle {
+    fn insert(needles: &mut Vec<Self>, value: Zeroizing<String>, alphabet: Base64Alphabet) {
+        if let Some(needle) = needles
+            .iter_mut()
+            .find(|needle| needle.value.as_str() == value.as_str())
+        {
+            if needle.alphabet != alphabet {
+                needle.alphabet = Base64Alphabet::Both;
+            }
+        } else {
+            needles.push(Self { value, alphabet });
+        }
+    }
+
+    fn matches(&self, input: &[u8], strict: bool) -> bool {
+        let needle = self.value.as_str();
+        input.utf8_chunks().any(|chunk| {
+            let text = chunk.valid();
+            text.match_indices(needle).any(|(start, _)| {
+                if strict || needle.len() >= 8 {
+                    return true;
+                }
+                let left = start
+                    .checked_sub(1)
+                    .and_then(|index| text.as_bytes().get(index));
+                let right = text.as_bytes().get(start + needle.len());
+                let bounded = |symbols: &[u8]| {
+                    [left, right]
+                        .into_iter()
+                        .flatten()
+                        .all(|byte| !byte.is_ascii_alphanumeric() && !symbols.contains(byte))
+                };
+                (matches!(
+                    self.alphabet,
+                    Base64Alphabet::Standard | Base64Alphabet::Both
+                ) && bounded(b"+/"))
+                    || (matches!(
+                        self.alphabet,
+                        Base64Alphabet::UrlSafe | Base64Alphabet::Both
+                    ) && bounded(b"-_"))
+            })
+        })
+    }
+}
+
+fn matches_credential_forms(
+    text: &str,
+    credentials: &SentCredentials,
+    context: MatchContext,
+) -> bool {
     let mut needles = Vec::new();
-    let mut encoded_needles: Vec<Zeroizing<String>> = Vec::new();
+    let mut encoded_needles = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
         if !value.is_empty() && value.len() < 6 {
-            for encoding in [
-                data_encoding::BASE64,
-                data_encoding::BASE64_NOPAD,
-                data_encoding::BASE64URL,
-                data_encoding::BASE64URL_NOPAD,
+            for (encoding, alphabet) in [
+                (data_encoding::BASE64, Base64Alphabet::Standard),
+                (data_encoding::BASE64_NOPAD, Base64Alphabet::Standard),
+                (data_encoding::BASE64URL, Base64Alphabet::UrlSafe),
+                (data_encoding::BASE64URL_NOPAD, Base64Alphabet::UrlSafe),
             ] {
-                let encoded = Zeroizing::new(encoding.encode(value.as_bytes()));
-                if !encoded_needles
-                    .iter()
-                    .any(|existing| existing.as_str() == encoded.as_str())
-                {
-                    encoded_needles.push(encoded);
-                }
+                EncodedNeedle::insert(
+                    &mut encoded_needles,
+                    Zeroizing::new(encoding.encode(value.as_bytes())),
+                    alphabet,
+                );
             }
         }
         for part in std::iter::once(value).chain(
@@ -138,12 +210,12 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
                 if end.saturating_sub(start) >= 8 {
                     for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
                         let encoded = Zeroizing::new(encoding.encode(&aligned));
-                        if let Some(stable) = encoded.get(start..end)
-                            && !encoded_needles
-                                .iter()
-                                .any(|needle| needle.as_str() == stable)
-                        {
-                            encoded_needles.push(Zeroizing::new(stable.to_owned()));
+                        if let Some(stable) = encoded.get(start..end) {
+                            EncodedNeedle::insert(
+                                &mut encoded_needles,
+                                Zeroizing::new(stable.to_owned()),
+                                Base64Alphabet::Both,
+                            );
                         }
                     }
                 }
@@ -157,12 +229,14 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
             }
         }
     }
+    let error_text = matches!(context, MatchContext::ErrorText);
     let mut state = MatchState {
         work: matching_work_limit(text.len(), error_text),
         forms: Vec::new(),
         visited: Vec::new(),
         encoded_needles,
         error_text,
+        strict_base64: matches!(context, MatchContext::Identifier),
     };
     matches_forms(text.as_bytes(), &needles, [0; 4], &mut state)
 }
@@ -180,8 +254,9 @@ struct MatchState {
     work: usize,
     forms: Vec<Zeroizing<Vec<u8>>>,
     visited: Vec<(usize, [u8; 4])>,
-    encoded_needles: Vec<Zeroizing<String>>,
+    encoded_needles: Vec<EncodedNeedle>,
     error_text: bool,
+    strict_base64: bool,
 }
 
 impl MatchState {
@@ -220,29 +295,11 @@ fn matches_forms(
             if !state.charge(
                 input
                     .len()
-                    .saturating_add(state.encoded_needles[index].len()),
+                    .saturating_add(state.encoded_needles[index].value.len()),
             ) {
                 return true;
             }
-            let needle = state.encoded_needles[index].as_str();
-            if input.utf8_chunks().any(|chunk| {
-                let text = chunk.valid();
-                text.match_indices(needle).any(|(start, _)| {
-                    let end = start + needle.len();
-                    let is_alphabet = |byte: u8| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_')
-                    };
-                    needle.len() >= 8
-                        || (start
-                            .checked_sub(1)
-                            .and_then(|i| text.as_bytes().get(i))
-                            .is_none_or(|&byte| !is_alphabet(byte))
-                            && text
-                                .as_bytes()
-                                .get(end)
-                                .is_none_or(|&byte| !is_alphabet(byte)))
-                })
-            }) {
+            if state.encoded_needles[index].matches(input, state.strict_base64) {
                 return true;
             }
         }
@@ -1006,6 +1063,30 @@ mod tests {
     }
 
     #[test]
+    fn short_base64_boundaries_follow_the_matching_variant() {
+        let bearer = "ab>de";
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new(bearer)]);
+        let standard = data_encoding::BASE64_NOPAD.encode(bearer.as_bytes());
+        let url_safe = data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes());
+        assert!(reflects_credential_forms(
+            &format!("group-{standard}-tail"),
+            &credentials
+        ));
+        assert!(reflects_credential_forms(
+            &format!("path/{url_safe}/next"),
+            &credentials
+        ));
+        assert!(!reflects_credential_forms(
+            &format!("group-{url_safe}-tail"),
+            &credentials
+        ));
+        assert!(!reflects_credential_forms(
+            &format!("path/{standard}/next"),
+            &credentials
+        ));
+    }
+
+    #[test]
     fn embedded_complete_short_base64_credentials_are_withheld() {
         for secret in ["a?bcd", "123456"] {
             let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
@@ -1140,6 +1221,7 @@ mod tests {
             visited: Vec::new(),
             encoded_needles: Vec::new(),
             error_text: true,
+            strict_base64: false,
         };
         assert!(!matches_forms(
             &input,

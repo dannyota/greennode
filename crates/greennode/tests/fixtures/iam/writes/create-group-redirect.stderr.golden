@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"iam.CreateGroup: create may have already reached the server; check with list-groups before creating it again: iam.CreateGroup: Temporary Redirect (status 307)","status":307,"operation":"iam.CreateGroup"}}

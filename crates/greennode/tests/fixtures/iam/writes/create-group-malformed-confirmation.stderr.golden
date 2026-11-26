@@ -1,0 +1,1 @@
+{"error":{"code":"NotSettled","message":"iam.CreateGroup: group group-1 was created but the read to confirm it failed: vngcloud: write outcome not confirmed: iam.GetGroup: request failed: response failed to decode"}}

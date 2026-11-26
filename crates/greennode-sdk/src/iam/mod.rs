@@ -1,9 +1,11 @@
-//! IAM caller, user, service-account, policy, and group reads.
+//! IAM caller, user, service-account, policy, and group operations.
 
 mod accounts;
+mod groups;
 mod models;
 mod policies;
 mod wire;
+mod writes;
 
 #[cfg(test)]
 mod tests;
@@ -26,8 +28,10 @@ use crate::{ApiError, Config, Error, ErrorClass, Failure, RequestContext, WriteD
 use wire::{Body, Screen, Wire};
 
 pub use accounts::*;
+pub use groups::*;
 pub use models::*;
 pub use policies::*;
+pub use writes::WriteError;
 
 const OBJECT_CAP: usize = 256 << 10;
 const LIST_CAP: usize = 4 << 20;
@@ -88,11 +92,8 @@ impl Client {
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
-        if path
-            .iter()
-            .copied()
-            .chain(query.iter().map(|(_, value)| *value))
-            .any(|value| evidence.text_reflects(value))
+        if path.iter().any(|id| evidence.id_reflects(id))
+            || query.iter().any(|(_, value)| evidence.text_reflects(value))
         {
             return Err(refusal(
                 ErrorClass::InvalidInput,
