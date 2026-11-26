@@ -24,7 +24,8 @@ def validate(w):
     assert inputs['publish']['type'] == 'boolean' and inputs['publish']['default'] is False, 'publish input'
     assert w['permissions'] == {}, 'default permissions'
     assert w.get('concurrency') == {'group': 'release', 'cancel-in-progress': False}, 'concurrency'
-    assert set(w['jobs']) == {'verify', 'package'}, 'jobs'
+    assert set(w['jobs']) == {'verify', 'package', 'publish'}, 'jobs'
+    validate_publish(w['jobs']['publish'])
     job = w['jobs']['verify']
     assert job['permissions'] == {'contents': 'read', 'actions': 'read'}, 'job permissions'
     package = w['jobs']['package']
@@ -55,14 +56,38 @@ def validate(w):
         elif isinstance(value, list):
             for child in value:
                 forbidden(child)
-    forbidden(w)
+    forbidden(job)
+    forbidden(package)
     assert 'GH_TOKEN' not in w.get('env', {}) and 'GH_TOKEN' not in job.get('env', {}), 'token scope'
     assert not re.search(r'github\s*\.\s*token|secrets\s*[.\[]', json.dumps([w.get('env', {}), job.get('env', {}), package.get('env', {})]), re.I), 'token scope'
-    for candidate in (job, package):
+    publish = w['jobs']['publish']
+    publish_steps = publish['steps']
+    names = [step.get('name') for step in publish_steps]
+    for name in ('Verify owner approval', 'Recheck release evidence', 'Exchange OIDC for a crates.io token', 'Check SDK registry state', 'Upload SDK', 'Confirm SDK upload', 'Check tool registry state', 'Upload tool', 'Confirm tool upload'):
+        assert name in names, 'publish steps'
+    assert [names.index(name) for name in ('Verify owner approval', 'Recheck release evidence', 'Exchange OIDC for a crates.io token', 'Check SDK registry state', 'Upload SDK', 'Confirm SDK upload', 'Check tool registry state', 'Upload tool', 'Confirm tool upload')] == sorted(names.index(name) for name in ('Verify owner approval', 'Recheck release evidence', 'Exchange OIDC for a crates.io token', 'Check SDK registry state', 'Upload SDK', 'Confirm SDK upload', 'Check tool registry state', 'Upload tool', 'Confirm tool upload')), 'publish order'
+    for name, required in {
+        'Verify owner approval': ('GITHUB_REF_PROTECTED', 'required_reviewers', '/approvals', '.state == "approved"', '.user.login == "dannyota"'),
+        'Recheck release evidence': ('gh run download "$RELEASE_RUN"', 'gh release download "$TAG"', 'cmp "$receipt"', 'check-crate-release.py evidence', '"$RECEIPT_SHA256"', 'check-crate-release.py state', 'needed=false'),
+        'Check SDK registry state': ('check-crate-release.py state', 'greennode-sdk: absent'),
+        'Check tool registry state': ('check-crate-release.py state', 'greennode-sdk: present-and-approved', 'greennode: absent', '/owners'),
+        'Upload SDK': ('--package greennode-sdk', 'check-crate-publish-credential.py', '--config net.retry=0', 'unknown version='),
+        'Upload tool': ('--package greennode ', 'check-crate-publish-credential.py', '--config net.retry=0', 'unknown version='),
+        'Confirm SDK upload': ('--wait greennode-sdk',),
+        'Confirm tool upload': ('--wait greennode',),
+    }.items():
+        run = publish_steps[names.index(name)].get('run', '')
+        assert all(value in run for value in required), 'publish safeguards'
+    assert publish_steps[names.index('Exchange OIDC for a crates.io token')].get('if') == "${{ steps.prepare.outputs.needed == 'true' }}", 'auth condition'
+    assert 'success()' in publish_steps[names.index('Check tool registry state')].get('if', ''), 'registry gate'
+    for step in publish_steps:
+        if 'steps.auth.outputs.token' in json.dumps(step):
+            assert step.get('name') in ('Upload SDK', 'Upload tool') and step.get('env', {}).get('CARGO_REGISTRY_TOKEN') == '${{ steps.auth.outputs.token }}', 'registry token scope'
+    for candidate in (job, package, publish):
         assert 'continue-on-error' not in candidate, 'continue on error'
         for step in candidate['steps']:
             assert 'continue-on-error' not in step, 'continue on error'
-    for step in job['steps'] + package['steps']:
+    for step in job['steps'] + package['steps'] + publish['steps']:
         uses = step.get('uses', '')
         if uses:
             assert re.fullmatch(r'[^@]+@[0-9a-f]{40}', uses), 'action pin'
@@ -201,6 +226,13 @@ printf 404
             assert old in step['run']
             step['run'] = step['run'].replace(old, new, 1)
         mutations = [
+            ('publish safeguards', lambda w: change_run(w, 'publish', 'Verify owner approval', '.state == "approved"', '.state != "approved"')),
+            ('publish safeguards', lambda w: change_run(w, 'publish', 'Recheck release evidence', '"$RECEIPT_SHA256"', '"other"')),
+            ('publish safeguards', lambda w: change_run(w, 'publish', 'Upload SDK', 'check-crate-publish-credential.py', 'other.py')),
+            ('publish safeguards', lambda w: change_run(w, 'publish', 'Confirm SDK upload', '--wait greennode-sdk', '')),
+            ('publish order', lambda w: w['jobs']['publish']['steps'].reverse()),
+            ('auth condition', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('id') == 'auth').update({'if': '${{ true }}'})),
+            ('registry gate', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('id') == 'tool_state').update({'if': '${{ true }}'})),
             ('continue on error', lambda w: w['jobs']['verify']['steps'][0].update({'continue-on-error': True})),
             ('continue on error', lambda w: w['jobs']['package'].update({'continue-on-error': False})),
             ('token scope', lambda w: w['jobs']['verify'].update(env={'ALIAS': '${{ secrets.ALIAS }}'})),
