@@ -1,7 +1,7 @@
 mod auth;
 mod credentials;
 mod endpoints;
-mod session;
+pub(crate) mod session;
 
 pub use auth::{IamUserAuth, SecretTotp, ServiceAccountAuth, TotpFn, TotpProvider};
 pub use endpoints::EndpointOverrides;

@@ -2,9 +2,11 @@
 mod tests;
 
 use super::{EndpointOverrides, IamUserAuth, credentials};
+use crate::discovery::{Discovery, ProjectRead};
+use crate::endpoint::{self, Base, EndpointSet};
 use crate::wire::connection::{HeadLimit, OneSendClient, PooledClient, Trust};
 use crate::wire::product::sender::{BearerSource, Clients, Runtime, SentCredentials, Sleeper};
-use crate::{Clock, Error, ErrorClass, RequestContext, Secret};
+use crate::{Clock, Error, ErrorClass, Project, RequestContext, Secret};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -13,13 +15,26 @@ use std::{path::PathBuf, time::Duration};
 pub(crate) struct Session {
     auth: Auth,
     configured_credentials: SentCredentials,
-    _endpoints: crate::endpoint::EndpointSet,
+    endpoints: EndpointSet,
+    default_endpoints: EndpointSet,
+    endpoint_overrides_used: bool,
+    default_auth_endpoints: bool,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
     _profile: String,
-    _project_id: Option<String>,
+    region: String,
+    discovery: Discovery,
     _cdn_key: Option<Secret>,
+}
+
+#[allow(dead_code, reason = "Shared query for service ports")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuthKind {
+    ServiceAccount,
+    IamUser,
+    Static,
+    Custom,
 }
 
 enum Auth {
@@ -84,9 +99,73 @@ impl BearerSource for Session {
     }
 }
 
+#[allow(dead_code, reason = "Shared queries for service ports")]
 impl Session {
-    pub(crate) fn endpoints(&self) -> &crate::endpoint::EndpointSet {
-        &self._endpoints
+    pub(crate) fn auth_kind(&self) -> AuthKind {
+        match self.auth {
+            Auth::ServiceAccount(_) => AuthKind::ServiceAccount,
+            Auth::IamUser(_) => AuthKind::IamUser,
+            Auth::Static(_) => AuthKind::Static,
+            Auth::Provider(_) => AuthKind::Custom,
+        }
+    }
+
+    pub(crate) fn default_endpoints(&self) -> &EndpointSet {
+        &self.default_endpoints
+    }
+
+    pub(crate) fn endpoint_overrides_used(&self) -> bool {
+        self.endpoint_overrides_used
+    }
+
+    pub(crate) fn uses_default_auth_endpoints(&self) -> bool {
+        self.default_auth_endpoints
+    }
+
+    pub(crate) async fn project_id_context(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Option<String>, Box<Error>> {
+        self.discovery.project_id_context(ctx, self.clock()).await
+    }
+
+    pub(crate) async fn require_project_id(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<String, Box<Error>> {
+        self.resolve_project(ctx, ProjectRead::Id)
+            .await
+            .map(|project| project.id)
+    }
+
+    pub(crate) async fn require_project(
+        &self,
+        ctx: &RequestContext,
+    ) -> Result<Project, Box<Error>> {
+        self.resolve_project(ctx, ProjectRead::Metadata).await
+    }
+
+    async fn resolve_project(
+        &self,
+        ctx: &RequestContext,
+        read: ProjectRead,
+    ) -> Result<Project, Box<Error>> {
+        let mut jitter = || self.retry_jitter();
+        let runtime = self.runtime(ctx, &mut jitter)?;
+        let base = self
+            .endpoints()
+            .vserver
+            .as_ref()
+            .ok_or_else(|| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+        self.discovery
+            .require(runtime, base, self.bearer_source(), &self.region, read)
+            .await
+    }
+}
+
+impl Session {
+    pub(crate) fn endpoints(&self) -> &EndpointSet {
+        &self.endpoints
     }
 
     pub(crate) fn clock(&self) -> &dyn Clock {
@@ -179,8 +258,11 @@ impl Session {
         } else {
             None
         };
-        let endpoints =
-            crate::endpoint::defaults(region, overrides.into()).map_err(|_| invalid())?;
+        let endpoints = endpoint::defaults(region, overrides.into()).map_err(|_| invalid())?;
+        let default_endpoints =
+            endpoint::defaults(region, Default::default()).map_err(|_| invalid())?;
+        let mut endpoint_overrides_used = endpoints.overrides_used;
+        let mut default_auth_endpoints = false;
         let directory = if matches!(
             &selected.kind,
             credentials::Kind::ServiceAccount(_) | credentials::Kind::IamUser(_)
@@ -234,26 +316,33 @@ impl Session {
                 ),
             )),
             credentials::Kind::IamUser(value) => {
-                let url = |base: &Option<crate::endpoint::Base>,
-                           override_value: Option<&str>|
+                default_auth_endpoints = true;
+                let mut url = |base: &Option<Base>,
+                               default: &Option<Base>,
+                               supplied: Option<&str>|
                  -> Result<url::Url, Error> {
-                    let value = override_value
-                        .filter(|value| !value.is_empty())
-                        .or(base.as_deref())
-                        .ok_or_else(invalid)?;
-                    crate::endpoint::Base::parse(value).map_err(|_| invalid())?;
+                    let supplied = supplied.filter(|value| !value.is_empty());
+                    let base = base.as_ref().map(Base::configured_url);
+                    let default = default.as_ref().map(Base::configured_url);
+                    let value = supplied.or(base).ok_or_else(invalid)?;
+                    endpoint_overrides_used |= supplied.is_some();
+                    default_auth_endpoints &= base == default && Some(value) == default;
+                    Base::parse(value).map_err(|_| invalid())?;
                     url::Url::parse(value).map_err(|_| invalid())
                 };
                 let signin = url(
                     &endpoints.signin,
+                    &default_endpoints.signin,
                     details.as_ref().and_then(|v| v.signin_base_url.as_deref()),
                 )?;
                 let dashboard = url(
                     &endpoints.dashboard,
+                    &default_endpoints.dashboard,
                     details.as_ref().and_then(|v| v.dashboard_uri.as_deref()),
                 )?;
                 let token_url = url(
                     &endpoints.token,
+                    &default_endpoints.token,
                     details.as_ref().and_then(|v| v.token_url.as_deref()),
                 )?;
                 let provider = details.and_then(|v| v.provider);
@@ -279,12 +368,16 @@ impl Session {
         Ok(Self {
             auth,
             configured_credentials,
-            _endpoints: endpoints,
+            endpoints,
+            default_endpoints,
+            endpoint_overrides_used,
+            default_auth_endpoints,
             clients: OnceLock::new(),
             clock,
             timeout,
             _profile: profile,
-            _project_id: project_id,
+            region: region.to_owned(),
+            discovery: Discovery::new(project_id, region),
             _cdn_key: selected.cdn_key,
         })
     }

@@ -36,6 +36,7 @@ const LIST_INPUT: InputDescriptor<ListProjectsInput> = InputDescriptor {
 
 pub(super) const SERVICE: Service = Service {
     name: "project",
+    error_rules: &[],
     operations: &[Operation {
         name: "list-projects",
         sdk_operation: "project.ListProjects",

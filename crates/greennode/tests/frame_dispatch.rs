@@ -356,19 +356,23 @@ fn first_api_detail_controls_status_exit_unless_nested_identity_matches() {
 
 #[test]
 fn service_rules_use_fixed_ranks_and_reject_duplicates() {
-    use greennode::cli::errors::{Rule, classify, validate_rules};
+    use greennode::cli::errors::{
+        Rule, RuleExit, RuleName, RuleOperation, classify, validate_rules,
+    };
     use greennode_sdk::{ErrorClass, testing};
     fn any(_: &Error) -> bool {
         true
     }
     let rule = Rule {
         identity: "quota-status",
-        rank: 2,
         matches: any,
-        code: "QuotaStatusIncomplete",
-        exit: Some(1),
-        operation: None,
-        include_api_status: false,
+        name: Some(RuleName {
+            rank: 2,
+            code: "QuotaStatusIncomplete",
+            operation: RuleOperation::Api,
+            include_api_status: true,
+        }),
+        exit: Some(RuleExit::Failure),
     };
     assert!(validate_rules(&[rule]));
     assert!(!validate_rules(&[rule, rule]));
@@ -380,11 +384,50 @@ fn service_rules_use_fixed_ranks_and_reject_duplicates() {
     let classified = classify(&error, &rules);
     assert_eq!(classified.envelope.code, "QuotaStatusIncomplete");
     assert_eq!(classified.exit, 1);
+    assert_eq!(classified.envelope.operation, None);
+    assert_eq!(classified.envelope.status, None);
     let history = testing::cause(testing::identity(ErrorClass::HistoryIncomplete), error);
     assert_eq!(
         classify(&history, &[rule]).envelope.code,
         "HistoryIncomplete"
     );
+}
+
+#[test]
+fn page_format_name_follows_api_and_invalid_config() {
+    use greennode::cli::errors::{
+        PAGE_FORMAT_RANK, Rule, RuleName, RuleOperation, classify, validate_rules,
+    };
+    use greennode_sdk::{ErrorClass, testing};
+
+    let rules = [Rule {
+        identity: "page-format",
+        matches: |error| error.has_identity(ErrorClass::RateLimited),
+        name: Some(RuleName {
+            rank: PAGE_FORMAT_RANK,
+            code: "PageFormat",
+            operation: RuleOperation::Omit,
+            include_api_status: false,
+        }),
+        exit: None,
+    }];
+    let page_format = || testing::identity(ErrorClass::RateLimited);
+    let api = testing::cause(
+        page_format(),
+        testing::api("list", Some(500), "ServiceFailure", "failure"),
+    );
+    let classified = classify(&api, &rules);
+    assert_eq!(classified.envelope.code, "ServiceFailure");
+    assert_eq!(classified.envelope.status, Some(500));
+    assert_eq!(classified.envelope.operation, Some("list"));
+
+    let config = testing::cause(page_format(), testing::identity(ErrorClass::InvalidConfig));
+    let classified = classify(&config, &rules);
+    assert_eq!(classified.envelope.code, "InvalidConfig");
+    assert_eq!(classified.exit, 2);
+
+    assert!(validate_rules(&rules));
+    assert_eq!(classify(&page_format(), &rules).envelope.code, "PageFormat");
 }
 
 #[test]

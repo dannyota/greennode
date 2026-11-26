@@ -363,6 +363,7 @@ mod tests {
         };
         let registry = Registry::new(&[Service {
             name: "toy",
+            error_rules: &[],
             operations: &[OP],
         }])
         .unwrap();
@@ -400,6 +401,7 @@ mod tests {
         };
         let registry = Registry::new(&[Service {
             name: "toy",
+            error_rules: &[],
             operations: &[OP],
         }])
         .unwrap();
@@ -428,6 +430,7 @@ mod tests {
         };
         let registry = Registry::new(&[Service {
             name: "toy",
+            error_rules: &[],
             operations: &[OP],
         }])
         .unwrap();

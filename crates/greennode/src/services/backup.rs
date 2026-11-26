@@ -109,6 +109,7 @@ const POLICIES_INPUT: InputDescriptor<ListPoliciesInput> = InputDescriptor {
 
 pub(super) const SERVICE: Service = Service {
     name: "backup",
+    error_rules: &[],
     operations: &[
         Operation {
             name: "get-policy",

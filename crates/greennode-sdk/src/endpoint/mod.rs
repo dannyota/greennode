@@ -5,6 +5,8 @@ use url::Url;
 pub(crate) struct Base {
     url: Url,
     serialized: String,
+    configured: Option<String>,
+    explicit_override: bool,
 }
 
 impl std::ops::Deref for Base {
@@ -46,6 +48,7 @@ pub(crate) struct EndpointOverrides {
 }
 
 pub(crate) struct EndpointSet {
+    pub(crate) overrides_used: bool,
     pub(crate) vserver: Option<Base>,
     pub(crate) vlb: Option<Base>,
     pub(crate) vnetwork: Option<Base>,
@@ -110,9 +113,13 @@ pub(crate) fn defaults(region: &str, overrides: EndpointOverrides) -> Result<End
             .then(|| format!("https://{region}.api.vngcloud.vn/vbackup-gateway/")),
         database: Some("https://vdb.console.greennode.ai/vdb/".into()),
     };
+    let mut overrides_used = false;
     macro_rules! apply {
         ($($field:ident),+ $(,)?) => { $(
-            if let Some(value) = overrides.$field.filter(|value| !value.is_empty()) { set.$field = Some(value); }
+            if let Some(value) = overrides.$field.as_ref().filter(|value| !value.is_empty()) {
+                set.$field = Some(value.clone());
+                overrides_used = true;
+            }
         )+ };
     }
     apply!(
@@ -172,7 +179,14 @@ pub(crate) fn defaults(region: &str, overrides: EndpointOverrides) -> Result<End
     }
     macro_rules! resolve {
         ($($field:ident),+ $(,)?) => {
-            Ok(EndpointSet { $($field: set.$field.as_deref().map(Base::parse).transpose().map_err(|_| ())?,)+ })
+            Ok(EndpointSet {
+                overrides_used,
+                $($field: set.$field.as_deref().map(|value| {
+                    let mut base = Base::parse(value)?;
+                    base.explicit_override = overrides.$field.as_ref().is_some_and(|v| !v.is_empty());
+                    Ok::<_, BaseError>(base)
+                }).transpose().map_err(|_| ())?,)+
+            })
         };
     }
     resolve!(
@@ -308,7 +322,21 @@ impl Base {
             return Err(BaseError::InvalidUrl);
         }
         let serialized = format!("{}{path}", &url[..url::Position::BeforePath]);
-        Ok(Self { url, serialized })
+        let configured = (input != serialized).then(|| input.to_owned());
+        Ok(Self {
+            url,
+            serialized,
+            configured,
+            explicit_override: false,
+        })
+    }
+
+    pub(crate) fn configured_url(&self) -> &str {
+        self.configured.as_deref().unwrap_or(&self.serialized)
+    }
+
+    pub(crate) fn is_explicit_override(&self) -> bool {
+        self.explicit_override
     }
 
     pub(crate) fn same_origin(&self, other: &Self) -> bool {

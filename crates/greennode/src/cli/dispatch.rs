@@ -10,10 +10,10 @@ use clap::ArgMatches;
 use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, Failure, RequestContext};
 
 use super::input::{self, InputDescriptor, ParsedOperationInput};
-use super::op::{Kind, Operation};
+use super::op::{Kind, SelectedOperation};
 use super::{Invocation, errors, query, render};
-pub use output::OutputView;
 use output::{OutputError, render_output};
+pub use output::{OutputView, RenderFailure};
 
 pub type FutureResult<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -129,6 +129,7 @@ struct ManagementAdapter<'a, T> {
     matches: &'a ArgMatches,
     source: &'a dyn ConfigSource,
     view: OutputView,
+    error_rules: &'static [errors::Rule],
 }
 
 struct ManagementInput<'a, T: 'static> {
@@ -316,6 +317,10 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         self.view
     }
 
+    fn rules(&self) -> &[errors::Rule] {
+        self.error_rules
+    }
+
     fn advice(&self, error: &Error) -> Option<&'static str> {
         error.detail::<&'static str>().copied()
     }
@@ -339,14 +344,14 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
 
 pub(crate) async fn management<T: Send + 'static>(
     invocation: &mut Invocation<'_>,
-    operation: &Operation,
+    selected: SelectedOperation,
     matches: &ArgMatches,
     descriptor: &'static InputDescriptor<T>,
     execute: ManagementOperation<T>,
 ) -> u8 {
     management_with_view(
         invocation,
-        operation,
+        selected,
         matches,
         descriptor,
         execute,
@@ -357,12 +362,13 @@ pub(crate) async fn management<T: Send + 'static>(
 
 pub(crate) async fn management_with_view<T: Send + 'static>(
     invocation: &mut Invocation<'_>,
-    operation: &Operation,
+    selected: SelectedOperation,
     matches: &ArgMatches,
     descriptor: &'static InputDescriptor<T>,
     execute: ManagementOperation<T>,
     view: OutputView,
 ) -> u8 {
+    let operation = selected.operation;
     let mut input = ManagementInput {
         descriptor,
         matches,
@@ -376,6 +382,7 @@ pub(crate) async fn management_with_view<T: Send + 'static>(
         matches,
         source: invocation.source,
         view,
+        error_rules: selected.error_rules,
     };
     run_with_clock(
         &mut input,
@@ -426,14 +433,6 @@ pub(super) fn local(stderr: &mut dyn Write, error: LocalError) -> u8 {
         },
     );
     error.exit
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RenderFailure {
-    Query,
-    TableLimit,
-    Encoding,
-    Output,
 }
 
 fn refuse<I: ParsedInput, A: Adapter<I>>(

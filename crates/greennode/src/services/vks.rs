@@ -83,6 +83,7 @@ const SCOPE: &str = "VKS reads work in `hcm-3` and `han-1` and support `--read-o
 
 pub(super) const SERVICE: Service = Service {
     name: "vks",
+    error_rules: &[],
     operations: &[
         Operation {
             name: "list-clusters",

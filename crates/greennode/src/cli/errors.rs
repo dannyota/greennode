@@ -2,25 +2,58 @@ use std::io::Write;
 
 use greennode_sdk::{Error, ErrorClass};
 
-#[derive(Clone, Copy)]
+const OUTCOME_NAMES: [(u16, ErrorClass, &str); 5] = [
+    (0, ErrorClass::HistoryIncomplete, "HistoryIncomplete"),
+    (20, ErrorClass::NotSettled, "NotSettled"),
+    (21, ErrorClass::Failed, "WriteFailed"),
+    (38, ErrorClass::PriceAboveMax, "PriceAboveMax"),
+    (39, ErrorClass::Unpriced, "Unpriced"),
+];
+const NOT_FOUND_RANK: u16 = 50;
+pub const PAGE_FORMAT_RANK: u16 = 58;
+
+#[derive(Clone, Copy, Debug)]
 pub struct Rule {
     pub identity: &'static str,
-    pub rank: u16,
     pub matches: fn(&Error) -> bool,
+    pub name: Option<RuleName>,
+    pub exit: Option<RuleExit>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RuleName {
+    pub rank: u16,
     pub code: &'static str,
-    pub exit: Option<u8>,
-    pub operation: Option<&'static str>,
+    pub operation: RuleOperation,
     pub include_api_status: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RuleOperation {
+    Omit,
+    Fixed(&'static str),
+    Api,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleExit {
+    Failure,
+    Auth,
+    NotFound,
+    Usage,
 }
 
 pub fn validate_rules(rules: &[Rule]) -> bool {
     rules.iter().enumerate().all(|(i, rule)| {
-        ![0, 20, 21, 38, 39].contains(&rule.rank)
-            && rule.rank < 50
-            && rules
-                .iter()
-                .skip(i + 1)
-                .all(|other| rule.identity != other.identity && rule.rank != other.rank)
+        let rank = rule.name.map(|name| name.rank);
+        rank.is_none_or(|rank| {
+            rank == PAGE_FORMAT_RANK
+                || (rank < NOT_FOUND_RANK
+                    && !OUTCOME_NAMES.iter().any(|(used, _, _)| *used == rank))
+        }) && rules.iter().skip(i + 1).all(|other| {
+            rule.identity != other.identity
+                && rank.is_none_or(|rank| other.name.is_none_or(|name| name.rank != rank))
+        })
     })
 }
 
@@ -39,58 +72,54 @@ pub struct Classified<'a> {
 pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
     let api = error.api_error();
     let matching = rules.iter().filter(|rule| (rule.matches)(error));
-    let rule = matching.clone().min_by_key(|rule| rule.rank);
-    let special_exit = matching.filter_map(|rule| rule.exit).min();
+    let name = matching
+        .clone()
+        .filter_map(|rule| rule.name)
+        .min_by_key(|name| name.rank);
+    let matches_exit = |exit| matching.clone().any(|rule| rule.exit == Some(exit));
     let status = api
         .and_then(|api| api.status())
         .filter(|status| *status > 0);
     let has = |class| error.has_identity(class);
     let not_found = has(ErrorClass::NotFound) || status == Some(404);
-    let shared = [
-        (0, ErrorClass::HistoryIncomplete, "HistoryIncomplete"),
-        (20, ErrorClass::NotSettled, "NotSettled"),
-        (21, ErrorClass::Failed, "WriteFailed"),
-        (38, ErrorClass::PriceAboveMax, "PriceAboveMax"),
-        (39, ErrorClass::Unpriced, "Unpriced"),
-    ]
-    .into_iter()
-    .find(|(_, class, _)| has(*class));
-    let rule = rule.filter(|rule| shared.is_none_or(|(rank, _, _)| rule.rank < rank));
-    let code = if let Some(rule) = rule {
-        rule.code
-    } else if let Some((_, _, code)) = shared {
-        code
+    let outcome = OUTCOME_NAMES.into_iter().find(|(_, class, _)| has(*class));
+    let (rank, code) = if let Some((rank, _, code)) = outcome {
+        (rank, code)
     } else if not_found {
-        "NotFound"
+        (NOT_FOUND_RANK, "NotFound")
     } else if let Some(api) = api {
-        if api.code().is_empty() {
+        let code = if api.code().is_empty() {
             "RequestFailed"
         } else {
             api.code()
-        }
+        };
+        (51, code)
     } else if has(ErrorClass::NoCredentials) || has(ErrorClass::CredentialsFile) {
-        "NoCredentials"
+        (52, "NoCredentials")
     } else if has(ErrorClass::TokenCache) {
-        "TokenCacheFailed"
+        (53, "TokenCacheFailed")
     } else if error.service_account_login_error().is_some() {
-        "ServiceAccountLoginFailed"
+        (54, "ServiceAccountLoginFailed")
     } else if error.login_error().is_some() || has(ErrorClass::Auth) {
-        "LoginFailed"
+        (55, "LoginFailed")
     } else if has(ErrorClass::InvalidInput) {
-        "InvalidUsage"
+        (56, "InvalidUsage")
     } else if has(ErrorClass::InvalidConfig) || has(ErrorClass::ProjectAmbiguous) {
-        "InvalidConfig"
+        (57, "InvalidConfig")
     } else {
-        "RequestFailed"
+        (PAGE_FORMAT_RANK + 1, "RequestFailed")
     };
-    let exit = if special_exit == Some(1)
+    let name = name.filter(|name| name.rank < rank);
+    let code = name.map_or(code, |name| name.code);
+    let exit = if matches_exit(RuleExit::Failure)
         || has(ErrorClass::NotSettled)
         || has(ErrorClass::Failed)
         || has(ErrorClass::Cancelled)
         || has(ErrorClass::DeadlineExceeded)
     {
         1
-    } else if has(ErrorClass::NoCredentials)
+    } else if matches_exit(RuleExit::Auth)
+        || has(ErrorClass::NoCredentials)
         || has(ErrorClass::CredentialsFile)
         || has(ErrorClass::Auth)
         || error.login_error().is_some()
@@ -98,15 +127,16 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         || status == Some(401)
     {
         3
-    } else if not_found {
+    } else if matches_exit(RuleExit::NotFound) || not_found {
         4
-    } else if has(ErrorClass::InvalidInput)
+    } else if matches_exit(RuleExit::Usage)
+        || has(ErrorClass::InvalidInput)
         || has(ErrorClass::InvalidConfig)
         || has(ErrorClass::ProjectAmbiguous)
     {
         2
     } else {
-        special_exit.unwrap_or(1)
+        1
     };
     let message = api
         .map(|api| api.message())
@@ -118,10 +148,14 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         })
         .or_else(|| error.login_error().map(|login| login.reason()))
         .unwrap_or("request failed");
-    let (status, operation) = match rule {
-        Some(rule) => (
-            rule.include_api_status.then_some(status).flatten(),
-            rule.operation,
+    let (status, operation) = match name {
+        Some(name) => (
+            name.include_api_status.then_some(status).flatten(),
+            match name.operation {
+                RuleOperation::Omit => None,
+                RuleOperation::Fixed(operation) => Some(operation),
+                RuleOperation::Api => api.map(|api| api.operation()),
+            },
         ),
         None if api.is_some()
             && (code == "NotFound"

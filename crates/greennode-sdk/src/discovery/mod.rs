@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::error::SafeText;
 use crate::wire::product::{
     operation::{self, Operation, Output},
@@ -8,14 +6,19 @@ use crate::wire::product::{
     sender::{BearerSource, Response, Runtime, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{ApiError, Error, ErrorClass, Project};
+use crate::{ApiError, Clock, Error, ErrorClass, Project, RequestContext};
 use http::{Method, StatusCode};
 use std::{
     collections::{BTreeMap, HashSet},
     future::Future,
     task::Poll,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
+
+pub(crate) enum ProjectRead {
+    Id,
+    Metadata,
+}
 
 #[derive(Default)]
 pub(crate) struct Discovery {
@@ -38,22 +41,17 @@ impl Discovery {
         }
     }
 
-    pub(crate) async fn require(
+    async fn lock(
         &self,
-        runtime: Runtime<'_>,
-        base: &crate::endpoint::Base,
-        source: &dyn BearerSource,
-        region: &str,
-    ) -> Result<Project, Box<Error>> {
-        let effective = runtime.ctx.child_with_deadline(runtime.deadline);
-        let ctx = &effective;
-        let clock = runtime.clock;
+        ctx: &RequestContext,
+        clock: &dyn Clock,
+    ) -> Result<MutexGuard<'_, Option<Project>>, Box<Error>> {
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
         }
         let mut lock = Box::pin(self.selected.lock());
         let mut ended = Box::pin(ctx.wait(clock));
-        let mut state = std::future::poll_fn(|cx| {
+        let state = std::future::poll_fn(|cx| {
             if let Poll::Ready(end) = ended.as_mut().poll(cx) {
                 return Poll::Ready(Err(Box::new(end.into())));
             }
@@ -63,11 +61,36 @@ impl Discovery {
         if let Some(end) = ctx.check(clock) {
             return Err(Box::new(end.into()));
         }
-        if let Some(project) = &*state {
+        Ok(state)
+    }
+
+    pub(crate) async fn project_id_context(
+        &self,
+        ctx: &RequestContext,
+        clock: &dyn Clock,
+    ) -> Result<Option<String>, Box<Error>> {
+        let state = self.lock(ctx, clock).await?;
+        Ok(state.as_ref().map(|project| project.id.clone()))
+    }
+
+    pub(crate) async fn require(
+        &self,
+        runtime: Runtime<'_>,
+        base: &crate::endpoint::Base,
+        source: &dyn BearerSource,
+        region: &str,
+        read: ProjectRead,
+    ) -> Result<Project, Box<Error>> {
+        let ctx = runtime.ctx.child_with_deadline(runtime.deadline);
+        let clock = runtime.clock;
+        let mut state = self.lock(&ctx, clock).await?;
+        if matches!(read, ProjectRead::Id)
+            && let Some(project) = &*state
+        {
             return Ok(project.clone());
         }
         let projects = read_projects(runtime, base, source, region).await?;
-        let selected = select(projects)?;
+        let selected = select(projects, region, state.as_ref())?;
         #[cfg(test)]
         if let Some(hook) = &self.before_publish {
             hook();
@@ -165,8 +188,21 @@ fn invalid_response(status: StatusCode) -> Box<Error> {
     )
 }
 
-fn select(projects: Vec<Project>) -> Result<Project, Box<Error>> {
+fn select(
+    projects: Vec<Project>,
+    region: &str,
+    selected: Option<&Project>,
+) -> Result<Project, Box<Error>> {
     let mut matches = projects.into_iter();
+    if let Some(selected) = selected {
+        return Ok(matches
+            .find(|project| project.id == selected.id)
+            .unwrap_or_else(|| Project {
+                id: selected.id.clone(),
+                region: region.to_owned(),
+                ..Default::default()
+            }));
+    }
     let project = matches
         .next()
         .ok_or_else(|| Box::new(Error::new(ErrorClass::ProjectNotFound)))?;

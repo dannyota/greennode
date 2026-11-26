@@ -10,6 +10,14 @@ pub struct OutputView {
     pub(crate) withhold: Option<&'static str>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RenderFailure {
+    Query,
+    TableLimit,
+    Encoding,
+    Output,
+}
+
 pub(super) enum OutputError {
     Query,
     Render(render::Error),
