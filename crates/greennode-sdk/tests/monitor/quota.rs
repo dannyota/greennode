@@ -95,6 +95,11 @@ async fn quota_status_preserves_partial_rows_and_only_treats_source_404_as_none(
         Some(&ErrorDetail::QuotaStatusIncomplete)
     );
     assert!(result.error().has_class(ErrorClass::PermissionDenied));
+    let api = result.error().api_error().unwrap();
+    assert_eq!(
+        (api.status(), api.code(), api.retryable()),
+        (Some(404), "NotFound", false)
+    );
     let output = serde_json::to_value(result.partial().unwrap()).unwrap();
     assert_eq!(output["Complete"], false);
     assert_eq!(output["Items"][0]["Error"]["Code"], "NotFound");
@@ -160,6 +165,190 @@ async fn quota_catalog_refuses_reflected_catalog_ids_before_projection() {
     );
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+#[ignore = "shared identifier matcher does not yet screen hexadecimal credentials"]
+async fn synthetic_catalog_rejects_hex_credential_in_class_id_before_request() {
+    let classes = CLASSES.replace("class-1", "prefix746f792d736563726574suffix");
+    let server = Server::start(
+        [classes.as_str(), PACKAGES, SETTINGS, UNITS, "[]"]
+            .map(|body| response("200 OK", body))
+            .into(),
+    );
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client_with_token(&server, "toy-secret")
+            .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+            .await
+            .is_err()
+    );
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn quota_status_redacts_credential_in_formatted_time_left() {
+    let end =
+        time::OffsetDateTime::now_utc() + time::Duration::days(12345) + time::Duration::hours(12);
+    let end = end
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let quota = QUOTA.replace("2000-02-01T00:00:00Z", &end);
+    let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
+    let (ctx, _) = RequestContext::new();
+    let output = client_with_token(&server, "12345")
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "email".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let output = serde_json::to_value(output).unwrap();
+    assert_eq!(output["Items"][0]["TimeLeftSeconds"], "<redacted>");
+}
+
+#[tokio::test]
+async fn catalog_budget_counts_html_escaped_bodies() {
+    let payload = "<".repeat(750_000);
+    let classes = CLASSES.replace("Coming soon.", &payload);
+    let packages = PACKAGES.replace("free10", &payload);
+    let server = Server::start(
+        [classes.as_str(), packages.as_str(), SETTINGS, UNITS, "[]"]
+            .map(|body| response("200 OK", body))
+            .into(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "ResponseTooLarge"
+    );
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn truncated_quota_source_404_is_unavailable() {
+    use greennode_sdk::testing::Response;
+    let server = Server::start(vec![Response::RawClose(
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 5\r\n\r\n{}".to_vec(),
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "email".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let output = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    assert_eq!(output["Complete"], false);
+    assert_eq!(output["Items"][0]["Status"], "unavailable");
+}
+
+#[tokio::test]
+async fn quota_status_rechecks_ids_after_token_refresh() {
+    use super::{Product, Refresh, with_product_loopback};
+    use greennode_sdk::{Config, ConfigOptions};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let quota = QUOTA.replace("quota-1", "prefixYWJjsuffix");
+    let server = Server::start(vec![
+        response("404 Not Found", "{}"),
+        response("200 OK", &quota),
+        response("200 OK", "[]"),
+        response("401 Unauthorized", ""),
+        response("404 Not Found", "{}"),
+    ]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_credentials_provider(Arc::new(Refresh(AtomicBool::new(false))));
+    let client = greennode_sdk::monitor::Client::new(
+        &Config::new(with_product_loopback(Product::Monitor, options, &server)).unwrap(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .get_quota_status(&ctx, GetQuotaStatusInput::default())
+        .await
+        .unwrap_err();
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
+async fn failed_row_ids_do_not_discard_safe_partial_output() {
+    use super::{Product, Refresh, with_product_loopback};
+    use greennode_sdk::{Config, ConfigOptions};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let quota = QUOTA.replace("quota-1", "prefixYWJjsuffix");
+    let server = Server::start(vec![
+        response("200 OK", &quota),
+        response("401 Unauthorized", ""),
+        response("200 OK", "[]"),
+    ]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_credentials_provider(Arc::new(Refresh(AtomicBool::new(false))));
+    let client = greennode_sdk::monitor::Client::new(
+        &Config::new(with_product_loopback(Product::Monitor, options, &server)).unwrap(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "email".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    assert_eq!(partial["Items"][0]["Status"], "unavailable");
+    assert!(!partial.to_string().contains("prefixYWJjsuffix"));
+}
+
+#[tokio::test]
+async fn quota_status_rejects_underscores_in_notification_and_class_ids() {
+    let (ctx, _) = RequestContext::new();
+    let quota = QUOTA.replace("quota-1", "quota_1");
+    let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
+    let failure = client(&server)
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "email".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(failure.partial().unwrap()).unwrap()["Items"][0]["Status"],
+        "unavailable"
+    );
+
+    let detail = DETAIL
+        .replace("class-1", "class_1")
+        .replace("\"price\": 0", "\"price\": 1");
+    let server = Server::start(vec![response("200 OK", QUOTA), response("200 OK", &detail)]);
+    let failure = client(&server)
+        .get_quota_status(
+            &ctx,
+            GetQuotaStatusInput {
+                kind: "synthetic".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        serde_json::to_value(failure.partial().unwrap()).unwrap()["Items"][0]["Status"],
+        "unavailable"
+    );
 }
 
 #[tokio::test]

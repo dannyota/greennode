@@ -33,15 +33,27 @@ fn render_catalog(
     if format == Format::Json || queried {
         return Ok(false);
     }
-    let mut document = fields(output.for_query()?);
-    let periods = array(take(&mut document, "MonthPeriods"))
+    let mut exact = Vec::new();
+    render::write_json(&mut exact, output)?;
+    let exact: serde_json::Value = serde_json::from_slice(&exact)
+        .map_err(|error| render::Error::Invalid(error.to_string()))?;
+    let exact_scalar = |value: &serde_json::Value| match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Number(number) => number.to_string(),
+        serde_json::Value::Bool(flag) => flag.to_string(),
+        _ => "unknown".to_owned(),
+    };
+    let periods = exact["MonthPeriods"]
+        .as_array()
         .into_iter()
-        .map(|period| scalar(&period))
+        .flatten()
+        .map(exact_scalar)
         .collect::<Vec<_>>()
         .join(" ");
-    let maximum = take(&mut document, "MaxMonthPeriodForFreeQuota");
+    let maximum = exact_scalar(&exact["MaxMonthPeriodForFreeQuota"]);
+    let mut document = fields(output.for_query()?);
     let payment = take(&mut document, "PaymentMethod");
-    writeln!(stdout, "Class options (class packageId)\nSettings periods: [{periods}]; free maximum: {}; payment: {}", scalar(&maximum), render::escape(&scalar(&payment)))
+    writeln!(stdout, "Class options (class packageId)\nSettings periods: [{periods}]; free maximum: {}; payment: {}", maximum, render::escape(&scalar(&payment)))
         .map_err(render::Error::Io)?;
     let mut options = Vec::new();
     let mut units = Vec::new();
@@ -276,5 +288,24 @@ fn unknown_cells(value: &mut Value) {
         Value::Array(items) => items.iter_mut().for_each(unknown_cells),
         Value::Null => *value = Value::String("unknown".into()),
         _ => (),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_header_preserves_large_integers() {
+        let output = render::project(&serde_json::json!({"MonthPeriods": [9007199254740993_i64], "MaxMonthPeriodForFreeQuota": 9007199254740993_i64, "PaymentMethod": "PRE-PAID"})).unwrap();
+        for format in [Format::Table, Format::Text] {
+            let mut stdout = Vec::new();
+            render_catalog(&mut stdout, &mut Vec::new(), &output, format, false).unwrap();
+            assert!(
+                String::from_utf8(stdout).unwrap().contains(
+                    "Settings periods: [9007199254740993]; free maximum: 9007199254740993"
+                )
+            );
+        }
     }
 }

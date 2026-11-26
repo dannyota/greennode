@@ -45,7 +45,11 @@ impl Default for QuotaTimestamp {
 
 impl Serialize for QuotaTimestamp {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let text = self.0.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
+        let text = self
+            .0
+            .to_offset(UtcOffset::UTC)
+            .format(&Rfc3339)
+            .map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&text)
     }
 }
@@ -178,14 +182,16 @@ impl Client {
                 ));
             }
         };
-        let now = self.session.clock().utc_now();
+        let now = self.session.clock().utc_now().to_offset(UtcOffset::UTC);
         let mut reader = Reader::new(self, ctx, OPERATION);
         let mut rows = Vec::with_capacity(kinds.len());
         let mut causes = Vec::new();
         for kind in kinds {
+            let retained_ids = reader.decision_ids.len();
             match status_row(*kind, now, &mut reader).await {
                 Ok(row) => rows.push(row),
                 Err(error) => {
+                    reader.decision_ids.truncate(retained_ids);
                     let api = error.api_error();
                     let mut row = empty_row(*kind, "unavailable", "");
                     row.error = Some(QuotaStatusError {
@@ -205,18 +211,35 @@ impl Client {
             items: rows,
             complete: ResponseField::Value(causes.is_empty()),
         };
-        let safe_output = reader.evidence.can_retain_partial() && output.screen(&reader.evidence);
+        if reader
+            .evidence
+            .credentials()
+            .has_numeric_product_credential()
+        {
+            for row in &mut output.items {
+                if let Some(ResponseField::Value(seconds)) = row.time_left_seconds {
+                    let minutes = (seconds / 60).unsigned_abs();
+                    let display = format!(
+                        "{}d {}h {}m",
+                        minutes / 1440,
+                        minutes % 1440 / 60,
+                        minutes % 60
+                    );
+                    if reader.evidence.text_reflects(&display) {
+                        row.time_left_seconds = Some(ResponseField::Redacted);
+                    }
+                }
+            }
+        }
+        let safe_output = reader.evidence.can_retain_partial()
+            && !reader
+                .decision_ids
+                .iter()
+                .any(|id| reader.evidence.id_reflects(id))
+            && output.screen(&reader.evidence);
         if !causes.is_empty() {
-            let mut error = reader
-                .read
-                .error(
-                    None,
-                    "QuotaStatusIncomplete",
-                    "monitor: quota status incomplete",
-                    false,
-                    &reader.evidence,
-                )
-                .with_outer_detail(ErrorDetail::QuotaStatusIncomplete);
+            let mut error =
+                Error::new(ErrorClass::Api).with_outer_detail(ErrorDetail::QuotaStatusIncomplete);
             for cause in causes {
                 error = error.with_cause(Error::new(cause.class()).with_cause(cause));
             }
@@ -292,12 +315,22 @@ async fn status_row(
     let mut row = empty_row(kind, "none", kind.next());
     let raw = match reader.get(kind.source(), &[]).await {
         Ok(raw) => raw,
-        Err(error) if error.has_class(ErrorClass::NotFound) && !error.is_body_too_large() => {
+        Err(error)
+            if error.has_class(ErrorClass::NotFound)
+                && !error.is_body_too_large()
+                && error
+                    .detail::<super::super::wire::BodyReadFailure>()
+                    .is_none() =>
+        {
             return Ok(row);
         }
         Err(error) => return Err(error),
     };
-    let quota = reader.decode(decode_quota(&raw, matches!(kind, Kind::Synthetic)))?;
+    let quota = reader.decode(decode_quota(&raw))?;
+    reader.decision_ids.extend([
+        quota.id_fields.id.clone(),
+        quota.id_fields.package_id.clone(),
+    ]);
     match kind {
         Kind::Synthetic => synthetic_row(&mut row, &quota, now, reader).await?,
         Kind::Email | Kind::Sms => {
@@ -350,6 +383,7 @@ async fn synthetic_row(
         .get("billing-api/v2/synthetic/{}/quota-detail", &[&fields.id])
         .await?;
     let detail = reader.decode(synthetic_detail(&raw, fields))?;
+    reader.decision_ids.push(detail.class_id.clone());
     if [&fields.id, &fields.package_id, &detail.class_id]
         .into_iter()
         .any(|id| reader.evidence.id_reflects(id))
@@ -432,16 +466,11 @@ impl DecodedQuota {
     }
 }
 
-fn decode_quota(raw: &serde_json::value::RawValue, path_id: bool) -> Option<DecodedQuota> {
+fn decode_quota(raw: &serde_json::value::RawValue) -> Option<DecodedQuota> {
     let o = Object::of(raw)?;
     let id = o.text("id")?;
     let package_id = o.text("packageId")?;
-    let id_rule = if path_id {
-        PathIds::Strict
-    } else {
-        PathIds::WithUnderscore
-    };
-    if !id_rule.allows(&id) || !PathIds::WithUnderscore.allows(&package_id) {
+    if !PathIds::Strict.allows(&id) || !PathIds::WithUnderscore.allows(&package_id) {
         return None;
     }
     let flag = |name| match o.integer(name)? {
@@ -482,7 +511,7 @@ fn synthetic_detail(raw: &serde_json::value::RawValue, quota: &QuotaIds) -> Opti
         return None;
     }
     let class_id = o.text("classId")?;
-    if !PathIds::WithUnderscore.allows(&class_id) {
+    if !PathIds::Strict.allows(&class_id) {
         return None;
     }
     token::<Option<String>>(o.required("tierName")?)?;
@@ -523,4 +552,19 @@ fn notification_packages(raw: &serde_json::value::RawValue) -> Option<Vec<Notifi
         });
     }
     unique(packages.iter().map(|package| &package.id)).then_some(packages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn as_of_is_utc_for_non_utc_clock() {
+        let now = OffsetDateTime::UNIX_EPOCH.to_offset(UtcOffset::from_hms(7, 0, 0).unwrap());
+        let timestamp = QuotaTimestamp(now);
+        assert_eq!(
+            serde_json::to_string(&timestamp).unwrap(),
+            "\"1970-01-01T00:00:00Z\""
+        );
+    }
 }

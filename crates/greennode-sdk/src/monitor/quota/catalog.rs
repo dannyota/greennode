@@ -259,13 +259,16 @@ pub(super) async fn read_class_packages(
         return Err(reader.invalid());
     }
     classes.sort_by(|a, b| (a.priority, &a.name, &a.id).cmp(&(b.priority, &b.name, &b.id)));
-    for class in classes {
+    for class in classes.iter_mut() {
         if reader.evidence.id_reflects(&class.id) {
             return Err(reader.invalid());
         }
         let raw = reader.get(CLASS_PACKAGES, &[&class.id]).await?;
         class.packages = reader.decode(class_packages(&raw))?;
     }
+    reader
+        .decision_ids
+        .extend(class_ids(classes).map(str::to_owned));
     Ok(())
 }
 

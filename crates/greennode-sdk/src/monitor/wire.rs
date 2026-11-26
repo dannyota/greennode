@@ -23,6 +23,8 @@ pub(super) enum Family {
     Quota,
 }
 
+pub(super) struct BodyReadFailure;
+
 pub(super) struct Read {
     pub(super) id: &'static str,
     pub(super) route: &'static str,
@@ -68,7 +70,13 @@ impl Read {
             return self.overflow(status, evidence);
         }
         if matches!(self.family, Family::Quota) && status.is_some() && api.is_some() {
-            return self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
+            let failed =
+                self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
+            return if error.detail::<StatusCode>().is_some() {
+                failed.with_outer_detail(BodyReadFailure)
+            } else {
+                failed
+            };
         }
         if error.class() != ErrorClass::Api || api.is_none() {
             return error.screen_api(&|text| evidence.text_reflects(text));

@@ -19,6 +19,7 @@ pub(super) struct Reader<'a> {
     ctx: &'a RequestContext,
     retained: usize,
     exhausted: bool,
+    pub(super) decision_ids: Vec<String>,
     pub(super) read: Read,
     pub(super) evidence: Evidence,
 }
@@ -30,6 +31,7 @@ impl<'a> Reader<'a> {
             ctx,
             retained: 0,
             exhausted: false,
+            decision_ids: Vec::new(),
             read: Read {
                 id,
                 route: "",
@@ -76,8 +78,9 @@ impl<'a> Reader<'a> {
             ));
         }
         let raw = response?;
-        self.retained += raw.get().len();
-        if self.retained > COMPOSITE_LIMIT {
+        validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| self.invalid())?;
+        let length = sanitized_len(raw.get());
+        if length > COMPOSITE_LIMIT - self.retained {
             self.exhausted = true;
             return Err(read
                 .error(
@@ -89,7 +92,7 @@ impl<'a> Reader<'a> {
                 )
                 .with_body_too_large());
         }
-        validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| self.invalid())?;
+        self.retained += length;
         Ok(raw)
     }
 
@@ -100,6 +103,32 @@ impl<'a> Reader<'a> {
     pub(super) fn decode<T>(&self, decoded: Option<T>) -> Result<T, Error> {
         decoded.ok_or_else(|| self.invalid())
     }
+}
+
+fn sanitized_len(raw: &str) -> usize {
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut length = 0;
+    for ch in raw.chars() {
+        if in_string {
+            length += match ch {
+                '<' | '>' | '&' if !escaped => 6,
+                '\u{2028}' | '\u{2029}' if !escaped => 6,
+                _ => ch.len_utf8(),
+            };
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+        } else if !ch.is_ascii_whitespace() {
+            length += ch.len_utf8();
+            in_string = ch == '"';
+        }
+    }
+    length
 }
 
 pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>);
