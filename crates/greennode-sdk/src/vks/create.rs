@@ -295,7 +295,7 @@ impl Client {
                 },
             )) => {
                 return Err(Failure::new(
-                    reply::refusal(status, reason, input.resource_ids(), evidence.credentials()),
+                    reply::refusal(status, reason, input.resource_ids(), &evidence),
                     None,
                     WriteDispatch::MayHaveBeenSent,
                 ));

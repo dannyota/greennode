@@ -1,10 +1,12 @@
 use super::{CreateClusterOutput, valid_id};
 use crate::error::SafeText;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{Operation, Output},
-    sender::{Response, SentCredentials},
+    response::sanitize_error_text,
+    sender::Response,
 };
-use crate::wire::strict_json::Shape;
+use crate::wire::strict_json::{Shape, ShapeField, field_matches, validate_shape};
 use crate::{ApiError, Error};
 use http::StatusCode;
 use regex_lite::Regex;
@@ -32,31 +34,30 @@ pub(super) struct CreateReply {
 }
 
 impl Output for CreateReply {
-    const SCHEMA: Shape<'static> = Shape::Any;
+    const SCHEMA: Shape<'static> = Shape::Object(&[
+        ShapeField {
+            name: "id",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "status",
+            shape: Shape::Any,
+        },
+    ]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         Ok(Self {
-            outcome: outcome(
-                operation,
-                response.status,
-                &response.body,
-                &response.credentials,
-            ),
+            outcome: outcome(operation, response.status, &response.body),
         })
     }
 }
 
-pub(super) fn outcome(
-    operation: &Operation,
-    status: StatusCode,
-    body: &[u8],
-    credentials: &SentCredentials,
-) -> Outcome {
+fn outcome(operation: &Operation, status: StatusCode, body: &[u8]) -> Outcome {
     if operation.success.contains(&status) {
-        return decode_accepted(body);
+        return decode_accepted(body, operation.cap);
     }
     if status.is_client_error() && status != StatusCode::REQUEST_TIMEOUT {
-        return Outcome::Refused(rejection_reason(body, credentials));
+        return Outcome::Refused(rejection_reason(body));
     }
     Outcome::Unknown
 }
@@ -80,9 +81,9 @@ impl<'de> Deserialize<'de> for Accepted {
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Accepted, M::Error> {
                 let mut reply = Accepted::default();
                 while let Some((key, value)) = map.next_entry::<String, &RawValue>()? {
-                    let field = if key.eq_ignore_ascii_case("id") {
+                    let field = if field_matches("id", &key) {
                         &mut reply.output.id
-                    } else if key.eq_ignore_ascii_case("status") {
+                    } else if field_matches("status", &key) {
                         &mut reply.output.status
                     } else {
                         continue;
@@ -100,7 +101,10 @@ impl<'de> Deserialize<'de> for Accepted {
     }
 }
 
-fn decode_accepted(body: &[u8]) -> Outcome {
+fn decode_accepted(body: &[u8], limit: usize) -> Outcome {
+    if validate_shape(body, &CreateReply::SCHEMA, limit).is_err() {
+        return Outcome::Unconfirmed(CreateClusterOutput::default());
+    }
     let Ok(Accepted {
         mut output,
         wrong_type,
@@ -124,7 +128,7 @@ fn decode_accepted(body: &[u8]) -> Outcome {
     Outcome::Accepted(output)
 }
 
-fn rejection_reason(body: &[u8], credentials: &SentCredentials) -> Option<String> {
+fn rejection_reason(body: &[u8]) -> Option<String> {
     #[derive(Deserialize)]
     struct Envelope {
         error: ProviderError,
@@ -150,19 +154,6 @@ fn rejection_reason(body: &[u8], credentials: &SentCredentials) -> Option<String
         || message.len() > MESSAGE_LIMIT
         || !message.bytes().all(|byte| (32..=126).contains(&byte))
         || UNSAFE.as_ref().ok()?.is_match(message)
-        || credentials.reflects(message.as_bytes())
-        || credentials.values().iter().any(|value| {
-            let text = value.expose_secret();
-            let escaped = serde_json::to_string(text).ok();
-            escaped
-                .as_deref()
-                .and_then(|value| value.strip_prefix('"')?.strip_suffix('"'))
-                .is_some_and(|value| !value.is_empty() && message.contains(value))
-                || text
-                    .lines()
-                    .map(str::trim)
-                    .any(|line| line.len() >= 8 && message.contains(line))
-        })
     {
         return None;
     }
@@ -173,22 +164,27 @@ pub(super) fn refusal<'a>(
     status: StatusCode,
     reason: Option<String>,
     ids: impl Iterator<Item = &'a str>,
-    credentials: &SentCredentials,
+    evidence: &Evidence,
 ) -> Error {
+    let credentials = evidence.credentials();
     let message = reason.and_then(|mut message| {
+        if sanitize_error_text(&message, credentials).as_str() != message {
+            return None;
+        }
         for id in ids {
             message = message.replace(id, "[redacted]");
             if message.len() > MESSAGE_LIMIT {
                 return None;
             }
         }
-        (!credentials.reflects(message.as_bytes())).then_some(message)
+        let sanitized = sanitize_error_text(&message, credentials);
+        (sanitized.as_str() == message).then_some(sanitized)
     });
     Error::from_api(ApiError::new(
         super::CREATE,
         Some(status.as_u16()),
         SafeText::new("", &[]),
-        SafeText::new(message.as_deref().unwrap_or(WITHHELD), &[]),
+        message.unwrap_or_else(|| SafeText::new(WITHHELD, &[])),
         false,
     ))
 }
@@ -200,6 +196,7 @@ mod tests {
 
     #[test]
     fn recovers_only_valid_fields_from_malformed_acceptance() {
+        let limit = super::super::create_operation().cap;
         for (body, id, status) in [
             (&br#"{"id":"cluster-1","status":123}"#[..], "cluster-1", ""),
             (br#"{"status":123,"Id":"cluster-1"}"#, "cluster-1", ""),
@@ -213,12 +210,13 @@ mod tests {
             (br#"{"id":"bad/path","status":"CREATING"}"#, "", "CREATING"),
             (br#"{"id":"bad/path","status":"unsafe status"}"#, "", ""),
         ] {
-            let Outcome::Unconfirmed(output) = decode_accepted(body) else {
+            let Outcome::Unconfirmed(output) = decode_accepted(body, limit) else {
                 panic!("expected an unconfirmed cluster order");
             };
             assert_eq!((output.id.as_str(), output.status.as_str()), (id, status));
         }
-        let Outcome::Accepted(output) = decode_accepted(br#"{"id":"cluster-1","status":null}"#)
+        let Outcome::Accepted(output) =
+            decode_accepted(br#"{"id":"cluster-1","status":null}"#, limit)
         else {
             panic!("acceptance with no status should keep the ID");
         };
@@ -227,18 +225,52 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_cluster_identifiers_leave_no_id_to_poll() {
+        let operation = super::super::create_operation();
+        for body in [
+            &br#"{"id":"cluster-1","ID":"cluster-2","status":"ACTIVE"}"#[..],
+            br#"{"id":"cluster-1","id":"cluster-1"}"#,
+            br#"{"id":"cluster-1","id":null}"#,
+        ] {
+            let Outcome::Unconfirmed(output) = outcome(&operation, StatusCode::ACCEPTED, body)
+            else {
+                panic!("duplicate identifier must leave the order unconfirmed");
+            };
+            assert!(output.id.is_empty());
+        }
+    }
+
+    #[test]
+    fn refusals_withhold_encoded_credentials_before_and_after_id_redaction() {
+        let operation = super::super::create_operation();
+        let mut evidence = Evidence::new();
+        for value in ["mock+abc", "toy/value", "some/value in [redacted]"] {
+            evidence.add_secret(&Secret::new(value));
+        }
+        for message in [
+            "Bad value mock%2Babc",
+            "Bad value toy%252Fvalue",
+            "Bad value some%2Fvalue in vpc",
+        ] {
+            let body =
+                serde_json::to_vec(&serde_json::json!({"error": {"message": message}})).unwrap();
+            let status = StatusCode::BAD_REQUEST;
+            let Outcome::Refused(reason) = outcome(&operation, status, &body) else {
+                panic!("expected a definite refusal");
+            };
+            let error = refusal(status, reason, ["vpc"].into_iter(), &evidence);
+            assert!(error.api_error().unwrap().message() == WITHHELD);
+        }
+    }
+
+    #[test]
     fn distinguishes_definite_refusals_from_uncertain_statuses() {
         let operation = super::super::create_operation();
-        let mut credentials = SentCredentials::default();
-        credentials.record(&Secret::new("toy-reflection"));
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("toy-reflection"));
         for status in [302, 408, 500, 204] {
             assert!(matches!(
-                outcome(
-                    &operation,
-                    StatusCode::from_u16(status).unwrap(),
-                    b"",
-                    &credentials
-                ),
+                outcome(&operation, StatusCode::from_u16(status).unwrap(), b""),
                 Outcome::Unknown,
             ));
         }
@@ -250,10 +282,10 @@ mod tests {
             (429, ErrorClass::RateLimited),
         ] {
             let status = StatusCode::from_u16(status).unwrap();
-            let Outcome::Refused(reason) = outcome(&operation, status, b"", &credentials) else {
+            let Outcome::Refused(reason) = outcome(&operation, status, b"") else {
                 panic!("expected a definite refusal");
             };
-            let error = refusal(status, reason, std::iter::empty(), &credentials);
+            let error = refusal(status, reason, std::iter::empty(), &evidence);
             assert_eq!(error.class(), class);
             let api = error.api_error().unwrap();
             assert_eq!(api.status(), Some(status.as_u16()));
@@ -276,12 +308,12 @@ mod tests {
         ] {
             let body =
                 serde_json::to_vec(&serde_json::json!({"error": {"message": message}})).unwrap();
-            let reason = rejection_reason(&body, &credentials);
+            let reason = rejection_reason(&body);
             let error = refusal(
                 StatusCode::BAD_REQUEST,
                 reason,
                 ["vpc"].into_iter(),
-                &credentials,
+                &evidence,
             );
             assert!(error.api_error().unwrap().message() == expected);
         }
