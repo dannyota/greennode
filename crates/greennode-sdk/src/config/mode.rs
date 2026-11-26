@@ -56,6 +56,7 @@ fn windows_error_presence(raw: Option<i32>) -> Presence {
 }
 
 #[cfg(windows)]
+#[cfg(test)]
 pub(super) fn probe(path: &Path) -> Presence {
     probe_windows_with(path, |options, path| options.open(path))
 }
@@ -112,6 +113,7 @@ fn probe_windows_checked_with(
 }
 
 #[cfg(not(windows))]
+#[cfg(test)]
 pub(super) fn probe(path: &Path) -> Presence {
     probe_checked(path, &|| false)
 }

@@ -90,6 +90,15 @@ impl std::fmt::Debug for ServiceAccount {
 }
 
 impl ServiceAccount {
+    #[cfg(test)]
+    pub(crate) fn set_test_endpoint(
+        &mut self,
+        origin: String,
+        root: rustls::pki_types::CertificateDer<'static>,
+    ) {
+        self.endpoint = Some((origin, root));
+    }
+
     pub(crate) fn new(
         id: String,
         secret: Secret,
@@ -176,6 +185,10 @@ impl ServiceAccount {
                 let checked = crate::cache::checked_directory(home.as_deref(), &directory)?;
                 let checked = crate::cache::resolve(&checked, true)
                     .map_err(|()| Box::new(Error::new(ErrorClass::TokenCache)))?;
+                crate::cache::checked_directory(
+                    home.as_deref(),
+                    &checked.join("service-account-v1"),
+                )?;
                 if let Some(end) = worker_context.check(worker_clock.as_ref()) {
                     return Err(Box::new(end.into()));
                 }

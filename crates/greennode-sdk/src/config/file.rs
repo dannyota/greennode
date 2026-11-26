@@ -31,6 +31,7 @@ fn open_windows(
     open(&options, path)
 }
 
+#[cfg(test)]
 pub(super) fn open(path: &Path, slot: Slot) -> Result<File, String> {
     let file = open_without_permissions(path, slot)?;
     if matches!(slot, Slot::Credentials) {
@@ -55,6 +56,7 @@ fn check_credentials_permissions(file: &File) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn open_without_permissions(path: &Path, slot: Slot) -> Result<File, String> {
     open_without_permissions_checked(path, slot, &|| false)
 }
@@ -101,6 +103,7 @@ fn open_without_permissions_checked(
     Ok(file)
 }
 
+#[cfg(test)]
 pub(super) fn same(first: &File, second: &File) -> std::io::Result<bool> {
     Ok(same_file::Handle::from_file(first.try_clone()?)?
         == same_file::Handle::from_file(second.try_clone()?)?)
@@ -112,6 +115,7 @@ pub(super) struct Pair {
     pub credentials: Option<File>,
 }
 
+#[cfg(test)]
 pub(super) fn open_pair(selection: &super::mode::Selection) -> Result<Pair, Box<crate::Error>> {
     open_pair_checked(selection, || None)
 }

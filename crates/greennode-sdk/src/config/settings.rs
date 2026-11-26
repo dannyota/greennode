@@ -10,6 +10,7 @@ pub(super) struct Options {
     pub output: Option<String>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Policy {
     Read,
@@ -119,6 +120,7 @@ pub(super) fn select_profile(
     Ok(profile)
 }
 
+#[cfg(test)]
 pub(super) fn resolve(
     paths: &Selection,
     config_file: Option<std::fs::File>,

@@ -20,7 +20,10 @@ mod token;
 mod wire;
 
 pub use clock::*;
-pub use config::{Config, ConfigOptions, ResolvedProfile};
+pub use config::{
+    Config, ConfigOptions, EndpointOverrides, IamUserAuth, ResolvedProfile, SecretTotp,
+    ServiceAccountAuth, TotpFn, TotpProvider,
+};
 pub use context::*;
 pub use error::*;
 pub use event::*;

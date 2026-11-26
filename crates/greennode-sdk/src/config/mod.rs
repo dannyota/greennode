@@ -1,6 +1,10 @@
-#![allow(dead_code)]
-
+mod auth;
 mod credentials;
+mod endpoints;
+mod session;
+
+pub use auth::{IamUserAuth, SecretTotp, ServiceAccountAuth, TotpFn, TotpProvider};
+pub use endpoints::EndpointOverrides;
 mod file;
 mod ini;
 mod load;
@@ -29,6 +33,15 @@ pub struct ConfigOptions {
     config_file: Option<std::path::PathBuf>,
     credentials_file: Option<std::path::PathBuf>,
     provider: Option<std::sync::Arc<dyn crate::CredentialsProvider>>,
+    region: Option<String>,
+    project_id: Option<String>,
+    token: Option<crate::Secret>,
+    service_account: Option<credentials::ServiceAccount>,
+    iam_user: Option<credentials::IamUser>,
+    cdn_key: Option<crate::Secret>,
+    token_cache: Option<std::path::PathBuf>,
+    iam_details: Option<IamUserAuth>,
+    endpoint_overrides: EndpointOverrides,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -40,6 +53,64 @@ struct ParseHooks {
 }
 
 impl ConfigOptions {
+    fn credential_options(&self) -> credentials::Options {
+        credentials::Options {
+            provider: self.provider.clone(),
+            token: self.token.clone(),
+            service_account: self.service_account.clone(),
+            iam_user: self.iam_user.clone(),
+            cdn_key: self.cdn_key.clone(),
+        }
+    }
+    /// Overrides management service and IAM endpoint bases.
+    pub fn with_endpoint_overrides(mut self, overrides: EndpointOverrides) -> Self {
+        self.endpoint_overrides = overrides;
+        self
+    }
+    /// Supplies service-account credentials.
+    pub fn with_service_account(mut self, auth: ServiceAccountAuth) -> Self {
+        self.service_account = Some(credentials::ServiceAccount {
+            client_id: auth.client_id,
+            client_secret: auth.client_secret,
+        });
+        self
+    }
+    /// Supplies IAM-user credentials.
+    pub fn with_iam_user(mut self, auth: IamUserAuth) -> Self {
+        self.iam_user = Some(credentials::IamUser {
+            root_email: crate::Secret::new(auth.root_email.clone()),
+            username: crate::Secret::new(auth.username.clone()),
+            password: auth.password.clone(),
+            totp_secret: None,
+        });
+        self.iam_details = Some(auth);
+        self
+    }
+    /// Enables disk token caching in the specified directory.
+    pub fn with_token_cache(mut self, path: std::path::PathBuf) -> Self {
+        self.token_cache = Some(path);
+        self
+    }
+    /// Selects the management region.
+    pub fn with_region(mut self, region: String) -> Self {
+        self.region = Some(region);
+        self
+    }
+    /// Selects a project without discovery.
+    pub fn with_project_id(mut self, project_id: String) -> Self {
+        self.project_id = Some(project_id);
+        self
+    }
+    /// Supplies a static management token.
+    pub fn with_static_token(mut self, token: crate::Secret) -> Self {
+        self.token = Some(token);
+        self
+    }
+    /// Supplies a CDN API key.
+    pub fn with_cdn_api_key(mut self, key: crate::Secret) -> Self {
+        self.cdn_key = Some(key);
+        self
+    }
     /// Supplies the management credentials provider.
     pub fn with_credentials_provider(
         mut self,
@@ -75,10 +146,8 @@ impl std::fmt::Debug for ConfigOptions {
 #[derive(Clone)]
 pub struct Config {
     region: String,
-    profile: String,
-    project_id: Option<String>,
     settings: std::collections::BTreeMap<String, String>,
-    credentials: std::sync::Arc<credentials::Selected>,
+    session: std::sync::Arc<session::Session>,
 }
 
 impl std::fmt::Debug for Config {
@@ -126,6 +195,61 @@ impl ResolvedProfile {
 }
 
 impl Config {
+    /// Constructs an offline configuration using only the supplied options.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The public API returns Error by value"
+    )]
+    pub fn new(options: ConfigOptions) -> Result<Self, crate::Error> {
+        let region = options
+            .region
+            .clone()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| crate::Error::new(crate::ErrorClass::InvalidConfig))?;
+        let source = SourceSnapshot {
+            values: Default::default(),
+            secrets: Default::default(),
+            home: None,
+        };
+        let settings_options = settings::Options {
+            profile: options.profile.clone(),
+            ..Default::default()
+        };
+        let profile = settings::select_profile(&settings_options, &source)
+            .map_err(|_| crate::Error::new(crate::ErrorClass::InvalidConfig))?;
+        let credential_options = options.credential_options();
+        let kind = credentials::select_options(&credential_options)
+            .map_err(|e| *e)?
+            .ok_or_else(|| crate::Error::new(crate::ErrorClass::NoCredentials))?;
+        let cdn_key = credentials::validate_cdn(credential_options.cdn_key).map_err(|e| *e)?;
+        let selected = credentials::Selected {
+            source: credentials::Source::Options,
+            kind,
+            cdn_key,
+        };
+        let session = session::Session::new(
+            selected,
+            &region,
+            profile,
+            options.project_id,
+            options.token_cache,
+            None,
+            (options.iam_details, options.endpoint_overrides),
+        )?;
+        Ok(Self {
+            region,
+            settings: Default::default(),
+            session: std::sync::Arc::new(session),
+        })
+    }
+    /// Authenticates using the selected credentials without returning a token.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The public API returns Error by value"
+    )]
+    pub async fn authenticate(&self, ctx: &crate::RequestContext) -> Result<(), crate::Error> {
+        self.session.authenticate(ctx).await
+    }
     /// Loads configuration offline; requires a Tokio runtime with timers.
     #[expect(
         clippy::result_large_err,
