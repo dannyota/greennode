@@ -315,11 +315,65 @@ fn dropped_refresh_does_not_publish_and_releases_lock() {
 }
 
 #[cfg(unix)]
+#[test]
+fn drop_during_stalled_rename_returns_promptly() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = Dir::new();
+    std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let store = Arc::new(crate::cache::store::Store::open(&dir.0).unwrap());
+    let live = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drop_guard = LiveWrite(live.clone());
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let calls = AtomicUsize::new(0);
+    let worker = std::thread::spawn(move || {
+        let entry = crate::cache::entry::Entry {
+            token: Secret::new("toy"),
+            expires: time::OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(120),
+            obtained: time::OffsetDateTime::UNIX_EPOCH,
+        };
+        crate::cache::entry::write_hook(
+            &store,
+            "entry.json",
+            &entry,
+            || {
+                if calls.fetch_add(1, Ordering::SeqCst) == 2 {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }
+                Ok(())
+            },
+            None,
+            Some(&live),
+        )
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let dropper = std::thread::spawn(move || {
+        drop(drop_guard);
+        done_tx.send(()).unwrap();
+    });
+    let prompt = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    release_tx.send(()).unwrap();
+    dropper.join().unwrap();
+    let result = worker.join().unwrap();
+    assert!(prompt);
+    assert!(result.is_err());
+    assert!(!dir.0.join("entry.json").exists());
+}
+
+#[cfg(unix)]
 #[tokio::test]
-async fn token_expiring_during_write_is_refreshed() {
+async fn token_expiring_during_write_returns_auth_error_without_second_exchange() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let dir = Dir::new();
-    let server = server(2);
+    let body = br#"{"access_token":"canary-token","expires_in":31}"#.to_vec();
+    let server = Server::start(vec![Response::Http {
+        status: "200 OK".into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body,
+    }]);
     let clock = Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
     let mut account = source(&server, clock.clone(), Some(dir.0.join("cache")));
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
@@ -336,10 +390,10 @@ async fn token_expiring_during_write_is_refreshed() {
     let (ctx, _) = RequestContext::new();
     let task = tokio::spawn(async move { account.token(&ctx).await.map(|_| ()) });
     started_rx.await.unwrap();
-    clock.advance(Duration::from_secs(91));
+    clock.advance(Duration::from_secs(2));
     release_tx.send(()).unwrap();
-    assert!(task.await.unwrap().is_ok());
-    assert_eq!(server.requests(), 2);
+    assert!(matches!(task.await.unwrap(), Err(error) if error.class() == ErrorClass::Auth));
+    assert_eq!(server.requests(), 1);
 }
 
 #[cfg(unix)]

@@ -58,6 +58,18 @@ fn rejects_ancestor_symlink_into_legacy_tree() {
 
 #[cfg(unix)]
 #[test]
+fn refuses_resolved_cache_inside_legacy_root_by_inode() {
+    let home = Dir::new();
+    let legacy = home.0.join(".vngcloud");
+    std::fs::create_dir(&legacy).unwrap();
+    let cache = crate::cache::resolve(&legacy.join("cache"), true).unwrap();
+    assert!(Store::create_avoiding(&cache, Some(&home.0)).is_err());
+    assert!(!cache.exists());
+    assert!(Store::create_avoiding(&home.0.join("safe"), Some(&home.0)).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
 fn rejects_symlinked_namespace() {
     let dir = Dir::new();
     let store = Store::open(&dir.0).unwrap();

@@ -269,7 +269,7 @@ pub(crate) fn write_hook(
     entry: &Entry,
     guard: impl Fn() -> Result<(), Box<crate::Error>>,
     hook: Option<&(dyn Fn() + Send + Sync)>,
-    live: Option<&std::sync::Mutex<bool>>,
+    live: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<crate::Error>> {
     guard()?;
     let token = entry.token.expose_secret();

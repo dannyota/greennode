@@ -301,7 +301,7 @@ impl Store {
         data: &crate::Secret,
         guard: impl Fn() -> Result<(), Box<crate::Error>>,
         hook: Option<&(dyn Fn() + Send + Sync)>,
-        live: Option<&std::sync::Mutex<bool>>,
+        live: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<(), Box<crate::Error>> {
         guard()?;
         validate_name(name)?;
@@ -334,13 +334,10 @@ impl Store {
             hook();
         }
         file.sync_all().map_err(|_| unavailable())?;
-        let live_guard = live
-            .map(|value| value.lock().map_err(|_| unavailable()))
-            .transpose()?;
-        if live_guard.as_deref() == Some(&false) {
+        guard()?;
+        if live.is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Acquire)) {
             return Err(unavailable());
         }
-        guard()?;
         rustix::fs::renameat(&self.directory, temporary.as_str(), &self.directory, name)
             .map_err(|_| unavailable())?;
         cleanup.committed = true;

@@ -28,13 +28,11 @@ pub(crate) struct ServiceAccount {
 }
 
 #[cfg(unix)]
-struct LiveWrite(Arc<std::sync::Mutex<bool>>);
+struct LiveWrite(Arc<std::sync::atomic::AtomicBool>);
 #[cfg(unix)]
 impl Drop for LiveWrite {
     fn drop(&mut self) {
-        if let Ok(mut live) = self.0.lock() {
-            *live = false;
-        }
+        self.0.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -195,7 +193,7 @@ impl ServiceAccount {
                 &self.secret,
             );
             let name = format!("{stem}.json");
-            let mut lock =
+            let lock =
                 crate::cache::lock::acquire(store.clone(), format!("{stem}.lock"), ctx, clock)
                     .await?;
             let reader = store.clone();
@@ -240,7 +238,7 @@ impl ServiceAccount {
                 state.rejected = None;
                 return Ok(result);
             }
-            loop {
+            {
                 let timed = self.exchange(ctx).await?;
                 let exchange_wall = timed.started_wall;
                 let exchange_mono = timed.started_monotonic;
@@ -257,13 +255,13 @@ impl ServiceAccount {
                 };
                 let writer_context = ctx.clone();
                 let writer_clock = self.clock.clone();
-                let live = LiveWrite(Arc::new(std::sync::Mutex::new(true)));
+                let live = LiveWrite(Arc::new(std::sync::atomic::AtomicBool::new(false)));
                 let writer_live = live.0.clone();
                 let writer_store = store.clone();
                 let writer_name = name.clone();
                 #[cfg(test)]
                 let sync_hook = self.sync_hook.clone();
-                let (returned_lock, write) = blocking(ctx, self.clock.clone(), move || {
+                let (_lock, write) = blocking(ctx, self.clock.clone(), move || {
                     #[cfg(test)]
                     let hook = sync_hook.as_deref();
                     #[cfg(not(test))]
@@ -283,7 +281,6 @@ impl ServiceAccount {
                     Ok((lock, result))
                 })
                 .await?;
-                lock = returned_lock;
                 if let Some(end) = ctx.check(clock) {
                     return Err(Box::new(end.into()));
                 }
@@ -306,7 +303,7 @@ impl ServiceAccount {
                             && cached.old(clock)
                     })
                 {
-                    continue;
+                    return Err(Box::new(Error::new(ErrorClass::Auth)));
                 }
                 let result = cached.bearer();
                 state.cached = Some(cached);
