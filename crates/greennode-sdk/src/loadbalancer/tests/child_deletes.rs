@@ -241,12 +241,12 @@ async fn conflict_arrays_require_go_error_fields_and_accept_detail_text() {
         (
             r#"[{"message":"pool is updating"},{"detail":42}]"#,
             None,
-            "Conflict",
+            "pool is updating",
         ),
         (
             r#"[{"detail":"pool is used in listener"}]"#,
             Some(&WriteError::ResourceInUse),
-            "pool is used in listener",
+            "Conflict",
         ),
     ];
     for (body, expected, message) in cases {
@@ -264,6 +264,14 @@ async fn conflict_arrays_require_go_error_fields_and_accept_detail_text() {
         assert_eq!(failure.error().detail::<WriteError>(), expected);
         assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
         assert_eq!(failure.error().api_error().unwrap().message(), message);
+        if expected.is_some() {
+            let advice = failure
+                .error()
+                .detail::<crate::RecoveryAdvice>()
+                .unwrap()
+                .message();
+            assert!(!advice.contains("pool is used in listener"));
+        }
         assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
         assert_eq!(server.requests(), 4);
     }
@@ -357,4 +365,30 @@ async fn child_delete_internal_bound_is_not_a_caller_deadline() {
         .unwrap()
         .message();
     assert!(message.contains("did not settle within 10m0s"));
+}
+
+#[tokio::test]
+async fn busy_delete_validates_the_full_child_before_resending() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("409 Conflict", r#"{"message":"listener is not ready"}"#),
+        lb_status("CREATED"),
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"listener-1","progressStatus":"CREATED","protocolPort":"443"}}"#,
+        ),
+        response("202 Accepted", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .delete_listener(&ctx, listener_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 5);
 }

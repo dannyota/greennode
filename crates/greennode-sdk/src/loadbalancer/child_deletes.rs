@@ -13,6 +13,7 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     response, retry,
 };
+use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::deletes::{context_error, local, safe_text};
@@ -20,7 +21,7 @@ use super::wire::{
     CompleteNotFound, DecodeError, Envelope, PoolInUseRefusal, Read, pool_in_use_refusal,
     screen_input, validate_ids,
 };
-use super::{Client, WriteError, ZonedLoadBalancer, guard};
+use super::{Client, Listener, Policy, Pool, WriteError, ZonedLoadBalancer, guard};
 
 const LOAD_BALANCER: Read = Read {
     id: "loadbalancer.GetLoadBalancer",
@@ -32,6 +33,35 @@ const LISTENERS: Read = Read {
 };
 const INTERVAL: Duration = Duration::from_secs(5);
 const BOUND: Duration = Duration::from_secs(10 * 60);
+
+macro_rules! shape {
+    ($($key:literal),* ; $($nested:literal => $shape:expr),* $(,)?) => {
+        Shape::Object(&[
+            $(ShapeField { name: $key, shape: Shape::Any },)*
+            $(ShapeField { name: $nested, shape: $shape },)*
+        ])
+    };
+}
+
+const MONITOR: Shape<'_> = shape!("timeout", "createdAt", "updatedAt", "domainName",
+    "httpVersion", "healthCheckProtocol", "interval", "healthyThreshold", "unhealthyThreshold",
+    "healthCheckMethod", "healthCheckPath", "successCode", "progressStatus", "displayStatus";);
+const MEMBER: Shape<'_> = shape!("uuid", "address", "protocolPort", "weight", "monitorPort",
+    "subnetId", "name", "poolId", "typeCreate", "backup", "displayStatus", "createdAt",
+    "updateAt", "createdBy", "progressStatus";);
+const POOL: Shape<'_> = shape!("uuid", "name", "protocol", "description", "loadBalanceMethod",
+    "displayStatus", "progressStatus", "stickiness", "tlsEncryption";
+    "members" => Shape::Array(&MEMBER), "healthMonitor" => MONITOR);
+const HEADER: Shape<'_> = shape!("headerName", "headerValue";);
+const LISTENER: Shape<'_> = shape!("uuid", "name", "description", "protocol", "protocolPort",
+    "connectionLimit", "defaultPoolId", "defaultPoolName", "timeoutClient", "timeoutMember",
+    "timeoutConnection", "allowedCidrs", "certificateAuthorities", "displayStatus", "createdAt",
+    "updatedAt", "defaultCertificateAuthority", "clientCertificateAuthentication", "progressStatus";
+    "insertHeaders" => Shape::Array(&HEADER));
+const RULE: Shape<'_> = shape!("uuid", "compareType", "ruleValue", "ruleType", "provisioningStatus", "operatingStatus";);
+const POLICY: Shape<'_> = shape!("uuid", "name", "description", "redirectPoolId", "redirectPoolName",
+    "action", "redirectUrl", "redirectHttpCode", "keepQueryString", "position", "displayStatus",
+    "createdAt", "updatedAt", "progressStatus"; "l7Rules" => Shape::Array(&RULE));
 
 struct BusyRefusal;
 
@@ -213,7 +243,7 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
 
         let first = self.send_child_delete(ctx, &child, &mut evidence).await;
-        let result = match first {
+        match first {
             Err(failure) if failure.error().detail::<BusyRefusal>().is_some() => {
                 self.wait_child_ready(ctx, &child, &mut evidence)
                     .await
@@ -231,8 +261,8 @@ impl Client {
                     })
             }
             first => first,
-        };
-        result.map_err(|failure| {
+        }
+        .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(error, None, dispatch)
         })?;
@@ -313,26 +343,26 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
-        let deadline = clock.monotonic_now() + BOUND;
-        let wait = ctx.child_with_deadline(deadline);
+        let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
+        let lb_ids = [("LoadBalancerID", child.load_balancer)];
         loop {
             check_ready_time(ctx, &wait, clock, child, evidence)?;
             let lb = self
                 .read_progress(
                     &wait,
                     &LOAD_BALANCER,
-                    &[("LoadBalancerID", child.load_balancer)],
+                    &lb_ids,
                     child.load_balancer,
                     evidence,
                 )
                 .await;
             check_ready_time(ctx, &wait, clock, child, evidence)?;
-            if !lb_busy(&lb?) {
+            if !busy(&lb?, true) {
                 let status = self
                     .read_progress(&wait, &child.read, child.ids, child.id, evidence)
                     .await;
                 check_ready_time(ctx, &wait, clock, child, evidence)?;
-                if !child_busy(&status?) {
+                if !busy(&status?, false) {
                     return Ok(());
                 }
             }
@@ -350,6 +380,7 @@ impl Client {
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
+        let lb_ids = [("LoadBalancerID", child.load_balancer)];
         loop {
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
             let status = self
@@ -362,7 +393,7 @@ impl Client {
                         .read_progress(
                             &wait,
                             &LOAD_BALANCER,
-                            &[("LoadBalancerID", child.load_balancer)],
+                            &lb_ids,
                             child.load_balancer,
                             evidence,
                         )
@@ -372,7 +403,7 @@ impl Client {
                     if lb == "ERROR" {
                         return Err(child.failed("load balancer", child.load_balancer, evidence));
                     }
-                    if !lb_busy(&lb) {
+                    if !busy(&lb, true) {
                         return Ok(());
                     }
                 }
@@ -399,15 +430,18 @@ impl Client {
         let text = self.read_text(ctx, read, ids, &[], evidence, true).await?;
         let wrapper = Envelope::parse(&text, read, evidence)?;
         let data = wrapper.canonical_raw(read, evidence, "data")?;
-        let (uuid, progress) = if read.id == LOAD_BALANCER.id {
-            let ZonedLoadBalancer(row) = guard::parse(read, data, &guard::LOAD_BALANCER, evidence)?;
-            (row.uuid, row.progress_status)
-        } else {
-            let fields = Envelope::parse(data, read, evidence)?;
-            (
-                canonical_field::<String>(&fields, read, evidence, "uuid")?,
-                canonical_field::<String>(&fields, read, evidence, "progressStatus")?,
-            )
+        macro_rules! typed_progress {
+            ($model:ty, $shape:expr $(, $inner:tt)?) => {{
+                let row: $model = guard::parse(read, data, &$shape, evidence)?;
+                let row = row$(.$inner)?;
+                (row.uuid, row.progress_status)
+            }};
+        }
+        let (uuid, progress) = match read.id {
+            "loadbalancer.GetPool" => typed_progress!(Pool, POOL),
+            "loadbalancer.GetListener" => typed_progress!(Listener, LISTENER),
+            "loadbalancer.GetPolicy" => typed_progress!(Policy, POLICY),
+            _ => typed_progress!(ZonedLoadBalancer, guard::LOAD_BALANCER, 0),
         };
         if uuid != id || progress.is_empty() {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
@@ -493,7 +527,12 @@ impl Client {
         let in_use = (child.kind == "pool" && !operation.success.contains(&status))
             .then(|| pool_in_use_refusal(&body, evidence))
             .flatten();
-        response::classify_full(
+        let classify = if evidence.credentials().values().is_empty() {
+            response::classify_full
+        } else {
+            response::classify
+        };
+        classify(
             operation.id,
             status,
             body,
@@ -517,31 +556,20 @@ impl Client {
 
 impl Child<'_> {
     fn in_use_refusal(&self, error: Error, evidence: &Evidence) -> Error {
-        use std::fmt::Write as _;
-
-        let Some(refusal) = error
+        let Some(PoolInUseRefusal(_private_message)) = error
             .detail::<PoolInUseRefusal>()
             .filter(|_| self.kind == "pool")
         else {
             return error;
         };
         let id = safe_text(self.id, evidence);
-        let mut message = format!(
-            "loadbalancer: resource in use: {}: pool {id}",
+        let reason = error
+            .api_error()
+            .map_or_else(String::new, |api| format!(": {}", api_error_text(api)));
+        let message = format!(
+            "loadbalancer: resource in use: {}: pool {id}{reason}",
             self.operation
         );
-        if let Some(api) = error.api_error() {
-            let reason = refusal.0.as_str();
-            if !reason.is_empty() {
-                if !api.operation().is_empty() {
-                    let _ = write!(message, ": {}", api.operation());
-                }
-                let _ = write!(message, ": {reason}");
-            }
-            if let Some(status) = api.status() {
-                let _ = write!(message, " (status {status})");
-            }
-        }
         local(ErrorClass::Api, &message, evidence)
             .with_outer_detail(WriteError::ResourceInUse)
             .with_cause(error)
@@ -574,20 +602,18 @@ impl Child<'_> {
 }
 
 fn api_error_text(api: &crate::ApiError) -> String {
-    let mut message = String::new();
-    if !api.operation().is_empty() {
-        message.push_str(api.operation());
-        message.push_str(": ");
-    }
-    message.push_str(if api.message().is_empty() {
+    let message = api.message();
+    let message = if message.is_empty() {
         "request failed"
     } else {
-        api.message()
-    });
-    if let Some(status) = api.status() {
-        message.push_str(&format!(" (status {status})"));
+        message
+    };
+    match (api.operation(), api.status()) {
+        ("", None) => message.into(),
+        ("", Some(status)) => format!("{message} (status {status})"),
+        (operation, None) => format!("{operation}: {message}"),
+        (operation, Some(status)) => format!("{operation}: {message} (status {status})"),
     }
-    message
 }
 
 fn check_ready_time(
@@ -645,12 +671,9 @@ fn check_confirm_time(
     Err(Box::new(error))
 }
 
-fn child_busy(progress: &str) -> bool {
+fn busy(progress: &str, parent: bool) -> bool {
     matches!(progress, "CREATING" | "UPDATING" | "DELETING")
-}
-
-fn lb_busy(progress: &str) -> bool {
-    progress == "CREATING-BILLING" || child_busy(progress)
+        || (parent && progress == "CREATING-BILLING")
 }
 
 fn message_has_phrase(message: &str, phrases: &[&[u8]]) -> bool {
