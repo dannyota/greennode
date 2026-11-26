@@ -32,6 +32,25 @@ pub enum DecodeError {
 
 pub(super) struct CompleteNotFound;
 
+pub(super) struct PoolInUseRefusal(pub(super) SafeText);
+
+pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<PoolInUseRefusal> {
+    response::inspect_error_message(body, |message| {
+        let phrase = b"is used in listener";
+        message
+            .as_bytes()
+            .windows(phrase.len())
+            .any(|part| part.eq_ignore_ascii_case(phrase))
+            .then(|| {
+                PoolInUseRefusal(response::sanitize_error_text(
+                    message.trim(),
+                    evidence.credentials(),
+                ))
+            })
+    })
+    .flatten()
+}
+
 pub(super) struct Read {
     pub(super) id: &'static str,
     pub(super) route: &'static str,
@@ -43,7 +62,7 @@ impl Read {
         Box::new(self.api("", &message, evidence).with_detail(detail))
     }
 
-    fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
+    pub(super) fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
         Error::from_api(ApiError::without_fallback(
             self.id,
             None,
@@ -159,6 +178,24 @@ impl Envelope<'_> {
             .take(2)
             .count()
             > 1
+        {
+            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
+        }
+        Ok(self.0.get(name).map_or("null", |raw| raw.get()))
+    }
+
+    pub(super) fn canonical_raw(
+        &self,
+        read: &Read,
+        evidence: &Evidence,
+        name: &str,
+    ) -> Result<&str, Box<Error>> {
+        if self
+            .0
+            .keys()
+            .filter(|key| field_matches(name, key))
+            .nth(1)
+            .is_some()
         {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
@@ -289,6 +326,9 @@ impl Client {
             |error: Error| Box::new(error.screen_api(&|text| evidence.text_reflects(text)));
         let received = result.map_err(|error| screen(error.into_parts().0))?;
         let status = received.status;
+        let in_use = (require_complete && !operation.success.contains(&status))
+            .then(|| pool_in_use_refusal(&received.reply.body, evidence))
+            .flatten();
         let body = response::classify(
             read.id,
             status,
@@ -298,12 +338,14 @@ impl Client {
             evidence.credentials(),
         )
         .map_err(|error| {
-            let error = screen(*error);
+            let mut error = *screen(*error);
             if require_complete && status == StatusCode::NOT_FOUND {
-                Box::new(error.with_outer_detail(CompleteNotFound))
-            } else {
-                error
+                error = error.with_outer_detail(CompleteNotFound);
             }
+            if let Some(in_use) = in_use {
+                error = error.with_outer_detail(in_use);
+            }
+            Box::new(error)
         })?;
         let text = if body.is_empty() {
             "null".into()

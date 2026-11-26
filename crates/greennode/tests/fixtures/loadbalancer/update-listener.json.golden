@@ -1,0 +1,31 @@
+{
+  "Listener": {
+    "UUID": "listener-1",
+    "Name": "web",
+    "Description": "",
+    "Protocol": "HTTPS",
+    "ProtocolPort": 443,
+    "ConnectionLimit": 0,
+    "DefaultPoolID": "pool-1",
+    "DefaultPoolName": "",
+    "TimeoutClient": 0,
+    "TimeoutMember": 52,
+    "TimeoutConnection": 6,
+    "AllowedCIDRs": "10.0.0.0/24",
+    "CertificateAuthorities": [
+      "cert-1"
+    ],
+    "DisplayStatus": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DefaultCertificateAuthority": "cert-1",
+    "ClientCertificateAuthentication": null,
+    "ProgressStatus": "CREATED",
+    "InsertHeaders": [
+      {
+        "HeaderName": "X-To",
+        "HeaderValue": "web"
+      }
+    ]
+  }
+}

@@ -155,6 +155,10 @@ macro_rules! optional_bool {
     };
 }
 
+mod listener_writes;
+mod policy_writes;
+mod pool_writes;
+
 const NO_WAIT: Field = flag("no-wait", "bool", false);
 
 const CERTIFICATE_ID: Field = flag("certificate-id", "string", true);
@@ -180,7 +184,10 @@ pub(super) const SERVICE: Service = Service {
     error_rules: &[
         Rule {
             identity: "loadbalancer.resource-busy",
-            matches: |error| error.detail::<sdk::ResourceBusy>().is_some(),
+            matches: |error| {
+                error.detail::<sdk::ResourceBusy>().is_some()
+                    || error.detail::<sdk::WriteError>() == Some(&sdk::WriteError::ResourceBusy)
+            },
             name: Some(RuleName {
                 rank: 37,
                 code: "ResourceBusy",
@@ -209,6 +216,12 @@ pub(super) const SERVICE: Service = Service {
         paid::CREATE,
         paid::RESIZE,
         certificate_import::IMPORT,
+        policy_writes::CREATE_POLICY,
+        policy_writes::UPDATE_POLICY,
+        listener_writes::CREATE_LISTENER,
+        listener_writes::UPDATE_LISTENER,
+        pool_writes::CREATE_POOL,
+        pool_writes::UPDATE_POOL,
         operation!(
             @kind Kind::DestructiveWrite,
             DeleteCertificateInput, delete_certificate, "delete-certificate", "DeleteCertificate",
@@ -225,6 +238,40 @@ pub(super) const SERVICE: Service = Service {
             "greennode loadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes",
             &["Waits up to 15 minutes for the load balancer to disappear. Use `--no-wait` to return after acceptance or when a deletion is already in progress."], [
                 LOAD_BALANCER_ID => required_id!(sdk::DeleteLoadBalancerInput, load_balancer_id, LOAD_BALANCER_ID, "LoadBalancerID"),
+                NO_WAIT => optional_bool!(no_wait, NO_WAIT, "NoWait"),
+            ]
+        ),
+        operation!(
+            @kind Kind::DestructiveWrite,
+            DeleteListenerInput, delete_listener, "delete-listener", "DeleteListener",
+            "Delete a load balancer listener",
+            "greennode loadbalancer delete-listener --load-balancer-id <load-balancer-id> --listener-id <listener-id> --yes",
+            &["Waits for the load balancer and listener to be ready before sending the delete. Use `--no-wait` to return after acceptance."], [
+                LOAD_BALANCER_ID => required_id!(sdk::DeleteListenerInput, load_balancer_id, LOAD_BALANCER_ID, "LoadBalancerID"),
+                LISTENER_ID => required_id!(sdk::DeleteListenerInput, listener_id, LISTENER_ID, "ListenerID"),
+                NO_WAIT => optional_bool!(no_wait, NO_WAIT, "NoWait"),
+            ]
+        ),
+        operation!(
+            @kind Kind::DestructiveWrite,
+            DeletePolicyInput, delete_policy, "delete-policy", "DeletePolicy",
+            "Delete a listener policy",
+            "greennode loadbalancer delete-policy --load-balancer-id <load-balancer-id> --listener-id <listener-id> --policy-id <policy-id> --yes",
+            &["Waits for the load balancer and policy to be ready before sending the delete. Use `--no-wait` to return after acceptance."], [
+                LOAD_BALANCER_ID => required_id!(sdk::DeletePolicyInput, load_balancer_id, LOAD_BALANCER_ID, "LoadBalancerID"),
+                LISTENER_ID => required_id!(sdk::DeletePolicyInput, listener_id, LISTENER_ID, "ListenerID"),
+                POLICY_ID => required_id!(sdk::DeletePolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                NO_WAIT => optional_bool!(no_wait, NO_WAIT, "NoWait"),
+            ]
+        ),
+        operation!(
+            @kind Kind::DestructiveWrite,
+            DeletePoolInput, delete_pool, "delete-pool", "DeletePool",
+            "Delete an unused load balancer pool",
+            "greennode loadbalancer delete-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --yes",
+            &["Reads the load balancer’s listeners first and refuses to delete a pool that a listener uses as its default pool. Use `--no-wait` to return after acceptance."], [
+                LOAD_BALANCER_ID => required_id!(sdk::DeletePoolInput, load_balancer_id, LOAD_BALANCER_ID, "LoadBalancerID"),
+                POOL_ID => required_id!(sdk::DeletePoolInput, pool_id, POOL_ID, "PoolID"),
                 NO_WAIT => optional_bool!(no_wait, NO_WAIT, "NoWait"),
             ]
         ),

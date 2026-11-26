@@ -1,8 +1,11 @@
 mod encoded;
+mod full_error;
 
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
 use encoded::{Base64Alphabet, EncodedNeedle};
+use full_error::full_error;
+pub(crate) use full_error::inspect_error_message;
 use http::StatusCode;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -18,6 +21,45 @@ pub(crate) fn classify(
     rules: (bool, bool, Retry),
     credentials: &SentCredentials,
 ) -> Result<Bytes, Box<crate::Error>> {
+    classify_with_decoder(
+        operation,
+        status,
+        body,
+        success,
+        rules,
+        credentials,
+        |body| decode(body, !credentials.values().is_empty()),
+    )
+}
+
+pub(crate) fn classify_full(
+    operation: &'static str,
+    status: StatusCode,
+    body: Bytes,
+    success: &[StatusCode],
+    rules: (bool, bool, Retry),
+    credentials: &SentCredentials,
+) -> Result<Bytes, Box<crate::Error>> {
+    classify_with_decoder(
+        operation,
+        status,
+        body,
+        success,
+        rules,
+        credentials,
+        |body| full_error(body).unwrap_or_default(),
+    )
+}
+
+fn classify_with_decoder(
+    operation: &'static str,
+    status: StatusCode,
+    body: Bytes,
+    success: &[StatusCode],
+    rules: (bool, bool, Retry),
+    credentials: &SentCredentials,
+    decode: impl FnOnce(&[u8]) -> (String, String),
+) -> Result<Bytes, Box<crate::Error>> {
     if success.contains(&status) {
         return Ok(body);
     }
@@ -25,7 +67,7 @@ pub(crate) fn classify(
     let (code, message) = if sensitive {
         (String::new(), String::new())
     } else {
-        decode(&body, !credentials.values().is_empty())
+        decode(&body)
     };
     let secrets: Vec<_> = credentials.values().iter().collect();
     let safe = |text: &str| sanitize_error_text(text, credentials);

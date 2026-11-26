@@ -1,4 +1,8 @@
+mod child_deletes;
 mod create_writes;
+mod listener_writes;
+mod policy_writes;
+mod pool_writes;
 
 use super::*;
 use crate::wire::test_server::{Response, Server};

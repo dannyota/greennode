@@ -2,6 +2,36 @@
 
 # CLI: LoadBalancer
 
+## create-listener
+
+Kind: Write.
+
+Supply a comma-separated list of IPv4 CIDR prefixes with no host bits set. Use
+`--yes` for any entry outside `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+or `100.64.0.0/10`. HTTPS requires a default certificate. Use `--no-wait` to
+return submitted settings.
+
+| Flag                                           | Type                                  | Required |
+| ---------------------------------------------- | ------------------------------------- | -------- |
+| `--load-balancer-id`                           | `string`                              | yes      |
+| `--name`                                       | `string`                              | yes      |
+| `--protocol`                                   | `string`                              | yes      |
+| `--port`                                       | `int`                                 | yes      |
+| `--default-pool-id`                            | `string`                              |          |
+| `--timeout-client`                             | `int`                                 |          |
+| `--timeout-member`                             | `int`                                 |          |
+| `--timeout-connection`                         | `int`                                 |          |
+| `--default-certificate-id`                     | `string`                              |          |
+| `--client-certificate-id`                      | `string`                              |          |
+| `--no-wait`                                    | `bool`                                |          |
+| `--allowed-cidrs`                              | `string`                              | yes      |
+| `CertificateIDs` (via `--cli-input-json` only) | `[]string`                            |          |
+| `InsertHeaders` (via `--cli-input-json` only)  | `[]loadbalancer.ListenerInsertHeader` |          |
+
+```sh
+greennode loadbalancer create-listener --load-balancer-id <load-balancer-id> --name <name> --protocol HTTP --port <port> --allowed-cidrs 10.0.0.0/24
+```
+
 ## create-load-balancer
 
 Kind: Write.
@@ -24,6 +54,63 @@ up to 20 minutes for creation unless `--no-wait` is set.
 greennode loadbalancer create-load-balancer --name <name> --type 'Layer 4' --scheme Internal --subnet-id <subnet-id> --zone-id <zone-id> --package-id <package-id> --max-price <monthly-vnd>
 ```
 
+## create-policy
+
+Kind: Write.
+
+Supply at least one `Rules` entry through `--cli-input-json`. A pool redirect
+requires a pool ID. A URL redirect requires a URL. Use `--no-wait` to return
+submitted settings.
+
+| Flag                                  | Type                             | Required |
+| ------------------------------------- | -------------------------------- | -------- |
+| `--load-balancer-id`                  | `string`                         | yes      |
+| `--listener-id`                       | `string`                         | yes      |
+| `--name`                              | `string`                         | yes      |
+| `--action`                            | `string`                         | yes      |
+| `--redirect-pool-id`                  | `string`                         |          |
+| `--redirect-url`                      | `string`                         |          |
+| `--redirect-http-code`                | `int`                            |          |
+| `--keep-query-string`                 | `bool`                           |          |
+| `--no-wait`                           | `bool`                           |          |
+| `Rules` (via `--cli-input-json` only) | `[]loadbalancer.PolicyRuleInput` |          |
+
+```sh
+greennode loadbalancer create-policy --load-balancer-id <load-balancer-id> --listener-id <listener-id> --name <name> --action <action>
+```
+
+## create-pool
+
+Kind: Write.
+
+Defaults to `ROUND_ROBIN` and health checks with thresholds 3 and 3, a 30-second
+interval, and a 5-second timeout. HTTP health check fields require HTTP or
+HTTPS. Use `--no-wait` to return submitted settings.
+
+| Flag                          | Type     | Required |
+| ----------------------------- | -------- | -------- |
+| `--load-balancer-id`          | `string` | yes      |
+| `--name`                      | `string` | yes      |
+| `--protocol`                  | `string` | yes      |
+| `--algorithm`                 | `string` |          |
+| `--stickiness`                | `*bool`  |          |
+| `--tls-encryption`            | `*bool`  |          |
+| `--health-check-protocol`     | `string` | yes      |
+| `--health-check-path`         | `string` |          |
+| `--health-check-method`       | `string` |          |
+| `--health-check-http-version` | `string` |          |
+| `--health-check-domain-name`  | `string` |          |
+| `--health-check-success-code` | `string` |          |
+| `--healthy-threshold`         | `int`    |          |
+| `--unhealthy-threshold`       | `int`    |          |
+| `--health-check-interval`     | `int`    |          |
+| `--health-check-timeout`      | `int`    |          |
+| `--no-wait`                   | `bool`   |          |
+
+```sh
+greennode loadbalancer create-pool --load-balancer-id <load-balancer-id> --name <name> --protocol <protocol> --health-check-protocol <health-check-protocol>
+```
+
 ## delete-certificate
 
 Kind: Write, destructive.
@@ -36,6 +123,23 @@ Reads the certificate before deleting it and refuses if a listener uses it.
 
 ```sh
 greennode loadbalancer delete-certificate --certificate-id <certificate-id> --yes
+```
+
+## delete-listener
+
+Kind: Write, destructive.
+
+Waits for the load balancer and listener to be ready before sending the delete.
+Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--listener-id`      | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-listener --load-balancer-id <load-balancer-id> --listener-id <listener-id> --yes
 ```
 
 ## delete-load-balancer
@@ -52,6 +156,41 @@ return after acceptance or when a deletion is already in progress.
 
 ```sh
 greennode loadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes
+```
+
+## delete-policy
+
+Kind: Write, destructive.
+
+Waits for the load balancer and policy to be ready before sending the delete.
+Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--listener-id`      | `string` | yes      |
+| `--policy-id`        | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-policy --load-balancer-id <load-balancer-id> --listener-id <listener-id> --policy-id <policy-id> --yes
+```
+
+## delete-pool
+
+Kind: Write, destructive.
+
+Reads the load balancer’s listeners first and refuses to delete a pool that a
+listener uses as its default pool. Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--pool-id`          | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --yes
 ```
 
 ## get-certificate
@@ -318,4 +457,86 @@ unless `--no-wait` is set.
 
 ```sh
 greennode loadbalancer resize-load-balancer --load-balancer-id <load-balancer-id> --package-id <package-id> --max-price <vnd>
+```
+
+## update-listener
+
+Kind: Write.
+
+Reads and merges the listener’s current settings. Supply at least one setting.
+If you change `--allowed-cidrs`, use `--yes` for entries outside the private
+ranges. Use `--no-wait` to return submitted settings.
+
+| Flag                                           | Type                                   | Required |
+| ---------------------------------------------- | -------------------------------------- | -------- |
+| `--load-balancer-id`                           | `string`                               | yes      |
+| `--listener-id`                                | `string`                               | yes      |
+| `--default-pool-id`                            | `*string`                              |          |
+| `--timeout-client`                             | `*int`                                 |          |
+| `--timeout-member`                             | `*int`                                 |          |
+| `--timeout-connection`                         | `*int`                                 |          |
+| `--default-certificate-id`                     | `*string`                              |          |
+| `--client-certificate-id`                      | `*string`                              |          |
+| `--no-wait`                                    | `bool`                                 |          |
+| `--allowed-cidrs`                              | `string`                               |          |
+| `CertificateIDs` (via `--cli-input-json` only) | `*[]string`                            |          |
+| `InsertHeaders` (via `--cli-input-json` only)  | `*[]loadbalancer.ListenerInsertHeader` |          |
+
+```sh
+greennode loadbalancer update-listener --load-balancer-id <load-balancer-id> --listener-id <listener-id> --timeout-client <timeout-client>
+```
+
+## update-policy
+
+Kind: Write.
+
+Reads and merges the current policy. Changing the action discards inherited
+redirect fields that the new action cannot carry. Supplying `Rules` replaces the
+list. Use `--no-wait` to return submitted settings.
+
+| Flag                                  | Type                              | Required |
+| ------------------------------------- | --------------------------------- | -------- |
+| `--load-balancer-id`                  | `string`                          | yes      |
+| `--listener-id`                       | `string`                          | yes      |
+| `--policy-id`                         | `string`                          | yes      |
+| `--action`                            | `*string`                         |          |
+| `--redirect-pool-id`                  | `*string`                         |          |
+| `--redirect-url`                      | `*string`                         |          |
+| `--redirect-http-code`                | `*int`                            |          |
+| `--keep-query-string`                 | `*bool`                           |          |
+| `--no-wait`                           | `bool`                            |          |
+| `Rules` (via `--cli-input-json` only) | `*[]loadbalancer.PolicyRuleInput` |          |
+
+```sh
+greennode loadbalancer update-policy --load-balancer-id <load-balancer-id> --listener-id <listener-id> --policy-id <policy-id> --action <action>
+```
+
+## update-pool
+
+Kind: Write.
+
+Reads and merges the pool and its health monitor. Supply at least one setting.
+The health check protocol stays fixed. Use `--no-wait` to return submitted
+settings.
+
+| Flag                          | Type      | Required |
+| ----------------------------- | --------- | -------- |
+| `--load-balancer-id`          | `string`  | yes      |
+| `--pool-id`                   | `string`  | yes      |
+| `--algorithm`                 | `*string` |          |
+| `--stickiness`                | `*bool`   |          |
+| `--tls-encryption`            | `*bool`   |          |
+| `--health-check-path`         | `*string` |          |
+| `--health-check-method`       | `*string` |          |
+| `--health-check-http-version` | `*string` |          |
+| `--health-check-domain-name`  | `*string` |          |
+| `--health-check-success-code` | `*string` |          |
+| `--healthy-threshold`         | `*int`    |          |
+| `--unhealthy-threshold`       | `*int`    |          |
+| `--health-check-interval`     | `*int`    |          |
+| `--health-check-timeout`      | `*int`    |          |
+| `--no-wait`                   | `bool`    |          |
+
+```sh
+greennode loadbalancer update-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --algorithm <algorithm>
 ```

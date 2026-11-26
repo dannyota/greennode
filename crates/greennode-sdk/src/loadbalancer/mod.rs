@@ -1,9 +1,18 @@
 //! Read regional load balancers, their catalogs and children, and price quotes.
 
 mod certificate_import;
+mod child_deletes;
+mod child_writes;
 mod deletes;
+mod guard;
+mod listener_output;
+mod listener_writes;
 mod models;
 mod paid;
+mod policy_output;
+mod policy_writes;
+mod pool_output;
+mod pool_writes;
 mod quotes;
 mod types;
 mod wire;
@@ -20,9 +29,13 @@ use crate::{
 };
 
 pub use certificate_import::*;
+pub use child_deletes::*;
 pub use deletes::*;
+pub use listener_writes::*;
 pub use models::*;
 pub use paid::*;
+pub use policy_writes::*;
+pub use pool_writes::*;
 pub use quotes::{CreateLoadBalancerInput, ResizeLoadBalancerInput};
 pub use types::*;
 pub use wire::DecodeError;
