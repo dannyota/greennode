@@ -40,6 +40,14 @@ impl BudgetData for Vec<Budget> {
     }
 }
 
+impl BudgetData for () {
+    const SCHEMA: Shape<'static> = Shape::Any;
+
+    fn valid(&self, _: &SentCredentials) -> bool {
+        true
+    }
+}
+
 const HEADER_SCHEMA: Shape<'static> =
     Shape::Object(&[field("code"), field("message"), field("data")]);
 
@@ -68,6 +76,9 @@ impl<T: BudgetData> Output for Envelope<T> {
             }
             return operation::decode_response(operation, response);
         }
+        if operation.allow_empty && response.body.is_empty() {
+            return Ok(Self::default());
+        }
         let header: Header<'_> = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
         let code = header.code.ok_or_else(invalid)?.get();
         if !success_code(code).ok_or_else(invalid)? {
@@ -77,6 +88,10 @@ impl<T: BudgetData> Output for Envelope<T> {
         }
         if response.credentials.has_numeric_product_credential() {
             return Err(invalid());
+        }
+        if operation.no_output {
+            strict_json::validate_shape(&response.body, &Self::SCHEMA, operation.cap)
+                .map_err(|_| invalid())?;
         }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;

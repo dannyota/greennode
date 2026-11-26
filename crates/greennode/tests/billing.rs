@@ -1,5 +1,7 @@
 #[path = "billing/budget_reads.rs"]
 mod budget_reads;
+#[path = "billing/budget_writes.rs"]
+mod budget_writes;
 #[path = "billing/cost.rs"]
 mod cost;
 
@@ -42,6 +44,15 @@ fn invoke_with_bearer(
     server: Option<&Server>,
     bearer: &str,
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_source(args, server, bearer, &Source)
+}
+
+fn invoke_with_source(
+    args: &[&str],
+    server: Option<&Server>,
+    bearer: &str,
+    source: &dyn ConfigSource,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let mut config_options = ConfigOptions::default();
@@ -60,7 +71,7 @@ fn invoke_with_bearer(
             .chain(args.iter().copied())
             .map(OsString::from)
             .collect(),
-        source: &Source,
+        source,
         config_options,
         stdin: &mut stdin,
         stdout: &mut stdout,
