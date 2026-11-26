@@ -5,7 +5,7 @@ use serde_json::value::RawValue;
 use crate::Error;
 use crate::model::wire::WireField;
 use crate::wire::product::evidence::Evidence;
-use crate::wire::strict_json::{Shape, ShapeField, validate_exact_shape};
+use crate::wire::strict_json::{Shape, ShapeField, validate_canonical_shape};
 
 use super::wire::{DecodeError, Read};
 
@@ -47,7 +47,7 @@ pub(super) fn canonical_json(
     evidence: &Evidence,
 ) -> Result<String, Box<Error>> {
     let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
-    validate_exact_shape(body.as_bytes(), shape, body.len()).map_err(|_| invalid())?;
+    validate_canonical_shape(body.as_bytes(), shape, body.len()).map_err(|_| invalid())?;
     canonical_value(body, shape).ok_or_else(invalid)
 }
 

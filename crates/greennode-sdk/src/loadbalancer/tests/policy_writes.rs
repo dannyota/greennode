@@ -27,12 +27,9 @@ async fn policy_update_refuses_to_resend_incomplete_read_rules() {
         .update_policy(&ctx, update())
         .await
         .unwrap_err();
-    let api = failure.error().api_error().unwrap();
-    assert_eq!(api.operation(), "loadbalancer.UpdatePolicy");
-    assert_eq!(api.status(), None);
     assert_eq!(
-        api.message(),
-        "policy rule 0 read back incomplete; refusing to resend it unchanged"
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 2);
@@ -112,6 +109,31 @@ async fn aliased_policy_action_cannot_authorize_a_merge() {
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn policy_update_rejects_aliases_in_carried_fields() {
+    for row in [
+        r#"{"data":{"uuid":"policy-1","action":"REDIRECT_TO_POOL","RedirectUrl":"https://example.test/","progressStatus":"CREATED","l7Rules":[{"ruleType":"PATH","compareType":"EQUAL_TO","ruleValue":"/api"}]}}"#,
+        r#"{"data":{"uuid":"policy-1","action":"REDIRECT_TO_POOL","progressStatus":"CREATED","l7Rules":[{"ruleType":"PATH","compareType":"EQUAL_TO","ruleValue":"/api","RuleValue":"/other"}]}}"#,
+    ] {
+        let server = Server::start(vec![
+            response("200 OK", PARENT),
+            response("200 OK", row),
+            response("202 Accepted", ""),
+        ]);
+        let (ctx, _) = RequestContext::new();
+        let failure = client(&server, CANARY)
+            .update_policy(&ctx, update())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.error().detail::<DecodeError>(),
+            Some(&DecodeError::InvalidShape)
+        );
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 2);
+    }
 }
 
 #[tokio::test]

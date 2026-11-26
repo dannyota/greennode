@@ -64,8 +64,13 @@ async fn listener_update_refuses_ambiguous_guard_reads_before_the_put() {
     for row in [
         r#"{"data":{"uuid":"listener-1","progressStatus":"CREATED","protocolPort":"443"}}"#,
         r#"{"data":{"uuid":"listener-1","progressStatus":"CREATED","allowedCidrs":"10.0.0.0/24","AllowedCidrs":"0.0.0.0/0"}}"#,
+        r#"{"data":{"uuid":"listener-1","progressStatus":"CREATED","protocol":"HTTP","allowedCidrs":"10.0.0.0/24","CertificateAuthorities":["cert-1"]}}"#,
     ] {
-        let server = Server::start(vec![response("200 OK", PARENT), response("200 OK", row)]);
+        let server = Server::start(vec![
+            response("200 OK", PARENT),
+            response("200 OK", row),
+            response("202 Accepted", ""),
+        ]);
         let (ctx, _) = RequestContext::new();
         let failure = client(&server, CANARY)
             .update_listener(&ctx, update())
