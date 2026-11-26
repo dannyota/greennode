@@ -58,6 +58,18 @@ pub(crate) fn classify(
     Err(Box::new(crate::Error::from_api(api)))
 }
 
+pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) -> bool) -> bool {
+    let fields = [crate::wire::strict_json::Field {
+        name: "message",
+        children: &[],
+    }];
+    if crate::wire::strict_json::validate(body, &fields, body.len()).is_err() {
+        return false;
+    }
+    let (_, message) = decode(body, true);
+    predicate(&Zeroizing::new(message))
+}
+
 pub(crate) fn sanitize_error_text(
     text: &str,
     credentials: &SentCredentials,

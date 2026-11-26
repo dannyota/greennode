@@ -403,3 +403,46 @@ async fn deletes_report_certificate_in_use_without_api_status() {
         assert_eq!(server.requests(), requests);
     }
 }
+
+#[tokio::test]
+async fn certificate_refusal_keeps_go_status_based_exits() {
+    for (status, message, expected_exit, code) in [
+        ("404 Not Found", "certificate is in use", 4, "ResourceInUse"),
+        (
+            "401 Unauthorized",
+            "certificate is in use",
+            3,
+            "ResourceInUse",
+        ),
+        ("401 Unauthorized", "login required", 3, "Unauthorized"),
+    ] {
+        let body = serde_json::json!({"message":message}).to_string();
+        let mut responses = vec![
+            response("200 OK", r#"{"uuid":"cert-1","inUse":false}"#),
+            response(status, &body),
+        ];
+        if code == "Unauthorized" {
+            responses.push(response("400 Bad Request", "{}"));
+        }
+        let requests = responses.len();
+        let server = Server::start(responses);
+        let (exit, stdout, stderr) = invoke(
+            &server,
+            &[
+                "delete-certificate",
+                "--certificate-id",
+                "cert-1",
+                "--project-id",
+                "proj-1",
+                "--yes",
+            ],
+            false,
+        )
+        .await;
+        assert_eq!(exit, ExitCode::from(expected_exit), "{status}/{code}");
+        assert!(stdout.is_empty());
+        let envelope: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(envelope["error"]["code"], code);
+        assert_eq!(server.requests(), requests);
+    }
+}

@@ -30,6 +30,8 @@ pub enum DecodeError {
     ReflectedCredential,
 }
 
+pub(super) struct CompleteNotFound;
+
 pub(super) struct Read {
     pub(super) id: &'static str,
     pub(super) route: &'static str,
@@ -286,15 +288,23 @@ impl Client {
         let screen =
             |error: Error| Box::new(error.screen_api(&|text| evidence.text_reflects(text)));
         let received = result.map_err(|error| screen(error.into_parts().0))?;
+        let status = received.status;
         let body = response::classify(
             read.id,
-            received.status,
+            status,
             Bytes::from(received.reply.body),
             operation.success,
             (true, false, operation.retry),
             evidence.credentials(),
         )
-        .map_err(|error| screen(*error))?;
+        .map_err(|error| {
+            let error = screen(*error);
+            if require_complete && status == StatusCode::NOT_FOUND {
+                Box::new(error.with_outer_detail(CompleteNotFound))
+            } else {
+                error
+            }
+        })?;
         let text = if body.is_empty() {
             "null".into()
         } else {

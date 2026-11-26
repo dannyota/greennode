@@ -23,7 +23,7 @@ use crate::{
     WriteDispatch,
 };
 
-use super::wire::{DecodeError, Envelope, Read, screen_input, validate_ids};
+use super::wire::{CompleteNotFound, DecodeError, Envelope, Read, screen_input, validate_ids};
 use super::{Certificate, Client, ZonedLoadBalancer, page_query};
 
 const DELETE_LB: &str = "loadbalancer.DeleteLoadBalancer";
@@ -88,7 +88,9 @@ impl Client {
             .load_balancer_progress(ctx, id, &mut evidence)
             .await
             .map_err(|error| not_sent(*error))?;
-        if current != "DELETING" {
+        let dispatch = if current == "DELETING" {
+            WriteDispatch::NotSent
+        } else {
             self.send_delete(
                 ctx,
                 DELETE_LB,
@@ -98,38 +100,53 @@ impl Client {
                 &mut evidence,
             )
             .await?;
-        }
+            WriteDispatch::MayHaveBeenSent
+        };
         if input.no_wait {
             return Ok(DeleteLoadBalancerOutput {});
         }
 
         let clock = self.session.clock();
-        let wait = ctx.child_with_deadline(clock.monotonic_now() + DELETE_BOUND);
+        let settlement_deadline = clock.monotonic_now() + DELETE_BOUND;
+        let wait = ctx.child_with_deadline(settlement_deadline);
         let was_error = current == "ERROR";
         let (class, reason, cause) = loop {
+            let poll = self.load_balancer_progress(&wait, id, &mut evidence).await;
             if let Some(end) = wait.check(clock) {
+                let reason = match end {
+                    ContextEnd::Cancelled => "confirmation cancelled by caller",
+                    ContextEnd::DeadlineExceeded
+                        if ctx
+                            .deadline()
+                            .is_some_and(|deadline| deadline <= settlement_deadline) =>
+                    {
+                        "confirmation stopped at the caller's deadline"
+                    }
+                    ContextEnd::DeadlineExceeded => "did not reach 404 within 15m0s",
+                };
                 break (
                     ErrorClass::NotSettled,
-                    "did not reach 404 within 15m0s; delete was sent and a rerun is safe",
+                    reason.into(),
                     Some(context_error(end)),
                 );
             }
-            match self.load_balancer_progress(&wait, id, &mut evidence).await {
-                Err(error)
-                    if complete_not_found(&error, "loadbalancer.GetLoadBalancer")
-                        && wait.check(clock).is_none() =>
-                {
+            match poll {
+                Err(error) if error.detail::<CompleteNotFound>().is_some() => {
                     return Ok(DeleteLoadBalancerOutput {});
                 }
                 Ok(progress) if progress == "ERROR" && !was_error => {
-                    break (ErrorClass::Failed, "is ERROR", None);
+                    break (ErrorClass::Failed, "is ERROR".into(), None);
                 }
                 Err(error) => {
-                    break (
-                        ErrorClass::NotSettled,
-                        "delete was sent and a rerun is safe",
-                        Some(*error),
-                    );
+                    let reason = error
+                        .api_error()
+                        .map(|api| api.message())
+                        .filter(|message| !message.is_empty())
+                        .map_or_else(
+                            || "confirmation read failed".into(),
+                            |message| format!("confirmation read failed: {message}"),
+                        );
+                    break (ErrorClass::NotSettled, reason, Some(*error));
                 }
                 Ok(_) => {
                     wait.child_with_deadline(clock.monotonic_now() + POLL_INTERVAL)
@@ -138,13 +155,19 @@ impl Client {
                 }
             }
         };
-        let prefix = if class == ErrorClass::Failed {
-            "vngcloud: write failed"
-        } else {
-            "vngcloud: write outcome not confirmed"
+        let (prefix, advice) = match (class, dispatch) {
+            (ErrorClass::Failed, _) => ("vngcloud: write failed", ""),
+            (_, WriteDispatch::NotSent) => (
+                "vngcloud: write outcome not confirmed",
+                "; delete was already in progress and a rerun is safe",
+            ),
+            _ => (
+                "vngcloud: write outcome not confirmed",
+                "; delete was sent and a rerun is safe",
+            ),
         };
         let safe_id = safe_text(id, &evidence);
-        let message = format!("{prefix}: {DELETE_LB}: load balancer {safe_id} {reason}");
+        let message = format!("{prefix}: {DELETE_LB}: load balancer {safe_id} {reason}{advice}");
         let error = local(class, &message, &evidence);
         let error = match cause {
             Some(cause) => error.with_cause(cause),
@@ -153,7 +176,7 @@ impl Client {
         let partial = evidence
             .can_retain_partial()
             .then_some(DeleteLoadBalancerOutput {});
-        Err(Failure::new(error, partial, WriteDispatch::MayHaveBeenSent))
+        Err(Failure::new(error, partial, dispatch))
     }
 
     /// Deletes an unused certificate and requires a complete HTTP 204 response.
@@ -167,13 +190,11 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
         let mut evidence = Evidence::new();
         if let Err(error) = self.check_certificate(ctx, id, &mut evidence).await {
-            let error = if error.detail::<WriteError>().is_none()
-                && error.detail::<DecodeError>().is_none()
-            {
+            let error = if error.detail::<WriteError>().is_some() {
+                *error
+            } else {
                 self.certificate_not_found(ctx, id, *error, &mut evidence)
                     .await
-            } else {
-                *error
             };
             return Err(not_sent(error));
         }
@@ -191,21 +212,22 @@ impl Client {
             return Ok(DeleteCertificateOutput {});
         };
         let (error, _, dispatch) = failure.into_parts();
-        if let Some(api) = error.api_error() {
-            let normalized = api.message().to_ascii_lowercase();
-            if normalized.contains("in use") || normalized.contains("is used") {
-                let detail = format!(
-                    "loadbalancer: certificate in use: {DELETE_CERT}: certificate {}: {DELETE_CERT}: {} (status {})",
-                    safe_text(id, &evidence),
-                    api.message(),
-                    api.status()
-                        .map_or_else(|| "withheld".into(), |status| status.to_string()),
-                );
-                let error = local(ErrorClass::Api, &detail, &evidence)
-                    .with_outer_detail(WriteError::ResourceInUse)
-                    .with_cause(error);
-                return Err(Failure::new(error, None, dispatch));
+        if error.detail::<WriteError>() == Some(&WriteError::ResourceInUse) {
+            let mut detail = format!(
+                "loadbalancer: certificate in use: {DELETE_CERT}: certificate {}",
+                safe_text(id, &evidence),
+            );
+            if let Some(api) = error.api_error() {
+                use std::fmt::Write as _;
+                if !api.message().is_empty() {
+                    let _ = write!(detail, ": {DELETE_CERT}: {}", api.message());
+                }
+                if let Some(status) = api.status() {
+                    let _ = write!(detail, " (status {status})");
+                }
             }
+            let error = local(ErrorClass::Api, &detail, &evidence).with_cause(error);
+            return Err(Failure::new(error, None, dispatch));
         }
         let error = self
             .certificate_not_found(ctx, id, error, &mut evidence)
@@ -306,8 +328,7 @@ impl Client {
         error: Error,
         evidence: &mut Evidence,
     ) -> Error {
-        if complete_not_found(&error, "loadbalancer.GetCertificate")
-            || complete_not_found(&error, DELETE_CERT)
+        if error.detail::<CompleteNotFound>().is_some()
             || error.has_class(ErrorClass::InvalidInput)
             || !self
                 .certificate_absent(ctx, id, evidence)
@@ -349,8 +370,13 @@ impl Client {
         };
         let page: i64 = envelope.field(&read, evidence, "page")?;
         let size: i64 = envelope.field(&read, evidence, "pageSize")?;
-        let total_pages: i64 = envelope.field(&read, evidence, "totalPage")?;
-        let total_items: i64 = envelope.field(&read, evidence, "totalItem")?;
+        let total_pages =
+            read.parse::<Option<i64>>(envelope.raw(&read, evidence, "totalPage")?, evidence)?;
+        let total_items =
+            read.parse::<Option<i64>>(envelope.raw(&read, evidence, "totalItem")?, evidence)?;
+        let (Some(total_pages), Some(total_items)) = (total_pages, total_items) else {
+            return Ok(false);
+        };
         let count = i64::try_from(rows.len()).unwrap_or(i64::MAX);
         let mut seen = BTreeSet::new();
         Ok(page == 1
@@ -431,24 +457,41 @@ impl Client {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(screen(error), None, dispatch)
         })?;
+        let status = reply.status;
+        let in_use = id == DELETE_CERT
+            && status != StatusCode::NO_CONTENT
+            && response::error_message_matches(&reply.body, certificate_in_use);
         response::classify(
             id,
-            reply.status,
+            status,
             Bytes::from(reply.reply.body),
             success,
             (true, false, op.retry),
             evidence.credentials(),
         )
         .map(|_| ())
-        .map_err(|error| Failure::new(screen(*error), None, WriteDispatch::MayHaveBeenSent))
+        .map_err(|error| {
+            let mut error = screen(*error);
+            if status == StatusCode::NOT_FOUND {
+                error = error.with_outer_detail(CompleteNotFound);
+            }
+            if in_use {
+                error = error.with_outer_detail(WriteError::ResourceInUse);
+            }
+            Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+        })
     }
 }
 
-fn complete_not_found(error: &Error, operation: &str) -> bool {
-    !error.is_body_too_large()
-        && error
-            .api_error()
-            .is_some_and(|api| api.operation() == operation && api.status() == Some(404))
+fn certificate_in_use(message: &str) -> bool {
+    [b"in use".as_slice(), b"is used"]
+        .into_iter()
+        .any(|needle| {
+            message
+                .as_bytes()
+                .windows(needle.len())
+                .any(|piece| piece.eq_ignore_ascii_case(needle))
+        })
 }
 
 fn context_error(end: ContextEnd) -> Error {

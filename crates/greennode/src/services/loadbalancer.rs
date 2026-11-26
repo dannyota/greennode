@@ -2,7 +2,7 @@ use clap::ArgMatches;
 use greennode_sdk::loadbalancer as sdk;
 
 use crate::cli::dispatch::{self, OutputView};
-use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
+use crate::cli::errors::{Rule, RuleName, RuleOperation};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 
@@ -183,7 +183,7 @@ pub(super) const SERVICE: Service = Service {
             include_api_status: false,
             operation: RuleOperation::Omit,
         }),
-        exit: Some(RuleExit::Failure),
+        exit: None,
         message: None,
     }],
     operations: &[
