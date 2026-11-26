@@ -1,0 +1,10 @@
+{
+  "Dashboard": {
+    "ID": "dash-1",
+    "Name": "Synthetic",
+    "System": true,
+    "Favorite": true,
+    "CreatedAt": "created",
+    "UpdatedAt": "updated"
+  }
+}

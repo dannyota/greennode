@@ -1,0 +1,15 @@
+{
+  "Items": [
+    {
+      "LocationID": "loc-1",
+      "Points": [
+        {
+          "Timestamp": "2000-01-01T01:00:00Z",
+          "ValueMillis": 12.5
+        }
+      ]
+    }
+  ],
+  "Start": "2000-01-01T00:00:00Z",
+  "End": "2000-01-02T00:00:00Z"
+}
