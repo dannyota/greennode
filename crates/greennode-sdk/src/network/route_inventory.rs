@@ -260,7 +260,7 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: true,
+            keep_status: read.kind == ResponseKind::RouteTable,
             overflow_overrides_status: false,
             sensitive: read.kind != ResponseKind::Standard,
             reject_reflected_credentials: false,
@@ -268,7 +268,7 @@ impl Client {
             retry_config: retry::Config::default(),
         };
         let options = Options {
-            path_ids: if read.kind == ResponseKind::Standard {
+            path_ids: if read.kind != ResponseKind::Vpn {
                 PathIds::WithUnderscore
             } else {
                 PathIds::Strict
@@ -289,6 +289,12 @@ impl Client {
         .await
         .map_err(|failure| {
             let error = failure.into_parts().0;
+            if matches!(
+                error.class(),
+                ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
+            ) {
+                return error;
+            }
             if error.is_body_too_large() {
                 if read.kind != ResponseKind::Standard {
                     return read.invalid(evidence).with_body_too_large();
@@ -305,6 +311,11 @@ impl Client {
                         return read.invalid(evidence);
                     }
                     return read.vpn_refused(status, api.retryable(), evidence);
+                }
+                if error.detail::<StatusCode>().is_some()
+                    && status.is_some_and(|status| !status.is_redirection())
+                {
+                    return read.api(None, "", "", false, evidence);
                 }
                 if status.is_some() {
                     return read.api(
@@ -391,7 +402,7 @@ impl Client {
         Ok((output, raw.len()))
     }
 
-    pub(super) async fn list_route_inventory<T: WireField>(
+    pub(super) async fn list_route_inventory<T: WireField + serde::Serialize>(
         &self,
         ctx: &RequestContext,
         read: InventoryRead,
@@ -416,7 +427,7 @@ pub(super) fn field<T: WireField>(fields: &Fields<'_>, name: &str) -> Result<T, 
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
-pub(super) fn redact_page<T: WireField>(
+pub(super) fn redact_page<T: WireField + serde::Serialize>(
     read: InventoryRead,
     output: &mut PagedList<T>,
     evidence: &Evidence,
@@ -430,11 +441,48 @@ pub(super) fn redact_page<T: WireField>(
     if numbers
         .into_iter()
         .any(|mut value| evidence.text_reflects(&value.to_string()) || !value.redact(evidence))
+        || ids_reflect(&output.items, evidence)
         || !output.items.redact(evidence)
     {
         return Err(read.invalid(evidence));
     }
     Ok(())
+}
+
+pub(super) fn ids_reflect<T: serde::Serialize>(value: &T, evidence: &Evidence) -> bool {
+    fn scan(value: &serde_json::Value, evidence: &Evidence, numeric: bool) -> bool {
+        match value {
+            serde_json::Value::Number(number) if numeric => {
+                evidence.credentials().has_numeric_product_credential()
+                    || evidence.text_reflects(&number.to_string())
+                    || number.as_f64().is_none_or(|value| {
+                        [
+                            crate::output_number::Style::Json,
+                            crate::output_number::Style::Fixed,
+                        ]
+                        .into_iter()
+                        .any(|style| {
+                            crate::output_number::f64(value, style)
+                                .is_none_or(|rendered| evidence.text_reflects(&rendered))
+                        })
+                    })
+            }
+            serde_json::Value::Array(items) => {
+                items.iter().any(|item| scan(item, evidence, numeric))
+            }
+            serde_json::Value::Object(fields) => fields.iter().any(|(name, value)| {
+                ((name.ends_with("ID") || name.ends_with("UUID"))
+                    && value.as_str().is_some_and(|id| evidence.id_reflects(id)))
+                    || scan(
+                        value,
+                        evidence,
+                        numeric || name == "TunnelLimit" || name == "CircuitID",
+                    )
+            }),
+            _ => false,
+        }
+    }
+    serde_json::to_value(value).map_or(true, |value| scan(&value, evidence, false))
 }
 
 macro_rules! paged_input {

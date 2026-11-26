@@ -5,7 +5,7 @@ use crate::wire::product::options::PathIds;
 use crate::{Failure, List, PagedList, RequestContext};
 
 use super::route_inventory::{
-    CAP, InventoryRead, ResponseKind, field, paged_input, required_id_input,
+    CAP, InventoryRead, ResponseKind, field, ids_reflect, paged_input, required_id_input,
 };
 use super::{Client, failure};
 
@@ -69,6 +69,14 @@ impl Client {
             .await
             .map_err(failure)?;
         let text = go_json(&raw);
+        if crate::wire::product::operation::reflects_json(
+            text.as_bytes(),
+            evidence.credentials(),
+            true,
+        ) == Some(true)
+        {
+            return Err(failure(ROUTE_TABLE.invalid(&evidence)));
+        }
         let envelope = ROUTE_TABLE.fields(&text, &evidence).map_err(failure)?;
         let invalid = |()| failure(ROUTE_TABLE.invalid(&evidence));
         let incomplete = || failure(ROUTE_TABLE.incomplete(&evidence));
@@ -87,7 +95,7 @@ impl Client {
         {
             return Err(incomplete());
         }
-        if !table.redact(&evidence) {
+        if ids_reflect(&table, &evidence) || !table.redact(&evidence) {
             return Err(invalid(()));
         }
         Ok(GetRouteTableOutput { route_table: table })
@@ -139,7 +147,7 @@ impl Client {
                 })
             })
             .collect();
-        if !items.redact(&evidence) {
+        if ids_reflect(&items, &evidence) || !items.redact(&evidence) {
             return Err(failure(ROUTE_TABLES.invalid(&evidence)));
         }
         Ok(List { items })

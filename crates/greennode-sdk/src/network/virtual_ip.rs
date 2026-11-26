@@ -6,7 +6,9 @@ use crate::model::wire::{WireField, go_json, model};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, Failure, List, PagedList, RequestContext, model};
 
-use super::route_inventory::{CAP, InventoryRead, field, paged_input, required_id_input};
+use super::route_inventory::{
+    CAP, InventoryRead, field, ids_reflect, paged_input, required_id_input,
+};
 use super::{Client, Zone, failure};
 
 const VIRTUAL_IP: InventoryRead =
@@ -121,7 +123,7 @@ impl Client {
         let envelope = VIRTUAL_IP.fields(&text, &evidence).map_err(failure)?;
         let invalid = |()| failure(VIRTUAL_IP.invalid(&evidence));
         let mut virtual_ip_address: VirtualIpAddress = field(&envelope, "data").map_err(invalid)?;
-        if !virtual_ip_address.redact(&evidence) {
+        if ids_reflect(&virtual_ip_address, &evidence) || !virtual_ip_address.redact(&evidence) {
             return Err(invalid(()));
         }
         Ok(GetVirtualIpAddressOutput { virtual_ip_address })
@@ -214,7 +216,7 @@ impl Client {
             }
             items.extend(pairs);
         }
-        if !items.redact(&evidence) {
+        if ids_reflect(&items, &evidence) || !items.redact(&evidence) {
             return Err(failure(ALL_PAIRS.invalid(&evidence)));
         }
         Ok(List { items })
@@ -232,7 +234,7 @@ impl Client {
         let (mut items, _) = self
             .read_address_pairs(ctx, &project, parent, &mut evidence)
             .await?;
-        if !items.redact(&evidence) {
+        if ids_reflect(&items, &evidence) || !items.redact(&evidence) {
             return Err(read.invalid(&evidence));
         }
         Ok(List { items })

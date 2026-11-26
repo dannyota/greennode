@@ -126,10 +126,7 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
     } else {
         return Err(invalid(()));
     };
-    if items
-        .iter()
-        .any(|item| !PathIds::WithUnderscore.allows(&item.uuid))
-    {
+    if items.iter().any(|item| item.uuid.is_empty()) {
         return Err(invalid(()));
     }
     let mut output = PagedList {
@@ -141,6 +138,41 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
     };
     redact_page(VPN, &mut output, evidence)?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore]
+    fn hex_credentials_in_numeric_fields_are_withheld_after_rebase() {
+        let mut evidence = crate::wire::product::evidence::Evidence::new();
+        evidence.add_secret(&crate::Secret::new("AAA"));
+        let vpn = r#"{"success":true,"data":[{"uuid":"vpn-1","packageModel":{"tunnelLimit":414141}}],"page":1,"size":10,"totalPage":1,"total":1}"#;
+        assert!(super::decode_vpn(vpn, &evidence).is_err());
+    }
+
+    #[test]
+    fn encoded_credentials_in_numeric_fields_are_withheld() {
+        let mut evidence = crate::wire::product::evidence::Evidence::new();
+        evidence.add_secret(&crate::Secret::new("\u{05cd}"));
+        let vpn = r#"{"success":true,"data":[{"uuid":"vpn-1","packageModel":{"tunnelLimit":140}}],"page":1,"size":10,"totalPage":1,"total":1}"#;
+        assert!(super::decode_vpn(vpn, &evidence).is_err());
+        let mut page: crate::PagedList<crate::network::Interconnect> = crate::PagedList {
+            items: vec![serde_json::from_str(r#"{"circuitId":140}"#).unwrap()],
+            page: 1,
+            page_size: 10,
+            total_page: 1,
+            total_item: 1,
+        };
+        assert!(
+            super::redact_page(
+                super::InventoryRead::standard("test", ""),
+                &mut page,
+                &evidence
+            )
+            .is_err()
+        );
+    }
 }
 
 trait CheckedField {

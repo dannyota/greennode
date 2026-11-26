@@ -5,6 +5,172 @@ use crate::network::{
 use crate::testing::{Product, Response, Server, with_product_loopback};
 use crate::{Config, ConfigOptions, ErrorClass, RequestContext, Secret};
 
+#[tokio::test]
+async fn route_inventory_regressions() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"listData":[{"uuid":"dG95"}]}"#,
+    )]);
+    let config = config(Product::Vserver, &server, "toy", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .list_wan_ips(&ctx, ListWanIpsInput::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn route_inventory_ignores_lone_case_variant_after_rebase() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"listData":[{"Name":"case"}]}"#,
+    )]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    assert_eq!(
+        client
+            .list_wan_ips(&ctx, ListWanIpsInput::default())
+            .await
+            .unwrap()
+            .items[0]
+            .name,
+        ""
+    );
+}
+
+#[tokio::test]
+async fn route_table_refuses_credentials_in_unknown_fields() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"uuid":"rt-1","status":"ACTIVE","routes":[]},"extra":"toy-token"}"#,
+    )]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn route_table_accepts_underscore_in_project_id() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"uuid":"rt-1","status":"ACTIVE","routes":[]}}"#,
+    )]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj_1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn vpn_accepts_nonempty_uuid_without_path_charset() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"success":true,"data":[{"uuid":"vpn.1"}],"page":1,"size":10,"totalPage":1,"total":1}"#,
+    )]);
+    let config = config(Product::Vnetwork, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .list_vpn_connections(&ctx, ListVpnConnectionsInput::default())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn truncated_not_found_is_a_body_read_failure() {
+    let server = Server::start(vec![Response::RawClose(
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 20\r\n\r\n{}".to_vec(),
+    )]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+        .await
+        .unwrap_err();
+    assert_ne!(error.error().class(), ErrorClass::NotFound);
+}
+
+#[tokio::test]
+async fn oversized_not_found_keeps_status() {
+    let body = vec![b'x'; (8 << 20) + 1];
+    let server = Server::start(vec![Response::Http {
+        status: "404 Not Found".into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body,
+    }]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().class(), ErrorClass::NotFound);
+}
+
+#[tokio::test]
+async fn vpn_cancellation_before_headers_preserves_class() {
+    let (sent, ready) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let config = config(Product::Vnetwork, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, cancel) = RequestContext::new();
+    let cancel_when_started = async {
+        ready.await.unwrap();
+        cancel.cancel();
+    };
+    let (result, ()) = tokio::join!(
+        client.list_vpn_connections(&ctx, ListVpnConnectionsInput::default()),
+        cancel_when_started
+    );
+    assert_eq!(result.unwrap_err().error().class(), ErrorClass::Cancelled);
+}
+
+#[tokio::test]
+async fn route_table_redirect_preserves_status_and_withholds_message() {
+    let server = Server::start(vec![Response::Http {
+        status: "302 Found".into(),
+        headers: vec![
+            ("Location".into(), "/other".into()),
+            ("Content-Length".into(), "0".into()),
+        ],
+        body: Vec::new(),
+    }]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::Api);
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.status(), api.code(), api.message()),
+        (Some(302), "", "security group response withheld")
+    );
+    assert_eq!(server.heads().len(), 1);
+}
+
 fn response(status: &str, body: &str) -> Response {
     Response::Http {
         status: status.into(),
@@ -57,7 +223,7 @@ async fn ordinary_lists_preserve_go_zero_values_and_redact_typed_strings() {
 }
 
 #[tokio::test]
-async fn interconnect_redacts_dynamic_keys_and_rendered_numbers() {
+async fn interconnect_refuses_numeric_credential_in_dynamic_value() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"{"listData":[{"uuid":"link_1","circuitId":{"%34%32-key":"drop","nested":[4.2e1,12],"safe":false}}],"page":1,"pageSize":2,"totalPage":1,"totalItem":1}"#,
@@ -65,13 +231,11 @@ async fn interconnect_redacts_dynamic_keys_and_rendered_numbers() {
     let config = config(Product::Vserver, &server, "42", Some("proj-1"));
     let client = Client::new(&config);
     let (ctx, _) = RequestContext::new();
-    let output = client
-        .list_interconnects(&ctx, ListInterconnectsInput::default())
-        .await
-        .unwrap();
-    assert_eq!(
-        output.items[0].circuit_id,
-        serde_json::json!({"nested":["<redacted>",12.0],"safe":false})
+    assert!(
+        client
+            .list_interconnects(&ctx, ListInterconnectsInput::default())
+            .await
+            .is_err()
     );
 }
 
