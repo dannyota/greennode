@@ -5,7 +5,7 @@ use http::{Method, StatusCode};
 use serde::Serialize;
 use serde_json::{Map, Value, json, value::RawValue};
 
-use super::principal_guard::optional_field;
+use super::principal_guard::{optional_field, require_safe};
 use super::wire::{REDACTED, Screen, Wire};
 use super::writes::{confirmed_identity, error_reason, guard_failed, settle, write_operation};
 use super::{
@@ -270,6 +270,7 @@ impl Client {
             self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
         let op = Operation {
             cap: OBJECT_CAP,
+            allow_empty: false,
             ..secret_operation(CREATE, ACCOUNTS, &[StatusCode::CREATED])
         };
         let IssuedAccount { id, secret } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
@@ -277,8 +278,7 @@ impl Client {
         if let Some(secret) = &secret {
             record_issued(&mut evidence, secret);
         }
-        let attributable = Options::DEFAULT.path_ids.allows(&id) && !evidence.text_reflects(&id);
-        let confirmation = if attributable {
+        let confirmation = if usable_account_id(&id, &evidence) {
             self.confirm_account::<CreateServiceAccountOutput>(ctx, &id, &mut evidence)
                 .await
                 .ok()
@@ -287,21 +287,23 @@ impl Client {
         };
         let confirmed = confirmation.is_some();
         let account = confirmation.unwrap_or_else(|| safe_account_id(&id, &evidence));
-        let cleanup_id = (attributable && !evidence.text_reflects(&id)).then(|| account.id.clone());
+        let cleanup_id = usable_account_id(&account.id, &evidence).then(|| account.id.clone());
         if secret.is_none() || !confirmed {
-            let error = if secret.is_none() {
-                outcome(
+            let (detail, message) = match (confirmed, secret.is_some()) {
+                (true, false) => (
                     WriteError::NoSecret,
                     "iam.CreateServiceAccount: iam: no client secret returned: create response had no client secret; run reset-service-account-secret to get one",
-                    &evidence,
-                )
-            } else {
-                outcome(
+                ),
+                (false, false) => (
+                    WriteError::CreateUnconfirmed,
+                    "iam.CreateServiceAccount: iam: created but not confirmed by a read; the response held no client secret; reconcile with list-service-accounts",
+                ),
+                _ => (
                     WriteError::CreateUnconfirmed,
                     "iam.CreateServiceAccount: iam: created but not confirmed by a read",
-                    &evidence,
-                )
+                ),
             };
+            let error = outcome(detail, message, &evidence);
             let partial = evidence
                 .can_retain_partial()
                 .then_some(CreateServiceAccountOutput {
@@ -350,6 +352,7 @@ impl Client {
         let op = Operation {
             no_output: true,
             keep_status: true,
+            sensitive: true,
             ..write_operation(
                 UPDATE,
                 Method::PATCH,
@@ -405,20 +408,23 @@ impl Client {
         if let Some(cleanup) = &input.cleanup {
             evidence.absorb(cleanup);
         }
-        if evidence.text_reflects(id) {
+        if evidence.id_reflects(id) {
             return Err(guard_failed(invalid_input(
                 "IAM request operand withheld".into(),
             )));
         }
         self.guard_service_account(ctx, DELETE, id, &mut evidence)
             .await?;
-        let op = write_operation(
-            DELETE,
-            Method::DELETE,
-            ACCOUNT,
-            Retry::Repeatable,
-            &[StatusCode::NO_CONTENT],
-        );
+        let op = Operation {
+            sensitive: true,
+            ..write_operation(
+                DELETE,
+                Method::DELETE,
+                ACCOUNT,
+                Retry::Repeatable,
+                &[StatusCode::NO_CONTENT],
+            )
+        };
         self.write::<Value, _>(ctx, Api::Accounts, &op, &[id], None, &mut evidence)
             .await?;
         Ok(DeleteServiceAccountOutput {})
@@ -461,9 +467,10 @@ impl Client {
     ) -> Result<ServiceAccount, Failure<O>> {
         let op = Operation {
             sensitive: true,
+            reject_reflected_credentials: true,
             ..read_operation("iam.GetServiceAccount", ACCOUNT, OBJECT_CAP, false)
         };
-        let mut account: ServiceAccount = self
+        let account: ServiceAccount = self
             .fetch(
                 ctx,
                 Api::Accounts,
@@ -479,7 +486,11 @@ impl Client {
             "iam.GetServiceAccount: service account identity is unproven",
             evidence,
         )?;
-        account.screen(evidence);
+        require_safe(
+            &account,
+            "iam: iam.GetServiceAccount: unsafe guard response",
+            evidence,
+        )?;
         Ok(account)
     }
 }
@@ -512,14 +523,13 @@ fn safe_text<'a>(evidence: &Evidence, text: &'a str) -> &'a str {
     }
 }
 
+fn usable_account_id(id: &str, evidence: &Evidence) -> bool {
+    Options::DEFAULT.path_ids.allows(id) && !evidence.id_reflects(id)
+}
+
 fn safe_account_id(id: &str, evidence: &Evidence) -> ServiceAccount {
     let mut account = ServiceAccount::default();
-    if !id.is_empty()
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        && !evidence.text_reflects(id)
-    {
+    if usable_account_id(id, evidence) {
         account.id = id.to_owned();
     }
     account.screen(evidence);
@@ -534,9 +544,9 @@ fn settle_update(
 ) -> Failure<UpdateServiceAccountOutput> {
     settle(
         failed,
-        UpdateServiceAccountOutput {
+        Some(UpdateServiceAccountOutput {
             service_account: safe_account_id(id, evidence),
-        },
+        }),
         &format!("{UPDATE}: {message}"),
         evidence,
     )

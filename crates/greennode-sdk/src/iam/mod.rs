@@ -118,6 +118,7 @@ impl Client {
         .await
         .map_err(|error| {
             let error = wire::account_error(operation.id, error.into_parts().0);
+            let error = wire::private_status_error(operation, error, evidence);
             failure(screen_error(error, evidence))
         })?;
         Ok(output)

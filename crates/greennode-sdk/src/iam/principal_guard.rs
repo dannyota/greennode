@@ -8,7 +8,8 @@ use serde_json::value::RawValue;
 use super::wire::{self, Wire};
 use super::writes::{confirmed_identity, guard_failed, guard_refusal};
 use super::{
-    Action, Api, Client, LIST_CAP, OBJECT_CAP, Policy, PolicySummary, WriteError, read_operation,
+    Action, Api, Client, LIST_CAP, OBJECT_CAP, Operation, Policy, PolicySummary, WriteError,
+    read_operation,
 };
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::{Shape, ShapeField};
@@ -99,7 +100,7 @@ impl Client {
                 Some(WriteError::PrivilegedChange),
             ));
         }
-        if evidence.text_reflects(id) {
+        if evidence.id_reflects(id) {
             return Err(guard_failed(super::invalid_input(
                 "IAM request operand withheld".into(),
             )));
@@ -116,7 +117,7 @@ impl Client {
             .fetch(
                 ctx,
                 Api::Policies,
-                &read_operation("iam.ListActions", ACTIONS, LIST_CAP, false),
+                &guard_read("iam.ListActions", ACTIONS, LIST_CAP),
                 &[],
                 &[("product", "iam")],
                 evidence,
@@ -152,7 +153,7 @@ impl Client {
             .fetch(
                 ctx,
                 Api::Policies,
-                &read_operation(op, route, LIST_CAP, false),
+                &guard_read(op, route, LIST_CAP),
                 &[id],
                 &[("pageNumber", "0"), ("pageSize", "10000")],
                 evidence,
@@ -203,7 +204,7 @@ impl Client {
             .fetch(
                 ctx,
                 Api::Policies,
-                &read_operation("iam.GetPolicy", POLICY, OBJECT_CAP, false),
+                &guard_read("iam.GetPolicy", POLICY, OBJECT_CAP),
                 &[("PolicyID", id)],
                 &[],
                 evidence,
@@ -232,8 +233,15 @@ impl Client {
     }
 }
 
+fn guard_read(id: &'static str, route: &'static str, cap: usize) -> Operation {
+    Operation {
+        sensitive: true,
+        ..read_operation(id, route, cap, false)
+    }
+}
+
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
-fn require_safe<O>(
+pub(super) fn require_safe<O>(
     value: &impl Serialize,
     message: &str,
     evidence: &Evidence,

@@ -102,6 +102,7 @@ impl Client {
         .map(|(_, Body(value))| value)
         .map_err(|failed| {
             let (error, _, dispatch) = failed.into_parts();
+            let error = super::wire::private_status_error(operation, error, evidence);
             Failure::new(screen_error(error, evidence), None, dispatch)
         })
     }
@@ -116,12 +117,20 @@ impl Client {
             .fetch::<_, O>(
                 ctx,
                 Api::Accounts,
-                &read_operation(
-                    "iam.GetCallerIdentity",
-                    "accounts-api/v1/auth/userinfo",
-                    OBJECT_CAP,
-                    false,
-                ),
+                &Operation {
+                    sensitive: matches!(
+                        op,
+                        "iam.UpdateServiceAccount"
+                            | "iam.DeleteServiceAccount"
+                            | "iam.ResetServiceAccountSecret"
+                    ),
+                    ..read_operation(
+                        "iam.GetCallerIdentity",
+                        "accounts-api/v1/auth/userinfo",
+                        OBJECT_CAP,
+                        false,
+                    )
+                },
                 &[],
                 &[],
                 evidence,
