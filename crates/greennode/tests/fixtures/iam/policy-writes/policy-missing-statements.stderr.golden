@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"create-policy needs Statements: pass --document-file \u003cpath\u003e or set Statements with --cli-input-json"}}

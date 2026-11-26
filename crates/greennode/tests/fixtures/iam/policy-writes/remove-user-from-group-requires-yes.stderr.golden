@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"iam remove-user-from-group removes permissions; pass --yes to confirm"}}

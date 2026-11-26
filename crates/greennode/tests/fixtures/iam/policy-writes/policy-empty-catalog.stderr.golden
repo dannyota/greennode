@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"iam: guard: refused: the account's IAM action list names no write action"}}

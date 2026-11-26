@@ -31,6 +31,8 @@ pub enum WriteError {
     UserCreateUncertain,
     /// A user administration write may have reached the service.
     UserWriteUncertain,
+    /// The policy is managed by GreenNode.
+    ManagedPolicy,
     /// A resource still has an attachment that prevents deletion.
     ResourceInUse,
 }
@@ -211,6 +213,7 @@ impl Client {
             .await
             .map_err(guard_failed)?;
         if evidence.id_reflects(&caller.user_id)
+            || evidence.id_reflects(&caller.account_id.to_string())
             || [&caller.user_type, &caller.username]
                 .into_iter()
                 .any(|v| evidence.text_reflects(v))
@@ -263,7 +266,7 @@ pub(super) fn not_sent<O>(error: Error) -> Failure<O> {
     Failure::new(error, None, WriteDispatch::NotSent)
 }
 
-fn withheld_operand<O>() -> Failure<O> {
+pub(super) fn withheld_operand<O>() -> Failure<O> {
     not_sent(
         super::invalid_input::<O>("IAM request operand withheld".into())
             .into_parts()
@@ -286,11 +289,25 @@ pub(super) fn settle<O>(
     evidence: &Evidence,
 ) -> Failure<O> {
     let cause = failed.into_parts().0;
+    unsettled(cause, partial, evidence, |cause| {
+        format!(
+            "{message}: vngcloud: write outcome not confirmed: {}",
+            error_reason(cause)
+        )
+    })
+}
+
+pub(super) fn unsettled<O>(
+    cause: Error,
+    partial: Option<O>,
+    evidence: &Evidence,
+    advice: impl FnOnce(&Error) -> String,
+) -> Failure<O> {
     const UNCONFIRMED: &str = "vngcloud: write outcome not confirmed";
     let partial = partial.filter(|_| evidence.can_retain_partial());
     let advice = partial
         .is_some()
-        .then(|| format!("{message}: {UNCONFIRMED}: {}", error_reason(&cause)))
+        .then(|| advice(&cause))
         .filter(|message| !evidence.text_reflects(message));
     let error = Error::new(ErrorClass::NotSettled)
         .with_cause(cause)

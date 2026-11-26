@@ -1,9 +1,12 @@
 //! IAM caller, user, service-account, policy, and group operations.
 
 mod accounts;
+mod attachments;
 mod groups;
 mod models;
 mod policies;
+mod policy_guard;
+mod policy_writes;
 mod principal_guard;
 mod service_account_writes;
 mod user_guard;
@@ -34,9 +37,11 @@ use crate::{ApiError, Config, Error, ErrorClass, Failure, RequestContext, WriteD
 use wire::{Body, Screen, Wire};
 
 pub use accounts::*;
+pub use attachments::*;
 pub use groups::*;
 pub use models::*;
 pub use policies::*;
+pub use policy_writes::*;
 pub use service_account_writes::*;
 pub use user_mfa::*;
 pub use user_writes::*;

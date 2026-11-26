@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"iam: guard: iam.AttachGroupPolicy: the group is not in iam mode"}}

@@ -1,0 +1,1 @@
+{"error":{"code":"SelfChange","message":"iam: refused: target is the caller: iam.AttachGroupPolicy: the change would affect the caller's own rights"}}

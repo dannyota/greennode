@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"iam attach-user-policy grants permissions; pass --yes to confirm"}}

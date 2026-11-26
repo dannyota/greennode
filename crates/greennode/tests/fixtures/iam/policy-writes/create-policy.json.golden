@@ -1,0 +1,23 @@
+{
+  "Policy": {
+    "ID": "pol-1",
+    "Name": "reader",
+    "Description": "",
+    "Manager": "user",
+    "Scope": "account",
+    "Root": "123",
+    "Statements": [
+      {
+        "Effect": "allow",
+        "Actions": [
+          "iam:ListActions"
+        ],
+        "Resources": [
+          "*"
+        ],
+        "Condition": null
+      }
+    ],
+    "CreatedAt": 1000
+  }
+}

@@ -1,0 +1,1 @@
+{"error":{"code":"ServerError","message":"Bad Gateway","status":502,"operation":"iam.AttachGroupPolicy"}}

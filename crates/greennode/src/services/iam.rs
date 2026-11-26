@@ -139,8 +139,46 @@ macro_rules! operation {
     }};
 }
 
+mod policy_writes;
 mod service_account_writes;
 mod user_writes;
+
+macro_rules! permission_change {
+    ($input:ident, $method:ident, $name:literal, $go:literal, $help:literal,
+     $reason:literal, [$($flag:ident => $field:expr),+ $(,)?]) => {{
+        const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
+            defaults: || sdk::$input::new("", ""),
+            fields: &[$($field),+],
+            allow_json: true,
+            allow_query: true,
+            project_binding: None,
+            pre_guard: Some(check_input_source),
+            guard: None,
+        };
+        Operation {
+            name: $name,
+            sdk_operation: concat!("iam.", $go),
+            short_help: $help,
+            example: None,
+            presence_required_fields: &[],
+            inherited_bindings: &[],
+            kind: Kind::DestructiveWrite,
+            flags: &[$($flag),+],
+            json_fields: &[],
+            extra_flags: &[],
+            notes: &[],
+            handler: Some(Handler::new(&INPUT, |op, matches, invocation| {
+                Box::pin(dispatch::management_with_confirmation(
+                    invocation, op, matches, &INPUT,
+                    |ctx, config, input| Box::pin(async move {
+                        dispatch::project_result(sdk::Client::new(config).$method(ctx, input.clone()).await, std::convert::identity)
+                    }),
+                    concat!("iam ", $name, " ", $reason, "; pass --yes to confirm"),
+                ))
+            })),
+        }
+    }};
+}
 
 const PAGE_NOTE: &str =
     "Returns one zero-based page. The default size is 10000. Unknown page metadata is null.";
@@ -191,6 +229,7 @@ pub(super) const SERVICE: Service = Service {
         },
         write_rule!(SelfChange, 41),
         write_rule!(PrivilegedChange, 42),
+        write_rule!(ManagedPolicy, 43),
         write_rule!(ResourceInUse, 44),
     ],
     operations: &[
@@ -199,6 +238,58 @@ pub(super) const SERVICE: Service = Service {
         user_writes::RESET,
         user_writes::ENABLE_MFA,
         user_writes::DISABLE_MFA,
+        permission_change!(
+            AddUserToGroupInput, add_user_to_group, "add-user-to-group", "AddUserToGroup",
+            "Add an IAM user to a group", "grants permissions", [
+                GROUP_ID => required_string!(sdk::AddUserToGroupInput, group_id, GROUP_ID, "GroupID"),
+                USER_ID => required_string!(sdk::AddUserToGroupInput, user_id, USER_ID, "UserID"),
+            ]
+        ),
+        permission_change!(
+            AttachGroupPolicyInput, attach_group_policy, "attach-group-policy", "AttachGroupPolicy",
+            "Attach an IAM policy to a group", "grants permissions", [
+                POLICY_ID => required_string!(sdk::AttachGroupPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                GROUP_ID => required_string!(sdk::AttachGroupPolicyInput, group_id, GROUP_ID, "GroupID"),
+            ]
+        ),
+        permission_change!(
+            AttachUserPolicyInput, attach_user_policy, "attach-user-policy", "AttachUserPolicy",
+            "Attach an IAM policy to a user", "grants permissions", [
+                POLICY_ID => required_string!(sdk::AttachUserPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                USER_ID => required_string!(sdk::AttachUserPolicyInput, user_id, USER_ID, "UserID"),
+            ]
+        ),
+        permission_change!(
+            DetachGroupPolicyInput, detach_group_policy, "detach-group-policy", "DetachGroupPolicy",
+            "Detach an IAM policy from a group", "removes permissions", [
+                POLICY_ID => required_string!(sdk::DetachGroupPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                GROUP_ID => required_string!(sdk::DetachGroupPolicyInput, group_id, GROUP_ID, "GroupID"),
+            ]
+        ),
+        permission_change!(
+            DetachUserPolicyInput, detach_user_policy, "detach-user-policy", "DetachUserPolicy",
+            "Detach an IAM policy from a user", "removes permissions", [
+                POLICY_ID => required_string!(sdk::DetachUserPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                USER_ID => required_string!(sdk::DetachUserPolicyInput, user_id, USER_ID, "UserID"),
+            ]
+        ),
+        permission_change!(
+            RemoveUserFromGroupInput, remove_user_from_group, "remove-user-from-group", "RemoveUserFromGroup",
+            "Remove an IAM user from a group", "removes permissions", [
+                GROUP_ID => required_string!(sdk::RemoveUserFromGroupInput, group_id, GROUP_ID, "GroupID"),
+                USER_ID => required_string!(sdk::RemoveUserFromGroupInput, user_id, USER_ID, "UserID"),
+            ]
+        ),
+        policy_writes::CREATE,
+        operation!(
+            DestructiveWrite; DeletePolicyInput, || sdk::DeletePolicyInput::new(""), delete_policy,
+            "delete-policy", "DeletePolicy", "Delete an unattached customer IAM policy",
+            Some("greennode iam delete-policy --policy-id <policy-id> --yes"),
+            &["Refuses managed policies and policies attached to groups, users, or service accounts."], [
+                POLICY_ID => required_string!(sdk::DeletePolicyInput, policy_id, POLICY_ID, "PolicyID"),
+            ]
+        ),
+        policy_writes::UPDATE,
         service_account_writes::CREATE,
         service_account_writes::RESET,
         operation!(

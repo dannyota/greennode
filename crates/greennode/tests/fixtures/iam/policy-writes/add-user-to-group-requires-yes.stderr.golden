@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"iam add-user-to-group grants permissions; pass --yes to confirm"}}

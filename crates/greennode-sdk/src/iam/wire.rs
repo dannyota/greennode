@@ -158,6 +158,22 @@ impl Wire for Value {
     }
 }
 
+pub(super) fn exact_value(raw: &RawValue) -> Result<Value, serde_json::Error> {
+    match raw.get().as_bytes().first() {
+        Some(b'{') => serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())?
+            .into_iter()
+            .map(|(key, value)| Ok((key, exact_value(value)?)))
+            .collect::<Result<_, _>>()
+            .map(Value::Object),
+        Some(b'[') => serde_json::from_str::<Vec<&RawValue>>(raw.get())?
+            .into_iter()
+            .map(exact_value)
+            .collect::<Result<_, _>>()
+            .map(Value::Array),
+        _ => serde_json::from_str(raw.get()),
+    }
+}
+
 pub(super) fn epoch(raw: &RawValue) -> Result<i64, serde_json::Error> {
     match raw.get().as_bytes().first() {
         Some(b'"') => {
