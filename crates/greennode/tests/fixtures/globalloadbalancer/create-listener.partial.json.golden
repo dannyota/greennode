@@ -1,0 +1,20 @@
+{
+  "Listener": {
+    "ID": "listener-1",
+    "Name": "",
+    "Description": "",
+    "Protocol": "",
+    "Port": 0,
+    "GlobalLoadBalancerID": "",
+    "GlobalPoolID": "",
+    "TimeoutClient": 0,
+    "TimeoutMember": 0,
+    "TimeoutConnection": 0,
+    "AllowedCIDRs": "",
+    "Headers": null,
+    "Status": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  }
+}

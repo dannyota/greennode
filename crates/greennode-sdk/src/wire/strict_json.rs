@@ -21,6 +21,7 @@ enum FieldShape {
     Folded,
     Exact,
     DuplicatesOnly,
+    Canonical,
 }
 
 pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>, limit: usize) -> Result<(), Error> {
@@ -33,6 +34,14 @@ pub(crate) fn validate_exact_shape(
     limit: usize,
 ) -> Result<(), Error> {
     validate_fields(body, shape, limit, FieldShape::Exact)
+}
+
+pub(crate) fn validate_canonical_shape(
+    body: &[u8],
+    shape: &Shape<'_>,
+    limit: usize,
+) -> Result<(), Error> {
+    validate_fields(body, shape, limit, FieldShape::Canonical)
 }
 
 fn validate_fields(
@@ -78,6 +87,9 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>, mode: FieldShape) -> Result<()
                         return Err(Error);
                     }
                     if let Some(field) = fields.get(index) {
+                        if matches!(mode, FieldShape::Canonical) && field.name != name {
+                            return Err(Error);
+                        }
                         let child_mode = if matches!(mode, FieldShape::Exact) && field.name != name
                         {
                             FieldShape::DuplicatesOnly

@@ -15,14 +15,14 @@ use crate::wire::product::{
     options::Options,
     redirect::{Classification, Retry},
     response,
-    sender::{BearerSource, BearerToken, Response},
+    sender::{BearerSource, BearerToken, Response, SentCredentials},
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WRITE_OK: &[StatusCode] = &[StatusCode::OK, StatusCode::ACCEPTED];
 const CREDENTIAL_INPUT: &str = "a request value contains a credential";
-const PROVENANCE: &str =
+pub(super) const PROVENANCE: &str =
     "vngcloud: invalid config: GLB writes require SDK IAM-user login and default endpoints";
 
 pub(super) struct Write<'a> {
@@ -81,12 +81,30 @@ impl Write<'_> {
         path: &[&str],
         body: Option<&Value>,
     ) -> Result<Response, Failure<()>> {
+        self.request_on(
+            ctx,
+            op,
+            self.client
+                .session
+                .endpoints()
+                .global_load_balancer
+                .as_ref(),
+            path,
+            body,
+        )
+        .await
+    }
+
+    pub(super) async fn request_on(
+        &mut self,
+        ctx: &RequestContext,
+        op: &Operation,
+        base: Option<&Base>,
+        path: &[&str],
+        body: Option<&Value>,
+    ) -> Result<Response, Failure<()>> {
         let session = &self.client.session;
-        let base = session
-            .endpoints()
-            .global_load_balancer
-            .as_ref()
-            .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
+        let base = base.ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
         let mut jitter = || session.retry_jitter();
         let runtime = session
             .runtime(ctx, &mut jitter)
@@ -166,6 +184,16 @@ impl Write<'_> {
         partial: Option<O>,
         uncertain: &'static str,
     ) -> Failure<O> {
+        self.rejection_with_message(failure, partial, uncertain, None)
+    }
+
+    pub(super) fn rejection_with_message<O: Serialize>(
+        &self,
+        failure: Failure<()>,
+        partial: Option<O>,
+        uncertain: &'static str,
+        fixed_message: Option<&str>,
+    ) -> Failure<O> {
         let (error, _, dispatch) = failure.into_parts();
         if dispatch == WriteDispatch::NotSent {
             return Failure::new(error, None, dispatch);
@@ -176,11 +204,12 @@ impl Write<'_> {
             .and_then(|status| StatusCode::from_u16(status).ok())
             .filter(StatusCode::is_client_error)
         {
-            return Failure::new(
-                status_rejection(self.id, status, self.evidence.credentials()),
-                None,
-                dispatch,
-            );
+            let credentials = self.evidence.credentials();
+            let error = match fixed_message {
+                Some(message) => api_rejection(self.id, status, message, false, credentials),
+                None => status_rejection(self.id, status, credentials),
+            };
+            return Failure::new(error, None, dispatch);
         }
         self.finish(Settlement::Unknown(uncertain), partial)
     }
@@ -284,31 +313,9 @@ pub(super) fn guard_operation(id: &'static str, template: &'static str) -> Opera
 pub(super) fn status_rejection(
     id: &'static str,
     status: StatusCode,
-    credentials: &crate::wire::product::sender::SentCredentials,
+    credentials: &SentCredentials,
 ) -> Error {
-    let status_error = Error::from_api(ApiError::new(
-        id,
-        Some(status.as_u16()),
-        SafeText::new("", &[]),
-        SafeText::new("", &[]),
-        false,
-    ));
-    let class = status_error.class();
-    let api = status_error.api_error();
-    let safe_status = Some(status.as_u16())
-        .filter(|value| !response::reflects_credential_forms(&value.to_string(), credentials));
-    let error = Error::from_api(ApiError::without_fallback(
-        id,
-        safe_status,
-        response::sanitize_error_text(api.map_or("", ApiError::code), credentials),
-        response::sanitize_error_text(api.map_or("", ApiError::message), credentials),
-        false,
-    ));
-    if safe_status.is_none() && class != ErrorClass::Api {
-        error.with_cause(Error::new(class))
-    } else {
-        error
-    }
+    api_rejection(id, status, "", false, credentials)
 }
 
 pub(super) fn rejected_response(
@@ -317,7 +324,6 @@ pub(super) fn rejected_response(
     body: Option<&Value>,
     fixed_message: Option<&str>,
 ) -> Error {
-    let status = Some(reply.status.as_u16());
     let classified = response::classify(
         op.id,
         reply.status,
@@ -328,28 +334,43 @@ pub(super) fn rejected_response(
     )
     .err();
     let api = classified.as_ref().and_then(|error| error.api_error());
-    let status_error = Error::from_api(ApiError::new(
+    let message = fixed_message.unwrap_or_else(|| provider_message(reply, api, body));
+    api_rejection(
         op.id,
-        status,
+        reply.status,
+        message,
+        api.is_some_and(ApiError::retryable),
+        &reply.credentials,
+    )
+}
+
+fn api_rejection(
+    id: &'static str,
+    status: StatusCode,
+    message: &str,
+    retryable: bool,
+    credentials: &SentCredentials,
+) -> Error {
+    let status_error = Error::from_api(ApiError::new(
+        id,
+        Some(status.as_u16()),
         SafeText::new("", &[]),
         SafeText::new("", &[]),
         false,
     ));
     let code = status_error.api_error().map_or("", ApiError::code);
     let class = status_error.class();
-    let message = fixed_message.unwrap_or_else(|| provider_message(reply, api, body));
-    let safe = |text| response::sanitize_error_text(text, &reply.credentials);
-    let status = status.filter(|value| {
-        !response::reflects_credential_forms(&value.to_string(), &reply.credentials)
-    });
+    let safe = |text| response::sanitize_error_text(text, credentials);
+    let safe_status = Some(status.as_u16())
+        .filter(|value| !response::reflects_credential_forms(&value.to_string(), credentials));
     let error = Error::from_api(ApiError::without_fallback(
-        op.id,
-        status,
+        id,
+        safe_status,
         safe(code),
         safe(message),
-        api.is_some_and(ApiError::retryable),
+        retryable,
     ));
-    if status.is_none() && class != ErrorClass::Api {
+    if safe_status.is_none() && class != ErrorClass::Api {
         error.with_cause(Error::new(class))
     } else {
         error

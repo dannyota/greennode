@@ -1,3 +1,4 @@
+mod child;
 mod writes;
 
 use super::*;

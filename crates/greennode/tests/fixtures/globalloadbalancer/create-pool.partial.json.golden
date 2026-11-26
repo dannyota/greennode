@@ -1,0 +1,33 @@
+{
+  "Pool": {
+    "ID": "pool-1",
+    "Name": "",
+    "Description": "",
+    "GlobalLoadBalancerID": "",
+    "Algorithm": "",
+    "StickySession": null,
+    "TLSEnabled": null,
+    "Protocol": "",
+    "Status": "",
+    "Health": null,
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  },
+  "PoolMember": {
+    "ID": "group-1",
+    "Name": "",
+    "Description": "",
+    "Region": "",
+    "GlobalPoolID": "",
+    "GlobalLoadBalancerID": "",
+    "TrafficDial": 0,
+    "VPCID": "",
+    "Type": "",
+    "Status": "",
+    "Members": [],
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  }
+}

@@ -1,0 +1,1 @@
+{"AllowedCIDRs":"192.0.2.1/32,198.51.100.2/32","CreatedAt":"","DeletedAt":null,"Description":"","GlobalLoadBalancerID":"glb-1","GlobalPoolID":"pool-1","Headers":null,"ID":"listener-1","Name":"demo-listener","Port":443,"Protocol":"TCP","Status":"ACTIVE","TimeoutClient":50,"TimeoutConnection":5,"TimeoutMember":50,"UpdatedAt":""}

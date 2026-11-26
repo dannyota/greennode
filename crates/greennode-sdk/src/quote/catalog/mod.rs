@@ -255,7 +255,7 @@ pub(crate) fn value(op: &'static str, raw: &RawValue) -> Result<Value, Box<Error
     token(raw).map_err(|_| request::invalid(op, 200))
 }
 
-fn unique<'a>(
+pub(crate) fn unique<'a>(
     op: &'static str,
     ids: impl IntoIterator<Item = &'a str>,
     rule: PathIds,

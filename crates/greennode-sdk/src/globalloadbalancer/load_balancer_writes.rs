@@ -377,15 +377,24 @@ impl Write<'_> {
     }
 }
 
-fn decode<T: serde::de::DeserializeOwned + Default>(
+pub(super) fn decode<T: serde::de::DeserializeOwned + Default>(
     operation: &Operation,
     bytes: &[u8],
     shape: &Shape<'_>,
 ) -> Result<T, Box<Error>> {
+    decode_with(operation, bytes, shape, strict_json::validate_shape)
+}
+
+pub(super) fn decode_with<T: serde::de::DeserializeOwned + Default>(
+    operation: &Operation,
+    bytes: &[u8],
+    shape: &Shape<'_>,
+    validate: impl FnOnce(&[u8], &Shape<'_>, usize) -> Result<(), strict_json::Error>,
+) -> Result<T, Box<Error>> {
     let body = go_json(bytes);
     let raw = serde_json::from_str::<Option<&serde_json::value::RawValue>>(&body)
         .map_err(|_| Box::new(response_error(operation, DecodeError::MalformedJson)))?;
-    strict_json::validate_shape(body.as_bytes(), shape, operation.cap)
+    validate(body.as_bytes(), shape, operation.cap)
         .map_err(|_| Box::new(response_error(operation, DecodeError::InvalidShape)))?;
     raw.map(|raw| {
         serde_json::from_str(raw.get())

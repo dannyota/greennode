@@ -2,6 +2,44 @@
 
 # CLI: GlobalLoadBalancer
 
+## create-listener
+
+Kind: Write.
+
+Each write checks the configured region and the load balancer's package against
+the account catalogs. SDK IAM-user login and default GLB, vServer, and auth
+endpoints are required.
+
+Requires `--yes`. Run after `create-pool`. The only pool and its private backend
+must be settled, and the load balancer must have no listener.
+
+Repeat `--allowed-cidrs` for canonical IPv4 networks from `/8` through `/32`.
+Host bits, duplicates, and collectively unrestricted sources are refused. Use
+`/32` for one known source. Read-back verifies the CIDR configuration. Provider
+enforcement remains separate.
+
+No quote is available and the request carries no price or payment field.
+GreenNode bills child usage under the account's terms. The SDK neither selects
+nor verifies the payment source. Deleting does not promise a refund.
+
+The SDK sends one create and confirms by read-back. On `NotSettled` or
+`WriteFailed`, partial output holds only known IDs. Inspect inventory and
+billing before another mutation.
+
+| Flag                  | Type       | Required |
+| --------------------- | ---------- | -------- |
+| `--load-balancer-id`  | `string`   | yes      |
+| `--name`              | `string`   | yes      |
+| `--pool-id`           | `string`   | yes      |
+| `--port`              | `int`      | yes      |
+| `--allowed-cidrs`     | `[]string` | yes      |
+| `--backend-server-id` | `string`   | yes      |
+| `--project-id`        | `string`   | yes      |
+
+```sh
+greennode globalloadbalancer create-listener --load-balancer-id <glb-id> --name <name> --pool-id <pool-id> --port <port> --allowed-cidrs <cidr> --backend-server-id <server-id> --project-id <project-id> --yes
+```
+
 ## create-load-balancer
 
 Kind: Write.
@@ -25,6 +63,65 @@ mutation.
 greennode globalloadbalancer create-load-balancer --name <name> --package-id <package-id> --yes
 ```
 
+## create-pool
+
+Kind: Write.
+
+Each write checks the configured region and the load balancer's package against
+the account catalogs. SDK IAM-user login and default GLB, vServer, and auth
+endpoints are required.
+
+Requires `--yes`. Create the pool before `create-listener`. The load balancer
+must have no pool or listener. The backend is the server's private fixed IP,
+verified against the VPC and subnet under `--project-id`.
+
+No quote is available and the request carries no price or payment field.
+GreenNode bills child usage under the account's terms. The SDK neither selects
+nor verifies the payment source. Deleting does not promise a refund.
+
+The pool and monitor must become `ACTIVE`. Member health is reported. A new
+backend can be `OFFLINE` or `UNHEALTHY`.
+
+The SDK sends one create and confirms by read-back. On `NotSettled` or
+`WriteFailed`, partial output holds only known IDs. Inspect inventory and
+billing before another mutation.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--load-balancer-id`  | `string` | yes      |
+| `--name`              | `string` | yes      |
+| `--member-name`       | `string` | yes      |
+| `--backend-server-id` | `string` | yes      |
+| `--backend-vpc-id`    | `string` | yes      |
+| `--backend-subnet-id` | `string` | yes      |
+| `--backend-port`      | `int`    | yes      |
+| `--project-id`        | `string` | yes      |
+
+```sh
+greennode globalloadbalancer create-pool --load-balancer-id <glb-id> --name <name> --member-name <member-name> --backend-server-id <server-id> --backend-vpc-id <vpc-id> --backend-subnet-id <subnet-id> --backend-port <port> --project-id <project-id> --yes
+```
+
+## delete-listener
+
+Kind: Write, destructive.
+
+Each write checks the configured region and the load balancer's package against
+the account catalogs. SDK IAM-user login and default GLB, vServer, and auth
+endpoints are required.
+
+Requires `--yes`. Run before `delete-pool`. The SDK confirms absence from the
+complete listener list and checks that the load balancer, pool, and member group
+remain. Deleting does not promise a refund.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--listener-id`      | `string` | yes      |
+
+```sh
+greennode globalloadbalancer delete-listener --load-balancer-id <glb-id> --listener-id <listener-id> --yes
+```
+
 ## delete-load-balancer
 
 Kind: Write, destructive.
@@ -41,6 +138,30 @@ and waits up to 10 minutes for a detail read to confirm absence.
 
 ```sh
 greennode globalloadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes
+```
+
+## delete-pool
+
+Kind: Write, destructive.
+
+Each write checks the configured region and the load balancer's package against
+the account catalogs. SDK IAM-user login and default GLB, vServer, and auth
+endpoints are required.
+
+Requires `--yes`. Run after `delete-listener` and before deleting the load
+balancer or backend server. The only pool and health monitor must be `ACTIVE`,
+and its private backend must report a health status.
+
+The SDK verifies the load balancer remains and the pool and its member group are
+absent. Deleting does not promise a refund.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--pool-id`          | `string` | yes      |
+
+```sh
+greennode globalloadbalancer delete-pool --load-balancer-id <glb-id> --pool-id <pool-id> --yes
 ```
 
 ## get-listener
