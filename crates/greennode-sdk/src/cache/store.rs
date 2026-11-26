@@ -78,27 +78,43 @@ impl Store {
 
     #[cfg(unix)]
     pub(super) fn verify_identity(&self, name: &str, file: &File) -> Result<(), Box<crate::Error>> {
+        if self.identity_matches(name, file)? {
+            Ok(())
+        } else {
+            Err(unavailable())
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn identity_matches(
+        &self,
+        name: &str,
+        file: &File,
+    ) -> Result<bool, Box<crate::Error>> {
         validate_owner_file(file)?;
-        let fd = rustix::fs::openat(
+        let fd = match rustix::fs::openat(
             &self.directory,
             name,
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::empty(),
-        )
-        .map_err(|_| unavailable())?;
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(false),
+            Err(_) => return Err(unavailable()),
+        };
         let named = File::from(fd);
         validate_owner_file(&named)?;
         let first = same_file::Handle::from_file(file.try_clone().map_err(|_| unavailable())?)
             .map_err(|_| unavailable())?;
         let second = same_file::Handle::from_file(named).map_err(|_| unavailable())?;
-        if first != second {
-            return Err(unavailable());
-        }
-        Ok(())
+        Ok(first == second)
     }
 
     #[cfg(unix)]
-    pub(super) fn read_marker(&self, name: &str) -> Result<Option<Vec<u8>>, Box<crate::Error>> {
+    pub(super) fn read_marker(
+        &self,
+        name: &str,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, Box<crate::Error>> {
         validate_name(name)?;
         let fd = match rustix::fs::openat(
             &self.directory,
@@ -112,7 +128,7 @@ impl Store {
         };
         let file = File::from(fd);
         validate_owner_file(&file)?;
-        let mut data = Vec::with_capacity(32);
+        let mut data = Zeroizing::new(Vec::with_capacity(33));
         (&file)
             .take(32)
             .read_to_end(&mut data)

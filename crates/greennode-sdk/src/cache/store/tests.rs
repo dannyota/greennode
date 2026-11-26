@@ -70,7 +70,9 @@ fn round_trip() {
 #[test]
 fn rejects_symlink_file() {
     let dir = Dir::new();
+    use std::os::unix::fs::PermissionsExt;
     std::fs::write(dir.0.join("target"), "toy").unwrap();
+    std::fs::set_permissions(dir.0.join("target"), std::fs::Permissions::from_mode(0o600)).unwrap();
     std::os::unix::fs::symlink("target", dir.0.join("entry.json")).unwrap();
     let store = Store::open(&dir.0).unwrap();
     assert!(store.read("entry.json").is_err());

@@ -42,8 +42,8 @@ pub(crate) struct Entry {
 
 struct Parsed<'a> {
     token: &'a str,
-    expires: Option<String>,
-    obtained: Option<String>,
+    expires: Option<&'a serde_json::value::RawValue>,
+    obtained: Option<&'a serde_json::value::RawValue>,
 }
 
 impl<'de> Deserialize<'de> for Parsed<'de> {
@@ -107,8 +107,14 @@ impl<'de> Deserialize<'de> for Parsed<'de> {
                                         }
                                     };
                                 }
-                                1 => value.expires = map.next_value::<Option<String>>()?,
-                                2 => value.obtained = map.next_value::<Option<String>>()?,
+                                1 => {
+                                    value.expires = map
+                                        .next_value::<Option<&'de serde_json::value::RawValue>>()?
+                                }
+                                2 => {
+                                    value.obtained = map
+                                        .next_value::<Option<&'de serde_json::value::RawValue>>()?
+                                }
                                 _ => return Err(serde::de::Error::custom("invalid field")),
                             }
                         }
@@ -181,6 +187,44 @@ impl<'de> Deserialize<'de> for Strict {
     }
 }
 
+fn timestamp(raw: &serde_json::value::RawValue) -> Option<OffsetDateTime> {
+    let text = raw.get().strip_prefix('"')?.strip_suffix('"')?;
+    if !text.contains(char::from(92)) {
+        return OffsetDateTime::parse(text, &Rfc3339).ok();
+    }
+    let mut decoded = Zeroizing::new(String::with_capacity(text.len()));
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        let value = if character == char::from(92) {
+            match chars.next()? {
+                '"' => '"',
+                '\\' => '\\',
+                '/' => '/',
+                'b' => '\u{0008}',
+                'f' => '\u{000c}',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                'u' => {
+                    let mut code = 0u32;
+                    for _ in 0..4 {
+                        code = code * 16 + chars.next()?.to_digit(16)?;
+                    }
+                    char::from_u32(code)?
+                }
+                _ => return None,
+            }
+        } else {
+            character
+        };
+        if !value.is_ascii() {
+            return None;
+        }
+        decoded.push(value);
+    }
+    OffsetDateTime::parse(&decoded, &Rfc3339).ok()
+}
+
 #[allow(dead_code)]
 pub(crate) fn decode(
     raw: &crate::Secret,
@@ -190,11 +234,11 @@ pub(crate) fn decode(
     let parsed: Parsed<'_> = serde_json::from_str(raw.expose_secret()).ok()?;
     let zero = OffsetDateTime::parse("0001-01-01T00:00:00Z", &Rfc3339).ok()?;
     let expires = match parsed.expires {
-        Some(s) => OffsetDateTime::parse(&s, &Rfc3339).ok()?,
+        Some(s) => timestamp(s)?,
         None => zero,
     };
     let obtained = match parsed.obtained {
-        Some(s) => OffsetDateTime::parse(&s, &Rfc3339).ok()?,
+        Some(s) => timestamp(s)?,
         None => zero,
     };
     if parsed.token.is_empty() || expires - now <= time::Duration::seconds(30) {
@@ -220,13 +264,33 @@ struct Wire<'a> {
     #[serde(rename = "accessToken")]
     token: &'a str,
     #[serde(rename = "expiresAt")]
-    expires: String,
+    expires: &'a str,
     #[serde(rename = "obtainedAt")]
-    obtained: String,
+    obtained: &'a str,
 }
 
 #[allow(dead_code)]
-pub(crate) fn write(store: &Store, name: &str, entry: &Entry) -> Result<(), Box<crate::Error>> {
+pub(crate) fn write(
+    store: &Store,
+    name: &str,
+    entry: &Entry,
+    context: &crate::RequestContext,
+    clock: &dyn crate::Clock,
+) -> Result<(), Box<crate::Error>> {
+    write_with_guard(store, name, entry, || {
+        context
+            .check(clock)
+            .map_or(Ok(()), |end| Err(Box::new(end.into())))
+    })
+}
+
+fn write_with_guard(
+    store: &Store,
+    name: &str,
+    entry: &Entry,
+    guard: impl Fn() -> Result<(), Box<crate::Error>>,
+) -> Result<(), Box<crate::Error>> {
+    guard()?;
     let token = entry.token.expose_secret();
     let error = || Box::new(crate::Error::new(crate::ErrorClass::TokenCache));
     if token.len() > 65_536
@@ -236,15 +300,17 @@ pub(crate) fn write(store: &Store, name: &str, entry: &Entry) -> Result<(), Box<
     {
         return Err(error());
     }
+    let expires = Zeroizing::new(entry.expires.format(&Rfc3339).map_err(|_| error())?);
+    let obtained = Zeroizing::new(entry.obtained.format(&Rfc3339).map_err(|_| error())?);
     let wire = Wire {
         token,
-        expires: entry.expires.format(&Rfc3339).map_err(|_| error())?,
-        obtained: entry.obtained.format(&Rfc3339).map_err(|_| error())?,
+        expires: &expires,
+        obtained: &obtained,
     };
     let mut data = Zeroizing::new(Vec::with_capacity(65_536 + 512));
     serde_json::to_writer(&mut *data, &wire).map_err(|_| error())?;
     let text = std::str::from_utf8(&data).map_err(|_| error())?;
-    store.write(name, &crate::Secret::new(text))
+    store.write_guarded(name, &crate::Secret::new(text), guard)
 }
 
 #[cfg(test)]

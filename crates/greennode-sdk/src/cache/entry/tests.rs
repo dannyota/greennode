@@ -71,7 +71,8 @@ fn oversized_service_account_entry_can_be_replaced() {
         expires: now + time::Duration::seconds(120),
         obtained: now,
     };
-    assert!(write(&store, "large.json", &entry).is_ok());
+    let (context, _) = crate::RequestContext::new();
+    assert!(write(&store, "large.json", &entry, &context, &crate::SystemClock).is_ok());
     assert!(matches!(
         read(&store, "large.json", Kind::ServiceAccount, now, None),
         Ok(Some(_))
@@ -83,7 +84,10 @@ fn invalid_utf8_entry_is_miss() {
     use std::os::unix::fs::PermissionsExt;
     let dir = Dir::new();
     let path = dir.0.join("invalid.json");
-    std::fs::write(&path, [0xff]).unwrap();
+    let mut data = br#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","extra":""#.to_vec();
+    data.push(0xff);
+    data.extend_from_slice(br#""}"#);
+    std::fs::write(&path, data).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let store = Store::open(&dir.0).unwrap();
     assert!(matches!(
@@ -128,11 +132,11 @@ fn nested_duplicate_is_miss() {
 }
 #[test]
 fn duplicate_field_is_miss() {
-    rejected(r#"{"accessToken":"one","accessToken":"two"}"#);
+    rejected(r#"{"accessToken":"one","accessToken":"two","expiresAt":"2100-01-01T00:00:00Z"}"#);
 }
 #[test]
 fn duplicate_folded_field_is_miss() {
-    rejected(r#"{"accessToken":"one","ACCESSTOKEN":"two"}"#);
+    rejected(r#"{"accessToken":"one","ACCESSTOKEN":"two","expiresAt":"2100-01-01T00:00:00Z"}"#);
 }
 #[test]
 fn escaped_token_is_miss() {
@@ -155,11 +159,49 @@ fn expired_token_is_miss() {
 }
 
 #[test]
+fn escaped_timestamp_is_accepted() {
+    let raw = crate::Secret::new(format!(
+        r#"{{"accessToken":"toy","expiresAt":"{}u0032100-01-01T00:00:00Z"}}"#,
+        char::from(92)
+    ));
+    assert!(decode(&raw, OffsetDateTime::UNIX_EPOCH, None).is_some());
+}
+
+#[test]
 fn unknown_fields_are_allowed() {
     let raw = crate::Secret::new(
         r#"{"accessToken":"toy","expiresAt":"2100-01-01T00:00:00Z","unknown":{"array":[1,true,null,"text"]}}"#,
     );
     assert!(decode(&raw, OffsetDateTime::UNIX_EPOCH, None).is_some());
+}
+
+#[test]
+fn cancellation_before_token_rename_does_not_publish() {
+    let dir = Dir::new();
+    let store = Store::open(&dir.0).unwrap();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let entry = Entry {
+        token: crate::Secret::new("toy"),
+        expires: now + time::Duration::seconds(120),
+        obtained: now,
+    };
+    let (context, cancel) = crate::RequestContext::new();
+    let checks = std::cell::Cell::new(0);
+    let result = write_with_guard(&store, "entry.json", &entry, || {
+        checks.set(checks.get() + 1);
+        if checks.get() == 3 {
+            cancel.cancel();
+        }
+        context
+            .check(&crate::SystemClock)
+            .map_or(Ok(()), |end| Err(Box::new(end.into())))
+    });
+    assert_eq!(checks.get(), 3);
+    assert!(matches!(result, Err(error) if error.class() == crate::ErrorClass::Cancelled));
+    assert!(store.read("entry.json").unwrap().is_none());
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+    let (active, _) = crate::RequestContext::new();
+    assert!(write(&store, "entry.json", &entry, &active, &crate::SystemClock).is_ok());
 }
 
 #[test]
@@ -172,7 +214,8 @@ fn round_trip_and_redaction() {
         expires: now + time::Duration::seconds(120),
         obtained: now,
     };
-    write(&store, "entry.json", &entry).unwrap();
+    let (context, _) = crate::RequestContext::new();
+    write(&store, "entry.json", &entry, &context, &crate::SystemClock).unwrap();
     let data = store.read("entry.json").unwrap().unwrap();
     let shape: serde_json::Value = serde_json::from_str(data.expose_secret()).unwrap();
     assert!(shape.get("accessToken").is_some());
@@ -188,7 +231,14 @@ fn round_trip_and_redaction() {
         expires: entry.expires,
         obtained: entry.obtained,
     };
-    let error = write(&store, "invalid.json", &unsafe_entry).unwrap_err();
+    let error = write(
+        &store,
+        "invalid.json",
+        &unsafe_entry,
+        &context,
+        &crate::SystemClock,
+    )
+    .unwrap_err();
     assert!(!format!("{error:?} {error}").contains("toy-canary"));
 }
 
