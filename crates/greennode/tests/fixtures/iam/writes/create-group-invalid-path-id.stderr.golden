@@ -1,0 +1,1 @@
+{"error":{"code":"NotSettled","message":"iam.CreateGroup: group group_1 was created but the read to confirm it failed: vngcloud: write outcome not confirmed: vngcloud: invalid input: iam.GetGroup requires GroupID to match ^[A-Za-z0-9-]+$, got \"group_1\""}}

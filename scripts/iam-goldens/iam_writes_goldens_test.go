@@ -11,10 +11,12 @@ import (
 )
 
 type iamWriteReply struct {
-	Method string
-	Route  string
-	Status int
-	Body   json.RawMessage
+	Method  string
+	Route   string
+	Status  int
+	Body    json.RawMessage
+	RawBody *string
+	Headers map[string]string
 }
 
 func TestIAMWritePortGoldens(t *testing.T) {
@@ -63,7 +65,14 @@ func TestIAMWritePortGoldens(t *testing.T) {
 							w.WriteHeader(step.Status)
 							return
 						}
-						jsonHandler(step.Status, string(step.Body))(w, r)
+						body := string(step.Body)
+						if step.RawBody != nil {
+							body = *step.RawBody
+						}
+						for header, value := range step.Headers {
+							w.Header().Set(header, value)
+						}
+						jsonHandler(step.Status, body)(w, r)
 					}
 				}
 				fixture := newSvcFixture(handlers)

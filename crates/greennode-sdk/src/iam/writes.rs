@@ -200,19 +200,19 @@ pub(super) fn settle<O>(
     evidence: &Evidence,
 ) -> Failure<O> {
     let cause = failed.into_parts().0;
-    let reason = error_reason(&cause);
-    let message = format!("{message}: vngcloud: write outcome not confirmed: {reason}");
-    let message = if evidence.text_reflects(&message) {
-        "vngcloud: write outcome not confirmed"
-    } else {
-        &message
-    };
+    const UNCONFIRMED: &str = "vngcloud: write outcome not confirmed";
+    let retain = evidence.can_retain_partial();
+    let advice = retain
+        .then(|| format!("{message}: {UNCONFIRMED}: {}", error_reason(&cause)))
+        .filter(|message| !evidence.text_reflects(message));
     let error = Error::new(ErrorClass::NotSettled)
         .with_cause(cause)
-        .with_outer_detail(RecoveryAdvice::new(message));
+        .with_outer_detail(RecoveryAdvice::new(
+            advice.as_deref().unwrap_or(UNCONFIRMED),
+        ));
     Failure::new(
         error,
-        evidence.can_retain_partial().then_some(partial),
+        retain.then_some(partial),
         WriteDispatch::MayHaveBeenSent,
     )
 }
@@ -245,8 +245,13 @@ pub(super) fn error_reason(error: &Error) -> String {
         .to_owned();
     };
     let mut reason = String::new();
-    if !api.operation().is_empty() {
-        reason.push_str(api.operation());
+    let operation = api.operation();
+    let has_operation = api
+        .message()
+        .strip_prefix(operation)
+        .is_some_and(|rest| rest.starts_with(": "));
+    if !operation.is_empty() && !has_operation {
+        reason.push_str(operation);
         reason.push_str(": ");
     }
     reason.push_str(if api.message().is_empty() {

@@ -607,10 +607,13 @@ async fn run_inner(
                             location,
                         )
                         .map_err(Error::Redirect)?;
-                        if uri_contains_credential(&next, &credentials, &[])
-                            || (!matches!(auth, Auth::Bearer(_))
-                                && uri_reflects_credential_forms(&next, &credentials))
-                        {
+                        let reflected = match auth {
+                            Auth::Bearer(_) => {
+                                super::response::reflects_credential(location, &credentials)
+                            }
+                            _ => uri_reflects_credential_forms(&next, &credentials),
+                        };
+                        if reflected || uri_contains_credential(&next, &credentials, &[]) {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }
                         hops += 1;

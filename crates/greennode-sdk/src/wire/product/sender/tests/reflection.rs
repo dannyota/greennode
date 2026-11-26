@@ -387,3 +387,9 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
     assert_eq!(refused, [false, true, true]);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn redirect_base64_query_with_bearer_is_refused() {
+    let encoded = data_encoding::BASE64.encode(b"toy-first");
+    check_reflected_redirect(&format!("/next?copy={encoded}")).await;
+}

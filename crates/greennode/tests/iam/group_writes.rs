@@ -1,7 +1,8 @@
 use super::{BEARER, fixture, invoke, response};
-use greennode_sdk::testing::Server;
+use greennode_sdk::testing::{Response, Server};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 #[derive(Deserialize)]
@@ -17,13 +18,45 @@ struct Reply {
     method: String,
     route: String,
     status: u16,
+    #[serde(default)]
     body: Value,
+    #[serde(rename = "rawBody")]
+    raw_body: Option<String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
 }
 
 #[tokio::test]
 async fn writes_match_go_routes_exit_codes_and_output() {
+    check_go_goldens(|case| {
+        !matches!(
+            case,
+            "create-group-invalid-path-id"
+                | "create-group-redirect"
+                | "create-group-malformed-confirmation"
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn create_group_retains_go_redirect_status() {
+    check_go_goldens(|case| case == "create-group-redirect").await;
+}
+
+#[tokio::test]
+async fn create_group_malformed_confirmation_matches_go() {
+    check_go_goldens(|case| case == "create-group-malformed-confirmation").await;
+}
+
+#[tokio::test]
+async fn create_group_path_invalid_id_recovery_matches_go() {
+    check_go_goldens(|case| case == "create-group-invalid-path-id").await;
+}
+
+async fn check_go_goldens(select: impl Fn(&str) -> bool) {
     let cases: Vec<Case> = serde_json::from_slice(&fixture("writes/cases.json")).unwrap();
-    for case in cases {
+    for case in cases.into_iter().filter(|case| select(&case.name)) {
         let formats: &[&str] = if case.exit == 0 {
             &["json", "table", "text"]
         } else {
@@ -34,14 +67,18 @@ async fn writes_match_go_routes_exit_codes_and_output() {
                 case.replies
                     .iter()
                     .map(|reply| {
-                        response(
-                            reply.status,
-                            if reply.status == 204 {
-                                Vec::new()
-                            } else {
-                                serde_json::to_vec(&reply.body).unwrap()
-                            },
-                        )
+                        let body = if reply.status == 204 {
+                            Vec::new()
+                        } else if let Some(raw_body) = &reply.raw_body {
+                            raw_body.as_bytes().to_vec()
+                        } else {
+                            serde_json::to_vec(&reply.body).unwrap()
+                        };
+                        let mut reply_response = response(reply.status, body);
+                        if let Response::Http { headers, .. } = &mut reply_response {
+                            headers.extend(reply.headers.clone());
+                        }
+                        reply_response
                     })
                     .collect(),
             );

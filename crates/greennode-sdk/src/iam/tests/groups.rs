@@ -1,7 +1,17 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
 use super::{client, response};
-use crate::iam::{CreateGroupInput, DeleteGroupInput, UpdateGroupInput};
+use crate::iam::{Client, CreateGroupInput, DeleteGroupInput, UpdateGroupInput};
 use crate::wire::test_server::Server;
-use crate::{ErrorClass, RequestContext, WriteDispatch};
+use crate::{
+    Config, ConfigOptions, CredentialsProvider, EndpointOverrides, Error, ErrorClass,
+    RecoveryAdvice, RequestContext, Secret, Token, WriteDispatch,
+};
 use serde_json::{Value, json};
 
 #[tokio::test]
@@ -62,7 +72,6 @@ async fn create_never_replays_or_confirms_an_ambiguous_identity() {
         ("502 Bad Gateway", b"{}".as_slice()),
         ("201 Created", br#"{"id":"group-1","ID":"group-1"}"#),
         ("201 Created", br#"{"id":"toy-bearer"}"#),
-        ("201 Created", br#"{"id":"group_1"}"#),
     ] {
         let server = Server::start(vec![response(status, body)]);
         let err = client(&server, "toy-bearer")
@@ -141,4 +150,104 @@ async fn delete_requires_proven_empty_iam_membership() {
         .await
         .unwrap();
     assert!(server.heads()[2].starts_with(b"DELETE /iam/policies-api/v1/groups/group-1 "));
+}
+
+#[tokio::test]
+async fn path_invalid_group_id_is_retained_without_a_confirmation_request() {
+    let server = Server::start(vec![response("201 Created", br#"{"id":"group_1"}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let err = client(&server, "toy-bearer")
+        .create_group(&ctx, CreateGroupInput::new("team"))
+        .await
+        .unwrap_err();
+    let (error, partial, dispatch) = err.into_parts();
+    assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    assert!(error.has_identity(ErrorClass::NotSettled));
+    let mut group = crate::iam::Group::default();
+    group.id = "group_1".to_owned();
+    assert_eq!(partial.unwrap().group, group);
+    assert_eq!(server.requests(), 1);
+}
+
+struct ConfirmationProvider(AtomicUsize);
+
+impl CredentialsProvider for ConfirmationProvider {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+        let attempt = self.0.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            if attempt < 2 {
+                Ok(Token::new(Secret::new("toy-bearer"), None))
+            } else {
+                Err(Error::new(ErrorClass::Auth))
+            }
+        })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn failed_confirmation_sign_in_withholds_id_from_recovery_advice() {
+    let server = Server::start(vec![
+        response("201 Created", br#"{"id":"group-1"}"#),
+        response("401 Unauthorized", b"{}"),
+    ]);
+    let provider = Arc::new(ConfirmationProvider(AtomicUsize::new(0)));
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("han-1".into())
+            .with_credentials_provider(provider.clone())
+            .with_endpoint_overrides(EndpointOverrides {
+                iam: Some(format!("{}/iam/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let (ctx, _) = RequestContext::new();
+    let err = Client::new(&config)
+        .create_group(&ctx, CreateGroupInput::new("team"))
+        .await
+        .unwrap_err();
+    let (error, partial, dispatch) = err.into_parts();
+    assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 2);
+    assert_eq!(provider.0.load(Ordering::Relaxed), 3);
+    assert!(error.has_identity(ErrorClass::NotSettled));
+    assert!(partial.is_none());
+    assert_eq!(
+        error.detail::<RecoveryAdvice>().unwrap().message(),
+        "vngcloud: write outcome not confirmed"
+    );
+}
+
+#[tokio::test]
+async fn short_base64_credential_in_created_group_id_is_withheld() {
+    let bearer = "a?bcd";
+    let encoded = data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes());
+    let body = json!({"id": encoded}).to_string();
+    let server = Server::start(vec![response("201 Created", body.as_bytes())]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, bearer)
+        .create_group(&ctx, CreateGroupInput::new("team"))
+        .await
+        .err()
+        .unwrap();
+    let (error, partial, dispatch) = failure.into_parts();
+    assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    assert!(partial.is_none());
+    let message = error.api_error().unwrap().message();
+    assert!(!message.contains(&encoded));
+    assert_eq!(server.requests(), 1);
 }

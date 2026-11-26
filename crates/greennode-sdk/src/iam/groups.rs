@@ -11,7 +11,12 @@ use super::writes::{
 use super::{Api, Client, Group, OBJECT_CAP, invalid_input, read_operation};
 use crate::error::RecoveryAdvice;
 use crate::error::SafeText;
-use crate::wire::product::{evidence::Evidence, options::Options, redirect::Retry};
+use crate::wire::product::{
+    evidence::Evidence,
+    operation::Operation,
+    options::{Options, PathIds},
+    redirect::Retry,
+};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{ApiError, Error, Failure, RequestContext, WriteDispatch};
 
@@ -104,13 +109,16 @@ impl Client {
         }
         let mut evidence =
             self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
-        let operation = write_operation(
-            CREATE,
-            Method::POST,
-            GROUPS,
-            Retry::Once,
-            &[StatusCode::CREATED],
-        );
+        let operation = Operation {
+            keep_status: true,
+            ..write_operation(
+                CREATE,
+                Method::POST,
+                GROUPS,
+                Retry::Once,
+                &[StatusCode::CREATED],
+            )
+        };
         let body = json!({"name": input.name, "description": input.description, "mode": "iam"});
         let id = self
             .write::<CreatedId, _>(
@@ -124,7 +132,7 @@ impl Client {
             .await
             .map_err(|failed| create_failed(failed, &evidence))?
             .0;
-        if !Options::DEFAULT.path_ids.allows(&id) || evidence.text_reflects(&id) {
+        if !PathIds::WithUnderscore.allows(&id) || evidence.text_reflects(&id) {
             return Err(Failure::new(
                 Error::from_api(ApiError::without_fallback(
                     CREATE,
@@ -140,20 +148,25 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             ));
         }
-        let group = self
-            .fetch_group(ctx, &id, false, &mut evidence)
-            .await
-            .map_err(|failed| {
-                let mut group = Group::default();
-                group.id.clone_from(&id);
-                group.screen(&evidence);
-                settle(
-                    failed,
-                    CreateGroupOutput { group },
-                    &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
-                    &evidence,
-                )
-            })?;
+        let confirmed = if Options::DEFAULT.path_ids.allows(&id) {
+            self.fetch_group(ctx, &id, false, &mut evidence).await
+        } else {
+            let shown_id = id.get(..64).unwrap_or(&id);
+            Err(invalid_input(format!(
+                "iam.GetGroup requires GroupID to match ^[A-Za-z0-9-]+$, got {shown_id:?}"
+            )))
+        };
+        let group = confirmed.map_err(|failed| {
+            let mut group = Group::default();
+            group.id.clone_from(&id);
+            group.screen(&evidence);
+            settle(
+                failed,
+                CreateGroupOutput { group },
+                &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
+                &evidence,
+            )
+        })?;
         Ok(CreateGroupOutput { group })
     }
 

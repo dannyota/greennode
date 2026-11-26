@@ -243,5 +243,69 @@
         "body": {}
       }
     ]
+  },
+  {
+    "name": "create-group-invalid-path-id",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 201,
+        "body": {
+          "id": "group_1"
+        }
+      }
+    ]
+  },
+  {
+    "name": "create-group-redirect",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 307,
+        "body": {},
+        "headers": {
+          "Location": "/policies-api/v1/elsewhere"
+        }
+      }
+    ]
+  },
+  {
+    "name": "create-group-malformed-confirmation",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 201,
+        "body": {
+          "id": "group-1"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "rawBody": "{"
+      }
+    ]
   }
 ]
