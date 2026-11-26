@@ -64,7 +64,7 @@ struct WireTag {
     value: Option<String>,
     system_tag: Option<bool>,
     #[serde(default)]
-    created_at: String,
+    created_at: Option<String>,
 }
 
 fn decode_snapshot(body: &[u8]) -> Result<Vec<Tag>, ()> {
@@ -80,7 +80,7 @@ fn decode_snapshot(body: &[u8]) -> Result<Vec<Tag>, ()> {
                 key,
                 value: tag.value.ok_or(())?,
                 system_tag: tag.system_tag.ok_or(())?,
-                created_at: tag.created_at,
+                created_at: tag.created_at.unwrap_or_default(),
             })
         })
         .collect()
@@ -117,10 +117,27 @@ impl Output for Snapshot {
             &response.credentials,
         )?;
         let invalid = || Box::new(Error::new(ErrorClass::Api));
+        if serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err() {
+            return Err(Box::new(Error::from_api(
+                crate::ApiError::without_fallback(
+                    op.id,
+                    None,
+                    crate::error::SafeText::new("", &[]),
+                    crate::error::SafeText::new("response failed to decode", &[]),
+                    false,
+                ),
+            )));
+        }
         strict_json::validate_shape(&response.body, &Self::SCHEMA, op.cap)
             .map_err(|_| invalid())?;
         let mut tags = decode_snapshot(&response.body).map_err(|_| invalid())?;
         for tag in &mut tags {
+            if response
+                .credentials
+                .reflects(tag.system_tag.to_string().as_bytes())
+            {
+                return Err(invalid());
+            }
             for value in [&mut tag.key, &mut tag.value, &mut tag.created_at] {
                 if response.credentials.reflects(value.as_bytes()) {
                     *value = "<redacted>".to_owned();
@@ -184,8 +201,8 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: true,
-            overflow_overrides_status: false,
+            keep_status: false,
+            overflow_overrides_status: true,
             sensitive: false,
             reject_reflected_credentials: false,
             no_redirect: false,

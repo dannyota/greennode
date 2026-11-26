@@ -15,6 +15,51 @@ impl ConfigSource for Source {
 }
 
 #[test]
+fn truncated_not_found_is_request_failed() {
+    let server = Server::start(vec![Response::RawClose(
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 50\r\n\r\nshort".to_vec(),
+    )]);
+    let options = with_product_loopback(
+        Product::Vserver,
+        ConfigOptions::default().with_static_token(Secret::new("toy-token")),
+        &server,
+    );
+    let (context, _) = RequestContext::new();
+    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let status = runtime.block_on(run_invocation(Invocation {
+        args: [
+            "greennode",
+            "--project-id",
+            "project-1",
+            "tagging",
+            "list-resource-tags",
+            "--resource-id",
+            "res-1",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect(),
+        source: &Source,
+        config_options: options,
+        stdin: &mut stdin,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdin_terminal: false,
+        stdout_terminal: false,
+        stderr_terminal: false,
+        clock: &SystemClock,
+        context: &context,
+    }));
+    assert_eq!(status, ExitCode::from(1));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "RequestFailed");
+}
+
+#[test]
 fn list_matches_baseline_output_formats() {
     let body = include_str!("../../greennode-sdk/tests/fixtures/tagging/list_resource_tags.json");
     let server = Server::start(
