@@ -506,7 +506,11 @@ fn create_error(
         } else {
             format!("{}; {CREATE_AMBIGUOUS}", &reason[..end])
         };
-        error.with_detail(crate::error::RecoveryAdvice::new(&advice))
+        if evidence.text_reflects(&advice) {
+            error
+        } else {
+            error.with_detail(crate::error::RecoveryAdvice::new(&advice))
+        }
     } else {
         error
     };

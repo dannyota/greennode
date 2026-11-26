@@ -122,6 +122,31 @@ async fn delete_rejects_reflection_in_unknown_server_detail_field() {
 }
 
 #[tokio::test]
+async fn delete_rejects_credential_in_reserved_number_key() {
+    let server = TestServer::start(vec![
+        response(
+            r#"{"data":{"uuid":"server-1","unknown":{"$serde_json::private::Number":"123"}}}"#,
+        ),
+        response("[]"),
+        http("202 Accepted", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client_with_token(&server, "$serde_json::private::Number")
+        .delete_server(
+            &ctx,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                no_wait: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
 async fn delete_does_not_confirm_truncated_not_found_response() {
     let server = TestServer::start(vec![
         response(r#"{"data":{"uuid":"server-1"}}"#),
@@ -383,6 +408,34 @@ async fn create_gateway_failure_keeps_reason_in_recovery_advice() {
         .message();
     assert!(advice.contains("Bad Gateway"));
     assert!(advice.contains("match the name exactly"));
+}
+
+#[tokio::test]
+async fn create_recovery_advice_does_not_join_into_user_data() {
+    let server = TestServer::start(vec![
+        inventory(),
+        response(r#"{"optimumPrice":20}"#),
+        http("502 Bad Gateway", "{}"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let secret = "withheld: it may quote user data; create may";
+    let failure = server_order_client(&server)
+        .create_server(
+            &ctx,
+            CreateServerInput {
+                user_data: Some(Secret::new(secret)),
+                ssh_key_id: String::new(),
+                ..server_order()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .detail::<crate::error::RecoveryAdvice>()
+            .is_none_or(|advice| !advice.message().contains(secret))
+    );
 }
 
 #[tokio::test]
