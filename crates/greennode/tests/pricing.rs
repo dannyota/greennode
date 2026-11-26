@@ -200,20 +200,22 @@ fn strict_setup_and_required_quote_field_refuse_before_requests() {
 
 #[test]
 fn pricing_text_and_table_screen_amounts_after_two_decimal_rounding() {
-    let bearer = ".24";
+    let bearer = "12345678.24";
     for format in ["table", "text"] {
         let server = Server::start(vec![
-            response("200 OK", r#"{"optimumPrice":1.239}"#),
-            response("200 OK", r#"{"optimumPrice":0.619}"#),
-            response("200 OK", r#"{"optimumPrice":1.25}"#),
+            response("200 OK", r#"{"optimumPrice":12345678.239}"#),
+            response("200 OK", r#"{"optimumPrice":6172839.1195}"#),
+            response("200 OK", r#"{"optimumPrice":12345678.25}"#),
         ]);
         for quantity in [1, 2] {
             let input = format!(
                 r#"{{"PublicIPs":[{{"Key":"ip","Kind":"public-vip","Type":"public","Quantity":{quantity}}}]}}"#
             );
             let args = ["estimate", "--output", format, "--cli-input-json", &input];
-            let (_, stdout, stderr) = invoke_with_bearer(&args, &server, bearer);
+            let (status, stdout, stderr) = invoke_with_bearer(&args, &server, bearer);
+            assert_eq!(status, ExitCode::from(1));
             assert!(!stdout.contains(bearer) && !stderr.contains(bearer));
+            assert!(stderr.contains("InvalidResponse"));
         }
         let (status, stdout, _) = invoke_with_bearer(
             &["estimate", "--output", format, "--cli-input-json", ESTIMATE],
@@ -221,6 +223,7 @@ fn pricing_text_and_table_screen_amounts_after_two_decimal_rounding() {
             bearer,
         );
         assert_eq!(status, ExitCode::SUCCESS);
-        assert!(stdout.contains("1.25"));
+        assert!(stdout.contains("12345678.25"));
+        assert_eq!(server.requests(), 3);
     }
 }
