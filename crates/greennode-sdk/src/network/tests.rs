@@ -186,25 +186,24 @@ async fn returned_identifiers_reject_embedded_encoded_credentials() {
 }
 
 #[tokio::test]
-#[ignore = "shared hex matcher has not landed"]
 async fn returned_identifiers_reject_hex_credentials() {
     let server = Server::start(vec![
         response(
             "200 OK",
-            r#"{"data":[{"uuid":"prefix78797asuffix","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#,
+            r#"{"data":[{"uuid":"prefix746f6b656e76616c7565suffix","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#,
         ),
         response(
             "200 OK",
-            r#"{"projects":[{"projectId":"prefix78797asuffix","region":"hcm-3"}]}"#,
+            r#"{"projects":[{"projectId":"prefix746f6b656e76616c7565suffix","region":"hcm-3"}]}"#,
         ),
         response(
             "200 OK",
-            r#"{"success":true,"data":[{"uuid":"prefix78797asuffix","protocol":"tcp","etherType":"IPv4","direction":"ingress","portRangeMin":1,"portRangeMax":2,"isSystem":false}]}"#,
+            r#"{"success":true,"data":[{"uuid":"prefix746f6b656e76616c7565suffix","protocol":"tcp","etherType":"IPv4","direction":"ingress","portRangeMin":1,"portRangeMax":2,"isSystem":false}]}"#,
         ),
     ]);
     let opts = ConfigOptions::default()
         .with_region("hcm-3".into())
-        .with_static_token(Secret::new("xyz"));
+        .with_static_token(Secret::new("tokenvalue"));
     let (ctx, _) = RequestContext::new();
     let config = Config::new(with_product_loopback(
         Product::Vserver,
