@@ -48,7 +48,10 @@ pub struct ConfigOptions {
     iam_details: Option<IamUserAuth>,
     endpoint_overrides: EndpointOverrides,
     #[cfg(feature = "test-support")]
-    billing_fixture: Option<crate::wire::connection::FixtureTrust>,
+    billing_fixture: Option<(
+        crate::testing::Product,
+        crate::wire::connection::FixtureTrust,
+    )>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -61,16 +64,16 @@ struct ParseHooks {
 
 impl ConfigOptions {
     #[cfg(feature = "test-support")]
-    pub(crate) fn with_billing_loopback(mut self, server: &crate::testing::Server) -> Self {
-        if self
-            .endpoint_overrides
-            .billing
-            .as_deref()
-            .is_none_or(str::is_empty)
-        {
-            self.endpoint_overrides.billing = Some(server.origin.clone());
+    pub(crate) fn with_product_loopback(
+        mut self,
+        product: crate::testing::Product,
+        server: &crate::testing::Server,
+    ) -> Self {
+        let endpoint = product.override_slot(&mut self.endpoint_overrides);
+        if endpoint.as_deref().is_none_or(str::is_empty) {
+            *endpoint = Some(server.origin.clone());
         }
-        self.billing_fixture = Some(crate::wire::connection::FixtureTrust::new(server));
+        self.billing_fixture = Some((product, crate::wire::connection::FixtureTrust::new(server)));
         self
     }
 

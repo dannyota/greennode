@@ -221,13 +221,15 @@ impl Session {
     #[cfg(feature = "test-support")]
     pub(super) fn set_billing_fixture(
         &self,
-        fixture: &crate::wire::connection::FixtureTrust,
+        fixture: &(
+            crate::testing::Product,
+            crate::wire::connection::FixtureTrust,
+        ),
     ) -> Result<(), Box<Error>> {
         let invalid = || Box::new(Error::new(ErrorClass::InvalidConfig));
-        if !self
-            .endpoints()
-            .billing
-            .as_deref()
+        let (product, fixture) = fixture;
+        if !product
+            .endpoint(self.endpoints())
             .is_some_and(|url| fixture.allows(url))
         {
             return Err(invalid());

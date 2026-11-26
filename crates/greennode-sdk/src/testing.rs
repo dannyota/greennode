@@ -24,9 +24,39 @@ pub fn cause(error: Error, child: Error) -> Error {
 
 pub use crate::wire::test_server::{Response, Server};
 
+macro_rules! products {
+    ($( $variant:ident => $field:ident ),+ $(,)?) => {
+        #[derive(Clone, Copy)]
+        pub enum Product { $( $variant ),+ }
+        impl Product {
+            pub(crate) fn override_slot(self, options: &mut crate::EndpointOverrides) -> &mut Option<String> {
+                match self { $( Self::$variant => &mut options.$field ),+ }
+            }
+            pub(crate) fn endpoint(self, endpoints: &crate::endpoint::EndpointSet) -> Option<&str> {
+                match self { $( Self::$variant => endpoints.$field.as_deref() ),+ }
+            }
+        }
+    };
+}
+products! {
+    Vserver => vserver, Vlb => vlb, Vnetwork => vnetwork,
+    GlobalLoadBalancer => global_load_balancer, Dns => dns,
+    ContainerRegistry => container_registry, Portal => portal, Billing => billing,
+    Monitor => monitor, Iam => iam, Storage => storage, Cdn => cdn, Vks => vks,
+    VserverBackup => vserver_backup, BackupCenter => backup_center, Database => database,
+}
+
+pub fn with_product_loopback(
+    product: Product,
+    options: crate::ConfigOptions,
+    server: &Server,
+) -> crate::ConfigOptions {
+    options.with_product_loopback(product, server)
+}
+
 pub fn with_billing_loopback(
     options: crate::ConfigOptions,
     server: &Server,
 ) -> crate::ConfigOptions {
-    options.with_billing_loopback(server)
+    with_product_loopback(Product::Billing, options, server)
 }

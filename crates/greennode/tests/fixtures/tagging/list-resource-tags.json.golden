@@ -1,0 +1,16 @@
+{
+  "Items": [
+    {
+      "Key": "env",
+      "Value": "prod",
+      "SystemTag": false,
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    },
+    {
+      "Key": "team",
+      "Value": "platform",
+      "SystemTag": false,
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
