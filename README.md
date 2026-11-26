@@ -12,9 +12,9 @@ GreenNode or VNG.
 ## Status
 
 greennode is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud).
-The CLI ships `greennode version`, `greennode billing list-budgets`, and
-`greennode billing get-budget`. The SDK supports both billing reads. No release
-exists, and nothing is on crates.io.
+The CLI ships `greennode version`, `greennode configure`, and the ported
+services; [CLI.md](docs/wiki/CLI.md) lists every shipped command. Porting
+continues service by service. No release exists, and nothing is on crates.io.
 
 Use [vngcloud](https://github.com/dannyota/vngcloud) for real work until the
 commands you need are ported. The [architecture](docs/design/architecture.md)
