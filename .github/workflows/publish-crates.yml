@@ -228,3 +228,168 @@ jobs:
           PYTHON
           test "$(sha256sum "$stage/greennode-sdk-${TAG#v}.crate" | cut -d ' ' -f 1)" = "$SDK_SHA256"
           test "$(sha256sum "$stage/greennode-${TAG#v}.crate" | cut -d ' ' -f 1)" = "$TOOL_SHA256"
+
+  publish:
+    needs: [verify, package]
+    if: ${{ inputs.publish && github.run_attempt == 1 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: crates-io
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Verify owner approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$GITHUB_REPOSITORY" = dannyota/greennode
+          test "$GITHUB_REF" = refs/heads/master
+          test "$GITHUB_REF_PROTECTED" = true
+          environment_id=$(gh api "repos/$GITHUB_REPOSITORY/environments/crates-io" | jq -esr '
+            select(length == 1) | .[0] | objects
+            | select(.name == "crates-io" and any(
+              .protection_rules | arrays | .[] | objects | select(.type == "required_reviewers")
+              | .reviewers | arrays | .[] | objects;
+              .type == "User" and .reviewer.login == "dannyota"
+            )) | .id | numbers
+          ')
+          [[ "$environment_id" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" |
+            jq -es --argjson id "$environment_id" '
+              select(length == 1) | .[0] | arrays | any(.[] | objects;
+              .state == "approved" and .user.login == "dannyota" and
+              any(.environments | arrays | .[] | objects; .id == $id and .name == "crates-io")
+            )' > /dev/null
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recheck release evidence
+        id: prepare
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          COMMIT: ${{ needs.verify.outputs.commit }}
+          TOOLCHAIN: ${{ needs.verify.outputs.toolchain }}
+          RELEASE_RUN: ${{ needs.verify.outputs.release_run }}
+          RECEIPT_SHA256: ${{ needs.verify.outputs.receipt_sha256 }}
+        run: |
+          set +x
+          unset GH_DEBUG
+          umask 077
+          evidence="$RUNNER_TEMP/publish-evidence"
+          mkdir -p "$evidence"
+          test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$COMMIT"
+          git merge-base --is-ancestor "$COMMIT" "$GITHUB_SHA"
+          git ls-tree -r -z --full-tree "$COMMIT" > "$evidence/tree"
+          gh release view "$TAG" --repo dannyota/greennode --json tagName,isDraft,publishedAt,isImmutable,assets > "$evidence/release.json"
+          gh api --paginate --slurp "repos/dannyota/greennode/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" |
+            jq --arg tag "$TAG" '[.[].workflow_runs[] | select(.head_branch == $tag) | {databaseId: .id, headBranch: .head_branch, headSha: .head_sha, path, conclusion, event}]' > "$evidence/runs.json"
+          test "$(jq -er 'if length == 1 then .[0].databaseId else error("runs") end' "$evidence/runs.json")" = "$RELEASE_RUN"
+          for name in darwin-arm64 linux-amd64 linux-arm64 windows-amd64 crate-checksums; do
+            gh run download "$RELEASE_RUN" --repo dannyota/greennode --name "$name" --dir "$evidence/artifacts/$name"
+          done
+          for pair in greennode-sdk:sdk greennode:tool; do
+            crate=${pair%%:*}
+            curl -fsS --max-time 30 --max-filesize 1048576 -A greennode-release "https://crates.io/api/v1/crates/$crate/owners" > "$evidence/${pair##*:}-owners.json"
+          done
+          python3 -I scripts/check-crate-release.py evidence "$TAG" "$COMMIT" "$evidence/release.json" "$evidence/runs.json" "$evidence/sdk-owners.json" "$evidence/tool-owners.json" "$evidence/artifacts" "$evidence/tree" --publish
+          receipt="$evidence/artifacts/crate-checksums/crate-checksums.json"
+          mkdir "$evidence/release"
+          gh release download "$TAG" --repo dannyota/greennode --pattern crate-checksums.json --dir "$evidence/release"
+          cmp "$receipt" "$evidence/release/crate-checksums.json"
+          test "$(sha256sum "$receipt" | cut -d ' ' -f 1)" = "$RECEIPT_SHA256"
+          test "$(jq -er '.toolchain' "$receipt")" = "$TOOLCHAIN"
+          test "$TOOLCHAIN" = 1.100.0
+          git clone --no-local --no-checkout "$GITHUB_WORKSPACE" "$RUNNER_TEMP/publish-tagged"
+          git -C "$RUNNER_TEMP/publish-tagged" checkout --detach "refs/tags/$TAG"
+          test "$(git -C "$RUNNER_TEMP/publish-tagged" rev-parse HEAD)" = "$COMMIT"
+          test ! -L "$RUNNER_TEMP/publish-tagged/.cargo"
+          test ! -e "$RUNNER_TEMP/publish-tagged/.cargo/config"
+          test ! -e "$RUNNER_TEMP/publish-tagged/.cargo/config.toml"
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          mkdir "$RUNNER_TEMP/publish-cargo"
+          states=$(python3 -I scripts/check-crate-release.py state "$receipt")
+          printf '%s\n' "$states" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$states" = $'greennode-sdk: present-and-approved\ngreennode: present-and-approved' ]; then
+            printf 'needed=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'needed=true\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Exchange OIDC for a crates.io token
+        if: ${{ steps.prepare.outputs.needed == 'true' }}
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - name: Check SDK registry state
+        if: ${{ steps.prepare.outputs.needed == 'true' }}
+        id: sdk_state
+        shell: bash
+        run: |
+          receipt="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"
+          states=$(python3 -I scripts/check-crate-release.py state "$receipt")
+          case "$states" in
+            $'greennode-sdk: absent\ngreennode: absent'|$'greennode-sdk: absent\ngreennode: present-and-approved') printf 'needed=true\n' >> "$GITHUB_OUTPUT" ;;
+            $'greennode-sdk: present-and-approved\ngreennode: absent'|$'greennode-sdk: present-and-approved\ngreennode: present-and-approved') printf 'needed=false\n' >> "$GITHUB_OUTPUT" ;;
+            *) exit 1 ;;
+          esac
+      - name: Upload SDK
+        if: ${{ steps.sdk_state.outputs.needed == 'true' }}
+        id: sdk_upload
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          TOOLCHAIN: ${{ needs.verify.outputs.toolchain }}
+          SDK_SHA256: ${{ needs.verify.outputs.sdk_sha256 }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set +x
+          printf 'greennode-sdk: unknown version=%s sha256=%s until confirmed\n' "${TAG#v}" "$SDK_SHA256" >> "$GITHUB_STEP_SUMMARY"
+          export CARGO_HOME="$RUNNER_TEMP/publish-cargo"
+          export GREENNODE_RELEASE_RECEIPT="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"
+          provider="registry.credential-provider=['python3','-I','$GITHUB_WORKSPACE/scripts/check-crate-publish-credential.py']"
+          cd "$RUNNER_TEMP/publish-tagged"
+          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode-sdk --config "$provider" --config net.retry=0
+      - name: Confirm SDK upload
+        if: ${{ always() && steps.sdk_state.outputs.needed == 'true' && !cancelled() }}
+        shell: bash
+        run: |
+          python3 -I scripts/check-crate-release.py state "$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json" --wait greennode-sdk | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Check tool registry state
+        if: ${{ success() && steps.prepare.outputs.needed == 'true' && (steps.sdk_state.outputs.needed == 'false' || steps.sdk_upload.outcome == 'success') }}
+        id: tool_state
+        shell: bash
+        run: |
+          curl -fsS --max-time 30 --max-filesize 1048576 -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners | jq -e '.users | any(.kind == "user" and .login == "dannyota")' > /dev/null
+          states=$(python3 -I scripts/check-crate-release.py state "$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json")
+          case "$states" in
+            $'greennode-sdk: present-and-approved\ngreennode: absent') printf 'needed=true\n' >> "$GITHUB_OUTPUT" ;;
+            $'greennode-sdk: present-and-approved\ngreennode: present-and-approved') printf 'needed=false\n' >> "$GITHUB_OUTPUT" ;;
+            *) exit 1 ;;
+          esac
+      - name: Upload tool
+        if: ${{ steps.tool_state.outputs.needed == 'true' }}
+        id: tool_upload
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          TOOLCHAIN: ${{ needs.verify.outputs.toolchain }}
+          TOOL_SHA256: ${{ needs.verify.outputs.tool_sha256 }}
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set +x
+          printf 'greennode: unknown version=%s sha256=%s until confirmed\n' "${TAG#v}" "$TOOL_SHA256" >> "$GITHUB_STEP_SUMMARY"
+          export CARGO_HOME="$RUNNER_TEMP/publish-cargo"
+          export GREENNODE_RELEASE_RECEIPT="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"
+          provider="registry.credential-provider=['python3','-I','$GITHUB_WORKSPACE/scripts/check-crate-publish-credential.py']"
+          cd "$RUNNER_TEMP/publish-tagged"
+          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode --config "$provider" --config net.retry=0
+      - name: Confirm tool upload
+        if: ${{ always() && steps.tool_state.outputs.needed == 'true' && !cancelled() }}
+        shell: bash
+        run: |
+          python3 -I scripts/check-crate-release.py state "$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json" --wait greennode | tee -a "$GITHUB_STEP_SUMMARY"
