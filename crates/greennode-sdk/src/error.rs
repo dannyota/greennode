@@ -76,17 +76,18 @@ impl SafeText {
     }
 }
 
-/// Sanitized diagnostic for a failure without a service response.
-pub struct Diagnostic(String);
+/// Fixed diagnostic for a failure without a service response.
+pub enum Diagnostic {
+    /// No project quota matched the requested name.
+    QuotaNotFound,
+}
 
 impl Diagnostic {
-    pub(crate) fn new(text: &str) -> Self {
-        Self(SafeText::new(text, &[]).0)
-    }
-
-    /// Returns the sanitized diagnostic.
-    pub fn message(&self) -> &str {
-        &self.0
+    /// Returns the fixed diagnostic.
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::QuotaNotFound => "greennode: not found: quota",
+        }
     }
 }
 

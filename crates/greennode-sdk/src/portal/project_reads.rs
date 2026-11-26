@@ -29,7 +29,7 @@ pub struct Zone {
     #[serde(rename(serialize = "UUID"))]
     pub uuid: Option<String>,
     /// Zone name.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_string")]
     pub name: String,
     /// Zone type.
     pub zone_type: Option<String>,
@@ -73,6 +73,10 @@ pub struct GetTagQuotaOutput {
     pub tag_quota: TagQuota,
 }
 
+fn null_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 const LIST_KEYS: &[&str] = &[
     "listData",
     "data",
@@ -105,6 +109,28 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Collection<T> {
         }
         let fields: BTreeMap<String, &serde_json::value::RawValue> =
             serde_json::from_str(text).map_err(de::Error::custom)?;
+        let groups: &[&[&str]] = &[
+            &["page"],
+            &["pageSize", "size"],
+            &["totalPage", "totalPages"],
+            &["totalItem", "totalItems", "total"],
+        ];
+        for group in groups {
+            let mut seen = None;
+            let mut names = std::collections::HashSet::new();
+            for (key, raw) in &fields {
+                if let Some(name) = group.iter().find(|name| field_matches(key, name)) {
+                    if !names.insert(*name) {
+                        return Err(de::Error::custom("invalid portal metadata"));
+                    }
+                    let value: i64 = serde_json::from_str(raw.get()).map_err(de::Error::custom)?;
+                    if value < 0 || seen.is_some_and(|old| old != value) {
+                        return Err(de::Error::custom("invalid portal metadata"));
+                    }
+                    seen = Some(value);
+                }
+            }
+        }
         let mut selected = None;
         for (key, value) in fields {
             if let Some(name) = LIST_KEYS.iter().find(|name| field_matches(&key, name))
@@ -148,6 +174,44 @@ impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
     }
 }
 
+struct QuotaRow(UserInfo);
+
+impl<'de> Deserialize<'de> for QuotaRow {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = UserInfo::deserialize(deserializer)?;
+        for field in value.fields.values_mut() {
+            normalize_numbers(field).map_err(de::Error::custom)?;
+        }
+        Ok(Self(value))
+    }
+}
+
+fn normalize_numbers(value: &mut Value) -> Result<(), &'static str> {
+    match value {
+        Value::Number(number) => {
+            let float = number
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or("invalid number")?;
+            let text = crate::output_number::f64(float, crate::output_number::Style::Json)
+                .ok_or("invalid number")?;
+            *number = serde_json::Number::from_string_unchecked(text);
+        }
+        Value::Array(values) => {
+            for value in values {
+                normalize_numbers(value)?;
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                normalize_numbers(value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for UserInfo {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let fields = BTreeMap::<String, &serde_json::value::RawValue>::deserialize(deserializer)?;
@@ -181,14 +245,16 @@ impl Client {
         _: ListQuotaUsedInput,
     ) -> Result<ListQuotaUsedOutput, Failure<ListQuotaUsedOutput>> {
         let items = self
-            .project_read::<Collection<Quota>, _>(
+            .project_read::<Collection<QuotaRow>, _>(
                 ctx,
                 "portal.ListQuotaUsed",
                 "v2/{}/quotas/quotaUsed",
             )
             .await?
             .0;
-        Ok(crate::List { items })
+        Ok(crate::List {
+            items: items.into_iter().map(|row| row.0).collect(),
+        })
     }
     /// Finds the first quota entry matching the supplied name.
     pub async fn get_quota(
@@ -218,20 +284,18 @@ impl Client {
             ]
             .iter()
             .any(|key| {
-                quota.fields.get(*key).is_some_and(|value| {
-                    value
-                        .as_str()
-                        .is_some_and(|v| v.eq_ignore_ascii_case(&input.name))
-                        || value.to_string().eq_ignore_ascii_case(&input.name)
-                })
+                quota
+                    .fields
+                    .get(*key)
+                    .is_some_and(|value| match value.as_str() {
+                        Some(text) => text.eq_ignore_ascii_case(&input.name),
+                        None => value.to_string().eq_ignore_ascii_case(&input.name),
+                    })
             })
         });
         quota.map(|quota| GetQuotaOutput { quota }).ok_or_else(|| {
             Failure::new(
-                Error::new(ErrorClass::NotFound).with_detail(crate::Diagnostic::new(&format!(
-                    "greennode: not found: quota {}",
-                    input.name
-                ))),
+                Error::new(ErrorClass::NotFound).with_detail(crate::Diagnostic::QuotaNotFound),
                 None,
                 WriteDispatch::NotAWrite,
             )

@@ -42,11 +42,71 @@ pub struct GetUserInfoOutput {
 }
 
 /// Portal user details, including account data and API-defined fields.
-#[derive(Clone, Default, PartialEq, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Default, PartialEq)]
 pub struct UserInfo {
     /// Account fields keyed by their API names.
     pub fields: BTreeMap<String, Value>,
+}
+
+impl Serialize for UserInfo {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.fields.len()))?;
+        for (key, value) in &self.fields {
+            if sensitive(key) {
+                map.serialize_entry(key, "<redacted>")?;
+            } else {
+                map.serialize_entry(key, &redacted(value))?;
+            }
+        }
+        map.end()
+    }
+}
+
+fn sensitive(key: &str) -> bool {
+    let key: String = key
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    key == "auth"
+        || key == "auths"
+        || [
+            "password",
+            "passwd",
+            "passphrase",
+            "secret",
+            "token",
+            "credential",
+            "privatekey",
+            "apikey",
+            "authorization",
+            "accesskey",
+            "dockerconfig",
+        ]
+        .iter()
+        .any(|part| key.contains(part))
+}
+
+fn redacted(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if sensitive(key) {
+                            Value::String("<redacted>".into())
+                        } else {
+                            redacted(value)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(redacted).collect()),
+        value => value.clone(),
+    }
 }
 
 impl std::fmt::Debug for UserInfo {

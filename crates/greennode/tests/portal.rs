@@ -71,15 +71,16 @@ fn invoke_command(server: &Server, command: &str, args: &[&str]) -> (ExitCode, V
 }
 
 #[test]
-fn missing_quota_reports_name_without_operation_or_status() {
+fn missing_quota_does_not_disclose_name() {
     let server = Server::start(vec![response("200 OK", "[]")]);
-    let (status, stdout, stderr) = invoke_command(&server, "get-quota", &["--name", "cpu"]);
+    let (status, stdout, stderr) =
+        invoke_command(&server, "get-quota", &["--name", "private-canary"]);
     assert_eq!(status, ExitCode::from(4));
     assert!(stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(
         error,
-        serde_json::json!({"error": {"code": "NotFound", "message": "greennode: not found: quota cpu"}})
+        serde_json::json!({"error": {"code": "NotFound", "message": "greennode: not found: quota"}})
     );
 }
 

@@ -6,6 +6,89 @@ const USER: &[u8] = include_bytes!("../../tests/fixtures/portal/get_user_info.js
 const BEARER: &str = "synthetic-portal-bearer";
 
 #[tokio::test]
+async fn sdk_serialization_redacts_nested_dynamic_keys() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"data":{"nested":[{"apiToken":"canary","visible":"yes"}]}}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .get_user_info(&ctx, GetUserInfoInput::default())
+        .await
+        .unwrap();
+    let value = serde_json::to_value(output).unwrap();
+    assert_eq!(value["UserInfo"]["nested"][0]["apiToken"], "<redacted>");
+    assert_eq!(value["UserInfo"]["nested"][0]["visible"], "yes");
+}
+
+#[tokio::test]
+async fn list_metadata_rejects_invalid_values() {
+    let (ctx, _) = RequestContext::new();
+    for body in [
+        br#"{"zones":[],"page":-1}"#.as_slice(),
+        br#"{"zones":[],"page":null}"#,
+        br#"{"zones":[],"size":1,"pageSize":2}"#,
+    ] {
+        let server = Server::start(vec![response("200 OK", body)]);
+        let error = client(&server)
+            .list_zones(&ctx, ListZonesInput::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().api_error().unwrap().code(), "InvalidResponse");
+    }
+}
+
+#[test]
+fn failed_refresh_omits_status_but_preserves_auth() {
+    let error = Error::new(ErrorClass::Auth).with_outer_detail(StatusCode::UNAUTHORIZED);
+    let error = withheld(&user_info_operation(), error);
+    assert!(error.has_class(ErrorClass::Auth));
+    assert_eq!(error.api_error().unwrap().status(), None);
+    assert_eq!(
+        error.api_error().unwrap().message(),
+        "portal response withheld"
+    );
+}
+
+#[tokio::test]
+async fn zone_null_name_and_quota_number_rendering_match_baseline() {
+    let server = Server::start(vec![
+        response("200 OK", br#"[{"name":null}]"#),
+        response("200 OK", br#"[{"name":"cpu","used":1e2}]"#),
+    ]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let zones = client
+        .list_zones(&ctx, ListZonesInput::default())
+        .await
+        .unwrap();
+    assert_eq!(zones.items[0].name, "");
+    let quotas = client
+        .list_quota_used(&ctx, ListQuotaUsedInput::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_string(&quotas.items[0]).unwrap(),
+        r#"{"name":"cpu","used":100}"#
+    );
+}
+
+#[tokio::test]
+async fn quota_lookup_does_not_match_quoted_string_representation() {
+    let server = Server::start(vec![response("200 OK", br#"[{"name":"cpu"}]"#)]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server)
+        .get_quota(
+            &ctx,
+            GetQuotaInput {
+                name: "\"cpu\"".into(),
+            },
+        )
+        .await;
+    assert!(result.unwrap_err().error().has_class(ErrorClass::NotFound));
+}
+
+#[tokio::test]
 async fn invalid_project_list_has_portal_invalid_response_error() {
     let server = Server::start(vec![response("200 OK", br#"{"zones":null}"#)]);
     let (ctx, _) = RequestContext::new();
