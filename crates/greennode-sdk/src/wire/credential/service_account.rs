@@ -9,7 +9,11 @@ use http::{
     header::{self, HeaderValue},
 };
 use http_body_util::Full;
-use std::time::Duration;
+use std::{
+    future::{Future, poll_fn},
+    task::Poll,
+    time::Duration,
+};
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
@@ -201,11 +205,15 @@ async fn exchange_at(
             bounded.deadline().ok_or_else(|| failed(None))?,
             (&mut evidence, &[http::StatusCode::OK]),
         );
-        tokio::select! {
-            biased;
-            _ = context.wait(clock) => None,
-            result = send => Some(result),
-        }
+        let mut send = Box::pin(send);
+        let mut ended = Box::pin(context.wait(clock));
+        poll_fn(|cx| {
+            if ended.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(None);
+            }
+            send.as_mut().poll(cx).map(Some)
+        })
+        .await
     };
     let Some(result) = result else {
         let status = evidence.status.map(|status| status.as_u16());

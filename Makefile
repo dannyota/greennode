@@ -21,6 +21,8 @@ fmt: ## Check Rust formatting; fix with cargo fmt --all
 	cargo fmt --all -- --check
 
 lint: ## Run clippy with warnings denied
+	cargo clippy --locked -p greennode-sdk --lib -- -D warnings
+	cargo clippy --locked -p greennode --bin greennode -- -D warnings
 	cargo clippy --locked --all-targets -- -D warnings
 
 test: ## Run tests with nextest and an empty home under target/
