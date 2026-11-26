@@ -200,6 +200,15 @@ impl ResetServiceAccountSecretOutput {
     pub fn redact_reflections<'a>(&self, text: &'a str) -> &'a str {
         safe_text(&self.evidence, text)
     }
+
+    /// Masks an account ID that reflects a credential or the newly issued secret.
+    pub fn redact_account_id<'a>(&self, id: &'a str) -> &'a str {
+        if usable_account_id(id, &self.evidence) && self.evidence.can_retain_partial() {
+            id
+        } else {
+            REDACTED
+        }
+    }
 }
 
 #[derive(Default)]

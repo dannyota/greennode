@@ -338,18 +338,13 @@ impl<T: Wire> Output for Body<T> {
         strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
-        if operation.reject_reflected_credentials {
-            let mut evidence = Evidence::new();
-            evidence.absorb(&response.credentials);
-            let data = Value::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
-            if evidence.reflected_in(&data)
-                || super::operation::reflects_json(body.as_bytes(), &response.credentials, true)
-                    != Some(false)
-            {
-                return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
-                    crate::RecoveryAdvice::new("iam: iam.GetServiceAccount: unsafe guard response"),
-                )));
-            }
+        if operation.reject_reflected_credentials
+            && super::operation::reflects_json_forms(body.as_bytes(), &response.credentials)
+                != Some(false)
+        {
+            return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
+                crate::RecoveryAdvice::new("iam: iam.GetServiceAccount: unsafe guard response"),
+            )));
         }
         Ok(Self(value))
     }

@@ -300,3 +300,37 @@ async fn empty_create_response_is_ambiguous_and_missing_secret_keeps_unconfirmed
     assert!(issued_service_account_secret(&failure).is_none());
     assert_eq!(server.requests(), 2);
 }
+
+#[tokio::test]
+async fn account_confirmation_ignores_unknown_out_of_range_numbers() {
+    for (body, safe) in [
+        (br#"{"id":"sa-1","unknown":1e1000}"#.as_slice(), true),
+        (
+            br#"{"id":"sa-1","unknown":[1e1000,"%74oy-issued-key"]}"#.as_slice(),
+            false,
+        ),
+    ] {
+        let server = Server::start(vec![
+            response(
+                "201 Created",
+                br#"{"id":"sa-1","clientSecret":"toy-issued-key"}"#,
+            ),
+            response("200 OK", body),
+        ]);
+        let (ctx, _) = RequestContext::new();
+        let result = client(&server, "toy-bearer")
+            .create_service_account(&ctx, CreateServiceAccountInput::new("worker"))
+            .await;
+        if safe {
+            assert_eq!(result.unwrap().service_account.id, "sa-1");
+        } else {
+            let failure = result.unwrap_err();
+            assert_eq!(
+                failure.error().detail::<WriteError>(),
+                Some(&WriteError::CreateUnconfirmed)
+            );
+            assert!(issued_service_account_secret(&failure).is_some());
+        }
+        assert_eq!(server.requests(), 2);
+    }
+}

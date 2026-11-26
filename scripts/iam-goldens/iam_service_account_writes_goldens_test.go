@@ -28,9 +28,9 @@ func TestIAMServiceAccountWritePortGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	guard := []iamWriteReply{
-		{"GET", "/accounts-api/v1/auth/userinfo", 200, json.RawMessage(`{"userId":"user-1","userType":"iam-user"}`)},
-		{"GET", "/policies-api/v1/actions", 200, json.RawMessage(`[{"action":"CreatePolicy","label":"Write"}]`)},
-		{"GET", "/policies-api/v1/user-attachments/service-accounts/sa-1/policies", 200, json.RawMessage(`{"data":[],"totalItems":0}`)},
+		{Method: "GET", Route: "/accounts-api/v1/auth/userinfo", Status: 200, Body: json.RawMessage(`{"userId":"user-1","userType":"iam-user"}`)},
+		{Method: "GET", Route: "/policies-api/v1/actions", Status: 200, Body: json.RawMessage(`[{"action":"CreatePolicy","label":"Write"}]`)},
+		{Method: "GET", Route: "/policies-api/v1/user-attachments/service-accounts/sa-1/policies", Status: 200, Body: json.RawMessage(`{"data":[],"totalItems":0}`)},
 	}
 	for _, c := range cases {
 		replies := c.Replies

@@ -222,7 +222,10 @@ fn create<'a>(
                     };
                     return Err(local_failure("RequestFailed", message).into());
                 }
-                if failed.error().detail::<sdk::WriteError>() == Some(&sdk::WriteError::NoSecret) {
+                if matches!(
+                    failed.error().detail::<sdk::WriteError>(),
+                    Some(sdk::WriteError::NoSecret | sdk::WriteError::CreateUnconfirmed)
+                ) {
                     let id = failed
                         .partial()
                         .map_or("", |partial| partial.service_account.id.as_str());
@@ -260,7 +263,7 @@ fn reset<'a>(
         };
         let secret = output.client_secret();
         if !persist(input, secret).await {
-            let id = output.redact_reflections(&input.id);
+            let id = output.redact_account_id(&input.id);
             let message = format!(
                 "could not write --secret-file: secret file could not be saved; the service account {id} secret was already reset and cannot be recovered here; run reset-service-account-secret again"
             );
@@ -331,3 +334,6 @@ fn operation_failure<T>(failure: Failure<T>) -> ExecutionFailure {
     }
     .into()
 }
+
+#[cfg(all(test, unix))]
+mod tests;

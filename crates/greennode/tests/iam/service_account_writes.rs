@@ -302,3 +302,35 @@ async fn reset_service_account_missing_secret_has_dedicated_error() {
     assert!(!file.exists());
     assert_eq!(server.requests(), 4);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn create_without_secret_and_failed_confirmation_reports_secret_file_failure() {
+    let directory = PrivateDir::new();
+    let file = directory.0.join("issued");
+    let server = Server::start(vec![reply(201, r#"{"id":"sa-1"}"#), reply(404, "{}")]);
+    let (status, stdout, stderr) = invoke(
+        &[
+            "iam",
+            "create-service-account",
+            "--name",
+            "new",
+            "--secret-file",
+            file.to_str().unwrap(),
+        ],
+        &server,
+        BEARER,
+    )
+    .await;
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stderr).unwrap(),
+        serde_json::json!({"error": {
+            "code": "SecretFileFailed",
+            "message": "service account sa-1 was created but the response held no client secret; no file was written; run reset-service-account-secret to get one",
+        }}),
+    );
+    assert!(!file.exists());
+    assert_eq!(server.requests(), 2);
+}

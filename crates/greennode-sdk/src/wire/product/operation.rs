@@ -432,6 +432,26 @@ pub(crate) fn reflects_json(
     credentials: &sender::SentCredentials,
     check_rendered_numbers: bool,
 ) -> Option<bool> {
+    scan_json_reflections(body, credentials, check_rendered_numbers, |value| {
+        credentials.reflects(value.as_bytes())
+    })
+}
+
+pub(crate) fn reflects_json_forms(
+    body: &[u8],
+    credentials: &sender::SentCredentials,
+) -> Option<bool> {
+    scan_json_reflections(body, credentials, true, |value| {
+        super::response::reflects_credential(value, credentials)
+    })
+}
+
+fn scan_json_reflections(
+    body: &[u8],
+    credentials: &sender::SentCredentials,
+    check_rendered_numbers: bool,
+    reflects_string: impl Fn(&str) -> bool,
+) -> Option<bool> {
     if credentials.reflects(body) {
         return Some(true);
     }
@@ -470,7 +490,7 @@ pub(crate) fn reflects_json(
             index += 1;
         }
         let value = serde_json::from_slice::<String>(body.get(start..=index)?).ok()?;
-        if credentials.reflects(value.as_bytes()) {
+        if reflects_string(&value) {
             return Some(true);
         }
         index += 1;
