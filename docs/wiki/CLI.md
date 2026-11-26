@@ -7,6 +7,7 @@
 - [Backup](CLI-Backup.md)
 - [Billing](CLI-Billing.md)
 - [Project](CLI-Project.md)
+- [Tagging](CLI-Tagging.md)
 - [VKS](CLI-VKS.md)
 
 ## Global flags

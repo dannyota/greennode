@@ -1,6 +1,7 @@
 mod backup;
 mod billing;
 mod project;
+mod tagging;
 mod vks;
 
 use crate::cli::op::{Handler, SelectedOperation, Service};
@@ -150,6 +151,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         backup::SERVICE,
         billing::SERVICE,
         project::SERVICE,
+        tagging::SERVICE,
         vks::SERVICE,
     ])
 }

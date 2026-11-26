@@ -22,6 +22,7 @@ mod provider;
 mod secret;
 mod session;
 mod source;
+pub mod tagging;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 #[allow(missing_docs)]

@@ -33,6 +33,8 @@
   "greennode help",
   "greennode project",
   "greennode project list-projects",
+  "greennode tagging",
+  "greennode tagging list-resource-tags",
   "greennode version",
   "greennode vks",
   "greennode vks get-quota",
