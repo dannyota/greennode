@@ -1,0 +1,5 @@
+{
+  "LoadBalancerID": "glb-1",
+  "ListenerID": "listener-1",
+  "Deleted": false
+}

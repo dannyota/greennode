@@ -94,13 +94,20 @@ macro_rules! operation {
     };
     ($input:ident, $defaults:expr, $method:ident, $name:literal, $go:literal,
      $help:literal, $notes:expr, [$($flag:ident => $field:expr),* $(,)?],
-     $kind:expr, $guard:expr, $example:expr) => {{
+     $kind:expr, $guard:expr, $example:expr) => {
+        operation!($input, $defaults, $method, $name, $go, $help, $notes,
+                   [$($flag => $field),*], $kind, $guard, $example, None, &[], [])
+    };
+    ($input:ident, $defaults:expr, $method:ident, $name:literal, $go:literal,
+     $help:literal, $notes:expr, [$($flag:ident => $field:expr),* $(,)?],
+     $kind:expr, $guard:expr, $example:expr, $project:expr, $inherited:expr,
+     [$($extra_field:expr),* $(,)?]) => {{
         const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
             defaults: $defaults,
-            fields: &[$($field),*],
+            fields: &[$($field,)* $($extra_field),*],
             allow_json: true,
             allow_query: true,
-            project_binding: None,
+            project_binding: $project,
             pre_guard: Some(check_input_source),
             guard: $guard,
         };
@@ -110,7 +117,7 @@ macro_rules! operation {
             short_help: $help,
             example: $example,
             presence_required_fields: &[],
-            inherited_bindings: &[],
+            inherited_bindings: $inherited,
             kind: $kind,
             flags: &[$($flag),*],
             json_fields: &[],
@@ -129,6 +136,7 @@ macro_rules! operation {
     }};
 }
 
+mod child_writes;
 mod writes;
 
 const SHAPE_NOTE: &str =
@@ -138,6 +146,10 @@ pub(super) const SERVICE: Service = Service {
     name: "globalloadbalancer",
     error_rules: &[],
     operations: &[
+        child_writes::CREATE_LISTENER,
+        child_writes::CREATE_POOL,
+        child_writes::DELETE_LISTENER,
+        child_writes::DELETE_POOL,
         writes::CREATE,
         writes::DELETE,
         operation!(

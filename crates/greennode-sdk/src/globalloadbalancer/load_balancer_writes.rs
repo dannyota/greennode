@@ -377,7 +377,7 @@ impl Write<'_> {
     }
 }
 
-fn decode<T: serde::de::DeserializeOwned + Default>(
+pub(super) fn decode<T: serde::de::DeserializeOwned + Default>(
     operation: &Operation,
     bytes: &[u8],
     shape: &Shape<'_>,

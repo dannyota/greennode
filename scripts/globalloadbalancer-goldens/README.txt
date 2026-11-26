@@ -17,3 +17,11 @@ Copy globalloadbalancer_write_goldens_test.go into the same archive and run:
     go test ./internal/cli -run '^TestGlobalLoadBalancerWriteGoldens$' -count=1
 
 Copy the eight success and partial stdout goldens to the same directory.
+
+Copy globalloadbalancer_child_write_goldens_test.go into the same archive.
+Set GLB_CHILD_FIXTURE to the absolute path of child_writes.json under
+crates/greennode-sdk/tests/fixtures/globalloadbalancer/ and run:
+
+    go test ./internal/cli -run '^TestGlobalLoadBalancerChildWriteGoldens$' -count=1
+
+Copy the sixteen success and partial stdout goldens to the same directory.

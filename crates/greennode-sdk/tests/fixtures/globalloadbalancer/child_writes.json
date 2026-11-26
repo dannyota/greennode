@@ -1,0 +1,17 @@
+{
+  "parent": {"id": "glb-1", "package": "pkg-1", "status": "ACTIVE", "type": "Layer 4"},
+  "regions": [
+    {"id": "hcm", "name": "hcm-3", "status": "ACTIVE", "vserverEndpoint": "https://hcm-3.api.vngcloud.vn/vserver/vserver-gateway"},
+    {"id": "han_lab", "name": "han-1", "status": "", "vserverEndpoint": "https://han-1.api.vngcloud.vn/vserver/vserver-gateway"}
+  ],
+  "packages": [{"id": "pkg-1", "enabled": true, "vlbPackages": [{"region": "han-1", "glb_package_id": "pkg-1", "vlb_package_id": "plan-1"}]}],
+  "projects": {"projects": [{"projectId": "project-1", "region": "han-1"}]},
+  "server": {"data": {"uuid": "server-1", "status": "ACTIVE", "internalInterfaces": [{"serverUuid": "server-1", "networkUuid": "vpc-1", "subnetUuid": "sub-1", "fixedIp": "10.1.2.3"}]}},
+  "vpc": {"id": "vpc-1", "status": "ACTIVE", "cidr": "10.1.0.0/16"},
+  "subnet": {"uuid": "sub-1", "networkUuid": "vpc-1", "status": "ACTIVE", "cidr": "10.1.2.0/24"},
+  "pool": {"id": "pool-1", "name": "demo-pool", "globalLoadBalancerId": "glb-1", "algorithm": "ROUND_ROBIN", "protocol": "TCP", "status": "ACTIVE", "health": {"id": "health_1", "globalPoolId": "pool-1", "globalLoadBalancerId": "glb-1", "protocol": "TCP", "timeout": 5, "intervalTime": 30, "healthyThreshold": 3, "unhealthyThreshold": 3, "status": "ACTIVE"}},
+  "group": {"id": "group-1", "name": "backend", "region": "han_lab", "globalPoolId": "pool-1", "globalLoadBalancerId": "glb-1", "trafficDial": 100, "vpcId": "vpc-1", "type": "PRIVATE", "status": "OFFLINE", "members": [{"id": "row_1", "name": "backend", "globalPoolMemberId": "group-1", "globalLoadBalancerId": "glb-1", "subnetId": "sub-1", "address": "10.1.2.3", "weight": 1, "port": 8080, "monitorPort": 8080, "backupRole": false, "status": "OFFLINE"}]},
+  "listener": {"id": "listener-1", "name": "demo-listener", "protocol": "TCP", "port": 443, "globalLoadBalancerId": "glb-1", "globalPoolId": "pool-1", "timeoutClient": 50, "timeoutConnection": 5, "timeoutMember": 50, "allowedCidrs": "192.0.2.1/32,198.51.100.2/32", "status": "ACTIVE"},
+  "pool_accept": {"id": "pool-1", "globalLoadBalancerId": "glb-1", "globalPoolMembers": [{"id": "group-1", "members": [{"id": "row_1"}]}]},
+  "listener_accept": {"id": "listener-1", "globalLoadBalancerId": "glb-1", "globalPoolId": "pool-1"}
+}

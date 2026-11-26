@@ -23,6 +23,17 @@ pub(crate) enum Product<'a> {
     Storage(Option<&'a str>),
 }
 
+impl Product<'_> {
+    pub(crate) fn endpoint(self, session: &Session) -> Option<&crate::endpoint::Base> {
+        let endpoints = session.endpoints();
+        match self {
+            Self::Portal => endpoints.portal.as_ref(),
+            Self::Regional => endpoints.vserver.as_ref(),
+            Self::Storage(_) => endpoints.storage.as_ref(),
+        }
+    }
+}
+
 pub(crate) struct Request<'a> {
     pub(crate) operation: &'static str,
     pub(crate) template: &'static str,
@@ -187,15 +198,14 @@ pub(crate) async fn exchange(
     pacing: Option<&Pacing>,
 ) -> Result<Box<RawValue>, Box<Error>> {
     let direct = pacing.is_none();
-    let endpoints = session.endpoints();
-    let (base, region) = match req.product {
-        Product::Portal => (&endpoints.portal, None),
-        Product::Regional => (&endpoints.vserver, None),
-        Product::Storage(region) => (&endpoints.storage, region),
-    };
-    let base = base
-        .as_ref()
+    let base = req
+        .product
+        .endpoint(session)
         .ok_or_else(|| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+    let region = match req.product {
+        Product::Storage(region) => region,
+        _ => None,
+    };
     let headers = region.map(|id| [("region", id), ("region_id", id)]);
     let options = Options {
         pacing,

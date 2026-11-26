@@ -1,0 +1,69 @@
+{
+  "Pool": {
+    "ID": "pool-1",
+    "Name": "demo-pool",
+    "Description": "",
+    "GlobalLoadBalancerID": "glb-1",
+    "Algorithm": "ROUND_ROBIN",
+    "StickySession": null,
+    "TLSEnabled": null,
+    "Protocol": "TCP",
+    "Status": "ACTIVE",
+    "Health": {
+      "ID": "health_1",
+      "GlobalPoolID": "pool-1",
+      "GlobalLoadBalancerID": "glb-1",
+      "Protocol": "TCP",
+      "Path": null,
+      "Timeout": 5,
+      "IntervalTime": 30,
+      "HealthyThreshold": 3,
+      "UnhealthyThreshold": 3,
+      "HTTPVersion": null,
+      "HTTPMethod": null,
+      "DomainName": null,
+      "SuccessCode": null,
+      "Status": "ACTIVE",
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DeletedAt": null
+    },
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  },
+  "PoolMember": {
+    "ID": "group-1",
+    "Name": "backend",
+    "Description": "",
+    "Region": "han_lab",
+    "GlobalPoolID": "pool-1",
+    "GlobalLoadBalancerID": "glb-1",
+    "TrafficDial": 100,
+    "VPCID": "vpc-1",
+    "Type": "PRIVATE",
+    "Status": "OFFLINE",
+    "Members": [
+      {
+        "ID": "row_1",
+        "Name": "backend",
+        "Description": "",
+        "GlobalPoolMemberID": "group-1",
+        "GlobalLoadBalancerID": "glb-1",
+        "SubnetID": "sub-1",
+        "Address": "10.1.2.3",
+        "Weight": 1,
+        "Port": 8080,
+        "MonitorPort": 8080,
+        "BackupRole": false,
+        "Status": "OFFLINE",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "DeletedAt": null
+      }
+    ],
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DeletedAt": null
+  }
+}

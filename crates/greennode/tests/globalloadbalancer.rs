@@ -1,3 +1,6 @@
+#[path = "globalloadbalancer/child.rs"]
+mod child;
+
 #[path = "globalloadbalancer/writes.rs"]
 mod writes;
 

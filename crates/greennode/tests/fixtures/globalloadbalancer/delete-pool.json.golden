@@ -1,0 +1,5 @@
+{
+  "LoadBalancerID": "glb-1",
+  "PoolID": "pool-1",
+  "Deleted": true
+}

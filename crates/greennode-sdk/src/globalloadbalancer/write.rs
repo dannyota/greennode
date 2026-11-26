@@ -22,7 +22,7 @@ use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, Secret, WriteD
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const WRITE_OK: &[StatusCode] = &[StatusCode::OK, StatusCode::ACCEPTED];
 const CREDENTIAL_INPUT: &str = "a request value contains a credential";
-const PROVENANCE: &str =
+pub(super) const PROVENANCE: &str =
     "vngcloud: invalid config: GLB writes require SDK IAM-user login and default endpoints";
 
 pub(super) struct Write<'a> {
@@ -81,12 +81,30 @@ impl Write<'_> {
         path: &[&str],
         body: Option<&Value>,
     ) -> Result<Response, Failure<()>> {
+        self.request_on(
+            ctx,
+            op,
+            self.client
+                .session
+                .endpoints()
+                .global_load_balancer
+                .as_ref(),
+            path,
+            body,
+        )
+        .await
+    }
+
+    pub(super) async fn request_on(
+        &mut self,
+        ctx: &RequestContext,
+        op: &Operation,
+        base: Option<&Base>,
+        path: &[&str],
+        body: Option<&Value>,
+    ) -> Result<Response, Failure<()>> {
         let session = &self.client.session;
-        let base = session
-            .endpoints()
-            .global_load_balancer
-            .as_ref()
-            .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
+        let base = base.ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
         let mut jitter = || session.retry_jitter();
         let runtime = session
             .runtime(ctx, &mut jitter)

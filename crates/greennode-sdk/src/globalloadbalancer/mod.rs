@@ -1,5 +1,6 @@
 //! Manage global load balancers and read their catalogs, children, and usage.
 
+mod child;
 mod load_balancer_writes;
 mod models;
 mod wire;
@@ -27,6 +28,7 @@ use crate::{
     WriteDispatch,
 };
 
+pub use child::*;
 pub use load_balancer_writes::*;
 pub use models::*;
 pub use wire::DecodeError;
@@ -36,6 +38,7 @@ use wire::{Field, WireField, response_error};
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,
+    region: String,
 }
 
 /// Selects all global load balancer packages.
@@ -242,6 +245,7 @@ impl Client {
     pub fn new(config: &Config) -> Self {
         Self {
             session: Arc::clone(config.session()),
+            region: config.region().to_owned(),
         }
     }
 
