@@ -1,27 +1,93 @@
-use serde::Serialize;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::wire::strict_json::field_matches;
 
 /// A project returned by the project service.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Project {
     /// Project identifier.
-    #[serde(rename(serialize = "ID", deserialize = "projectId"))]
+    #[serde(rename = "ID")]
     pub id: String,
     /// Project name.
-    #[serde(rename(serialize = "Name"))]
+    #[serde(rename = "Name")]
     pub name: String,
     /// Project region.
-    #[serde(rename(serialize = "Region"))]
+    #[serde(rename = "Region")]
     pub region: String,
     /// Project status.
-    #[serde(rename(serialize = "Status"))]
+    #[serde(rename = "Status")]
     pub status: String,
     /// Whether this is the default project.
-    #[serde(rename(serialize = "IsDefault", deserialize = "isDefault"))]
+    #[serde(rename = "IsDefault")]
     pub is_default: bool,
     /// Project user identifier.
-    #[serde(rename(serialize = "UserID", deserialize = "userId"))]
+    #[serde(rename = "UserID")]
     pub user_id: i64,
+}
+
+impl<'de> Deserialize<'de> for Project {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ProjectVisitor;
+
+        impl<'de> Visitor<'de> for ProjectVisitor {
+            type Value = Project;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a project object")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Project, M::Error> {
+                let fields = [
+                    "projectId",
+                    "name",
+                    "region",
+                    "status",
+                    "isDefault",
+                    "userId",
+                ];
+                let mut seen = [false; 6];
+                let mut project = Project::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    let Some((field, seen)) = fields
+                        .into_iter()
+                        .zip(&mut seen)
+                        .find(|(field, _)| field_matches(field, &key))
+                    else {
+                        map.next_value::<IgnoredAny>()?;
+                        continue;
+                    };
+                    if std::mem::replace(seen, true) {
+                        return Err(serde::de::Error::duplicate_field(field));
+                    }
+                    match field {
+                        "projectId" => {
+                            project.id = map.next_value::<Option<_>>()?.unwrap_or_default()
+                        }
+                        "name" => project.name = map.next_value::<Option<_>>()?.unwrap_or_default(),
+                        "region" => {
+                            project.region = map.next_value::<Option<_>>()?.unwrap_or_default()
+                        }
+                        "status" => {
+                            project.status = map.next_value::<Option<_>>()?.unwrap_or_default()
+                        }
+                        "isDefault" => {
+                            project.is_default = map.next_value::<Option<_>>()?.unwrap_or_default()
+                        }
+                        "userId" => {
+                            project.user_id = map.next_value::<Option<_>>()?.unwrap_or_default()
+                        }
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(project)
+            }
+        }
+
+        deserializer.deserialize_map(ProjectVisitor)
+    }
 }
 
 #[cfg(test)]

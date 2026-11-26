@@ -16,6 +16,7 @@ mod model;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod output_number;
+pub mod project;
 mod provider;
 mod secret;
 mod session;
