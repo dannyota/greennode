@@ -102,3 +102,121 @@ async fn list_reads_the_resource_and_redacts_reflected_credentials() {
     assert_eq!(output.items[0].value, "<redacted>");
     assert!(server.heads()[0].starts_with(b"GET /v2/project-1/tag/resource/res-1 "));
 }
+
+#[tokio::test]
+async fn tag_replaces_once_and_confirms() {
+    let before = r#"[{"key":"env","value":"old","systemTag":false},{"key":"vng.zone","value":"zone","systemTag":true}]"#;
+    let after = r#"[{"key":"env","value":"new","systemTag":false},{"key":"vng.zone","value":"zone","systemTag":true}]"#;
+    let server = Server::start(vec![
+        http_response(before),
+        http_response(""),
+        http_response(after),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let result = test_client(&server, "toy-token")
+        .tag_resource(
+            &ctx,
+            TagResourceInput {
+                resource_id: "res-1".into(),
+                resource_type: "SERVER".into(),
+                key: "env".into(),
+                value: "new".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["Previous"], "old");
+    assert_eq!(result["Changed"], true);
+    let heads = server.heads();
+    assert_eq!(heads.len(), 3);
+    assert!(heads[0].starts_with(b"GET "));
+    assert!(heads[1].starts_with(b"PUT "));
+    assert!(heads[2].starts_with(b"GET "));
+}
+
+#[tokio::test]
+async fn untag_noop_sends_no_write() {
+    let server = Server::start(vec![http_response("[]")]);
+    let (ctx, _) = RequestContext::new();
+    let result = test_client(&server, "toy-token")
+        .untag_resource(
+            &ctx,
+            UntagResourceInput {
+                resource_id: "res-1".into(),
+                resource_type: "SERVER".into(),
+                key: "absent".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["Changed"], false);
+    assert_eq!(server.heads().len(), 1);
+}
+
+fn write_input(key: &str) -> TagResourceInput {
+    TagResourceInput {
+        resource_id: "res-1".into(),
+        resource_type: "SERVER".into(),
+        key: key.into(),
+        value: "new".into(),
+    }
+}
+
+fn error_response(status: &str) -> Response {
+    Response::Http {
+        status: status.into(),
+        headers: vec![("Content-Length".into(), "0".into())],
+        body: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn failed_write_and_confirm_are_not_settled_with_partial() {
+    let before = r#"[{"key":"env","value":"toy-token","systemTag":false}]"#;
+    for responses in [
+        vec![
+            http_response(before),
+            error_response("500 Internal Server Error"),
+        ],
+        vec![http_response(before), http_response(""), http_response("[")],
+    ] {
+        let server = Server::start(responses);
+        let (ctx, _) = RequestContext::new();
+        let failure = test_client(&server, "toy-token")
+            .tag_resource(&ctx, write_input("env"))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+        assert!(failure.error().has_class(ErrorClass::Api));
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert_eq!(failure.partial().unwrap()["Previous"], "<redacted>");
+    }
+}
+
+#[tokio::test]
+async fn rejected_write_has_no_partial() {
+    let server = Server::start(vec![http_response("[]"), error_response("400 Bad Request")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("env"))
+        .await
+        .unwrap_err();
+    assert!(failure.partial().is_none());
+    assert!(!failure.error().has_class(ErrorClass::NotSettled));
+    assert_eq!(server.heads().len(), 2);
+}
+
+#[tokio::test]
+async fn system_tag_refusal_has_baseline_identity() {
+    let server = Server::start(vec![]);
+    let (ctx, _) = RequestContext::new();
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("vng.zone"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.code(), "SystemTag");
+    assert_eq!(api.message(), "tagging: key is a system tag");
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(server.heads().is_empty());
+}

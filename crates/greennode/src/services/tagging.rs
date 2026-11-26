@@ -1,3 +1,6 @@
+#[path = "tagging_writes.rs"]
+mod writes;
+
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
@@ -49,26 +52,30 @@ const INPUT: InputDescriptor<ListResourceTagsInput> = InputDescriptor {
 pub(super) const SERVICE: Service = Service {
     name: "tagging",
     error_rules: &[],
-    operations: &[Operation {
-        name: "list-resource-tags",
-        sdk_operation: "tagging.ListResourceTags",
-        short_help: "List resource tags",
-        example: Some("greennode tagging list-resource-tags --resource-id <resource-id>"),
-        presence_required_fields: &[],
-        inherited_bindings: &[],
-        kind: Kind::Read,
-        flags: &[RESOURCE_ID],
-        json_fields: &[],
-        extra_flags: &[],
-        notes: &[
-            "Returns every tag on the resource, system tags included: vng.zone, vng.region, and vng.createdBy are confirmed live on a virtual IP address. Tag.SystemTag marks one of them.",
-        ],
-        handler: Some(Handler::new(&INPUT, |operation, matches, invocation| {
-            Box::pin(dispatch::management(
-                invocation, operation, matches, &INPUT, list,
-            ))
-        })),
-    }],
+    operations: &[
+        writes::TAG,
+        writes::UNTAG,
+        Operation {
+            name: "list-resource-tags",
+            sdk_operation: "tagging.ListResourceTags",
+            short_help: "List resource tags",
+            example: Some("greennode tagging list-resource-tags --resource-id <resource-id>"),
+            presence_required_fields: &[],
+            inherited_bindings: &[],
+            kind: Kind::Read,
+            flags: &[RESOURCE_ID],
+            json_fields: &[],
+            extra_flags: &[],
+            notes: &[
+                "Returns every tag on the resource, system tags included: vng.zone, vng.region, and vng.createdBy are confirmed live on a virtual IP address. Tag.SystemTag marks one of them.",
+            ],
+            handler: Some(Handler::new(&INPUT, |operation, matches, invocation| {
+                Box::pin(dispatch::management(
+                    invocation, operation, matches, &INPUT, list,
+                ))
+            })),
+        },
+    ],
 };
 
 fn list<'a>(

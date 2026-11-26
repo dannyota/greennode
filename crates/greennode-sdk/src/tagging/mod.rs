@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod tests;
+mod writes;
 
 use crate::config::Session;
 use crate::wire::product::{
@@ -47,6 +48,42 @@ impl ListResourceTagsInput {
 
 /// All tags on a resource, including system tags.
 pub type ListResourceTagsOutput = List<Tag>;
+
+/// Identifies a resource and user tag to set.
+#[derive(Clone, Debug)]
+pub struct TagResourceInput {
+    /// Resource identifier.
+    pub resource_id: String,
+    /// Resource type sent to the gateway.
+    pub resource_type: String,
+    /// User tag key.
+    pub key: String,
+    /// User tag value.
+    pub value: String,
+}
+
+/// Identifies a resource and user tag to remove.
+#[derive(Clone, Debug)]
+pub struct UntagResourceInput {
+    /// Resource identifier.
+    pub resource_id: String,
+    /// Resource type sent to the gateway.
+    pub resource_type: String,
+    /// User tag key.
+    pub key: String,
+}
+
+/// The last observed tags and the value before a replacement.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct WriteResourceTagsOutput {
+    /// All observed tags, including system tags.
+    pub tags: Vec<Tag>,
+    /// Previous value, if the key existed.
+    pub previous: Option<String>,
+    /// Whether a replacement was needed.
+    pub changed: bool,
+}
 
 /// Shares the configuration's session for tag operations.
 #[derive(Clone)]
