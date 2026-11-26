@@ -1,7 +1,6 @@
 use crate::Secret;
 
-pub(crate) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
-    use hmac::{Hmac, KeyInit, Mac};
+pub(crate) fn normalized_seed(seed: &Secret) -> Secret {
     use zeroize::Zeroizing;
     let raw = seed.expose_secret().trim();
     let mut normalized = Zeroizing::new(raw.to_owned());
@@ -19,9 +18,16 @@ pub(crate) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
         .trim_end_matches('=')
         .to_uppercase()
         .replace(['\r', '\n'], "");
+    Secret::new(std::mem::take(&mut *normalized))
+}
+
+pub(crate) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
+    use hmac::{Hmac, KeyInit, Mac};
+    use zeroize::Zeroizing;
+    let normalized = normalized_seed(seed);
     let key = Zeroizing::new(
         data_encoding::BASE32_NOPAD
-            .decode(normalized.as_bytes())
+            .decode(normalized.expose_secret().as_bytes())
             .map_err(|_| ())?,
     );
     let step = unix_seconds / 30;
@@ -101,6 +107,15 @@ pub(super) async fn complete(
     if !allowed_target(&target, login.origin) {
         return Err(LoginError::new("totp page", None, false));
     }
+    jar.sent.record(location);
+    if let Some(query) = target.query() {
+        for (_, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+            jar.sent.record(&Secret::new(value));
+        }
+    }
+    for (_, value) in target.query_pairs() {
+        jar.record_form(&Secret::new(value));
+    }
     let mut request = Request::get(target.as_str())
         .header(
             header::ACCEPT,
@@ -159,6 +174,8 @@ pub(super) async fn complete(
             false,
         )
     })?;
+    jar.record_form(&csrf);
+    jar.record_form(&code);
     let form = {
         let mut form = url::form_urlencoded::Serializer::new(String::new());
         form.append_pair("_csrf", csrf.expose_secret())

@@ -410,3 +410,242 @@ async fn authenticate_builtin_sources_against_loopback() {
     assert_eq!(signin.requests(), 2);
     assert_eq!(token.requests(), 1);
 }
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+async fn billing_test_trust_refuses_endpoints_outside_the_fixture_listener() {
+    use crate::testing::{Server, with_billing_loopback};
+
+    struct Empty;
+    impl ConfigSource for Empty {
+        fn var_os(&self, _: &OsStr) -> Option<OsString> {
+            None
+        }
+    }
+
+    let mut fixture = Server::start(vec![response("200 OK", None, r#"{"code":200,"data":[]}"#)]);
+
+    let other = Server::start(vec![]);
+    let address = fixture.address;
+    let port = address.port();
+    fixture.address = other.address;
+    fixture.root_der = other.root_der.clone();
+    let (ctx, _) = RequestContext::new();
+    for endpoint in [
+        format!("https://remote.test:{port}"),
+        format!("https://192.0.2.10:{port}"),
+        other.origin.clone(),
+    ] {
+        let options = with_billing_loopback(
+            options()
+                .with_static_token(Secret::new("test-bearer"))
+                .with_endpoint_overrides(EndpointOverrides {
+                    billing: Some(endpoint),
+                    ..Default::default()
+                }),
+            &fixture,
+        );
+        assert!(
+            matches!(Config::new(options.clone()), Err(error) if error.class() == ErrorClass::InvalidConfig)
+        );
+        assert!(
+            matches!(Config::load(&ctx, options, &Empty).await, Err(error) if error.class() == ErrorClass::InvalidConfig)
+        );
+    }
+
+    let valid = with_billing_loopback(
+        options()
+            .with_static_token(Secret::new("test-bearer"))
+            .with_endpoint_overrides(EndpointOverrides {
+                billing: Some(format!("https://{address}")),
+                ..Default::default()
+            }),
+        &fixture,
+    );
+    let config = Config::load(&ctx, valid, &Empty).await.unwrap();
+    let output = crate::billing::Client::new(&config)
+        .list_budgets(&ctx, crate::billing::ListBudgetsInput::default())
+        .await
+        .unwrap();
+    assert!(output.items.is_empty());
+    assert_eq!(fixture.requests(), 1);
+    assert_eq!(other.requests(), 0);
+}
+
+#[tokio::test]
+async fn billing_withholds_configured_and_exchanged_service_account_credentials() {
+    use crate::billing::{Client, GetBudgetInput};
+    use crate::wire::test_server::Server;
+
+    let login = Server::start(vec![response(
+        "200 OK",
+        None,
+        r#"{"access_token":"token-canary","expires_in":120}"#,
+    )]);
+    let encoded = data_encoding::BASE64.encode(b"client-canary:secret-canary");
+    let sensitive = ["secret-canary", "cdn-canary", encoded.as_str()];
+    let billing = Server::start(
+        sensitive
+            .iter()
+            .copied()
+            .chain(["monthly"])
+            .map(|name| {
+                response(
+                    "200 OK",
+                    None,
+                    &format!(r#"{{"code":200,"data":{{"uuid":"budget-1","name":"{name}"}}}}"#),
+                )
+            })
+            .collect(),
+    );
+    let mut config = Config::new(
+        options()
+            .with_service_account(service())
+            .with_cdn_api_key(Secret::new("cdn-canary"))
+            .with_endpoint_overrides(EndpointOverrides {
+                billing: Some(billing.origin.clone()),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    let session = Arc::get_mut(&mut config.session).unwrap();
+    let Auth::ServiceAccount(source) = &mut session.auth else {
+        panic!("wrong auth kind");
+    };
+    source.set_test_endpoint(login.origin.clone(), login.root_der.clone());
+    session.set_test_product_root(billing.root_der.clone());
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    for fragment in sensitive {
+        let Err(failure) = client
+            .get_budget(&ctx, GetBudgetInput::new("budget-1"))
+            .await
+        else {
+            panic!("credential reflection returned a budget");
+        };
+        assert!(failure.partial().is_none());
+        assert!(
+            failure
+                .error()
+                .api_error()
+                .is_some_and(|api| api.code() == "InvalidResponse")
+        );
+        assert!(!format!("{failure:?} {}", failure.error()).contains(fragment));
+    }
+    let output = client
+        .get_budget(&ctx, GetBudgetInput::new("budget-1"))
+        .await
+        .unwrap();
+    assert_eq!(output.budget.name, "monthly");
+    assert_eq!(login.requests(), 1);
+}
+
+#[tokio::test]
+async fn billing_withholds_iam_secrets_and_signin_material_after_cached_login() {
+    use crate::billing::{Client, GetBudgetInput};
+    use crate::wire::test_server::{Response, Server};
+
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const PASSWORD: &str = "test-iam-password";
+    const COOKIE: &str = "test-iam-cookie";
+    const CODE: &str = "test-iam-auth-code";
+
+    struct Source;
+    impl ConfigSource for Source {
+        fn var_os(&self, name: &OsStr) -> Option<OsString> {
+            let value = match name.to_str()? {
+                "GREENNODE_ROOT_EMAIL" => "test-iam-root",
+                "GREENNODE_USERNAME" => "test-iam-user",
+                "GREENNODE_PASSWORD" => PASSWORD,
+                "GREENNODE_TOTP_SECRET" => {
+                    return Some(format!("otpauth://totp/example?secret={SEED}").into());
+                }
+                _ => return None,
+            };
+            Some(value.into())
+        }
+    }
+
+    let page = "<input name=\"_csrf\" value=\"test-iam-csrf\">";
+    let signin = Server::start(vec![
+        Response::Http {
+            status: "200 OK".into(),
+            headers: vec![
+                ("Content-Length".into(), page.len().to_string()),
+                (
+                    "Set-Cookie".into(),
+                    format!("session={COOKIE}; Path=/; Secure"),
+                ),
+            ],
+            body: page.as_bytes().to_vec(),
+        },
+        response("302 Found", Some("/ap/auth/iam/google"), ""),
+        response("200 OK", None, page),
+        response(
+            "302 Found",
+            Some(&format!("https://dashboard.test/return/?code={CODE}")),
+            "",
+        ),
+    ]);
+    let token = Server::start(vec![response(
+        "200 OK",
+        None,
+        r#"{"accessToken":"test-iam-bearer","expiresIn":3600}"#,
+    )]);
+    let sensitive = [PASSWORD, SEED, COOKIE, CODE];
+    let billing = Server::start(
+        sensitive
+            .into_iter()
+            .chain(["monthly"])
+            .map(|name| response(
+                "200 OK", None,
+                &format!(r#"{{"code":200,"data":{{"uuid":"budget-1","name":"{name}","limitAmount":100}}}}"#),
+            ))
+            .collect(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut config = Config::load(
+        &ctx,
+        options().with_endpoint_overrides(EndpointOverrides {
+            signin: Some(signin.origin.clone()),
+            dashboard: Some("https://dashboard.test/return".into()),
+            token: Some(format!("{}/token", token.origin)),
+            billing: Some(billing.origin.clone()),
+            ..Default::default()
+        }),
+        &Source,
+    )
+    .await
+    .unwrap();
+    let session = Arc::get_mut(&mut config.session).unwrap();
+    let Auth::IamUser(source) = &mut session.auth else {
+        panic!("wrong auth kind");
+    };
+    source.set_test_roots(vec![signin.root_der.clone(), token.root_der.clone()]);
+    session.set_test_product_root(billing.root_der.clone());
+    config.authenticate(&ctx).await.unwrap();
+    let client = Client::new(&config);
+    for credential in sensitive {
+        let Err(failure) = client
+            .get_budget(&ctx, GetBudgetInput::new("budget-1"))
+            .await
+        else {
+            panic!("credential reflection returned a budget");
+        };
+        assert!(failure.partial().is_none());
+        assert!(
+            failure
+                .error()
+                .api_error()
+                .is_some_and(|api| api.code() == "InvalidResponse")
+        );
+        assert!(!format!("{failure:?} {}", failure.error()).contains(credential));
+    }
+    let output = client
+        .get_budget(&ctx, GetBudgetInput::new("budget-1"))
+        .await
+        .unwrap();
+    assert_eq!(output.budget.name, "monthly");
+    assert_eq!(signin.requests(), 4);
+    assert_eq!(token.requests(), 1);
+}

@@ -3,7 +3,7 @@ mod tests;
 
 use super::{EndpointOverrides, IamUserAuth, credentials};
 use crate::wire::connection::{HeadLimit, OneSendClient, PooledClient, Trust};
-use crate::wire::product::sender::{BearerSource, Clients, Runtime, Sleeper};
+use crate::wire::product::sender::{BearerSource, Clients, Runtime, SentCredentials, Sleeper};
 use crate::{Clock, Error, ErrorClass, RequestContext, Secret};
 use std::future::Future;
 use std::pin::Pin;
@@ -12,6 +12,7 @@ use std::{path::PathBuf, time::Duration};
 
 pub(crate) struct Session {
     auth: Auth,
+    configured_credentials: SentCredentials,
     _endpoints: crate::endpoint::EndpointSet,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
@@ -49,6 +50,7 @@ impl BearerSource for Session {
                 Auth::Static(token) => Ok(crate::wire::product::sender::BearerToken {
                     token: crate::Token::new(token.clone(), None),
                     obtained_at: None,
+                    signin_credentials: None,
                 }),
                 Auth::Provider(provider) => {
                     crate::wire::product::sender::PublicSource(provider.as_ref())
@@ -102,12 +104,13 @@ impl Session {
         let deadline = self.clock.monotonic_now() + self.timeout;
         let client = self
             .clients
-            .get_or_init(|| product_clients(Trust::webpki))
+            .get_or_init(|| product_clients(|| Ok(Trust::webpki())))
             .as_ref()
             .map_err(|_| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
         Ok(Runtime {
             client,
             ctx,
+            configured_credentials: Some(&self.configured_credentials),
             clock: self.clock.as_ref(),
             deadline,
             sleeper: self,
@@ -123,13 +126,31 @@ impl Session {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn set_test_product_root(&self, root: rustls::pki_types::CertificateDer<'static>) {
         assert!(
             self.clients
-                .set(product_clients(|| Trust::test(root.clone())))
+                .set(product_clients(|| Ok(Trust::test(root.clone()))))
                 .is_ok()
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(super) fn set_billing_fixture(
+        &self,
+        fixture: &crate::wire::connection::FixtureTrust,
+    ) -> Result<(), Box<Error>> {
+        let invalid = || Box::new(Error::new(ErrorClass::InvalidConfig));
+        if !self
+            .endpoints()
+            .billing
+            .as_deref()
+            .is_some_and(|url| fixture.allows(url))
+        {
+            return Err(invalid());
+        }
+        let clients = product_clients(|| fixture.trust()).map_err(|_| invalid())?;
+        self.clients.set(Ok(clients)).map_err(|_| invalid())
     }
 
     #[expect(
@@ -174,6 +195,26 @@ impl Session {
         }
         let clock: Arc<dyn crate::Clock> = Arc::new(crate::SystemClock);
         let timeout = Duration::from_secs(120);
+        let mut configured_credentials = SentCredentials::default();
+        if let Some(key) = &selected.cdn_key {
+            configured_credentials.record(key);
+        }
+        match &selected.kind {
+            credentials::Kind::StaticToken(token) => configured_credentials.record(token),
+            credentials::Kind::ServiceAccount(account) => {
+                configured_credentials.record(&account.client_secret)
+            }
+            credentials::Kind::IamUser(user) => {
+                configured_credentials.record(&user.password);
+                if let Some(seed) = &user.totp_secret {
+                    configured_credentials.record(seed);
+                    configured_credentials.record(
+                        &crate::wire::credential::iam_user::totp::normalized_seed(seed),
+                    );
+                }
+            }
+            credentials::Kind::Provider(_) => {}
+        }
         let auth = match selected.kind {
             credentials::Kind::Provider(provider) => Auth::Provider(provider),
             credentials::Kind::StaticToken(token) => Auth::Static(token),
@@ -233,6 +274,7 @@ impl Session {
         };
         Ok(Self {
             auth,
+            configured_credentials,
             _endpoints: endpoints,
             clients: OnceLock::new(),
             clock,
@@ -283,10 +325,12 @@ impl Session {
     }
 }
 
-fn product_clients(trust: impl Fn() -> Trust) -> Result<Clients, rustls::Error> {
+fn product_clients(
+    trust: impl Fn() -> Result<Trust, rustls::Error>,
+) -> Result<Clients, rustls::Error> {
     Ok(Clients {
-        pooled: PooledClient::new(HeadLimit::Api, trust())?,
-        one_send: OneSendClient::new(HeadLimit::Api, trust())?,
+        pooled: PooledClient::new(HeadLimit::Api, trust()?)?,
+        one_send: OneSendClient::new(HeadLimit::Api, trust()?)?,
     })
 }
 

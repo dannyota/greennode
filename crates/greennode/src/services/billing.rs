@@ -1,7 +1,6 @@
 use clap::ArgMatches;
-use greennode_sdk::billing::{Budget, Client, GetBudgetInput, ListBudgetsInput};
-use greennode_sdk::{Config, List, RequestContext};
-use serde::Serialize;
+use greennode_sdk::billing::{Client, GetBudgetInput, ListBudgetsInput};
+use greennode_sdk::{Config, RequestContext};
 
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
 use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
@@ -158,9 +157,7 @@ fn list_budgets<'a>(
             status: staged.status.clone(),
         };
         let result = Client::new(config).list_budgets(ctx, input).await;
-        dispatch::project_result(result, |output| List {
-            items: output.items.into_iter().map(BudgetView).collect(),
-        })
+        dispatch::project_result(result, std::convert::identity)
     })
 }
 
@@ -172,46 +169,6 @@ fn get_budget<'a>(
     Box::pin(async move {
         let input = GetBudgetInput::new(&staged.budget_uuid);
         let result = Client::new(config).get_budget(ctx, input).await;
-        dispatch::project_result(result, |output| GetBudgetView {
-            budget: BudgetView(output.budget),
-        })
+        dispatch::project_result(result, std::convert::identity)
     })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-struct GetBudgetView {
-    budget: BudgetView,
-}
-
-#[derive(Serialize)]
-struct BudgetView(#[serde(with = "BudgetFields")] Budget);
-
-#[derive(Serialize)]
-#[serde(remote = "Budget", rename_all = "PascalCase")]
-struct BudgetFields {
-    #[serde(rename = "UUID")]
-    uuid: String,
-    #[serde(rename = "ID")]
-    id: i64,
-    name: String,
-    period_type: String,
-    r#type: String,
-    limit_amount: i64,
-    currency: String,
-    status: String,
-    period_key: String,
-    period_start: String,
-    period_end: String,
-    start_date: String,
-    created_at: String,
-    updated_at: String,
-    actual_cost: Option<f64>,
-    forecasted_cost: Option<f64>,
-    actual_percentage: Option<f64>,
-    forecasted_percentage: Option<f64>,
-    threshold_percentage: Option<f64>,
-    alarm: bool,
-    threshold_count: i64,
-    alarm_threshold_count: i64,
 }

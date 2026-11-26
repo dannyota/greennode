@@ -13,6 +13,7 @@ use url::Url;
 pub(crate) struct BearerToken {
     pub(crate) token: Token,
     pub(crate) obtained_at: Option<unauthorized::ObtainedAt>,
+    pub(crate) signin_credentials: Option<std::sync::Arc<SentCredentials>>,
 }
 pub(crate) trait BearerSource: Send + Sync {
     fn refreshable(&self) -> bool {
@@ -43,6 +44,7 @@ impl BearerSource for PublicSource<'_> {
                     .await
                     .map_err(|_| crate::Error::provider_failed())?,
                 obtained_at: None,
+                signin_credentials: None,
             })
         })
     }
@@ -87,7 +89,7 @@ pub(crate) struct Request {
     pub(crate) credentials: Vec<CredentialHeader>,
     pub(crate) body: Bytes,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct SentCredentials {
     values: Vec<Secret>,
 }
@@ -96,10 +98,15 @@ impl SentCredentials {
     pub(crate) fn for_test(values: Vec<Secret>) -> Self {
         Self { values }
     }
-    fn record(&mut self, secret: &Secret) {
+    pub(crate) fn record(&mut self, secret: &Secret) {
         let value = secret.expose_secret();
         if !value.is_empty() && !self.values.iter().any(|item| item.expose_secret() == value) {
             self.values.push(secret.clone());
+        }
+    }
+    fn extend(&mut self, credentials: &Self) {
+        for secret in credentials.values() {
+            self.record(secret);
         }
     }
     pub(crate) fn values(&self) -> &[Secret] {
@@ -313,6 +320,7 @@ pub(crate) struct Clients {
 pub(crate) struct Runtime<'a> {
     pub(crate) client: &'a Clients,
     pub(crate) ctx: &'a RequestContext,
+    pub(crate) configured_credentials: Option<&'a SentCredentials>,
     pub(crate) clock: &'a dyn Clock,
     pub(crate) deadline: Instant,
     pub(crate) sleeper: &'a dyn Sleeper,
@@ -333,8 +341,20 @@ pub(crate) async fn run(
         status: None,
         dispatch,
     };
-    let mut credentials = SentCredentials::default();
-    match run_inner(runtime, op, auth, request, &mut evidence, &mut credentials).await {
+    let mut credentials = runtime.configured_credentials.cloned().unwrap_or_default();
+    let mut sent = SentCredentials::default();
+    let result = run_inner(
+        runtime,
+        op,
+        auth,
+        request,
+        &mut evidence,
+        &mut sent,
+        &mut credentials,
+    )
+    .await;
+    credentials.extend(&sent);
+    match result {
         Ok(reply) => Ok(Response { reply, credentials }),
         Err(error) => Err(Failure {
             error,
@@ -356,7 +376,8 @@ async fn run_inner(
     auth: Auth<'_>,
     request: &Request,
     evidence: &mut Evidence,
-    credentials: &mut SentCredentials,
+    sent: &mut SentCredentials,
+    reflection: &mut SentCredentials,
 ) -> Result<send::Reply, Error> {
     let Runtime {
         client,
@@ -365,6 +386,7 @@ async fn run_inner(
         deadline,
         sleeper,
         jitter,
+        configured_credentials: _,
     } = runtime;
     if request.url.scheme() != "https"
         || request.url.host().is_none()
@@ -411,6 +433,12 @@ async fn run_inner(
     let mut recovered = false;
     let mut attempt = 0usize;
     'attempt: loop {
+        if let Some(credentials) = bearer
+            .as_ref()
+            .and_then(|value| value.signin_credentials.as_deref())
+        {
+            reflection.extend(credentials);
+        }
         let mut url = request.url.clone();
         let mut visited = std::collections::HashSet::new();
         visited.insert(url.clone());
@@ -440,18 +468,18 @@ async fn run_inner(
                     || name == http::header::CONTENT_TYPE)
                     && value.as_bytes() == b"application/json";
                 !fixed_json
-                    && (credentials.reflects(value.as_bytes())
+                    && (sent.reflects(value.as_bytes())
                         || pending
                             .iter()
                             .any(|secret| contains_secret(value.as_bytes(), secret)))
             }) {
                 return Err(Error::InvalidRequest);
             }
-            if hops == 0 && uri_contains_credential(&url, credentials, &pending) {
+            if hops == 0 && uri_contains_credential(&url, sent, &pending) {
                 return Err(Error::InvalidRequest);
             }
             for secret in pending {
-                credentials.record(secret);
+                sent.record(secret);
             }
             let mut outgoing = http::Request::builder()
                 .method(op.method.clone())
@@ -540,7 +568,9 @@ async fn run_inner(
                             location,
                         )
                         .map_err(Error::Redirect)?;
-                        if uri_contains_credential(&next, credentials, &[]) {
+                        if uri_contains_credential(&next, sent, &[])
+                            || uri_contains_credential(&next, reflection, &[])
+                        {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }
                         hops += 1;

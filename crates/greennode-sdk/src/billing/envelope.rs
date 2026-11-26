@@ -10,7 +10,7 @@ use crate::{ApiError, Error, ErrorClass};
 use http::StatusCode;
 use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::value::RawValue;
-use std::{borrow::Cow, sync::LazyLock};
+use std::borrow::Cow;
 
 #[derive(Default, Deserialize)]
 pub(super) struct Envelope<T> {
@@ -77,7 +77,7 @@ impl<T: BudgetData> Output for Envelope<T> {
         }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
-        if numeric_credential(&response.credentials) || !output.data.valid(&response.credentials) {
+        if !output.data.valid(&response.credentials) {
             return Err(invalid());
         }
         Ok(output)
@@ -159,16 +159,4 @@ pub(super) fn invalid_response(operation: &Operation, status: StatusCode, overfl
         false,
     ))
     .with_outer_detail(status)
-}
-
-fn numeric_credential(credentials: &SentCredentials) -> bool {
-    static NUMBER: LazyLock<Result<regex_lite::Regex, regex_lite::Error>> = LazyLock::new(|| {
-        regex_lite::Regex::new(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
-    });
-    NUMBER.as_ref().map_or(true, |pattern| {
-        credentials
-            .values()
-            .iter()
-            .any(|secret| pattern.is_match(secret.expose_secret().trim()))
-    })
 }

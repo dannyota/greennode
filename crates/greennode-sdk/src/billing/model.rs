@@ -5,13 +5,16 @@ use serde_json::value::RawValue;
 
 /// An account's configured spend cap and its available period summary.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct Budget {
     /// Budget UUID used in requests.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "UUID"), deserialize_with = "null_default")]
     pub uuid: String,
     /// Numeric budget ID.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "ID"), deserialize_with = "null_default")]
     pub id: i64,
     /// Display name configured on the budget.
     #[serde(deserialize_with = "null_default")]
@@ -20,7 +23,10 @@ pub struct Budget {
     #[serde(deserialize_with = "null_default")]
     pub period_type: String,
     /// Budget type, such as `ACTUAL` or `FORECASTED`.
-    #[serde(rename = "type", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "type", serialize = "Type"),
+        deserialize_with = "null_default"
+    )]
     pub r#type: String,
     /// Exact spend cap in whole currency units.
     #[serde(deserialize_with = "limit_amount")]
@@ -97,7 +103,20 @@ impl Budget {
     ]);
 
     pub(super) fn reflects_numbers(&self, credentials: &SentCredentials) -> bool {
+        if credentials.values().is_empty() {
+            return false;
+        }
         [
+            self.id,
+            self.limit_amount,
+            self.threshold_count,
+            self.alarm_threshold_count,
+        ]
+        .into_iter()
+        .any(|value| {
+            credentials.reflects(value.to_string().as_bytes())
+                || crate::output_number::reflects(value as f64, credentials, false)
+        }) || [
             self.actual_cost,
             self.forecasted_cost,
             self.actual_percentage,
@@ -106,16 +125,7 @@ impl Budget {
         ]
         .into_iter()
         .flatten()
-        .any(|value| {
-            let scientific = format!("{value:e}");
-            if let Some((mantissa, exponent)) = scientific.split_once('e')
-                && let Ok(exponent) = exponent.parse::<i32>()
-                && !(-4..6).contains(&exponent)
-            {
-                return credentials.reflects(format!("{mantissa}e{exponent:+03}").as_bytes());
-            }
-            credentials.reflects(value.to_string().as_bytes())
-        })
+        .any(|value| crate::output_number::reflects(value, credentials, true))
     }
 }
 

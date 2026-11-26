@@ -40,6 +40,8 @@ pub struct Server {
     pub root_der: rustls::pki_types::CertificateDer<'static>,
     pub origin: String,
     pub address: SocketAddr,
+    #[cfg(feature = "test-support")]
+    fixture: (SocketAddr, rustls::pki_types::CertificateDer<'static>),
     requests: Arc<AtomicUsize>,
     connections: Arc<AtomicUsize>,
     protocol: Arc<AtomicUsize>,
@@ -51,8 +53,12 @@ pub struct Server {
 
 impl Server {
     pub fn start(responses: Vec<Response>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
         let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            rcgen::generate_simple_self_signed(vec!["localhost".into(), address.ip().to_string()])
+                .unwrap();
         let mut config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
@@ -62,9 +68,6 @@ impl Server {
             .unwrap();
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let root_der = cert.der().clone();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
         let connections = Arc::new(AtomicUsize::new(0));
         let request_count = Arc::clone(&requests);
@@ -188,6 +191,8 @@ impl Server {
             });
         });
         Self {
+            #[cfg(feature = "test-support")]
+            fixture: (address, root_der.clone()),
             root_der,
             origin: format!("https://localhost:{}", address.port()),
             address,
@@ -199,6 +204,10 @@ impl Server {
             shutdown: Some(shutdown),
             thread: Some(thread),
         }
+    }
+    #[cfg(feature = "test-support")]
+    pub(crate) fn fixture(&self) -> (SocketAddr, &rustls::pki_types::CertificateDer<'static>) {
+        (self.fixture.0, &self.fixture.1)
     }
     pub fn heads(&self) -> Vec<Vec<u8>> {
         self.heads.lock().unwrap().clone()

@@ -1,6 +1,6 @@
 use crate::wire::credential::iam_user::{flow, totp};
 use crate::wire::product::{
-    sender::{BearerSource, BearerToken},
+    sender::{BearerSource, BearerToken, SentCredentials},
     unauthorized::ObtainedAt,
 };
 use crate::{Clock, Error, ErrorClass, RequestContext, Secret, Token};
@@ -54,6 +54,7 @@ struct State {
 
 struct Cached {
     token: Token,
+    signin_credentials: Option<Arc<SentCredentials>>,
     obtained: ObtainedAt,
     expires_monotonic: Option<tokio::time::Instant>,
 }
@@ -62,6 +63,7 @@ impl Cached {
     fn bearer(&self) -> BearerToken {
         BearerToken {
             token: self.token.clone(),
+            signin_credentials: self.signin_credentials.clone(),
             obtained_at: Some(match self.obtained {
                 ObtainedAt::Disk(at) => ObtainedAt::Disk(at),
                 ObtainedAt::InProcess(at) => ObtainedAt::InProcess(at),
@@ -215,6 +217,7 @@ impl IamUser {
             {
                 let cached = Cached {
                     token: Token::new(entry.token, Some(entry.expires)),
+                    signin_credentials: None,
                     obtained: ObtainedAt::Disk(entry.obtained),
                     expires_monotonic: None,
                 };
@@ -277,6 +280,7 @@ impl IamUser {
                 .and_then(|duration| timed.started_monotonic.checked_add(duration));
             let cached = Cached {
                 token,
+                signin_credentials: Some(Arc::new(timed.credentials)),
                 obtained: ObtainedAt::InProcess(obtained_mono),
                 expires_monotonic,
             };
@@ -304,6 +308,7 @@ impl IamUser {
             .and_then(|duration| timed.started_monotonic.checked_add(duration));
         let cached = Cached {
             token,
+            signin_credentials: Some(Arc::new(timed.credentials)),
             obtained: ObtainedAt::InProcess(clock.monotonic_now()),
             expires_monotonic,
         };

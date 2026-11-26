@@ -13,6 +13,9 @@ mod error;
 mod event;
 mod file_diagnostic;
 mod model;
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub mod output_number;
 mod provider;
 mod secret;
 mod session;

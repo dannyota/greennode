@@ -210,3 +210,21 @@ fn missing_credentials_exits_three() {
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["code"], "NoCredentials");
 }
+
+#[test]
+fn non_null_cost_matches_the_go_json_golden() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        include_str!("fixtures/billing/get-budget-cost.response.json").into(),
+    )]);
+    let (status, stdout, stderr) = invoke(
+        &["billing", "get-budget", "--budget-uuid", "b-1"],
+        Some(&server),
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(
+        stdout,
+        include_bytes!("fixtures/billing/get-budget-cost.json.golden")
+    );
+    assert!(stderr.is_empty());
+}

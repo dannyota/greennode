@@ -59,8 +59,8 @@ async fn list_sends_summary_and_status() {
     assert_eq!(item.actual_cost, Some(0.0));
     assert_eq!(item.threshold_percentage, None);
     let json = serde_json::to_value(output).unwrap();
-    assert_eq!(json["Items"][0]["limitAmount"], 1_000_000);
-    assert!(json["Items"][0]["thresholdPercentage"].is_null());
+    assert_eq!(json["Items"][0]["LimitAmount"], 1_000_000);
+    assert!(json["Items"][0]["ThresholdPercentage"].is_null());
 }
 
 #[tokio::test]
@@ -98,7 +98,7 @@ async fn get_reads_budget_by_id() {
     assert_eq!(output.budget.created_at, "2026-09-01T00:00:00");
     assert_eq!(output.budget.actual_cost, None);
     assert_eq!(
-        serde_json::to_value(output).unwrap()["Budget"]["uuid"],
+        serde_json::to_value(output).unwrap()["Budget"]["UUID"],
         BUDGET_ID
     );
 }
@@ -192,20 +192,35 @@ async fn reflected_credentials_are_refused() {
 
 #[tokio::test]
 async fn rounded_numeric_fields_cannot_reflect_credentials() {
-    const NUMERIC_FRAGMENT: &str = "e+06";
+    for (fragment, cost) in [("e-7", "0.0000001"), ("e+21", "1000000000000000000000")] {
+        let body = format!(
+            r#"{{"code":200,"data":{{"uuid":"budget-1","limitAmount":1,"actualCost":{cost}}}}}"#
+        );
+        let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+        let (ctx, _) = RequestContext::new();
+        let Err(failure) = client(&server, fragment)
+            .get_budget(&ctx, GetBudgetInput::new(BUDGET_ID))
+            .await
+        else {
+            panic!("rendered credential reflection returned a budget");
+        };
+        assert!(!format!("{failure:?} {}", failure.error()).contains(fragment));
+        assert_invalid_response(failure);
+    }
+}
+
+#[tokio::test]
+async fn an_unused_numeric_spelling_does_not_withhold_a_budget() {
     let server = Server::start(vec![response(
         "200 OK",
         br#"{"code":200,"data":{"uuid":"budget-1","limitAmount":1,"actualCost":1e6}}"#,
     )]);
     let (ctx, _) = RequestContext::new();
-    let Err(failure) = client(&server, NUMERIC_FRAGMENT)
+    let result = client(&server, "e+06")
         .get_budget(&ctx, GetBudgetInput::new(BUDGET_ID))
         .await
-    else {
-        panic!("credential reflection returned a budget");
-    };
-    assert!(!format!("{failure:?} {}", failure.error()).contains(NUMERIC_FRAGMENT));
-    assert_invalid_response(failure);
+        .unwrap();
+    assert_eq!(result.budget.actual_cost, Some(1_000_000.0));
 }
 
 #[tokio::test]

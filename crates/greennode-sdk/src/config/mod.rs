@@ -48,7 +48,7 @@ pub struct ConfigOptions {
     iam_details: Option<IamUserAuth>,
     endpoint_overrides: EndpointOverrides,
     #[cfg(feature = "test-support")]
-    test_product_root: Option<rustls::pki_types::CertificateDer<'static>>,
+    billing_fixture: Option<crate::wire::connection::FixtureTrust>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -70,7 +70,7 @@ impl ConfigOptions {
         {
             self.endpoint_overrides.billing = Some(server.origin.clone());
         }
-        self.test_product_root = Some(server.root_der.clone());
+        self.billing_fixture = Some(crate::wire::connection::FixtureTrust::new(server));
         self
     }
 
@@ -262,8 +262,10 @@ impl Config {
             (options.iam_details, options.endpoint_overrides),
         )?;
         #[cfg(feature = "test-support")]
-        if let Some(root) = options.test_product_root {
-            session.set_test_product_root(root);
+        if let Some(fixture) = options.billing_fixture {
+            session
+                .set_billing_fixture(&fixture)
+                .map_err(|error| *error)?;
         }
         Ok(Self {
             region,

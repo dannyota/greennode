@@ -348,6 +348,7 @@ mod tests {
                 Ok(sender::BearerToken {
                     token: crate::Token::new(crate::Secret::new(self.1), None),
                     obtained_at: None,
+                    signin_credentials: None,
                 })
             })
         }
@@ -447,6 +448,7 @@ mod tests {
         let base = crate::endpoint::Base::parse(&server.origin).unwrap();
         execute(
             sender::Runtime {
+                configured_credentials: None,
                 client: &clients,
                 ctx: &ctx,
                 clock: &clock,
@@ -605,6 +607,7 @@ mod tests {
                 Ok(sender::BearerToken {
                     token: crate::Token::new(crate::Secret::new("toy-token"), None),
                     obtained_at: None,
+                    signin_credentials: None,
                 })
             })
         }

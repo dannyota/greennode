@@ -4,6 +4,7 @@ mod token;
 pub(crate) mod totp;
 
 use crate::Secret;
+use crate::wire::product::sender::SentCredentials;
 use data_encoding::BASE64URL_NOPAD;
 use sha2::{Digest, Sha256};
 
@@ -40,6 +41,7 @@ struct StoredCookie {
 struct CookieJar {
     origin: url::Origin,
     cookies: Vec<StoredCookie>,
+    sent: SentCredentials,
 }
 
 impl CookieJar {
@@ -47,6 +49,7 @@ impl CookieJar {
         Self {
             origin: origin.origin(),
             cookies: Vec::new(),
+            sent: SentCredentials::default(),
         }
     }
 
@@ -118,7 +121,14 @@ impl CookieJar {
         });
     }
 
-    fn header(&self, url: &url::Url, clock: &dyn crate::Clock) -> Option<Secret> {
+    fn record_form(&mut self, value: &Secret) {
+        self.sent.record(value);
+        let encoded: String =
+            url::form_urlencoded::byte_serialize(value.expose_secret().as_bytes()).collect();
+        self.sent.record(&Secret::new(encoded));
+    }
+
+    fn header(&mut self, url: &url::Url, clock: &dyn crate::Clock) -> Option<Secret> {
         let now = clock.utc_now();
         if url.origin() != self.origin {
             return None;
@@ -135,6 +145,14 @@ impl CookieJar {
         matches.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
         if matches.is_empty() {
             return None;
+        }
+        for cookie in &matches {
+            let value = cookie.value.expose_secret();
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(value);
+            self.sent.record(&Secret::new(unquoted));
         }
         Some(Secret::new(
             matches

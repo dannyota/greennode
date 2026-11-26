@@ -3,6 +3,7 @@ macro_rules! run {
     ($client:expr, $ctx:expr, $clock:expr, $deadline:expr, $op:expr, $auth:expr, $request:expr, $sleeper:expr, $jitter:expr) => {
         super::run(
             Runtime {
+                configured_credentials: None,
                 client: $client,
                 ctx: $ctx,
                 clock: $clock,
@@ -335,6 +336,7 @@ impl BearerSource for BuiltIn {
             Ok(BearerToken {
                 token: Token::new(Secret::new("toy-first"), None),
                 obtained_at: Some(unauthorized::ObtainedAt::InProcess(self.obtained)),
+                signin_credentials: None,
             })
         })
     }
