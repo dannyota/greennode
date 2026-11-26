@@ -174,15 +174,11 @@ impl<'a> ChildWriter<'a> {
             .await?;
         let ZonedLoadBalancer(parent) =
             guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, &self.evidence)?;
-        let lb_type = if parent.r#type.is_empty() && layer_seven_alias(&data) {
-            "Layer 7".into()
-        } else {
-            parent.r#type
-        };
-        screen_input(&self.evidence, [lb_type.as_str()])?;
+        validate_parent_type(&data, &self.evidence)?;
+        screen_input(&self.evidence, [parent.r#type.as_str()])?;
         Ok((
             progress(&LOAD_BALANCER, &data, self.lb_id, &self.evidence)?,
-            lb_type,
+            parent.r#type,
         ))
     }
 
@@ -453,14 +449,15 @@ pub(super) fn lb_busy(progress: &str) -> bool {
     progress == "CREATING-BILLING" || child_busy(progress)
 }
 
-fn layer_seven_alias(body: &str) -> bool {
-    serde_json::from_str::<BTreeMap<String, &RawValue>>(body).is_ok_and(|fields| {
-        fields.into_iter().any(|(name, value)| {
-            name != "type"
-                && field_matches("type", &name)
-                && serde_json::from_str::<String>(value.get()).is_ok_and(|kind| kind == "Layer 7")
-        })
-    })
+fn validate_parent_type(body: &str, evidence: &Evidence) -> Result<(), Box<Error>> {
+    let invalid = || LOAD_BALANCER.decode_error(evidence, DecodeError::InvalidShape);
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_str(body).map_err(|_| invalid())?;
+    if fields.into_iter().any(|(name, value)| {
+        field_matches("type", &name) && (name != "type" || !value.get().starts_with('"'))
+    }) {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 fn busy_message(message: &str) -> bool {

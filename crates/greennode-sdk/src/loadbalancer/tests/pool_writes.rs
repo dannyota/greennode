@@ -225,7 +225,10 @@ async fn layer_seven_alias_still_refuses_non_http_pools() {
         .create_pool(&ctx, input)
         .await
         .unwrap_err();
-    assert!(failure.error().has_class(ErrorClass::InvalidInput));
+    assert_eq!(
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
@@ -312,4 +315,32 @@ async fn credential_like_resource_names_are_sent_when_they_contain_no_secret() {
         .unwrap();
     assert_eq!(result.pool.name, "client-secret-rotation");
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn malformed_or_alias_only_parent_type_stops_pool_dispatch() {
+    for parent in [
+        r#"{"data":{"uuid":"lb-1","Type":7,"progressStatus":"CREATED"}}"#,
+        r#"{"data":{"uuid":"lb-1","Type":"Layer 4","progressStatus":"CREATED"}}"#,
+        r#"{"data":{"uuid":"lb-1","type":null,"progressStatus":"CREATED"}}"#,
+    ] {
+        let server = Server::start(vec![
+            response("200 OK", parent),
+            response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+        ]);
+        let (ctx, _) = RequestContext::new();
+        let mut input = create(true);
+        input.protocol = "TCP".into();
+        input.health_check_protocol = "TCP".into();
+        let failure = client(&server, CANARY)
+            .create_pool(&ctx, input)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.error().detail::<DecodeError>(),
+            Some(&DecodeError::InvalidShape)
+        );
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 1);
+    }
 }
