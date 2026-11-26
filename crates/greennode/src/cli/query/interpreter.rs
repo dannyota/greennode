@@ -26,6 +26,7 @@ pub(in crate::cli) enum EvaluationError {
     FunctionComparison,
     FunctionPanic,
     WorkBudget,
+    ResultSize,
 }
 
 impl EvaluationError {
@@ -38,7 +39,8 @@ impl EvaluationError {
             | Self::NonFinite
             | Self::Uncomparable
             | Self::FunctionPanic
-            | Self::WorkBudget => true,
+            | Self::WorkBudget
+            | Self::ResultSize => true,
             Self::InvalidSlice
             | Self::FunctionArity
             | Self::FunctionVariadicArity
@@ -51,11 +53,15 @@ impl EvaluationError {
 
 pub(super) struct WorkBudget {
     used: u64,
+    limit: u64,
 }
 
 impl WorkBudget {
     pub(super) fn new() -> Self {
-        Self { used: 0 }
+        Self {
+            used: 0,
+            limit: 10_000_000,
+        }
     }
 
     pub(super) fn equal(&mut self, left: &Value, right: &Value) -> Result<bool, EvaluationError> {
@@ -195,7 +201,7 @@ impl WorkBudget {
             .used
             .checked_add(units)
             .ok_or(EvaluationError::WorkBudget)?;
-        if next > 10_000_000 {
+        if next > self.limit {
             return Err(EvaluationError::WorkBudget);
         }
         self.used = next;
@@ -326,8 +332,58 @@ pub(in crate::cli) fn evaluate(
     Ok(result)
 }
 
+pub(super) const RESULT_LIMIT: usize = 64 * 1024 * 1024;
+
+pub(super) fn value_size(value: &Value) -> Result<usize, EvaluationError> {
+    let mut size = std::mem::size_of::<Value>();
+    match value {
+        Value::String(text) => {
+            size = size
+                .checked_add(text.len())
+                .ok_or(EvaluationError::ResultSize)?
+        }
+        Value::Array(items) => {
+            for item in items {
+                size = size
+                    .checked_add(value_size(item)?)
+                    .ok_or(EvaluationError::ResultSize)?;
+            }
+        }
+        Value::Object(items) => {
+            for (key, item) in items {
+                size = size
+                    .checked_add(key.len())
+                    .and_then(|n| n.checked_add(value_size(item).ok()?))
+                    .ok_or(EvaluationError::ResultSize)?;
+            }
+        }
+        _ => {}
+    }
+    if size > RESULT_LIMIT {
+        return Err(EvaluationError::ResultSize);
+    }
+    Ok(size)
+}
+
+pub(super) fn add_size(size: &mut usize, extra: usize) -> Result<(), EvaluationError> {
+    *size = size.checked_add(extra).ok_or(EvaluationError::ResultSize)?;
+    if *size > RESULT_LIMIT {
+        return Err(EvaluationError::ResultSize);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn unlimited_budget() -> WorkBudget {
+    WorkBudget {
+        used: 0,
+        limit: u64::MAX,
+    }
+}
+
 fn copy(value: &Value, budget: &mut WorkBudget) -> Result<Value, EvaluationError> {
     check(value, 0, budget)?;
+    value_size(value)?;
     budget.charge_value(value)?;
     Ok(value.clone())
 }
@@ -335,9 +391,16 @@ fn copy(value: &Value, budget: &mut WorkBudget) -> Result<Value, EvaluationError
 fn push(
     items: &mut Vec<Value>,
     value: Value,
+    size: &mut usize,
     budget: &mut WorkBudget,
 ) -> Result<(), EvaluationError> {
     check(&value, 1, budget)?;
+    *size = size
+        .checked_add(value_size(&value)?)
+        .ok_or(EvaluationError::ResultSize)?;
+    if *size > RESULT_LIMIT {
+        return Err(EvaluationError::ResultSize);
+    }
     budget.charge(1)?;
     items.push(value);
     Ok(())
@@ -457,11 +520,12 @@ pub(super) fn execute(
             };
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for item in &items {
                 if !is_false(&execute(child(node, 2)?, item, budget)?) {
                     let value = execute(child(node, 1)?, item, budget)?;
                     if value != Value::Null {
-                        push(&mut result, value, budget)?;
+                        push(&mut result, value, &mut size, budget)?;
                     }
                 }
             }
@@ -474,14 +538,15 @@ pub(super) fn execute(
             };
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for value in items {
                 match value {
                     Value::Array(nested) => {
                         for item in nested {
-                            push(&mut result, item, budget)?;
+                            push(&mut result, item, &mut size, budget)?;
                         }
                     }
-                    item => push(&mut result, item, budget)?,
+                    item => push(&mut result, item, &mut size, budget)?,
                 }
             }
             Ok(Value::Array(result))
@@ -493,13 +558,14 @@ pub(super) fn execute(
                 execute(child(node, 0)?, input, budget)?
             };
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             match (node.kind, source) {
                 (NodeKind::Projection, Value::Array(items)) => {
                     budget.charge(1)?;
                     for item in &items {
                         let value = execute(child(node, 1)?, item, budget)?;
                         if value != Value::Null {
-                            push(&mut result, value, budget)?;
+                            push(&mut result, value, &mut size, budget)?;
                         }
                     }
                 }
@@ -508,7 +574,7 @@ pub(super) fn execute(
                     for item in items.values() {
                         let value = execute(child(node, 1)?, item, budget)?;
                         if value != Value::Null {
-                            push(&mut result, value, budget)?;
+                            push(&mut result, value, &mut size, budget)?;
                         }
                     }
                 }
@@ -522,8 +588,14 @@ pub(super) fn execute(
             }
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for child in &node.children {
-                push(&mut result, execute(child, input, budget)?, budget)?;
+                push(
+                    &mut result,
+                    execute(child, input, budget)?,
+                    &mut size,
+                    budget,
+                )?;
             }
             Ok(Value::Array(result))
         }
@@ -533,12 +605,18 @@ pub(super) fn execute(
             }
             budget.charge(1)?;
             let mut result = BTreeMap::new();
+            let mut size = std::mem::size_of::<Value>();
             for child in &node.children {
                 let NodeValue::Text(key) = &child.value else {
                     return Err(EvaluationError::InvalidNode);
                 };
                 let value = execute(child, input, budget)?;
                 check(&value, 1, budget)?;
+                if let Some(old) = result.get(key) {
+                    size -= key.len() + value_size(old)?;
+                }
+                add_size(&mut size, key.len())?;
+                add_size(&mut size, value_size(&value)?)?;
                 budget.charge(1)?;
                 budget.charge_bytes(key)?;
                 budget.charge_map_key(key, result.len())?;
@@ -579,10 +657,17 @@ fn slice(
         .unwrap_or(if step < 0 { -1 } else { length });
     budget.charge(1)?;
     let mut result = Vec::new();
+    let mut size = std::mem::size_of::<Value>();
     while if step < 0 { index > stop } else { index < stop } {
         let position = usize::try_from(index).map_err(|_| EvaluationError::InvalidSlice)?;
         let value = items.get(position).ok_or(EvaluationError::InvalidSlice)?;
         check(value, 1, budget)?;
+        size = size
+            .checked_add(value_size(value)?)
+            .ok_or(EvaluationError::ResultSize)?;
+        if size > RESULT_LIMIT {
+            return Err(EvaluationError::ResultSize);
+        }
         budget.charge_value(value)?;
         result.push(value.clone());
         let next = i64::try_from(index)
@@ -597,6 +682,31 @@ fn slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn result_size_limit_checks_before_copy() {
+        let overhead = std::mem::size_of::<Value>();
+        let mut budget = WorkBudget {
+            used: 0,
+            limit: u64::MAX,
+        };
+        let value = Value::String("x".repeat(RESULT_LIMIT - overhead));
+        assert!(copy(&value, &mut budget).is_ok());
+        let oversized = Value::Array(vec![value]);
+        assert_eq!(
+            copy(&oversized, &mut budget),
+            Err(EvaluationError::ResultSize)
+        );
+    }
+
+    #[test]
+    fn default_budget_stops_large_string_before_size_limit() {
+        let value = Value::String("x".repeat(11_000_000));
+        assert_eq!(
+            copy(&value, &mut WorkBudget::new()),
+            Err(EvaluationError::WorkBudget)
+        );
+    }
+
     #[test]
     fn stable_sort_stops_at_first_comparator_error() {
         let mut budget = WorkBudget::new();
@@ -744,7 +854,10 @@ mod tests {
     #[test]
     fn empty_filter_charges_produced_container() {
         let query = super::super::compile("[?@]").unwrap();
-        let mut budget = WorkBudget { used: 9_999_997 };
+        let mut budget = WorkBudget {
+            used: 9_999_997,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             execute(&query.0, &Value::Array(vec![]), &mut budget),
             Err(EvaluationError::WorkBudget)
@@ -753,7 +866,10 @@ mod tests {
     #[test]
     fn multiselect_charges_produced_elements() {
         let query = super::super::compile("[@,@]").unwrap();
-        let mut budget = WorkBudget { used: 9_999_994 };
+        let mut budget = WorkBudget {
+            used: 9_999_994,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             execute(&query.0, &Value::Bool(true), &mut budget),
             Err(EvaluationError::WorkBudget)
@@ -763,7 +879,10 @@ mod tests {
     fn function_argument_clone_is_metered() {
         let query = super::super::compile("length(@)").unwrap();
         let input = Value::Array(vec![Value::Null, Value::Null]);
-        let mut budget = WorkBudget { used: 9_999_994 };
+        let mut budget = WorkBudget {
+            used: 9_999_994,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             execute(&query.0, &input, &mut budget),
             Err(EvaluationError::WorkBudget)
@@ -780,7 +899,10 @@ mod tests {
     #[test]
     fn doubling_copy_is_metered() {
         let query = super::super::compile("[@,@] | [@,@]").unwrap();
-        let mut budget = WorkBudget { used: 9_999_986 };
+        let mut budget = WorkBudget {
+            used: 9_999_986,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             execute(&query.0, &Value::Number(1.0), &mut budget),
             Err(EvaluationError::WorkBudget)
@@ -798,7 +920,10 @@ mod tests {
     #[test]
     fn budget_charges_each_visited_ast_node() {
         let query = super::super::compile("!@").unwrap();
-        let mut budget = WorkBudget { used: 9_999_999 };
+        let mut budget = WorkBudget {
+            used: 9_999_999,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             execute(&query.0, &Value::Bool(true), &mut budget),
             Err(EvaluationError::WorkBudget)
@@ -810,7 +935,10 @@ mod tests {
         let mut budget = WorkBudget::new();
         assert_eq!(budget.equal(&input, &input), Ok(true));
         assert_eq!(budget.used, 4);
-        let mut budget = WorkBudget { used: 9_999_998 };
+        let mut budget = WorkBudget {
+            used: 9_999_998,
+            ..WorkBudget::new()
+        };
         assert_eq!(
             budget.equal(&input, &input),
             Err(EvaluationError::WorkBudget)

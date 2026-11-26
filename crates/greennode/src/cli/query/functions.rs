@@ -2,8 +2,11 @@
 
 use crate::cli::render::Value;
 
+use super::json_size::json_size;
+
 use super::interpreter::{
-    EvaluationError, WorkBudget, check, compare_numbers, compare_strings, stable_order,
+    EvaluationError, WorkBudget, add_size, check, compare_numbers, compare_strings, stable_order,
+    value_size,
 };
 
 #[derive(Clone, Copy)]
@@ -78,69 +81,6 @@ pub(super) fn matches_type(
         Type::Any => true,
     };
     Ok(matches)
-}
-
-fn json_string_size(value: &str, budget: &mut WorkBudget) -> Result<usize, EvaluationError> {
-    let mut size = 2usize;
-    for ch in value.chars() {
-        budget.charge(1)?;
-        let bytes = match ch {
-            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
-            '\0'..='\u{1f}' | '<' | '>' | '&' | '\u{2028}' | '\u{2029}' => 6,
-            _ => ch.len_utf8(),
-        };
-        size = size.checked_add(bytes).ok_or(EvaluationError::WorkBudget)?;
-    }
-    Ok(size)
-}
-
-fn json_size(
-    value: &Value,
-    budget: &mut WorkBudget,
-    depth: usize,
-) -> Result<usize, EvaluationError> {
-    if depth > 128 {
-        return Err(EvaluationError::Depth);
-    }
-    budget.charge(1)?;
-    match value {
-        Value::Null => Ok(4),
-        Value::Bool(value) => Ok(if *value { 4 } else { 5 }),
-        Value::Number(value) => Ok(crate::cli::render::query_json_float(*value)
-            .map_err(|_| EvaluationError::NonFinite)?
-            .len()),
-        Value::String(value) => json_string_size(value, budget),
-        Value::Array(values) => {
-            if depth >= 128 {
-                return Err(EvaluationError::Depth);
-            }
-            let mut size = 2usize;
-            for (index, value) in values.iter().enumerate() {
-                let element_size = json_size(value, budget, depth + 1)?;
-                size = size
-                    .checked_add(usize::from(index > 0))
-                    .and_then(|n| n.checked_add(element_size))
-                    .ok_or(EvaluationError::WorkBudget)?;
-            }
-            Ok(size)
-        }
-        Value::Object(values) => {
-            if depth >= 128 {
-                return Err(EvaluationError::Depth);
-            }
-            let mut size = 2usize;
-            for (index, (key, value)) in values.iter().enumerate() {
-                let key_size = json_string_size(key, budget)?;
-                let value_size = json_size(value, budget, depth + 1)?;
-                size = size
-                    .checked_add(usize::from(index > 0) + 1)
-                    .and_then(|n| n.checked_add(key_size))
-                    .and_then(|n| n.checked_add(value_size))
-                    .ok_or(EvaluationError::WorkBudget)?;
-            }
-            Ok(size)
-        }
-    }
 }
 
 fn json_string(
@@ -409,9 +349,11 @@ pub(super) fn call_budgeted(
         ("keys", [Value::Object(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for key in values.keys() {
                 budget.charge(2)?;
                 budget.charge_bytes(key)?;
+                add_size(&mut size, std::mem::size_of::<Value>() + key.len())?;
                 result.push(Value::String(key.clone()));
             }
             Ok(Value::Array(result))
@@ -419,10 +361,12 @@ pub(super) fn call_budgeted(
         ("values", [Value::Object(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for value in values.values() {
                 budget.charge(1)?;
                 check(value, 1, budget)?;
                 budget.charge_value(value)?;
+                add_size(&mut size, value_size(value)?)?;
                 result.push(value.clone());
             }
             Ok(Value::Array(result))
@@ -495,10 +439,18 @@ pub(super) fn call_budgeted(
                     .ok_or(EvaluationError::WorkBudget)?;
                 parts.push(value.as_str());
             }
-            budget.charge(u64::try_from(bytes).map_err(|_| EvaluationError::WorkBudget)?)?;
+            add_size(&mut bytes, std::mem::size_of::<Value>())?;
+            budget.charge(
+                u64::try_from(bytes - std::mem::size_of::<Value>())
+                    .map_err(|_| EvaluationError::WorkBudget)?,
+            )?;
             Ok(Value::String(parts.join(separator)))
         }
         ("to_array", [Value::Array(values)]) => {
+            let mut size = std::mem::size_of::<Value>();
+            for value in values {
+                add_size(&mut size, value_size(value)?)?;
+            }
             budget.charge(1)?;
             for value in values {
                 budget.charge_value(value)?;
@@ -506,17 +458,23 @@ pub(super) fn call_budgeted(
             Ok(Value::Array(values.clone()))
         }
         ("to_array", [value]) => {
+            let mut size = std::mem::size_of::<Value>();
+            add_size(&mut size, value_size(value)?)?;
             budget.charge(1)?;
             check(value, 1, budget)?;
             budget.charge_value(value)?;
             Ok(Value::Array(vec![value.clone()]))
         }
         ("to_string", [Value::String(value)]) => {
+            let mut size = std::mem::size_of::<Value>();
+            add_size(&mut size, value.len())?;
             budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
             Ok(Value::String(value.clone()))
         }
         ("to_string", [value]) => {
             let size = json_size(value, budget, 0)?;
+            let mut result_size = std::mem::size_of::<Value>();
+            add_size(&mut result_size, size)?;
             budget.charge(u64::try_from(size).map_err(|_| EvaluationError::WorkBudget)?)?;
             let mut output = String::with_capacity(size);
             compact_json(value, &mut output, 0, budget)?;
@@ -569,6 +527,7 @@ pub(super) fn call_budgeted(
                     best = value;
                 }
             }
+            value_size(best)?;
             budget.charge_value(best)?;
             Ok(best.clone())
         }
@@ -586,8 +545,10 @@ pub(super) fn call_budgeted(
                 _ => Err(EvaluationError::FunctionType),
             })?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for index in order {
                 budget.charge_value(&values[index])?;
+                add_size(&mut size, value_size(&values[index])?)?;
                 result.push(values[index].clone());
             }
             Ok(Value::Array(result))
@@ -595,6 +556,7 @@ pub(super) fn call_budgeted(
         ("merge", values) => {
             budget.charge(1)?;
             let mut merged = std::collections::BTreeMap::new();
+            let mut size = std::mem::size_of::<Value>();
             for value in values {
                 let Value::Object(map) = value else {
                     return Err(EvaluationError::FunctionPanic);
@@ -604,6 +566,11 @@ pub(super) fn call_budgeted(
                     budget.charge_bytes(key)?;
                     budget.charge_value(value)?;
                     budget.charge_merge_key(key, merged.len())?;
+                    if let Some(old) = merged.get(key) {
+                        size -= key.len() + value_size(old)?;
+                    }
+                    add_size(&mut size, key.len())?;
+                    add_size(&mut size, value_size(value)?)?;
                     merged.insert(key.clone(), value.clone());
                 }
             }
@@ -643,6 +610,7 @@ pub(super) fn call_budgeted(
             for value in values {
                 budget.charge(1)?;
                 if *value != Value::Null {
+                    value_size(value)?;
                     budget.charge_value(value)?;
                     return Ok(value.clone());
                 }
@@ -650,6 +618,8 @@ pub(super) fn call_budgeted(
             Ok(Value::Null)
         }
         ("reverse", [Value::String(value)]) => {
+            let mut size = std::mem::size_of::<Value>();
+            add_size(&mut size, value.len())?;
             for _ in value.chars() {
                 budget.charge(1)?;
             }
@@ -659,9 +629,11 @@ pub(super) fn call_budgeted(
         ("reverse", [Value::Array(values)]) => {
             budget.charge(1)?;
             let mut result = Vec::new();
+            let mut size = std::mem::size_of::<Value>();
             for value in values.iter().rev() {
                 budget.charge(1)?;
                 budget.charge_value(value)?;
+                add_size(&mut size, value_size(value)?)?;
                 result.push(value.clone());
             }
             Ok(Value::Array(result))
@@ -690,6 +662,50 @@ pub(super) fn call_budgeted(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn function_results_stop_at_size_limit() {
+        use super::super::interpreter::{RESULT_LIMIT, unlimited_budget};
+        let overhead = std::mem::size_of::<Value>();
+        let text = "x".repeat(RESULT_LIMIT - 2 * overhead + 1);
+        let input = Value::String(text);
+        assert_eq!(
+            call_budgeted(
+                "to_array",
+                std::slice::from_ref(&input),
+                &mut unlimited_budget()
+            ),
+            Err(EvaluationError::ResultSize)
+        );
+        let object = Value::Object(BTreeMap::from([("k".into(), input)]));
+        assert_eq!(
+            call_budgeted(
+                "values",
+                std::slice::from_ref(&object),
+                &mut unlimited_budget()
+            ),
+            Err(EvaluationError::ResultSize)
+        );
+        assert_eq!(
+            call_budgeted(
+                "merge",
+                std::slice::from_ref(&object),
+                &mut unlimited_budget()
+            ),
+            Err(EvaluationError::ResultSize)
+        );
+        let args = [
+            Value::String("x".repeat(100)),
+            Value::Array(vec![
+                Value::String("a".repeat(RESULT_LIMIT - 100)),
+                Value::String("b".repeat(100)),
+            ]),
+        ];
+        assert_eq!(
+            call_budgeted("join", &args, &mut unlimited_budget()),
+            Err(EvaluationError::ResultSize)
+        );
+    }
 
     #[test]
     fn merge_charges_key_comparisons() {
