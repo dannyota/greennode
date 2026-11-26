@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 fn decode(
     bytes: &[u8],
     started: time::OffsetDateTime,
-    now: time::OffsetDateTime,
+    elapsed: std::time::Duration,
 ) -> Result<Token, LoginError> {
     let err = || LoginError::new("token exchange", None, false);
     let fields = [
@@ -46,7 +46,10 @@ fn decode(
     let end = started
         .checked_add(time::Duration::seconds(expires))
         .ok_or_else(err)?;
-    if end <= now.saturating_add(time::Duration::seconds(30)) {
+    if std::time::Duration::from_secs(u64::try_from(expires).map_err(|_| err())?)
+        .saturating_sub(elapsed)
+        <= std::time::Duration::from_secs(30)
+    {
         return Err(err());
     }
     Ok(Token::new(access, Some(end)))
@@ -111,6 +114,7 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<Token, LoginError> {
         )))
         .map_err(|_| failure())?;
     let started = input.clock.utc_now();
+    let started_monotonic = input.clock.monotonic_now();
     let response = send::once(
         input.client.as_client(),
         request,
@@ -131,8 +135,15 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<Token, LoginError> {
     if response.status != http::StatusCode::OK {
         return Err(LoginError::new("token exchange", status, false));
     }
-    decode(&response.body, started, input.clock.utc_now())
-        .map_err(|_| LoginError::new("token exchange", status, false))
+    decode(
+        &response.body,
+        started,
+        input
+            .clock
+            .monotonic_now()
+            .saturating_duration_since(started_monotonic),
+    )
+    .map_err(|_| LoginError::new("token exchange", status, false))
 }
 
 #[cfg(test)]
@@ -159,12 +170,17 @@ mod tests {
             OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
         let token_url = url::Url::parse(&format!("{}/token", server.origin)).unwrap();
         let dashboard = url::Url::parse("https://dashboard.test/").unwrap();
+        let (verifier, _) = super::super::pkce(&mut |bytes| {
+            bytes.fill(3);
+            Ok(())
+        })
+        .unwrap();
         exchange(Exchange {
             client: &client,
             token_url: &token_url,
             dashboard: &dashboard,
             code: &Secret::new("auth-code-canary"),
-            verifier: &Secret::new("verifier-canary"),
+            verifier: &verifier,
             clock: &SystemClock,
             deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
         })
@@ -217,13 +233,71 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn elapsed_time_uses_monotonic_clock_even_if_wall_clock_moves_back() {
+        struct ShiftingClock {
+            base: tokio::time::Instant,
+            ticks: std::sync::atomic::AtomicUsize,
+            walls: std::sync::atomic::AtomicUsize,
+        }
+        impl Clock for ShiftingClock {
+            fn utc_now(&self) -> time::OffsetDateTime {
+                let call = self.walls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                time::OffsetDateTime::UNIX_EPOCH
+                    + time::Duration::seconds(if call == 0 { 100 } else { 0 })
+            }
+            fn monotonic_now(&self) -> tokio::time::Instant {
+                self.base
+                    + Duration::from_secs(
+                        2 * self.ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) as u64,
+                    )
+            }
+            fn sleep_until(
+                &self,
+                _: tokio::time::Instant,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+                Box::pin(std::future::pending())
+            }
+        }
+        let server = Server::start(vec![response(
+            "200 OK",
+            r#"{"accessToken":"toy","expiresIn":31}"#,
+        )]);
+        let client =
+            OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
+        let token_url = url::Url::parse(&format!("{}/token", server.origin)).unwrap();
+        let dashboard = url::Url::parse("https://dashboard.test/").unwrap();
+        let base = tokio::time::Instant::now();
+        let clock = ShiftingClock {
+            base,
+            ticks: std::sync::atomic::AtomicUsize::new(0),
+            walls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let (verifier, _) = super::super::pkce(&mut |bytes| {
+            bytes.fill(3);
+            Ok(())
+        })
+        .unwrap();
+        let result = exchange(Exchange {
+            client: &client,
+            token_url: &token_url,
+            dashboard: &dashboard,
+            code: &Secret::new("toy-code"),
+            verifier: &verifier,
+            clock: &clock,
+            deadline: base + Duration::from_secs(300),
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
     #[test]
     fn unicode_token_aliases_follow_baseline() {
         let now = time::OffsetDateTime::UNIX_EPOCH;
         let valid = "{\"accessToKen\":\"abc\",\"expiresIn\":3600}";
         let duplicate = "{\"accessToken\":\"abc\",\"accessToKen\":\"other\",\"expiresIn\":3600}";
-        assert!(decode(valid.as_bytes(), now, now).is_ok());
-        assert!(decode(duplicate.as_bytes(), now, now).is_err());
+        assert!(decode(valid.as_bytes(), now, Duration::ZERO).is_ok());
+        assert!(decode(duplicate.as_bytes(), now, Duration::ZERO).is_err());
     }
 
     #[test]
@@ -237,14 +311,21 @@ mod tests {
             r#"{{"accessToken":"abc","expiresIn":3600,"extra":"{}"}}"#,
             "a".repeat(1024 * 1024)
         );
-        assert!(decode(valid.as_bytes(), now, now).is_ok());
-        assert!(decode(oversized.as_bytes(), now, now).is_err());
+        assert!(decode(valid.as_bytes(), now, Duration::ZERO).is_ok());
+        assert!(decode(oversized.as_bytes(), now, Duration::ZERO).is_err());
     }
 
     #[test]
     fn token_schema_and_lifetime() {
         let now = time::OffsetDateTime::UNIX_EPOCH;
-        assert!(decode(br#"{"accessToken":"abc","expiresIn":3600}"#, now, now).is_ok());
+        assert!(
+            decode(
+                br#"{"accessToken":"abc","expiresIn":3600}"#,
+                now,
+                Duration::ZERO
+            )
+            .is_ok()
+        );
         for bad in [
             br#"{"accessToken":"","expiresIn":3600}"#.as_slice(),
             br#"{"accessToken":"abc","expiresIn":30}"#,
@@ -255,13 +336,13 @@ mod tests {
             br#"{"accessToken":"abc","expiresIn":3600,"unknown":{"x":1,"x":2}}"#,
             br#"{"accessToken":"abc","expiresIn":3600} {}"#,
         ] {
-            assert!(decode(bad, now, now).is_err());
+            assert!(decode(bad, now, Duration::ZERO).is_err());
         }
         assert!(
             decode(
                 br#"{"accessToken":"abc","expiresIn":30}"#,
                 now,
-                now - time::Duration::seconds(1)
+                Duration::ZERO
             )
             .is_err()
         );
@@ -269,7 +350,7 @@ mod tests {
             decode(
                 br#"{"accessToken":"abc","expiresIn":31}"#,
                 now,
-                now + time::Duration::seconds(1)
+                Duration::from_secs(1)
             )
             .is_err()
         );

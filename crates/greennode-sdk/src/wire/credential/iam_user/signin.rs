@@ -46,15 +46,15 @@ pub(super) fn classify(
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Login<'a> {
-    pub(super) client: &'a crate::wire::connection::OneSendClient,
-    pub(super) origin: &'a Url,
-    pub(super) dashboard: &'a Url,
-    pub(super) root_email: &'a str,
-    pub(super) username: &'a str,
-    pub(super) password: &'a Secret,
-    pub(super) clock: &'a dyn crate::Clock,
-    pub(super) deadline: tokio::time::Instant,
+pub(crate) struct Login<'a> {
+    pub(crate) client: &'a crate::wire::connection::OneSendClient,
+    pub(crate) origin: &'a Url,
+    pub(crate) dashboard: &'a Url,
+    pub(crate) root_email: &'a str,
+    pub(crate) username: &'a str,
+    pub(crate) password: &'a Secret,
+    pub(crate) clock: &'a dyn crate::Clock,
+    pub(crate) deadline: tokio::time::Instant,
 }
 
 pub(super) struct Session {
@@ -232,6 +232,14 @@ mod tests {
         }
     }
 
+    fn test_pkce() -> (Secret, String) {
+        super::super::pkce(&mut |bytes| {
+            bytes.fill(1);
+            Ok(())
+        })
+        .unwrap()
+    }
+
     async fn run(server: &Server) -> Result<Session, LoginError> {
         let client =
             OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
@@ -249,7 +257,7 @@ mod tests {
                 clock: &SystemClock,
                 deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
             },
-            super::super::from_bytes(&[1; 32]),
+            test_pkce(),
         )
         .await
     }
@@ -282,6 +290,29 @@ mod tests {
         assert!(get.contains("codeChallengeMethod=S256"));
         let post = String::from_utf8_lossy(&heads[1]).to_ascii_lowercase();
         assert!(post.contains("cookie: session=toy"));
+    }
+
+    #[tokio::test]
+    async fn quoted_cookie_reaches_password_post() {
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                vec![("Set-Cookie", "session=\"toy cookie,part\"; Path=/; Secure")],
+                "<input name=\"_csrf\" value=\"token\">",
+            ),
+            response(
+                "302 Found",
+                vec![("Location", "https://dashboard.test/return?code=one")],
+                "",
+            ),
+        ]);
+        assert!(run(&server).await.is_ok());
+        let heads = server.heads();
+        let post = String::from_utf8_lossy(&heads[1]).to_ascii_lowercase();
+        assert!(
+            post.lines()
+                .any(|line| line == "cookie: session=\"toy cookie,part\"")
+        );
     }
 
     #[tokio::test]
@@ -585,7 +616,7 @@ mod tests {
                 clock: &SystemClock,
                 deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
             },
-            super::super::from_bytes(&[1; 32]),
+            test_pkce(),
         )
         .await;
         assert!(result.is_err());
@@ -618,7 +649,7 @@ mod tests {
                 clock: &SystemClock,
                 deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
             },
-            super::super::from_bytes(&[1; 32]),
+            test_pkce(),
         )
         .await;
         assert!(result.is_ok());

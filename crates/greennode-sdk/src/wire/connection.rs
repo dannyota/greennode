@@ -90,6 +90,17 @@ impl Trust {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_roots(
+        roots: impl IntoIterator<Item = rustls::pki_types::CertificateDer<'static>>,
+    ) -> Self {
+        let mut store = RootCertStore::empty();
+        for root in roots {
+            store.add(root).unwrap();
+        }
+        Self(store)
+    }
+
+    #[cfg(test)]
     pub(crate) fn test(root: rustls::pki_types::CertificateDer<'static>) -> Self {
         let mut roots = RootCertStore::empty();
         roots.add(root).unwrap();

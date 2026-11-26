@@ -1,7 +1,7 @@
-mod flow;
-mod signin;
+pub(crate) mod flow;
+pub(crate) mod signin;
 mod token;
-mod totp;
+pub(crate) mod totp;
 
 use crate::Secret;
 use data_encoding::BASE64URL_NOPAD;
@@ -21,9 +21,9 @@ fn from_bytes(bytes: &[u8; 32]) -> (Secret, String) {
     (verifier, challenge)
 }
 
-pub(super) fn pkce() -> Result<(Secret, String), getrandom::Error> {
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes)?;
+fn pkce(rng: &mut (dyn FnMut(&mut [u8]) -> Result<(), ()> + Send)) -> Result<(Secret, String), ()> {
+    let mut bytes = zeroize::Zeroizing::new([0; 32]);
+    rng(&mut bytes[..])?;
     Ok(from_bytes(&bytes))
 }
 
@@ -58,15 +58,24 @@ impl CookieJar {
         let Ok(cookie) = cookie::Cookie::parse(header) else {
             return;
         };
+        let value = cookie.value();
+        let (value_to_validate, quoted) =
+            match value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                Some(inner) => (inner, true),
+                None => (value, false),
+            };
         if !cookie
             .name()
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
             || cookie.name().is_empty()
-            || !cookie
-                .value()
-                .bytes()
-                .all(|b| matches!(b, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e))
+            || !value_to_validate.bytes().all(|b| {
+                if quoted {
+                    (0x20..0x7f).contains(&b) && !matches!(b, b'"' | b';' | b'\\')
+                } else {
+                    matches!(b, 0x21 | 0x23..=0x2b | 0x2d..=0x3a | 0x3c..=0x5b | 0x5d..=0x7e)
+                }
+            })
         {
             return;
         }
@@ -249,6 +258,22 @@ mod tests {
     }
 
     #[test]
+    fn quoted_cookie_rejects_invalid_enclosed_octets() {
+        let base = url("https://example.test/a");
+        let mut jar = CookieJar::new(base.clone());
+        for bad in [
+            "session=\"bad\\value\"",
+            "session=\"bad\"value\"",
+            "session=\"bad\u{7f}value\"",
+        ] {
+            jar.store(&base, bad, &now());
+            assert!(jar.header(&base, &now()).is_none());
+        }
+        jar.store(&base, "session=\"hello world,ok\"", &now());
+        assert!(jar.header(&base, &now()).is_some());
+    }
+
+    #[test]
     fn malformed_cookie_is_dropped() {
         let base = url("https://example.test/a");
         let mut jar = CookieJar::new(base.clone());
@@ -268,7 +293,11 @@ mod tests {
 
     #[test]
     fn verifier_matches_baseline_encoding() {
-        let (verifier, _) = from_bytes(&[0xff; 32]);
+        let (verifier, _) = pkce(&mut |bytes| {
+            bytes.fill(0xff);
+            Ok(())
+        })
+        .unwrap();
         assert_eq!(
             verifier.expose_secret(),
             "__________________________________________8"

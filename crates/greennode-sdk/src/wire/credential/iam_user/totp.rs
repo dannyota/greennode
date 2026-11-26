@@ -9,16 +9,16 @@ pub(super) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
         .get(..10)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("otpauth://"))
         && let Ok(url) = url::Url::parse(raw)
-        && let Some((_, value)) = url
-            .query_pairs()
-            .find(|(name, value)| name == "secret" && !value.is_empty())
+        && let Some((_, value)) = url.query_pairs().find(|(name, _)| name == "secret")
+        && !value.is_empty()
     {
         *normalized = value.into_owned();
     }
     *normalized = normalized
         .replace([' ', '-'], "")
         .trim_end_matches('=')
-        .to_uppercase();
+        .to_uppercase()
+        .replace(['\r', '\n'], "");
     let key = Zeroizing::new(
         data_encoding::BASE32_NOPAD
             .decode(normalized.as_bytes())
@@ -39,12 +39,12 @@ pub(super) fn code(seed: &Secret, unix_seconds: i64) -> Result<Secret, ()> {
     Ok(Secret::new(format!("{:06}", number % 1_000_000)))
 }
 
-pub(super) type Provider<'a> = dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send + 'a>>
+pub(crate) type Provider<'a> = dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send + 'a>>
     + Send
     + Sync
     + 'a;
 
-pub(super) enum Source<'a> {
+pub(crate) enum Source<'a> {
     Provider(&'a Provider<'a>),
     Seed(&'a Secret),
 }
@@ -475,6 +475,32 @@ mod tests {
         assert!(code(&Secret::new("!invalid!"), 59).is_err());
         assert!(code(&rfc_seed(), -30).is_err());
         assert!(code(&rfc_seed(), 59).is_ok());
+    }
+
+    #[test]
+    fn empty_first_otpauth_secret_is_not_skipped() {
+        let seed = rfc_seed();
+        let input = Secret::new(format!(
+            "otpauth://totp/account?secret=&secret={}",
+            seed.expose_secret()
+        ));
+        let valid = Secret::new(format!(
+            "otpauth://totp/account?secret={}&secret=",
+            seed.expose_secret()
+        ));
+        assert!(code(&input, 59).is_err());
+        assert!(code(&valid, 59).is_ok());
+    }
+
+    #[test]
+    fn base32_ignores_internal_crlf() {
+        let seed = rfc_seed();
+        let raw = seed.expose_secret();
+        let broken = Secret::new(format!("{}\r\n{}\n{}", &raw[..4], &raw[4..12], &raw[12..]));
+        let expected = code(&seed, 59).unwrap();
+        let result = code(&broken, 59);
+        assert!(result.is_ok());
+        assert!(result.unwrap().expose_secret() == expected.expose_secret());
     }
 
     #[test]
