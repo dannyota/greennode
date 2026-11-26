@@ -1,10 +1,15 @@
-//! Read relational database inventory and catalogs.
+//! Relational database inventory, catalogs, and instance writes.
 
+mod create;
+mod delete;
 mod model;
 #[cfg(test)]
 mod tests;
 mod wire;
+mod write;
 
+pub use create::{CreateDatabaseInstanceInput, CreateDatabaseInstanceOutput};
+pub use delete::{DeleteDatabaseInstanceInput, DeleteDatabaseInstanceOutput, DeleteRefused};
 pub use model::{EngineVersion, Flavor, Instance, Network, Page, StorageType, Subnet, Zone};
 
 use crate::config::Session;
@@ -130,15 +135,25 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseEngineVersionsInput,
     ) -> Result<ListDatabaseEngineVersionsOutput, Failure<ListDatabaseEngineVersionsOutput>> {
+        self.engine_versions(ctx, &mut Evidence::new()).await
+    }
+
+    async fn engine_versions(
+        &self,
+        ctx: &RequestContext,
+        evidence: &mut Evidence,
+    ) -> Result<ListDatabaseEngineVersionsOutput, Failure<ListDatabaseEngineVersionsOutput>> {
         Ok(List {
             items: self
-                .read(
+                .read_path(
                     ctx,
                     &read_operation(
                         "database.ListDatabaseEngineVersions",
                         "vdb-relational/v1/database-instances/datastore",
                     ),
                     &[],
+                    &[],
+                    evidence,
                 )
                 .await?,
         })
@@ -149,15 +164,25 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseZonesInput,
     ) -> Result<ListDatabaseZonesOutput, Failure<ListDatabaseZonesOutput>> {
+        self.zones(ctx, &mut Evidence::new()).await
+    }
+
+    async fn zones(
+        &self,
+        ctx: &RequestContext,
+        evidence: &mut Evidence,
+    ) -> Result<ListDatabaseZonesOutput, Failure<ListDatabaseZonesOutput>> {
         Ok(List {
             items: self
-                .read(
+                .read_path(
                     ctx,
                     &read_operation(
                         "database.ListDatabaseZones",
                         "vdb-relational/v1/database-instances/zones",
                     ),
                     &[],
+                    &[],
+                    evidence,
                 )
                 .await?,
         })
@@ -167,6 +192,15 @@ impl Client {
         &self,
         ctx: &RequestContext,
         input: ListDatabaseFlavorsInput,
+    ) -> Result<ListDatabaseFlavorsOutput, Failure<ListDatabaseFlavorsOutput>> {
+        self.flavors(ctx, input, &mut Evidence::new()).await
+    }
+
+    async fn flavors(
+        &self,
+        ctx: &RequestContext,
+        input: ListDatabaseFlavorsInput,
+        evidence: &mut Evidence,
     ) -> Result<ListDatabaseFlavorsOutput, Failure<ListDatabaseFlavorsOutput>> {
         if !valid_id(&input.engine) || input.engine_version.is_empty() || !valid_id(&input.zone_id)
         {
@@ -179,13 +213,15 @@ impl Client {
         ];
         Ok(List {
             items: self
-                .read(
+                .read_path(
                     ctx,
                     &read_operation(
                         "database.ListDatabaseFlavors",
                         "vdb-relational/v1/database-instances/flavors",
                     ),
+                    &[],
                     &query,
+                    evidence,
                 )
                 .await?,
         })
@@ -196,17 +232,28 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseStorageTypesInput,
     ) -> Result<ListDatabaseStorageTypesOutput, Failure<ListDatabaseStorageTypesOutput>> {
+        self.storage_types(ctx, input, &mut Evidence::new()).await
+    }
+
+    async fn storage_types(
+        &self,
+        ctx: &RequestContext,
+        input: ListDatabaseStorageTypesInput,
+        evidence: &mut Evidence,
+    ) -> Result<ListDatabaseStorageTypesOutput, Failure<ListDatabaseStorageTypesOutput>> {
         if !valid_id(&input.zone_id) {
             return Err(failure(invalid_input()));
         }
         let data: StorageData = self
-            .read(
+            .read_path(
                 ctx,
                 &read_operation(
                     "database.ListDatabaseStorageTypes",
                     "vdb-relational/v1/database-instances/volume/types",
                 ),
+                &[],
                 &[("zoneId", &input.zone_id)],
+                evidence,
             )
             .await?;
         Ok(ListDatabaseStorageTypesOutput {
@@ -220,18 +267,29 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseNetworksInput,
     ) -> Result<ListDatabaseNetworksOutput, Failure<ListDatabaseNetworksOutput>> {
+        self.networks(ctx, input, &mut Evidence::new()).await
+    }
+
+    async fn networks(
+        &self,
+        ctx: &RequestContext,
+        input: ListDatabaseNetworksInput,
+        evidence: &mut Evidence,
+    ) -> Result<ListDatabaseNetworksOutput, Failure<ListDatabaseNetworksOutput>> {
         if !valid_id(&input.zone_id) {
             return Err(failure(invalid_input()));
         }
         Ok(List {
             items: self
-                .read(
+                .read_path(
                     ctx,
                     &read_operation(
                         "database.ListDatabaseNetworks",
                         "vdb-relational/v1/database-instances/networks/subnets",
                     ),
+                    &[],
                     &[("zoneId", &input.zone_id)],
+                    evidence,
                 )
                 .await?,
         })
@@ -241,6 +299,15 @@ impl Client {
         &self,
         ctx: &RequestContext,
         input: ListDatabaseInstancesInput,
+    ) -> Result<ListDatabaseInstancesOutput, Failure<ListDatabaseInstancesOutput>> {
+        self.instances(ctx, input, &mut Evidence::new()).await
+    }
+
+    async fn instances(
+        &self,
+        ctx: &RequestContext,
+        input: ListDatabaseInstancesInput,
+        evidence: &mut Evidence,
     ) -> Result<ListDatabaseInstancesOutput, Failure<ListDatabaseInstancesOutput>> {
         if input.page_number < 0 || input.page_size < 0 {
             return Err(failure(invalid_input()));
@@ -253,13 +320,15 @@ impl Client {
         }
         .to_string();
         let data: InstanceData = self
-            .read(
+            .read_path(
                 ctx,
                 &read_operation(
                     "database.ListDatabaseInstances",
                     "vdb-relational/v1/database-instances",
                 ),
+                &[],
                 &[("pageNumber", &page), ("pageSize", &size)],
+                evidence,
             )
             .await?;
         Ok(ListDatabaseInstancesOutput {
@@ -274,27 +343,32 @@ impl Client {
         ctx: &RequestContext,
         input: GetDatabaseInstanceInput,
     ) -> Result<GetDatabaseInstanceOutput, Failure<GetDatabaseInstanceOutput>> {
-        if !valid_id(&input.id) {
+        let instance = self
+            .get_instance(ctx, &input.id, &mut Evidence::new())
+            .await?;
+        Ok(GetDatabaseInstanceOutput { instance })
+    }
+
+    async fn get_instance<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<Instance, Failure<O>> {
+        if !valid_id(id) {
             return Err(failure(invalid_input()));
         }
         let operation = read_operation(
             "database.GetDatabaseInstance",
             "vdb-relational/v1/database-instances/id/{}",
         );
-        let instance: Instance = self.read_path(ctx, &operation, &[&input.id], &[]).await?;
-        if instance.id != input.id {
+        let instance: Instance = self
+            .read_path(ctx, &operation, &[id], &[], evidence)
+            .await?;
+        if instance.id != id {
             return Err(failure(wire::invalid_response(&operation)));
         }
-        Ok(GetDatabaseInstanceOutput { instance })
-    }
-
-    async fn read<T: Data, O>(
-        &self,
-        ctx: &RequestContext,
-        operation: &Operation,
-        query: &[(&str, &str)],
-    ) -> Result<T, Failure<O>> {
-        self.read_path(ctx, operation, &[], query).await
+        Ok(instance)
     }
 
     async fn read_path<T: Data, O>(
@@ -303,6 +377,7 @@ impl Client {
         operation: &Operation,
         path: &[&str],
         query: &[(&str, &str)],
+        evidence: &mut Evidence,
     ) -> Result<T, Failure<O>> {
         let base = self
             .session
@@ -328,7 +403,7 @@ impl Client {
             query,
             self.session.bearer_source(),
             bytes::Bytes::new(),
-            &mut Evidence::new(),
+            evidence,
         )
         .await
         .map(|(_, envelope)| envelope.data)

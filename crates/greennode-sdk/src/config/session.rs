@@ -19,6 +19,8 @@ pub(crate) struct Session {
     default_endpoints: EndpointSet,
     endpoint_overrides_used: bool,
     default_auth_endpoints: bool,
+    #[cfg(feature = "test-support")]
+    database_write_fixture: OnceLock<()>,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
@@ -120,6 +122,11 @@ impl Session {
 
     pub(crate) fn uses_default_auth_endpoints(&self) -> bool {
         self.default_auth_endpoints
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn is_database_write_fixture(&self) -> bool {
+        self.database_write_fixture.get().is_some()
     }
 
     pub(crate) async fn project_id_context(
@@ -260,7 +267,11 @@ impl Session {
             return Err(invalid());
         }
         let clients = product_clients(|| fixture.trust()).map_err(|_| invalid())?;
-        self.clients.set(Ok(clients)).map_err(|_| invalid())
+        self.clients.set(Ok(clients)).map_err(|_| invalid())?;
+        if matches!(product, crate::testing::Product::DatabaseWrite) {
+            self.database_write_fixture.set(()).map_err(|_| invalid())?;
+        }
+        Ok(())
     }
 
     #[expect(
@@ -399,6 +410,8 @@ impl Session {
             default_endpoints,
             endpoint_overrides_used,
             default_auth_endpoints,
+            #[cfg(feature = "test-support")]
+            database_write_fixture: OnceLock::new(),
             clients: OnceLock::new(),
             clock,
             timeout,

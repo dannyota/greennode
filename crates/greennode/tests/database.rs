@@ -1,4 +1,4 @@
-use greennode::cli::{Invocation, run_invocation};
+use greennode::cli::{Invocation, Stdin, run_invocation};
 use greennode_sdk::testing::{Product, Response, Server, with_product_loopback};
 use greennode_sdk::{ConfigOptions, ConfigSource, RequestContext, Secret, SystemClock};
 use std::ffi::{OsStr, OsString};
@@ -20,11 +20,22 @@ struct Case {
     goldens: [&'static [u8]; 3],
 }
 fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_using(args, server, Product::Database, &mut std::io::empty())
+}
+
+fn invoke_using(
+    args: &[&str],
+    server: &Server,
+    product: Product,
+    stdin: &mut dyn Stdin,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
-    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let config_options = with_product_loopback(
-        Product::Database,
-        ConfigOptions::default().with_static_token(Secret::new("toy-cli-bearer")),
+        product,
+        ConfigOptions::default()
+            .with_project_id("project-1".into())
+            .with_static_token(Secret::new("toy-cli-bearer")),
         server,
     );
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -39,7 +50,7 @@ fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
         args,
         source: &Source,
         config_options,
-        stdin: &mut stdin,
+        stdin,
         stdout: &mut stdout,
         stderr: &mut stderr,
         stdin_terminal: false,
@@ -175,6 +186,238 @@ fn database_json_pagination_and_local_guards() {
         assert!(stdout.is_empty());
     }
     assert_eq!(server.requests(), 1);
+}
+
+const CREATE_JSON: &str = r#"{"Name":"demo-db","ZoneID":"zone-1","FlavorID":1,"StorageTypeID":"SSD","StorageSize":20,"VPCID":"network-1","SubnetID":"subnet-1","DatabaseName":"appdb","Username":"admin"}"#;
+const PASSWORD: &str = "Synthetic_Database32";
+const DETAIL: &[u8] = include_bytes!("fixtures/database/create-database-instance.response.json");
+
+fn create_args<'a>(path: &'a str, format: &'a str) -> [&'a str; 9] {
+    [
+        "database",
+        "create-database-instance",
+        "--yes",
+        "--cli-input-json",
+        CREATE_JSON,
+        "--password-file",
+        path,
+        "--output",
+        format,
+    ]
+}
+
+fn http(status: &str, body: &[u8]) -> Response {
+    Response::Http {
+        status: status.into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body: body.to_vec(),
+    }
+}
+
+fn create_replies(detail: &[u8]) -> Vec<Response> {
+    [
+        include_bytes!("fixtures/database/list-database-engine-versions.response.json").as_slice(),
+        include_bytes!("fixtures/database/list-database-zones.response.json"),
+        include_bytes!("fixtures/database/list-database-flavors.response.json"),
+        include_bytes!("fixtures/database/list-database-storage-types.response.json"),
+        include_bytes!("fixtures/database/list-database-networks.response.json"),
+        br#"{"code":200,"data":[{"resourceId":"db-1"}]}"#,
+        detail,
+    ]
+    .map(|body| http("200 OK", body))
+    .into()
+}
+
+fn delete_replies(confirmation: Response) -> Vec<Response> {
+    vec![
+        http("200 OK", DETAIL),
+        http("200 OK", br#"{"code":200,"data":{"projectId":"project-1","data":[{"id":"db-1","name":"demo-db","status":"ACTIVE"}],"pageObject":{"number":1,"size":1,"totalElements":1,"totalPages":1}}}"#),
+        http("200 OK", include_bytes!("fixtures/database/list-database-zones.response.json")),
+        http("200 OK", br#"{"code":200,"data":[]}"#),
+        http("204 No Content", b""),
+        confirmation,
+    ]
+}
+
+#[test]
+fn database_write_guards_run_before_requests_or_password_reads() {
+    let server = Server::start(vec![]);
+    let create = [
+        "database",
+        "create-database-instance",
+        "--cli-input-json",
+        CREATE_JSON,
+        "--password-file",
+        "missing-password-file",
+    ];
+    let delete = ["database", "delete-database-instance", "--id", "db-1"];
+    for command in [&create[..], &delete[..]] {
+        let (status, stdout, stderr) = invoke(command, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("--yes"));
+
+        let mut read_only = vec!["--yes", "--read-only"];
+        read_only.extend_from_slice(command);
+        let (status, stdout, stderr) = invoke(&read_only, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+    }
+    assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn database_write_success_matches_all_go_renderers() {
+    struct PasswordDirectory(std::path::PathBuf);
+    impl Drop for PasswordDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let path =
+        std::env::temp_dir().join(format!("greennode-database-writes-{}", std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    let temp = PasswordDirectory(path);
+    let path = temp.0.join("password");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).unwrap();
+    assert!(std::io::Write::write_all(&mut file, PASSWORD.as_bytes()).is_ok());
+    drop(file);
+    let line = format!("{PASSWORD}\r\n");
+    for (index, format) in ["json", "table", "text"].into_iter().enumerate() {
+        let server = Server::start(create_replies(DETAIL));
+        let password_path = if index == 0 {
+            path.to_str().unwrap()
+        } else {
+            "-"
+        };
+        let (status, stdout, stderr) = invoke_using(
+            &create_args(password_path, format),
+            &server,
+            Product::DatabaseWrite,
+            &mut line.as_bytes(),
+        );
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            stdout,
+            [
+                include_bytes!("fixtures/database/create-database-instance.json.golden").as_slice(),
+                include_bytes!("fixtures/database/create-database-instance.table.golden"),
+                include_bytes!("fixtures/database/create-database-instance.text.golden"),
+            ][index]
+        );
+        assert_eq!(server.requests(), 7);
+        let post: serde_json::Value = serde_json::from_slice(&server.bodies()[5]).unwrap();
+        assert!(post["user"]["password"].as_str() == Some(PASSWORD));
+
+        let server = Server::start(delete_replies(http("404 Not Found", b"{}")));
+        let (status, stdout, stderr) = invoke_using(
+            &[
+                "database",
+                "delete-database-instance",
+                "--id",
+                "db-1",
+                "--yes",
+                "--output",
+                format,
+            ],
+            &server,
+            Product::DatabaseWrite,
+            &mut std::io::empty(),
+        );
+        assert_eq!(status, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        assert_eq!(
+            stdout,
+            [
+                include_bytes!("fixtures/database/delete-database-instance.json.golden").as_slice(),
+                include_bytes!("fixtures/database/delete-database-instance.table.golden"),
+                include_bytes!("fixtures/database/delete-database-instance.text.golden"),
+            ][index]
+        );
+        assert_eq!(server.requests(), 6);
+    }
+}
+
+#[test]
+fn database_partial_outputs_match_go_without_querying_unconfirmed_data() {
+    let failed = String::from_utf8(DETAIL.to_vec())
+        .unwrap()
+        .replace("ACTIVE", "FAILED");
+    let server = Server::start(create_replies(failed.as_bytes()));
+    let mut args = create_args("-", "json").to_vec();
+    args.extend(["--query", "Instance.Name"]);
+    let (status, stdout, stderr) = invoke_using(
+        &args,
+        &server,
+        Product::DatabaseWrite,
+        &mut PASSWORD.as_bytes(),
+    );
+    assert_eq!(status, ExitCode::FAILURE);
+    assert_eq!(
+        stdout,
+        include_bytes!("fixtures/database/create-database-instance.partial.json.golden")
+    );
+    assert!(String::from_utf8_lossy(&stderr).contains("WriteFailed"));
+    assert!(!String::from_utf8_lossy(&stderr).contains(PASSWORD));
+
+    let server = Server::start(delete_replies(http("403 Forbidden", b"{}")));
+    let (status, stdout, stderr) = invoke_using(
+        &[
+            "database",
+            "delete-database-instance",
+            "--id",
+            "db-1",
+            "--yes",
+        ],
+        &server,
+        Product::DatabaseWrite,
+        &mut std::io::empty(),
+    );
+    assert_eq!(status, ExitCode::FAILURE);
+    assert_eq!(
+        stdout,
+        include_bytes!("fixtures/database/delete-database-instance.partial.json.golden")
+    );
+    assert!(String::from_utf8_lossy(&stderr).contains("NotSettled"));
+    assert!(!String::from_utf8_lossy(&stderr).contains("403"));
+}
+
+#[test]
+fn database_password_input_refuses_unsafe_sources_before_requests() {
+    let server = Server::start(vec![]);
+    let secret_json = CREATE_JSON.replacen('{', &format!("{{\"Password\":\"{PASSWORD}\","), 1);
+    let oversized = "A".repeat(4097);
+    for (json, input, expected) in [
+        (secret_json.as_str(), PASSWORD, "secret field"),
+        ("file://ignored", PASSWORD, "cannot share input"),
+        (CREATE_JSON, "", "non-empty"),
+        (CREATE_JSON, "abc\u{1}def\n", "controls"),
+        (CREATE_JSON, &oversized, "4096 bytes"),
+    ] {
+        let mut args = create_args("-", "json");
+        args[4] = json;
+        let (status, stdout, stderr) = invoke_using(
+            &args,
+            &server,
+            Product::DatabaseWrite,
+            &mut input.as_bytes(),
+        );
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&stderr);
+        assert!(stderr.contains(expected));
+        assert!(!stderr.contains(PASSWORD));
+    }
+    assert!(server.heads().is_empty());
 }
 
 #[test]

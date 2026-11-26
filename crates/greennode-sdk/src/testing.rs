@@ -44,6 +44,7 @@ products! {
     ContainerRegistry => container_registry, Portal => portal, Billing => billing,
     Monitor => monitor, Iam => iam, Storage => storage, Cdn => cdn, Vks => vks,
     VserverBackup => vserver_backup, BackupCenter => backup_center, Database => database,
+    DatabaseWrite => database,
 }
 
 pub fn with_product_loopback(

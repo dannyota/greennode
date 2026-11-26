@@ -2,6 +2,68 @@
 
 # CLI: Database
 
+## create-database-instance
+
+Kind: Write.
+
+Requires `--yes`, SDK IAM-user sign-in, and default database, vServer, and auth
+endpoints in `hcm-3`. Creates a private, single-node MySQL 8.0 instance with
+automatic backup off and spends credits through IAM Auto Payment. The flavor's
+`MonthlyCost` is a catalog estimate. The service provides no quote API or price
+check. Choose IDs from the catalogs for one zone.
+
+Use an instance name of 1 to 20 ASCII letters, digits, hyphens, or underscores,
+starting with a letter or digit. The master password takes 8 to 32 ASCII
+letters, digits, or `$ ^ _ < >`, starts with a letter, and ends with a letter or
+digit. Supply it via `--password-file` with a private file or `-` for
+nonterminal stdin. The command refuses passwords in argv, JSON input, or
+environment variables. API input errors report only recognized field names.
+
+Sends one create and waits up to 30 minutes for `ACTIVE`. A 404 during this wait
+means the instance may still be becoming visible. On `NotSettled` or
+`WriteFailed`, partial output holds only the known instance ID. Inspect
+inventory and billing before another mutation.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--name`            | `string` | yes      |
+| `--zone-id`         | `string` | yes      |
+| `--flavor-id`       | `int`    | yes      |
+| `--storage-type-id` | `string` | yes      |
+| `--storage-size`    | `int`    | yes      |
+| `--vpc-id`          | `string` | yes      |
+| `--subnet-id`       | `string` | yes      |
+| `--database-name`   | `string` | yes      |
+| `--username`        | `string` | yes      |
+| `--password-file`   | `string` |          |
+
+```sh
+greennode database create-database-instance --name <name> --zone-id <zone-id> --flavor-id <flavor-id> --storage-type-id <storage-type> --storage-size <gb> --vpc-id <vpc-id> --subnet-id <subnet-id> --database-name <database> --username <user> --password-file <path> --yes
+```
+
+## delete-database-instance
+
+Kind: Write, destructive.
+
+Requires `--yes`, SDK IAM-user sign-in, and default database, vServer, and auth
+endpoints in `hcm-3`. The instance must be `ACTIVE` MySQL in the selected
+project and a database zone of the region, with no backups or replicas. Shared
+instances are refused.
+
+Deletes the instance and its data without taking a final backup or purging
+backups. The command waits up to 30 minutes for confirmed absence before setting
+`Deleted` to true. On `NotSettled`, inspect the instance ID in the partial
+output and check inventory and billing before another mutation. A refund is
+uncertain.
+
+| Flag   | Type     | Required |
+| ------ | -------- | -------- |
+| `--id` | `string` | yes      |
+
+```sh
+greennode database delete-database-instance --id <id> --yes
+```
+
 ## get-database-instance
 
 Kind: Read.

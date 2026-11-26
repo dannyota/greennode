@@ -4,6 +4,7 @@ pub mod errors;
 mod gendocs;
 pub mod input;
 pub mod op;
+pub(crate) mod password;
 mod query;
 pub mod render;
 mod root;
@@ -15,7 +16,7 @@ pub struct Invocation<'a> {
     pub args: Vec<std::ffi::OsString>,
     pub source: &'a dyn greennode_sdk::ConfigSource,
     pub config_options: greennode_sdk::ConfigOptions,
-    pub stdin: &'a mut dyn std::io::Read,
+    pub stdin: &'a mut dyn Stdin,
     pub stdout: &'a mut dyn std::io::Write,
     pub stderr: &'a mut dyn std::io::Write,
     pub stdin_terminal: bool,
@@ -24,6 +25,22 @@ pub struct Invocation<'a> {
     pub clock: &'a dyn greennode_sdk::Clock,
     pub context: &'a greennode_sdk::RequestContext,
 }
+
+pub trait Stdin: std::io::Read {
+    fn read_before(
+        &mut self,
+        bytes: &mut [u8],
+        _deadline: tokio::time::Instant,
+    ) -> std::io::Result<usize> {
+        self.read(bytes)
+    }
+}
+
+impl Stdin for std::io::Empty {}
+impl Stdin for &[u8] {}
+impl Stdin for &mut dyn std::io::Read {}
+#[cfg(windows)]
+impl Stdin for std::io::Stdin {}
 
 pub trait Terminal {
     fn disable_echo(&mut self) -> std::io::Result<()>;

@@ -1,0 +1,1 @@
+{"BackupAuto":false,"DatastoreType":"MySQL","DatastoreVersion":"8.0","Deleted":false,"ID":"db-1","Name":"demo-db","Owner":true,"ProjectID":"project-1","PublicAccess":false,"QuotaPackageID":"1","ReplicaSourceID":"","Replicas":[],"Role":"","Status":"ACTIVE","SubnetID":"subnet-1","VolumeSize":20,"VolumeType":"SSD","ZoneID":"zone-1"}

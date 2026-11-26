@@ -73,6 +73,11 @@ pub(crate) struct SelectedOperation {
 pub(crate) fn argument(field: &Field) -> clap::Arg {
     use clap::{Arg, ArgAction};
     let arg = Arg::new(field.name).long(field.name);
+    if field.name == "password-file" {
+        return arg
+            .value_parser(clap::builder::OsStringValueParser::new())
+            .help(super::password::HELP);
+    }
     match field.go_type.trim_start_matches('*') {
         "bool" => arg
             .action(ArgAction::Set)

@@ -187,7 +187,7 @@ mod tests {
     }
 
     fn invocation<'a>(
-        stdin: &'a mut dyn Read,
+        stdin: &'a mut dyn crate::cli::Stdin,
         stdout: &'a mut dyn Write,
         stderr: &'a mut dyn Write,
         context: &'a RequestContext,
@@ -273,6 +273,8 @@ mod tests {
             self.next.read(output)
         }
     }
+
+    impl crate::cli::Stdin for EofThenInput<'_> {}
 
     #[test]
     fn visible_eof_is_blank_and_the_next_answer_is_read() {

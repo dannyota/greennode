@@ -41,6 +41,8 @@
   "greennode containerregistry list-repository-users",
   "greennode containerregistry list-users",
   "greennode database",
+  "greennode database create-database-instance",
+  "greennode database delete-database-instance",
   "greennode database get-database-instance",
   "greennode database list-database-engine-versions",
   "greennode database list-database-flavors",

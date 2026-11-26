@@ -1,0 +1,1 @@
+{"code":200,"data":{"id":"db-1","name":"demo-db","status":"ACTIVE","datastoreType":"MySQL","datastoreVersion":"8.0","quotaPackageId":"1","publicAccess":false,"backupAuto":false,"zoneId":"zone-1","projectId":"project-1","subnetId":"subnet-1","volumeType":"SSD","volumeSize":20,"owner":true,"deleted":false}}

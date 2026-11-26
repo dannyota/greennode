@@ -1,4 +1,7 @@
 use super::*;
+
+#[cfg(feature = "test-support")]
+mod writes;
 use crate::wire::test_server::{Response, Server};
 use crate::{ConfigOptions, EndpointOverrides, Secret};
 
