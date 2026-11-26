@@ -1,0 +1,37 @@
+{
+  "Items": [
+    {
+      "ID": "pool-1",
+      "Name": "\u003cname\u003e",
+      "Description": "",
+      "GlobalLoadBalancerID": "glb-1",
+      "Algorithm": "round_robin",
+      "StickySession": null,
+      "TLSEnabled": null,
+      "Protocol": "HTTP",
+      "Status": "ACTIVE",
+      "Health": {
+        "ID": "health-1",
+        "GlobalPoolID": "pool-1",
+        "GlobalLoadBalancerID": "glb-1",
+        "Protocol": "HTTP",
+        "Path": null,
+        "Timeout": 5,
+        "IntervalTime": 30,
+        "HealthyThreshold": 3,
+        "UnhealthyThreshold": 3,
+        "HTTPVersion": null,
+        "HTTPMethod": null,
+        "DomainName": null,
+        "SuccessCode": null,
+        "Status": "ACTIVE",
+        "CreatedAt": "",
+        "UpdatedAt": "",
+        "DeletedAt": null
+      },
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "DeletedAt": null
+    }
+  ]
+}

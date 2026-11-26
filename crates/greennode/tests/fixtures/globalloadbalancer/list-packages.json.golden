@@ -1,0 +1,22 @@
+{
+  "Items": [
+    {
+      "ID": "pkg-1",
+      "Name": "\u003cname\u003e",
+      "Description": "\u003cdescription\u003e",
+      "DescriptionEn": "",
+      "Enabled": true,
+      "BaseSKU": "",
+      "ConnectionSKU": "",
+      "BaseConnectionRate": 100,
+      "BaseDomesticTrafficTotal": 0,
+      "BaseNonDomesticTrafficTotal": 0,
+      "DomesticTrafficSKU": "",
+      "NonDomesticTrafficSKU": "",
+      "Detail": null,
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "VLBPackages": []
+    }
+  ]
+}

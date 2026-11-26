@@ -9,6 +9,7 @@
 - [ContainerRegistry](CLI-ContainerRegistry.md)
 - [Database](CLI-Database.md)
 - [DNS](CLI-DNS.md)
+- [GlobalLoadBalancer](CLI-GlobalLoadBalancer.md)
 - [Portal](CLI-Portal.md)
 - [Project](CLI-Project.md)
 - [Tagging](CLI-Tagging.md)

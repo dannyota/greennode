@@ -1,0 +1,1 @@
+round_robin				glb-1	{"CreatedAt":"","DeletedAt":null,"DomainName":null,"GlobalLoadBalancerID":"glb-1","GlobalPoolID":"pool-1","HTTPMethod":null,"HTTPVersion":null,"HealthyThreshold":3,"ID":"health-1","IntervalTime":30,"Path":null,"Protocol":"HTTP","Status":"ACTIVE","SuccessCode":null,"Timeout":5,"UnhealthyThreshold":3,"UpdatedAt":""}	pool-1	<name>	HTTP	ACTIVE			
