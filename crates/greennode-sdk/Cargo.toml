@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["greennode", "vngcloud", "cloud", "api", "sdk"]
 categories = ["api-bindings"]
 
+[features]
+test-support = []
+
 [dependencies]
 bytes = "1.12.2"
 cookie = "0.18.3"

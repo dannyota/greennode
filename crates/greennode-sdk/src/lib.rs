@@ -16,6 +16,10 @@ mod provider;
 mod secret;
 mod session;
 mod source;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub mod testing;
 mod token;
 mod wire;
 
