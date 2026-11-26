@@ -1,0 +1,12 @@
+{
+  "Policy": {
+    "ID": "pol_1",
+    "Name": "",
+    "Description": "",
+    "Manager": "",
+    "Scope": "",
+    "Root": "",
+    "Statements": [],
+    "CreatedAt": 0
+  }
+}

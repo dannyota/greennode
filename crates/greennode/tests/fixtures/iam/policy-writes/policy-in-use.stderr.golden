@@ -1,0 +1,1 @@
+{"error":{"code":"ResourceInUse","message":"iam: refused: resource in use: iam.DeletePolicy: the policy is attached"}}

@@ -1,0 +1,1 @@
+{"error":{"code":"NotSettled","message":"iam.UpdatePolicy: vngcloud: write outcome not confirmed: replacement outcome is uncertain; read the policy before another write: iam.UpdatePolicy: Service Unavailable (status 503)"}}

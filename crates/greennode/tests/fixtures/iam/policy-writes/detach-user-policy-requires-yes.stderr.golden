@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"iam detach-user-policy removes permissions; pass --yes to confirm"}}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -20,11 +21,20 @@ type iamWriteReply struct {
 }
 
 func TestIAMWritePortGoldens(t *testing.T) {
+	writeIAMGoldens(t, "writes")
+}
+
+func TestIAMPolicyWritePortGoldens(t *testing.T) {
+	writeIAMGoldens(t, "policy-writes")
+}
+
+func writeIAMGoldens(t *testing.T, subdir string) {
+	t.Helper()
 	dir := os.Getenv("IAM_GOLDEN_DIR")
 	if dir == "" {
 		t.Fatal("IAM_GOLDEN_DIR is required")
 	}
-	dir = filepath.Join(dir, "writes")
+	dir = filepath.Join(dir, subdir)
 	input, err := os.ReadFile(filepath.Join(dir, "cases.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +58,7 @@ func TestIAMWritePortGoldens(t *testing.T) {
 				var requests atomic.Int32
 				handlers := make(map[string]func(http.ResponseWriter, *http.Request))
 				for _, reply := range c.Replies {
-					handlers[reply.Route] = func(w http.ResponseWriter, r *http.Request) {
+					handlers[strings.SplitN(reply.Route, "?", 2)[0]] = func(w http.ResponseWriter, r *http.Request) {
 						index := int(requests.Add(1)) - 1
 						if index >= len(c.Replies) {
 							t.Error("unexpected extra request")
@@ -56,7 +66,7 @@ func TestIAMWritePortGoldens(t *testing.T) {
 							return
 						}
 						step := c.Replies[index]
-						if r.Method != step.Method || r.URL.Path != step.Route {
+						if r.Method != step.Method || r.URL.RequestURI() != step.Route {
 							t.Errorf("request %d: %s %s", index+1, r.Method, r.URL.Path)
 							w.WriteHeader(http.StatusBadRequest)
 							return

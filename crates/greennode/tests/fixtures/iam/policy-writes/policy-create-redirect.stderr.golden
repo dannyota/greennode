@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"iam.CreatePolicy: create may have already reached the server; check with list-policies --name before creating it again: iam.CreatePolicy: Temporary Redirect (status 307)","status":307,"operation":"iam.CreatePolicy"}}

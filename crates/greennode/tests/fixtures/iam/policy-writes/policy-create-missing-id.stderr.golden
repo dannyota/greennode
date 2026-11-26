@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"create response had no id; a policy may exist, check with list-policies --name","operation":"iam.CreatePolicy"}}

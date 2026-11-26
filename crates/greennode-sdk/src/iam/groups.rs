@@ -5,9 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json, value::RawValue};
 
 use super::wire::{self, Screen, Wire};
-use super::writes::{
-    WriteError, confirmed_identity, guard_failed, guard_refusal, settle, write_operation,
-};
+use super::writes::{WriteError, guard_failed, guard_refusal, settle, write_operation};
 use super::{Api, Client, Group, OBJECT_CAP, invalid_input, read_operation};
 use crate::error::RecoveryAdvice;
 use crate::error::SafeText;
@@ -323,7 +321,7 @@ fn create_failed<O>(failed: Failure<O>, evidence: &Evidence) -> Failure<O> {
 }
 
 #[derive(Default)]
-struct CreatedId(String);
+pub(super) struct CreatedId(pub(super) String);
 
 impl Wire for CreatedId {
     const SHAPE: Shape<'static> = Shape::Object(&[ShapeField {
@@ -364,7 +362,7 @@ impl Wire for GroupRead {
 }
 
 #[derive(Default)]
-struct GroupAttachments {
+pub(super) struct GroupAttachments {
     id: String,
     mode: String,
     iam_users: Option<Vec<String>>,
@@ -413,10 +411,26 @@ impl Wire for GroupAttachments {
     }
 }
 
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl GroupAttachments {
-    #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
     fn require_empty<O>(self, id: &str, evidence: &Evidence) -> Result<(), Failure<O>> {
-        let refusal = |reason| guard_refusal(&format!("iam: guard: {DELETE}: {reason}"), None);
+        let (policies, users) = self.checked(DELETE, id, evidence)?;
+        if !policies.is_empty() || !users.is_empty() {
+            return Err(guard_refusal(
+                "iam: refused: resource in use: iam.DeleteGroup: the group has a member or a policy",
+                Some(WriteError::ResourceInUse),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn checked<O>(
+        self,
+        op: &str,
+        id: &str,
+        evidence: &Evidence,
+    ) -> Result<(Vec<String>, Vec<String>), Failure<O>> {
+        let refusal = |reason| guard_refusal(&format!("iam: guard: {op}: {reason}"), None);
         if self.unrecognized {
             return Err(refusal("a group response held an unrecognized field"));
         }
@@ -429,19 +443,24 @@ impl GroupAttachments {
         let users = self
             .iam_users
             .ok_or_else(|| refusal("a group response had no iamUsers field"))?;
-        confirmed_identity(
-            &self.id,
-            id,
-            "iam.DeleteGroup: group identity is unproven",
-            evidence,
-        )
-        .map_err(guard_failed)?;
-        if !policies.is_empty() || !users.is_empty() {
+        if !Options::DEFAULT.path_ids.allows(&self.id)
+            || !self.id.eq_ignore_ascii_case(id)
+            || evidence.id_reflects(&self.id)
+            || evidence.id_reflects(id)
+        {
             return Err(guard_refusal(
-                "iam: refused: resource in use: iam.DeleteGroup: the group has a member or a policy",
-                Some(WriteError::ResourceInUse),
+                &format!("{op}: group identity is unproven"),
+                None,
             ));
         }
-        Ok(())
+        if policies
+            .iter()
+            .chain(&users)
+            .any(|id| evidence.id_reflects(id))
+        {
+            return Err(refusal("unsafe group attachments"));
+        }
+
+        Ok((policies, users))
     }
 }

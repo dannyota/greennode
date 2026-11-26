@@ -17,6 +17,11 @@ results beside it. Run:
 
     GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMWritePortGoldens$' -count=1
 
+The same generator uses `policy-writes/cases.json` for policy, membership, and
+attachment writes. Run:
+
+    GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMPolicyWritePortGoldens$' -count=1
+
 For service-account writes, also copy `iam_service_account_writes_goldens_test.go`
 into `internal/cli`. It reads and writes `service-account-writes/` in the same
 fixture directory. Run:

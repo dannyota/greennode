@@ -1,0 +1,2900 @@
+[
+  {
+    "name": "create-policy",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 201,
+        "body": {
+          "id": "pol-1"
+        },
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "update-policy",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "PUT",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 204,
+        "body": null,
+        "request": {
+          "name": "reader",
+          "description": "new",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "new",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "delete-policy",
+    "args": [
+      "delete-policy",
+      "--policy-id",
+      "pol-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "add-user-to-group",
+    "args": [
+      "add-user-to-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "add-user-to-group-requires-yes",
+    "args": [
+      "add-user-to-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "remove-user-from-group",
+    "args": [
+      "remove-user-from-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "remove-user-from-group-requires-yes",
+    "args": [
+      "remove-user-from-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-group-policy",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies/pol-1/groups/grp-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "attach-group-policy-requires-yes",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-group-policy",
+    "args": [
+      "detach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/policies/pol-1/groups/grp-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "detach-group-policy-requires-yes",
+    "args": [
+      "detach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-user-policy",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies/pol-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "attach-user-policy-requires-yes",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-user-policy",
+    "args": [
+      "detach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/policies/pol-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "detach-user-policy-requires-yes",
+    "args": [
+      "detach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "policy-self",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "USR-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "policy-privileged",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\": [{\"effect\": \"allow\", \"actions\": [\"iam:Creat*\"], \"resources\": [\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "policy-managed",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "managed",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-in-use",
+    "args": [
+      "delete-policy",
+      "--policy-id",
+      "pol-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": [
+          "usr-2"
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      }
+    ]
+  },
+  {
+    "name": "policy-create-uncertain",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 503,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-create-missing-id",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 201,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-create-unconfirmed",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 201,
+        "body": {
+          "id": "pol-1"
+        },
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 404,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "policy-update-uncertain",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "PUT",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 503,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "new",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-update-unconfirmed",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "PUT",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 204,
+        "body": null,
+        "request": {
+          "name": "reader",
+          "description": "new",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 404,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "policy-null-attachments",
+    "args": [
+      "delete-policy",
+      "--policy-id",
+      "pol-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "policy-truncated-page",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 1,
+          "totalPages": 2
+        }
+      }
+    ]
+  },
+  {
+    "name": "post-conflict",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies/pol-1/iam-users/usr-2",
+        "status": 409,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "delete-not-found",
+    "args": [
+      "detach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 4,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/policies/pol-1/groups/grp-1",
+        "status": 404,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "update-rejected",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "PUT",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 403,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "new",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "create-unauthorized",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 3,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 401,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "post-no-502-retry",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies/pol-1/groups/grp-1",
+        "status": 502,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "post-retries-429",
+    "args": [
+      "add-user-to-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 429,
+        "body": {}
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "delete-retries-503",
+    "args": [
+      "remove-user-from-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": []
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 503,
+        "body": {}
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/groups/grp-1/iam-users/usr-2",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "create-policy-read-only",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "update-policy-read-only",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "delete-policy-read-only",
+    "args": [
+      "delete-policy",
+      "--policy-id",
+      "pol-1",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "add-user-to-group-read-only",
+    "args": [
+      "add-user-to-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "remove-user-from-group-read-only",
+    "args": [
+      "remove-user-from-group",
+      "--group-id",
+      "grp-1",
+      "--user-id",
+      "usr-2",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-group-policy-read-only",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-group-policy-read-only",
+    "args": [
+      "detach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-user-policy-read-only",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-user-policy-read-only",
+    "args": [
+      "detach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "update-policy-requires-yes",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "delete-policy-requires-yes",
+    "args": [
+      "delete-policy",
+      "--policy-id",
+      "pol-1"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "policy-self-over-privileged",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:*"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": [
+          "USR-1"
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": []
+      }
+    ]
+  },
+  {
+    "name": "policy-service-account-self",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "user-sa"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/iam-users",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts",
+        "status": 200,
+        "body": [
+          "sa-1"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "policy-user-privileged-via-group",
+    "args": [
+      "attach-user-policy",
+      "--policy-id",
+      "pol-1",
+      "--user-id",
+      "usr-2",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0,
+          "totalPages": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/usr-2/groups",
+        "status": 200,
+        "body": [
+          {
+            "id": "grp-1",
+            "policies": [
+              "pol-1"
+            ]
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "description": "",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "IAM:CreatePolicy"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-group-self",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "iam",
+          "policies": [],
+          "iamUsers": [
+            "USR-1"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-unknown-group-mode",
+    "args": [
+      "attach-group-policy",
+      "--policy-id",
+      "pol-1",
+      "--group-id",
+      "grp-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/grp-1",
+        "status": 200,
+        "body": {
+          "id": "grp-1",
+          "mode": "idp",
+          "policies": [],
+          "iamUsers": []
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-incomplete-replacement",
+    "args": [
+      "update-policy",
+      "--policy-id",
+      "pol-1",
+      "--description",
+      "new",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "name": "reader",
+          "manager": "user",
+          "scope": "account",
+          "root": "123",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-empty-catalog",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": []
+      }
+    ]
+  },
+  {
+    "name": "policy-create-invalid-path-id",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 201,
+        "body": {
+          "id": "pol_1"
+        },
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-create-redirect",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 307,
+        "body": {},
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        },
+        "headers": {
+          "Location": "/policies-api/v1/elsewhere"
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-create-malformed-confirmation",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader",
+      "--cli-input-json",
+      "{\"Statements\":[{\"effect\":\"allow\",\"actions\":[\"iam:ListActions\"],\"resources\":[\"*\"]}]}"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          },
+          {
+            "action": "ListActions",
+            "label": "List",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies",
+        "status": 201,
+        "body": {
+          "id": "pol-1"
+        },
+        "request": {
+          "name": "reader",
+          "description": "",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": null,
+        "rawBody": "{"
+      }
+    ]
+  },
+  {
+    "name": "policy-missing-statements",
+    "args": [
+      "create-policy",
+      "--name",
+      "reader"
+    ],
+    "exit": 2,
+    "replies": []
+  }
+]

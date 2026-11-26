@@ -1,0 +1,1 @@
+{"error":{"code":"NotSettled","message":"iam.CreatePolicy: policy pol-1 was created but the read to confirm it failed: vngcloud: write outcome not confirmed: iam.GetPolicy: Not Found (status 404)"}}

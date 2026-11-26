@@ -1,0 +1,1 @@
+{"error":{"code":"InvalidUsage","message":"iam update-policy is destructive; pass --yes to confirm"}}

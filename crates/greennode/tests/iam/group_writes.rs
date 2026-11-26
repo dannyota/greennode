@@ -22,13 +22,14 @@ struct Reply {
     body: Value,
     #[serde(rename = "rawBody")]
     raw_body: Option<String>,
+    request: Option<Value>,
     #[serde(default)]
     headers: BTreeMap<String, String>,
 }
 
 #[tokio::test]
 async fn writes_match_go_routes_exit_codes_and_output() {
-    check_go_goldens(|case| {
+    check_go_goldens("writes", |case| {
         !matches!(
             case,
             "create-group-invalid-path-id"
@@ -41,21 +42,29 @@ async fn writes_match_go_routes_exit_codes_and_output() {
 
 #[tokio::test]
 async fn create_group_retains_go_redirect_status() {
-    check_go_goldens(|case| case == "create-group-redirect").await;
+    check_go_goldens("writes", |case| case == "create-group-redirect").await;
 }
 
 #[tokio::test]
 async fn create_group_malformed_confirmation_matches_go() {
-    check_go_goldens(|case| case == "create-group-malformed-confirmation").await;
+    check_go_goldens("writes", |case| {
+        case == "create-group-malformed-confirmation"
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn create_group_path_invalid_id_recovery_matches_go() {
-    check_go_goldens(|case| case == "create-group-invalid-path-id").await;
+    check_go_goldens("writes", |case| case == "create-group-invalid-path-id").await;
 }
 
-async fn check_go_goldens(select: impl Fn(&str) -> bool) {
-    let cases: Vec<Case> = serde_json::from_slice(&fixture("writes/cases.json")).unwrap();
+#[tokio::test]
+async fn policy_writes_match_go_routes_exit_codes_and_output() {
+    check_go_goldens("policy-writes", |_| true).await;
+}
+
+async fn check_go_goldens(dir: &str, select: impl Fn(&str) -> bool) {
+    let cases: Vec<Case> = serde_json::from_slice(&fixture(&format!("{dir}/cases.json"))).unwrap();
     for case in cases.into_iter().filter(|case| select(&case.name)) {
         let formats: &[&str] = if case.exit == 0 {
             &["json", "table", "text"]
@@ -94,7 +103,7 @@ async fn check_go_goldens(select: impl Fn(&str) -> bool) {
             );
             assert_eq!(
                 String::from_utf8(stdout).unwrap(),
-                String::from_utf8(fixture(&format!("writes/{}.{format}.golden", case.name)))
+                String::from_utf8(fixture(&format!("{dir}/{}.{format}.golden", case.name)))
                     .unwrap(),
                 "{} {format}",
                 case.name
@@ -104,7 +113,7 @@ async fn check_go_goldens(select: impl Fn(&str) -> bool) {
             } else {
                 assert_eq!(
                     String::from_utf8(stderr).unwrap(),
-                    String::from_utf8(fixture(&format!("writes/{}.stderr.golden", case.name)))
+                    String::from_utf8(fixture(&format!("{dir}/{}.stderr.golden", case.name)))
                         .unwrap(),
                     "{}",
                     case.name
@@ -112,7 +121,7 @@ async fn check_go_goldens(select: impl Fn(&str) -> bool) {
             }
             let heads = server.heads();
             assert_eq!(heads.len(), case.replies.len(), "{}", case.name);
-            for (head, reply) in heads.iter().zip(&case.replies) {
+            for ((head, body), reply) in heads.iter().zip(server.bodies()).zip(&case.replies) {
                 let product = if reply.route.starts_with("/accounts-api/") {
                     "dashboard"
                 } else {
@@ -121,6 +130,9 @@ async fn check_go_goldens(select: impl Fn(&str) -> bool) {
                 assert!(head.starts_with(
                     format!("{} /{product}{} ", reply.method, reply.route).as_bytes()
                 ));
+                if let Some(expected) = &reply.request {
+                    assert!(serde_json::from_slice::<Value>(&body).unwrap() == *expected);
+                }
             }
         }
     }
@@ -166,4 +178,100 @@ async fn group_write_guards_refuse_before_requests() {
         assert!(String::from_utf8_lossy(&stderr).contains(expected));
     }
     assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn policy_document_file_overrides_json_after_local_guards() {
+    let dir = std::env::temp_dir().join(format!("greennode-policy-doc-{}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    struct RemoveDir(std::path::PathBuf);
+    impl Drop for RemoveDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = RemoveDir(dir);
+    let path = dir.0.join("policy.json");
+    std::fs::write(&path, br#"{"Statements":[{"Effect":"allow","Actions":["iam:ListActions"],"Resources":["*"],"Condition":{"equals":{"\uD800":"\uD800"}}}]}"#).unwrap();
+    let server = Server::start(vec![
+        response(200, br#"{"userId":"usr-1","userType":"iam-user"}"#.to_vec()),
+        response(
+            200,
+            br#"[{"action":"CreatePolicy","label":"Write"}]"#.to_vec(),
+        ),
+        response(201, br#"{"id":"pol-1"}"#.to_vec()),
+        response(200, br#"{"id":"pol-1"}"#.to_vec()),
+    ]);
+    let path = path.to_str().unwrap();
+    let args = [
+        "iam",
+        "create-policy",
+        "--name",
+        "reader",
+        "--document-file",
+        path,
+        "--cli-input-json",
+        r#"{"Statements":[{"Effect":"allow","Actions":["iam:*"],"Resources":["*"]}]}"#,
+    ];
+    let (exit, _, stderr) = invoke(&args, &server, BEARER).await;
+    assert_eq!(
+        exit,
+        ExitCode::SUCCESS,
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    let bod = server.bodies();
+    assert!(
+        serde_json::from_slice::<Value>(&bod[2]).unwrap()
+            == serde_json::json!({
+                "name":"reader", "description":"", "statements":[{"effect":"allow", "actions":["iam:ListActions"], "resources":["*"], "condition":{"equals":{"�":"�"}}}]
+            })
+    );
+
+    let server = Server::start(vec![]);
+    let invalid = async |diagnostic: &str| {
+        let (exit, stdout, stderr) = invoke(&args[..6], &server, BEARER).await;
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains(diagnostic));
+        assert_eq!(server.requests(), 0);
+    };
+    for malformed in [
+        r#"{"Statement":[]}"#,
+        r#"{"statements":[],"Statements":[]}"#,
+        r#"{"statements":[]}{}"#,
+    ] {
+        std::fs::write(path, malformed).unwrap();
+        invalid("invalid policy document").await;
+    }
+    std::fs::write(path, vec![b' '; (64 << 10) + 1]).unwrap();
+    invalid("file exceeds 64 KiB").await;
+    std::fs::remove_file(path).unwrap();
+    #[cfg(unix)]
+    {
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        invalid("file must be regular").await;
+        let (exit, _, stderr) = invoke(
+            &[
+                "--read-only",
+                "iam",
+                "create-policy",
+                "--name",
+                "reader",
+                "--document-file",
+                path,
+            ],
+            &server,
+            BEARER,
+        )
+        .await;
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+    }
 }

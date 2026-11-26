@@ -1,0 +1,1 @@
+{"error":{"code":"ManagedPolicy","message":"iam: refused: policy is managed: iam.UpdatePolicy: the policy is managed"}}

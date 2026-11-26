@@ -2,6 +2,45 @@
 
 # CLI: IAM
 
+## add-user-to-group
+
+Kind: Write, destructive.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--group-id` | `string` | yes      |
+| `--user-id`  | `string` | yes      |
+
+```sh
+greennode iam add-user-to-group --group-id <group-id> --user-id <user-id> --yes
+```
+
+## attach-group-policy
+
+Kind: Write, destructive.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--policy-id` | `string` | yes      |
+| `--group-id`  | `string` | yes      |
+
+```sh
+greennode iam attach-group-policy --policy-id <policy-id> --group-id <group-id> --yes
+```
+
+## attach-user-policy
+
+Kind: Write, destructive.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--policy-id` | `string` | yes      |
+| `--user-id`   | `string` | yes      |
+
+```sh
+greennode iam attach-user-policy --policy-id <policy-id> --user-id <user-id> --yes
+```
+
 ## create-group
 
 Kind: Write.
@@ -16,6 +55,25 @@ uncertain, list groups before repeating the command.
 
 ```sh
 greennode iam create-group --name <name>
+```
+
+## create-policy
+
+Kind: Write.
+
+Use a JSON document with a `statements` array (up to 64 KiB). `--document-file`
+takes precedence over `Statements` in `--cli-input-json`. The SDK refuses
+statements that grant IAM write actions.
+
+| Flag                                       | Type              | Required |
+| ------------------------------------------ | ----------------- | -------- |
+| `--name`                                   | `string`          | yes      |
+| `--description`                            | `string`          |          |
+| `--document-file`                          | `string`          |          |
+| `Statements` (via `--cli-input-json` only) | `[]iam.Statement` | yes      |
+
+```sh
+greennode iam create-policy --name <name> --document-file policy.json
 ```
 
 ## create-service-account
@@ -71,6 +129,21 @@ policies. An attachment returns `ResourceInUse`.
 greennode iam delete-group --group-id <group-id> --yes
 ```
 
+## delete-policy
+
+Kind: Write, destructive.
+
+Refuses managed policies and policies attached to groups, users, or service
+accounts.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--policy-id` | `string` | yes      |
+
+```sh
+greennode iam delete-policy --policy-id <policy-id> --yes
+```
+
 ## delete-service-account
 
 Kind: Write, destructive.
@@ -97,6 +170,32 @@ Refuses self-deletion and requires a verified IAM-origin user.
 
 ```sh
 greennode iam delete-user --user-id <user-id> --yes
+```
+
+## detach-group-policy
+
+Kind: Write, destructive.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--policy-id` | `string` | yes      |
+| `--group-id`  | `string` | yes      |
+
+```sh
+greennode iam detach-group-policy --policy-id <policy-id> --group-id <group-id> --yes
+```
+
+## detach-user-policy
+
+Kind: Write, destructive.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--policy-id` | `string` | yes      |
+| `--user-id`   | `string` | yes      |
+
+```sh
+greennode iam detach-user-policy --policy-id <policy-id> --user-id <user-id> --yes
 ```
 
 ## disable-user-mfa
@@ -355,6 +454,19 @@ policies and memberships.
 greennode iam list-users
 ```
 
+## remove-user-from-group
+
+Kind: Write, destructive.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--group-id` | `string` | yes      |
+| `--user-id`  | `string` | yes      |
+
+```sh
+greennode iam remove-user-from-group --group-id <group-id> --user-id <user-id> --yes
+```
+
 ## reset-service-account-secret
 
 Kind: Write, destructive.
@@ -406,6 +518,26 @@ preserves it. Reads the group again after a successful update.
 
 ```sh
 greennode iam update-group --group-id <group-id> --description <description>
+```
+
+## update-policy
+
+Kind: Write, destructive.
+
+Omitted fields retain their current values. The SDK refuses managed policies,
+privileged statements, and changes that would affect protected principals or
+groups.
+
+| Flag                                       | Type               | Required |
+| ------------------------------------------ | ------------------ | -------- |
+| `--policy-id`                              | `string`           | yes      |
+| `--name`                                   | `*string`          |          |
+| `--description`                            | `*string`          |          |
+| `--document-file`                          | `string`           |          |
+| `Statements` (via `--cli-input-json` only) | `*[]iam.Statement` |          |
+
+```sh
+greennode iam update-policy --policy-id <policy-id> --document-file policy.json --yes
 ```
 
 ## update-service-account
