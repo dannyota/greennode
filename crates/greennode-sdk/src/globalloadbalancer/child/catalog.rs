@@ -1,8 +1,9 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
+use super::alias::{fold, same_alias};
 use super::model::{Package, Region, Server, Subnet, Vpc};
-use super::{Child, DecodeError, Error, RequestContext, State, ids, refuse, state};
-use crate::wire::{product::options::PathIds, strict_json::field_matches};
+use super::{Child, DecodeError, Error, PACKAGES, RequestContext, State, ids, refuse, state};
+use crate::wire::product::options::PathIds;
 
 impl Child<'_> {
     pub(super) async fn project(
@@ -29,14 +30,14 @@ impl Child<'_> {
         package: &str,
     ) -> Result<String, Box<Error>> {
         let regions: Vec<Region> = self.get(ctx, "v1/regions", &[]).await?;
-        let packages: Vec<Package> = self.get(ctx, "v1/packages", &[]).await?;
+        let packages: Vec<Package> = self.get(ctx, PACKAGES, &[]).await?;
         let configured = &self.0.client.region;
         if regions.iter().any(|row| row.status.is_none()) {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
         let mut matches = regions
             .iter()
-            .filter(|row| field_matches(configured, &row.name));
+            .filter(|row| same_alias(configured, &row.name));
         let Some(region) = matches.next() else {
             return Err(ineligible_region());
         };
@@ -54,7 +55,7 @@ impl Child<'_> {
         }
         if regions
             .iter()
-            .filter(|row| field_matches(&row.id, &region.id))
+            .filter(|row| same_alias(&row.id, &region.id))
             .count()
             != 1
         {
@@ -158,7 +159,9 @@ fn supports(package: &Package, configured: &str, region: &str, regions: &[Region
             .into_iter()
             .filter(|alias| !alias.is_empty())
         {
-            let slot = aliases.entry(fold(alias)).or_insert(Some(index));
+            let slot = aliases
+                .entry(fold(alias).collect::<String>())
+                .or_insert(Some(index));
             if *slot != Some(index) {
                 *slot = None;
             }
@@ -170,7 +173,9 @@ fn supports(package: &Package, configured: &str, region: &str, regions: &[Region
         if !link.glb_package.matches(&package.id) {
             return false;
         }
-        let index = aliases.get(&fold(&link.region)).and_then(|index| *index);
+        let index = aliases
+            .get(&fold(&link.region).collect::<String>())
+            .and_then(|index| *index);
         if !link.regional_package.is_empty() {
             let Some(index) = index else {
                 return false;
@@ -180,7 +185,7 @@ fn supports(package: &Package, configured: &str, region: &str, regions: &[Region
                 return false;
             }
         }
-        if field_matches(&link.region, configured) || field_matches(&link.region, region) {
+        if same_alias(&link.region, configured) || same_alias(&link.region, region) {
             if index.is_none() {
                 return false;
             }
@@ -188,15 +193,4 @@ fn supports(package: &Package, configured: &str, region: &str, regions: &[Region
         }
     }
     found
-}
-
-fn fold(alias: &str) -> String {
-    alias
-        .chars()
-        .map(|c| match c {
-            '\u{017f}' => 's',
-            '\u{212a}' => 'k',
-            _ => c.to_ascii_lowercase(),
-        })
-        .collect()
 }

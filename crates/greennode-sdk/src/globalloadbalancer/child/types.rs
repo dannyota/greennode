@@ -1,5 +1,7 @@
 use super::super::{Listener, Pool, PoolMember};
 use super::{Evidence, safe_id};
+use std::fmt;
+
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::Value;
 
@@ -130,7 +132,7 @@ impl DeleteListenerInput {
 }
 
 /// Contains the confirmed pool and group or their safely retained identifiers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreatePoolOutput {
     /// Confirmed pool or its identifier.
     pub pool: Pool,
@@ -162,7 +164,7 @@ impl Serialize for CreatePoolOutput {
 }
 
 /// Contains the confirmed listener or its safely retained identifier.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreateListenerOutput {
     /// Confirmed listener or its identifier.
     pub listener: Listener,
@@ -190,7 +192,7 @@ impl Serialize for CreateListenerOutput {
 }
 
 /// Identifies the pool and whether absence was confirmed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct DeletePoolOutput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -226,7 +228,7 @@ impl Serialize for DeletePoolOutput {
 }
 
 /// Identifies the listener and whether absence was confirmed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct DeleteListenerOutput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -261,6 +263,26 @@ impl Serialize for DeleteListenerOutput {
     }
 }
 
+macro_rules! debug_projection {
+    ($($output:ident),+ $(,)?) => {$(
+        impl fmt::Debug for $output {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match serde_json::to_value(self) {
+                    Ok(value) => fmt::Debug::fmt(&value, f),
+                    Err(_) => f.write_str("<redacted>"),
+                }
+            }
+        }
+    )+};
+}
+
+debug_projection!(
+    CreatePoolOutput,
+    CreateListenerOutput,
+    DeletePoolOutput,
+    DeleteListenerOutput
+);
+
 fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
     let mut value = serde_json::to_value(output).ok()?;
     if !evidence.reflected_in(&value) {
@@ -268,4 +290,45 @@ fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
     }
     evidence.redact(&mut value);
     Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn debug_uses_each_child_outputs_screened_projection() {
+        let mut evidence = Evidence::new();
+        let numeric = "45673";
+        evidence.add_secret(&Secret::new(numeric));
+        evidence.add_secret(&Secret::new("true"));
+        let pool = CreatePoolOutput::new(
+            Pool::default(),
+            PoolMember {
+                traffic_dial: 45673,
+                ..Default::default()
+            },
+            &evidence,
+        );
+        let listener = CreateListenerOutput::new(
+            Listener {
+                port: 45673,
+                ..Default::default()
+            },
+            &evidence,
+        );
+        let delete_pool = DeletePoolOutput::new("glb-1", "pool-1", true, &evidence);
+        let delete_listener = DeleteListenerOutput::new("glb-1", "listener-1", true, &evidence);
+        let outputs = [
+            (format!("{pool:?}"), numeric),
+            (format!("{listener:?}"), numeric),
+            (format!("{delete_pool:?}"), "true"),
+            (format!("{delete_listener:?}"), "true"),
+        ];
+        for (debug, secret) in outputs {
+            assert!(debug.contains("<redacted>"));
+            assert!(!debug.contains(secret));
+        }
+    }
 }

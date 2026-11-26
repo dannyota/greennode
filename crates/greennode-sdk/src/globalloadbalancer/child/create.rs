@@ -138,7 +138,7 @@ impl Client {
             ));
         }
         let row = group.members.first().map(|row| row.id.as_str());
-        if row.is_some_and(|id| !PathIds::WithUnderscore.allows(id)) {
+        if row.is_some_and(|id| !PathIds::Strict.allows(id)) {
             return Err(run.fail("create response has an invalid backend", partial(&run, "")));
         }
         let wait = run.0.wait_context(ctx, CREATE_WAIT);

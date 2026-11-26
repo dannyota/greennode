@@ -1,7 +1,9 @@
+mod alias;
 mod catalog;
 mod cidr;
 mod create;
 mod delete;
+mod fold_table;
 mod model;
 mod types;
 
@@ -12,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use std::time::Duration;
 
-use super::load_balancer_writes::decode;
+use super::load_balancer_writes::{decode, decode_with};
 use super::wire::{DecodeError, WireField};
 use super::write::{
     PROVENANCE, Settlement, Write, guard_operation, local, not_sent, rejected_response,
@@ -22,6 +24,7 @@ use super::{Client, invalid_input};
 use crate::endpoint::Base;
 use crate::quote::{catalog::unique, request};
 use crate::wire::product::{evidence::Evidence, options::PathIds, sender::Response};
+use crate::wire::strict_json;
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 use model::{Group, ListenerWire, Member, Parent, PoolWire};
 
@@ -31,6 +34,7 @@ const LISTENERS: &str = "v1/global-load-balancers/{}/global-listeners";
 const LISTENER: &str = "v1/global-load-balancers/{}/global-listeners/{}";
 const GROUPS: &str = "v1/global-load-balancers/{}/global-pools/{}/pool-members";
 const GROUP: &str = "v1/global-load-balancers/{}/global-pools/{}/pool-members/{}";
+const PACKAGES: &str = "v1/packages";
 const PARENT: &str = "v1/global-load-balancers/{}";
 const CREATE_WAIT: Duration = Duration::from_secs(900);
 const DELETE_WAIT: Duration = Duration::from_secs(600);
@@ -149,7 +153,12 @@ impl Child<'_> {
         if reply.body.is_empty() || super::wire::go_json(&reply.body).trim() == "null" {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
-        let result: T = decode(&op, &reply.body, &T::SHAPE).map_err(|error| {
+        let validation = if template == PACKAGES {
+            strict_json::validate_canonical_shape
+        } else {
+            strict_json::validate_shape
+        };
+        let result: T = decode_with(&op, &reply.body, &T::SHAPE, validation).map_err(|error| {
             self.invalid(
                 error
                     .detail::<DecodeError>()
@@ -197,9 +206,12 @@ impl Child<'_> {
             Ok(_) => Err(self
                 .0
                 .finish(Settlement::Unknown("request unconfirmed"), partial(self))),
-            Err(failure) => Err(self
-                .0
-                .rejection(failure, partial(self), "request unconfirmed")),
+            Err(failure) => Err(self.0.rejection_with_message(
+                failure,
+                partial(self),
+                "request unconfirmed",
+                Some(PROVIDER_TEXT),
+            )),
         }
     }
 
@@ -246,10 +258,7 @@ impl Child<'_> {
         glb: &str,
     ) -> Result<Vec<PoolWire>, Box<Error>> {
         let rows: Vec<PoolWire> = self.get(ctx, POOLS, &[glb]).await?;
-        self.unique(
-            rows.iter().map(|row| row.id.as_str()),
-            PathIds::WithUnderscore,
-        )?;
+        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
         Ok(rows)
     }
 
@@ -259,10 +268,7 @@ impl Child<'_> {
         glb: &str,
     ) -> Result<Vec<ListenerWire>, Box<Error>> {
         let rows: Vec<ListenerWire> = self.get(ctx, LISTENERS, &[glb]).await?;
-        self.unique(
-            rows.iter().map(|row| row.id.as_str()),
-            PathIds::WithUnderscore,
-        )?;
+        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
         Ok(rows)
     }
 
@@ -273,10 +279,7 @@ impl Child<'_> {
         pool: &str,
     ) -> Result<Vec<Group>, Box<Error>> {
         let rows: Vec<Group> = self.get(ctx, GROUPS, &[glb, pool]).await?;
-        self.unique(
-            rows.iter().map(|row| row.id.as_str()),
-            PathIds::WithUnderscore,
-        )?;
+        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
         Ok(rows)
     }
 

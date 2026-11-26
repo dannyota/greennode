@@ -25,3 +25,10 @@ crates/greennode-sdk/tests/fixtures/globalloadbalancer/ and run:
     go test ./internal/cli -run '^TestGlobalLoadBalancerChildWriteGoldens$' -count=1
 
 Copy the sixteen success and partial stdout goldens to the same directory.
+
+Regenerate the SDK catalog alias table with the Go version in the baseline's
+go.mod. From the greennode root, run:
+
+    GOTOOLCHAIN=local go run scripts/globalloadbalancer-goldens/generate-fold-table.go > crates/greennode-sdk/src/globalloadbalancer/child/fold_table.rs
+
+The table uses the lowest rune in each Go unicode.SimpleFold cycle.

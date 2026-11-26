@@ -121,7 +121,7 @@ async fn pool_creation_discovers_project_and_uses_catalog_region_for_private_bac
     let output = client.create_pool(&ctx, pool_input()).await.unwrap();
     assert_eq!(output.pool.id, "pool-1");
     assert_eq!(output.pool_member.region, "han_lab");
-    assert_eq!(output.pool_member.members[0].id, "row_1");
+    assert_eq!(output.pool_member.members[0].id, "row-1");
     paths(
         &regional,
         &[
@@ -439,4 +439,120 @@ async fn placement_requires_a_private_ipv4_address_in_the_exact_subnet() {
     assert_eq!(result.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(glb.requests(), 3);
     assert_eq!(regional.requests(), 3);
+}
+
+#[tokio::test]
+async fn catalog_rejects_noncanonical_and_duplicate_package_ownership_keys() {
+    let f = child_fixture();
+    for links in [
+        r#"[{"region":"han-1","GLB_PACKAGE_ID":"other","vlb_package_id":"plan-1"}]"#,
+        r#"[{"region":"han-1","glb_package_id":"pkg-1","glb_package_id":"other","vlb_package_id":"plan-1"}]"#,
+    ] {
+        let body = format!(r#"[{{"id":"pkg-1","enabled":true,"vlbPackages":{links}}}]"#);
+        let replies = vec![
+            ok(&f["parent"]),
+            ok(&f["regions"]),
+            response("200 OK", body),
+        ];
+        let (client, glb, regional) = servers(replies, placement(&f), true, TOKEN);
+        let (ctx, _) = RequestContext::new();
+        let failure = client.create_pool(&ctx, pool_input()).await.unwrap_err();
+        assert_eq!(
+            failure.error().api_error().map(crate::ApiError::code),
+            Some("InvalidResponse")
+        );
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(glb.requests(), 3);
+        assert_eq!(regional.requests(), 0);
+    }
+}
+
+#[tokio::test]
+async fn go_simple_fold_flags_ambiguous_aliases_even_in_another_region() {
+    let mut f = child_fixture();
+    f["regions"].as_array_mut().unwrap().extend([
+        json!({"id":"other-1","name":"É","status":"ACTIVE"}),
+        json!({"id":"other-2","name":"é","status":"ACTIVE"}),
+    ]);
+    f["packages"][0]["vlbPackages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"region":"É","vlb_package_id":"plan-2"}));
+    let (client, glb, regional) = servers(catalog(&f), placement(&f), true, TOKEN);
+    let (ctx, _) = RequestContext::new();
+    let failure = client.create_pool(&ctx, pool_input()).await.unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::InvalidInput));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(glb.requests(), 3);
+    assert_eq!(regional.requests(), 0);
+}
+
+#[tokio::test]
+async fn child_acknowledgements_and_collection_rows_require_strict_ids() {
+    let mut f = child_fixture();
+    f["pool_accept"]["globalPoolMembers"][0]["members"][0]["id"] = json!("row_1");
+    let mut replies = catalog(&f);
+    replies.extend([
+        empty(),
+        empty(),
+        accepted(&f["pool_accept"]),
+        ok(&f["parent"]),
+    ]);
+    replies.extend(chain(&f));
+    replies.push(empty());
+    let (client, glb, _regional) = servers(replies, placement(&f), true, TOKEN);
+    let (ctx, _) = RequestContext::new();
+    let failure = client.create_pool(&ctx, pool_input()).await.unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    let partial = failure.partial().unwrap();
+    assert_eq!(partial.pool.id, "pool-1");
+    assert!(partial.pool_member.id.is_empty());
+    assert_eq!(glb.requests(), 6);
+
+    let mut replies = catalog(&f);
+    replies.extend([
+        ok(&json!([f["pool"]])),
+        ok(&f["pool"]),
+        empty(),
+        ok(&json!([f["group"]])),
+        ok(&f["group"]),
+        response("202 Accepted", ""),
+        ok(&json!([{"id":"other_1"}])),
+        gone(),
+        ok(&f["parent"]),
+        gone(),
+    ]);
+    let (client, glb, _regional) = servers(replies, vec![], true, TOKEN);
+    let failure = client
+        .delete_pool(&ctx, DeletePoolInput::new("glb-1", "pool-1"))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert!(!failure.partial().unwrap().deleted);
+    assert_eq!(glb.requests(), 10);
+}
+
+#[tokio::test]
+async fn truncated_child_write_rejections_preserve_class_and_screen_status() {
+    let f = child_fixture();
+    for (token, expected) in [(TOKEN, Some(403)), ("403", None)] {
+        let mut replies = catalog(&f);
+        replies.extend([
+            empty(),
+            empty(),
+            Response::RawClose(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\n{}".to_vec()),
+        ]);
+        let (client, glb, _regional) = servers(replies, placement(&f), true, token);
+        let (ctx, _) = RequestContext::new();
+        let failure = client.create_pool(&ctx, pool_input()).await.unwrap_err();
+        assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert!(failure.partial().is_none());
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.code(), "Forbidden");
+        assert_eq!(api.status(), expected);
+        assert!(api.message() == "request rejected by the API");
+        assert!(!api.retryable());
+        assert_eq!(glb.requests(), 6);
+    }
 }

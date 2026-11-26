@@ -45,7 +45,7 @@
     "Status": "OFFLINE",
     "Members": [
       {
-        "ID": "row_1",
+        "ID": "row-1",
         "Name": "backend",
         "Description": "",
         "GlobalPoolMemberID": "group-1",
