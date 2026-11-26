@@ -175,7 +175,9 @@ const USER: Shape<'static> = Shape::Object(&[
 struct Users {
     data: Option<Vec<User>>,
     list_data: Option<Vec<User>>,
+    #[serde(deserialize_with = "null_default")]
     page: i64,
+    #[serde(deserialize_with = "null_default")]
     page_size: i64,
     total_page: Option<i64>,
     total_item: Option<i64>,
@@ -287,7 +289,7 @@ impl Client {
         input: ListRepositoryUsersInput,
     ) -> Result<ListRepositoryUsersOutput, Failure<ListRepositoryUsersOutput>> {
         if !valid_id(&input.repository_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.ListRepositoryUsers requires RepositoryID to match ^[A-Za-z0-9-]+$")));
         }
         self.users(
             ctx,
@@ -355,37 +357,40 @@ impl Client {
         input: GetRepositoryInput,
     ) -> Result<GetRepositoryOutput, Failure<GetRepositoryOutput>> {
         if !valid_id(&input.repository_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.GetRepository requires RepositoryID to match ^[A-Za-z0-9-]+$")));
         }
+        let mut get_operation =
+            read_operation("containerregistry.GetRepository", "v1/repository/{}");
+        get_operation.overflow_overrides_status = true;
         let result: Result<Repository, Failure<GetRepositoryOutput>> = self
-            .read_path(
-                ctx,
-                &read_operation("containerregistry.GetRepository", "v1/repository/{}"),
-                &[&input.repository_id],
-                &[],
-            )
+            .read_path(ctx, &get_operation, &[&input.repository_id], &[])
             .await;
         match result {
             Ok(repository) if repository.id == input.repository_id => {
                 Ok(GetRepositoryOutput { repository })
             }
-            Ok(_) => Err(failure(Error::new(ErrorClass::Api))),
+            Ok(_) => Err(failure(Error::new(ErrorClass::Api).with_detail(
+                "containerregistry.GetRepository: repository identity is unproven",
+            ))),
             Err(original) => {
-                let server_error = original
-                    .error()
-                    .api_error()
-                    .and_then(|api| api.status())
-                    .is_some_and(|status| (500..600).contains(&status));
-                if !server_error {
+                let server_error = original.error().api_error().is_some_and(|api| {
+                    !api.code().is_empty()
+                        && api
+                            .status()
+                            .is_some_and(|status| (500..600).contains(&status))
+                });
+                if !server_error || original.error().is_body_too_large() {
                     return Err(original);
                 }
+                let mut confirmation = read_operation(
+                    "containerregistry.repositoryFoundAfterServerError",
+                    "v1/repository",
+                );
+                confirmation.cap = 4 << 20;
                 let result: Result<Repositories, Failure<GetRepositoryOutput>> = self
                     .read(
                         ctx,
-                        &read_operation(
-                            "containerregistry.repositoryFoundAfterServerError",
-                            "v1/repository",
-                        ),
+                        &confirmation,
                         &[("accessLevel", "ALL"), ("name", ""), ("size", "10000")],
                     )
                     .await;
@@ -412,7 +417,7 @@ impl Client {
                             .all(|item| valid_id(&item.id) && ids.insert(item.id.as_str()))
                             && !ids.contains(input.repository_id.as_str())
                         {
-                            return Err(failure(Error::new(ErrorClass::NotFound)));
+                            return Err(failure(Error::new(ErrorClass::NotFound).with_detail("vngcloud: resource not found: containerregistry.GetRepository: repository absent")));
                         }
                     }
                 }
@@ -486,6 +491,141 @@ mod tests {
         );
         assert_eq!(result.items[0].repositories[0].policies[0].id, "policy-1");
     }
+    #[tokio::test]
+    async fn oversized_errors_and_confirmation_never_prove_absence() {
+        let big_error = vec![b' '; (8 << 20) + 1];
+        let big_confirmation = format!(
+            "{{\"data\":[],\"totalPage\":0,\"totalItem\":0,\"padding\":\"{}\"}}",
+            "x".repeat(4 << 20)
+        );
+        let error_response = |body: Vec<u8>| Response::Http {
+            status: "500 Internal Server Error".into(),
+            headers: vec![("Content-Length".into(), body.len().to_string())],
+            body,
+        };
+        let server = Server::start(vec![
+            Response::Http {
+                status: "500 Internal Server Error".into(),
+                headers: vec![("Content-Length".into(), "20".into())],
+                body: b"{}".to_vec(),
+            },
+            response(br#"{"data":[],"totalPage":0,"totalItem":0}"#),
+        ]);
+        let failure = client(&server)
+            .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
+            .await
+            .unwrap_err();
+        assert_ne!(failure.error().class(), ErrorClass::NotFound);
+        assert_eq!(server.requests(), 1);
+        let server = Server::start(vec![error_response(big_error)]);
+        let failure = client(&server)
+            .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
+            .await
+            .unwrap_err();
+        assert_ne!(failure.error().class(), ErrorClass::NotFound);
+        assert_eq!(server.requests(), 1);
+        let server = Server::start(vec![
+            error_response(b"{}".to_vec()),
+            response(big_confirmation.as_bytes()),
+        ]);
+        let failure = client(&server)
+            .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
+            .await
+            .unwrap_err();
+        assert_ne!(failure.error().class(), ErrorClass::NotFound);
+        assert_eq!(server.requests(), 2);
+    }
+
+    #[tokio::test]
+    async fn null_page_metadata_defaults_to_zero_for_all_reads() {
+        let empty = br#"{"data":[],"page":null,"pageSize":null,"totalPage":0,"totalItem":0}"#;
+        let server = Server::start(vec![
+            response(empty),
+            response(empty),
+            Response::Http {
+                status: "500 Internal Server Error".into(),
+                headers: vec![("Content-Length".into(), "2".into())],
+                body: b"{}".to_vec(),
+            },
+            response(empty),
+        ]);
+        let client = client(&server);
+        let ctx = RequestContext::new().0;
+        assert_eq!(
+            client
+                .list_repositories(&ctx, ListRepositoriesInput::default())
+                .await
+                .unwrap()
+                .page,
+            0
+        );
+        assert_eq!(
+            client
+                .list_users(&ctx, ListUsersInput::default())
+                .await
+                .unwrap()
+                .page_size,
+            0
+        );
+        assert_eq!(
+            client
+                .get_repository(&ctx, GetRepositoryInput::new("repo-1"))
+                .await
+                .unwrap_err()
+                .error()
+                .class(),
+            ErrorClass::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn repository_failures_keep_distinct_fixed_diagnostics() {
+        let server = Server::start(vec![
+            response(br#"{"uuid":"other"}"#),
+            Response::Http {
+                status: "500 Internal Server Error".into(),
+                headers: vec![("Content-Length".into(), "2".into())],
+                body: b"{}".to_vec(),
+            },
+            response(br#"{"data":[],"totalPage":0,"totalItem":0}"#),
+        ]);
+        let client = client(&server);
+        let ctx = RequestContext::new().0;
+        let invalid = client
+            .get_repository(&ctx, GetRepositoryInput::new("../bad"))
+            .await
+            .unwrap_err();
+        assert!(
+            invalid
+                .error()
+                .detail::<&'static str>()
+                .unwrap()
+                .contains("requires RepositoryID to match")
+        );
+        let mismatch = client
+            .get_repository(&ctx, GetRepositoryInput::new("repo-1"))
+            .await
+            .unwrap_err();
+        assert!(
+            mismatch
+                .error()
+                .detail::<&'static str>()
+                .unwrap()
+                .contains("repository identity is unproven")
+        );
+        let missing = client
+            .get_repository(&ctx, GetRepositoryInput::new("repo-1"))
+            .await
+            .unwrap_err();
+        assert!(
+            missing
+                .error()
+                .detail::<&'static str>()
+                .unwrap()
+                .contains("containerregistry.GetRepository")
+        );
+    }
+
     #[tokio::test]
     async fn get_repository_confirms_absence_after_server_error() {
         let server = Server::start(vec![

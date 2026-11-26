@@ -129,6 +129,46 @@ fn registry_reads_match_go_goldens() {
 }
 
 #[test]
+fn incomplete_repository_inventory_prints_no_partial_output() {
+    let body = br#"{"data":[{"uuid":"repo-1"}],"totalPage":2,"totalItem":2}"#;
+    let server = Server::start(vec![Response::Http {
+        status: "200 OK".into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body: body.to_vec(),
+    }]);
+    let options = with_product_loopback(
+        Product::ContainerRegistry,
+        ConfigOptions::default().with_static_token(Secret::new("synthetic-cli-registry-token")),
+        &server,
+    );
+    let (context, _) = RequestContext::new();
+    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let status = runtime.block_on(run_invocation(Invocation {
+        args: ["greennode", "containerregistry", "list-repositories"]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        source: &Source,
+        config_options: options,
+        stdin: &mut stdin,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdin_terminal: false,
+        stdout_terminal: false,
+        stderr_terminal: false,
+        clock: &SystemClock,
+        context: &context,
+    }));
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("incomplete"));
+}
+
+#[test]
 fn registry_read_is_registered() {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());

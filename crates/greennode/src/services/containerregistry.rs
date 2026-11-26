@@ -196,7 +196,7 @@ fn list_repositories<'a>(
     input: &'a Input,
 ) -> FutureResult<'a, ExecutionResult> {
     Box::pin(async move {
-        dispatch::project_result(
+        let mut result = dispatch::project_result(
             Client::new(config)
                 .list_repositories(
                     ctx,
@@ -207,7 +207,11 @@ fn list_repositories<'a>(
                 )
                 .await,
             std::convert::identity,
-        )
+        );
+        if let Err(failure) = &mut result {
+            failure.partial = None;
+        }
+        result
     })
 }
 fn get_repository<'a>(

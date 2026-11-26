@@ -148,7 +148,9 @@ impl Output for Permissions {
 struct Repositories {
     data: Option<Vec<Repository>>,
     list_data: Option<Vec<Repository>>,
+    #[serde(deserialize_with = "null_default")]
     page: i64,
+    #[serde(deserialize_with = "null_default")]
     page_size: i64,
     total_page: Option<i64>,
     total_item: Option<i64>,
