@@ -223,6 +223,9 @@ fn compare_tree(
                 let flag = arg
                     .get_long()
                     .ok_or_else(|| format!("unnamed or short-only argument {name} {op_name}"))?;
+                if flag == "cli-input-json" {
+                    continue;
+                }
                 if flag == "help" || greennode::services::GLOBAL_FLAGS.contains(&flag) {
                     let inherited = arg.is_global_set()
                         && tree.get_arguments().any(|root_arg| {

@@ -36,6 +36,16 @@ fn command() -> Command {
                 .arg(Arg::new("path").num_args(0..).action(ArgAction::Append)),
         )
         .subcommand(
+            Command::new("gen-docs")
+                .disable_help_flag(true)
+                .hide(true)
+                .arg(
+                    Arg::new("directory")
+                        .required(true)
+                        .value_parser(clap::value_parser!(std::path::PathBuf)),
+                ),
+        )
+        .subcommand(
             Command::new("__command-inventory")
                 .disable_help_flag(true)
                 .hide(true),
@@ -65,9 +75,27 @@ pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
         for operation in service.operations {
             let mut operation_command = Command::new(operation.name)
                 .disable_help_flag(true)
+                .args_override_self(true)
                 .about(operation.short_help);
+            if service.name != "storage"
+                || ![
+                    "put-object",
+                    "get-object",
+                    "list-objects",
+                    "head-object",
+                    "delete-object",
+                    "copy-object",
+                ]
+                .contains(&operation.name)
+            {
+                operation_command = operation_command.arg(
+                    Arg::new("cli-input-json")
+                        .long("cli-input-json")
+                        .action(ArgAction::Set),
+                );
+            }
             for flag in operation.flags.iter().chain(operation.extra_flags) {
-                operation_command = operation_command.arg(Arg::new(flag.name).long(flag.name));
+                operation_command = operation_command.arg(super::op::argument(flag));
             }
             service_command = service_command.subcommand(operation_command);
         }
@@ -240,6 +268,16 @@ where
     }
     if matches.get_flag("version-flag") || matches.subcommand_name() == Some("version") {
         let _ = writeln!(stdout, "{}", version());
+    } else if let Some(docs) = matches.subcommand_matches("gen-docs") {
+        if let Some(directory) = docs.get_one::<std::path::PathBuf>("directory")
+            && super::gendocs::generate(directory, registry).is_err()
+        {
+            let _ = writeln!(
+                stderr,
+                "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"cannot generate documentation\"}}}}"
+            );
+            return ExitCode::from(2);
+        }
     } else if matches.subcommand_name() == Some("__command-inventory") {
         let _ = write!(stdout, "{}", inventory(registry));
     } else if let Some((name, submatches)) = matches.subcommand() {
