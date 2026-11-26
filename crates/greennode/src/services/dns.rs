@@ -250,6 +250,7 @@ pub(super) const SERVICE: Service = Service {
             include_api_status: false,
         }),
         exit: Some(RuleExit::Failure),
+        message: None,
     }],
     operations: &[
         writes::CREATE_ZONE,
