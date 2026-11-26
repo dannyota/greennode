@@ -2,6 +2,7 @@
 
 #![warn(missing_docs)]
 
+pub mod backup;
 pub mod billing;
 mod cache;
 mod clock;

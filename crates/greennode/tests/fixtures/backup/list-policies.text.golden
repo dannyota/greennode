@@ -1,0 +1,1 @@
+backend-1	3	{"DailyConfig":{"BackupType":"incremental","IncrementalQuantity":2,"Retention":7},"DailyEnabled":true,"Hour":1,"HourlyEnabled":true,"IsProtectedServer":true,"Minute":30,"MonthlyEnabled":true,"TimeZone":"UTC","WeeklyEnabled":true}	2026-01-01T00:00:00Z	policy-1	true	policy	SERVER	project-1	2026-01-02T00:00:00Z
