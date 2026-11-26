@@ -95,11 +95,13 @@ fn only_old_exact_bearer_is_rejected() {
     let token = Token::new(Secret::new("toy"), None);
     let young = Cached {
         token: token.clone(),
+        signin_credentials: None,
         obtained: ObtainedAt::InProcess(now),
         expires_monotonic: None,
     };
     let old = Cached {
         token,
+        signin_credentials: None,
         obtained: ObtainedAt::InProcess(now - Duration::from_secs(30)),
         expires_monotonic: None,
     };

@@ -20,7 +20,28 @@ pub struct InheritedBinding {
     pub input_field: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub type Execute = for<'a> fn(
+    &'a Operation,
+    &'a clap::ArgMatches,
+    &'a mut super::Invocation<'_>,
+) -> super::dispatch::FutureResult<'a, u8>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Handler {
+    pub(crate) execute: Execute,
+    pub(crate) allow_json: bool,
+}
+
+impl Handler {
+    pub const fn new<T>(input: &super::input::InputDescriptor<T>, execute: Execute) -> Self {
+        Self {
+            execute,
+            allow_json: input.allow_json,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Operation {
     pub name: &'static str,
     pub sdk_operation: &'static str,
@@ -33,9 +54,10 @@ pub struct Operation {
     pub json_fields: &'static [Field],
     pub extra_flags: &'static [Field],
     pub notes: &'static [&'static str],
+    pub handler: Option<Handler>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct Service {
     pub name: &'static str,
     pub operations: &'static [Operation],

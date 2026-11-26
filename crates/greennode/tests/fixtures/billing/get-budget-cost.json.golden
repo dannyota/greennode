@@ -1,0 +1,26 @@
+{
+  "Budget": {
+    "UUID": "b-1",
+    "ID": 0,
+    "Name": "",
+    "PeriodType": "",
+    "Type": "",
+    "LimitAmount": 1,
+    "Currency": "",
+    "Status": "",
+    "PeriodKey": "",
+    "PeriodStart": "",
+    "PeriodEnd": "",
+    "StartDate": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ActualCost": 10000000.12345679,
+    "ForecastedCost": null,
+    "ActualPercentage": null,
+    "ForecastedPercentage": null,
+    "ThresholdPercentage": null,
+    "Alarm": false,
+    "ThresholdCount": 0,
+    "AlarmThresholdCount": 0
+  }
+}

@@ -73,8 +73,9 @@ async fn run_with_rng(
             super::totp::complete(&login, &mut jar, &location, source).await?
         }
     };
-    drop(jar);
-    super::token::exchange(super::token::Exchange {
+    jar.sent.record(&code);
+    jar.sent.record(&verifier);
+    let mut token = super::token::exchange(super::token::Exchange {
         client: login.client,
         token_url,
         dashboard: login.dashboard,
@@ -83,7 +84,9 @@ async fn run_with_rng(
         clock: login.clock,
         deadline: login.deadline,
     })
-    .await
+    .await?;
+    token.credentials = jar.sent;
+    Ok(token)
 }
 
 #[cfg(test)]
@@ -296,7 +299,10 @@ mod tests {
             },
         )
         .await;
-        assert!(result.is_ok());
+        let credentials = result.unwrap().credentials;
+        for fragment in ["toy-code", "toy-password", "token"] {
+            assert!(credentials.reflects(fragment.as_bytes()));
+        }
         assert_eq!(signin.requests(), 4);
         assert_eq!(token.requests(), 1);
         fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {

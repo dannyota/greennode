@@ -181,6 +181,19 @@ pub(crate) async fn execute<T: Output>(
     } else {
         crate::WriteDispatch::NotAWrite
     };
+    let output = T::decode_response(operation, &response)
+        .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    Ok((status, output))
+}
+
+pub(crate) fn decode_response<T: Output>(
+    operation: &Operation,
+    response: &sender::Response,
+) -> Result<T, Box<crate::Error>> {
+    let status = response.status;
+    let invalid = || {
+        Box::new(api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status))
+    };
     let body = super::response::classify(
         operation.id,
         status,
@@ -188,26 +201,14 @@ pub(crate) async fn execute<T: Output>(
         operation.success,
         (true, operation.sensitive, operation.retry),
         &response.credentials,
-    )
-    .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    )?;
     if operation.reject_reflected_credentials && reflects_json(&body, &response.credentials) {
-        return Err(crate::Failure::new(
-            api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status),
-            None,
-            dispatch,
-        ));
+        return Err(invalid());
     }
     if operation.no_output {
-        return Ok((status, T::default()));
+        return Ok(T::default());
     }
-    let output = decode(&body, operation.allow_empty, operation.cap).map_err(|_| {
-        crate::Failure::new(
-            api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status),
-            None,
-            dispatch,
-        )
-    })?;
-    Ok((status, output))
+    decode(&body, operation.allow_empty, operation.cap).map_err(|_| invalid())
 }
 
 fn reflects_json(body: &[u8], credentials: &sender::SentCredentials) -> bool {
@@ -308,6 +309,13 @@ fn api_error(
 #[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
+
+    fn decode_response(
+        operation: &Operation,
+        response: &sender::Response,
+    ) -> Result<Self, Box<crate::Error>> {
+        decode_response(operation, response)
+    }
 }
 
 #[allow(dead_code)]
@@ -340,6 +348,7 @@ mod tests {
                 Ok(sender::BearerToken {
                     token: crate::Token::new(crate::Secret::new(self.1), None),
                     obtained_at: None,
+                    signin_credentials: None,
                 })
             })
         }
@@ -439,6 +448,7 @@ mod tests {
         let base = crate::endpoint::Base::parse(&server.origin).unwrap();
         execute(
             sender::Runtime {
+                configured_credentials: None,
                 client: &clients,
                 ctx: &ctx,
                 clock: &clock,
@@ -584,6 +594,58 @@ mod tests {
         let error = call(&server, &declaration(), &["one"]).await.unwrap_err();
         assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
+    }
+
+    struct StaticSource;
+    impl sender::BearerSource for StaticSource {
+        fn token<'a>(
+            &'a self,
+            _: &'a crate::RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<sender::BearerToken, crate::Error>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Ok(sender::BearerToken {
+                    token: crate::Token::new(crate::Secret::new("toy-token"), None),
+                    obtained_at: None,
+                    signin_credentials: None,
+                })
+            })
+        }
+        fn rejected<'a>(
+            &'a self,
+            _: &'a crate::RequestContext,
+            _: &'a crate::Secret,
+            _: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn refreshable(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn static_bearer_is_not_retried_on_unauthorized() {
+        let server = Server::start(vec![
+            response("401 Unauthorized", b"{}"),
+            response("200 OK", br#"{"id":"one"}"#),
+        ]);
+        let mut op = declaration();
+        op.retry = redirect::Retry::Repeatable;
+        op.allow_recovery = true;
+        assert!(
+            call_with_source(
+                &server,
+                &op,
+                &["one"],
+                &[],
+                bytes::Bytes::new(),
+                &StaticSource
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(server.requests(), 1);
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@ keywords = ["greennode", "vngcloud", "cloud", "api", "sdk"]
 categories = ["api-bindings"]
 
 [features]
-test-support = []
+test-support = ["dep:rcgen", "dep:tokio-rustls", "tokio/rt", "tokio/macros", "tokio/net", "tokio/io-util"]
 
 [dependencies]
 bytes = "1.12.2"
@@ -31,12 +31,14 @@ rustls = { version = "0.23.46", default-features = false, features = ["std", "ri
 webpki-roots = "1.0.12"
 same-file = "1.0.6"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154", features = ["raw_value", "arbitrary_precision"] }
+serde_json = { version = "1.0.154", features = ["raw_value", "arbitrary_precision", "float_roundtrip"] }
 sha2 = { version = "=0.11.1", features = ["zeroize"] }
 time = { version = "0.3.55", features = ["parsing", "formatting"] }
 tower-service = "0.3.3"
 zeroize = "1.9.2"
 url = "2.5.9"
+rcgen = { version = "0.14.10", default-features = false, features = ["ring"], optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"], optional = true }
 tokio = { version = "1.54", features = ["time", "sync"] }
 
 [target.'cfg(unix)'.dependencies]

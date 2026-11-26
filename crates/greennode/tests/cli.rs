@@ -190,3 +190,23 @@ fn globals_work_on_both_sides_of_version() {
         }
     }
 }
+
+#[test]
+fn billing_missing_budget_uuid_is_usage_error() {
+    let output = greennode(&["billing", "get-budget"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        output.stderr,
+        b"{\"error\":{\"code\":\"InvalidUsage\",\"message\":\"--budget-uuid is required\"}}\n"
+    );
+}
+
+#[test]
+fn billing_missing_credentials_exits_three() {
+    let output = greennode(&["billing", "list-budgets", "--region", "hcm-3"]);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "NoCredentials");
+}

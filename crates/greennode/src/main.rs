@@ -128,6 +128,7 @@ fn main() -> ExitCode {
         greennode::cli::run_invocation(greennode::cli::Invocation {
             args: std::env::args_os().collect(),
             source: &source,
+            config_options: greennode_sdk::ConfigOptions::default(),
             stdin: &mut stdin,
             stdout: &mut stdout,
             stderr: &mut stderr,

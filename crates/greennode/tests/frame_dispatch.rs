@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use greennode::cli::dispatch::{
-    self, Adapter, FutureResult, LocalError, OperationFailure, ParsedInput, RenderFailure,
+    self, Adapter, ExecutionResult, FutureResult, LocalError, OperationFailure, ParsedInput,
+    RenderFailure,
 };
 use greennode::cli::render;
 use greennode_sdk::{Error, RequestContext};
@@ -22,9 +23,9 @@ impl ParsedInput for Input {
         self.events.borrow_mut().push("before");
         Ok(())
     }
-    fn merge(&mut self) -> Result<(), LocalError> {
+    fn merge(&mut self) -> FutureResult<'_, Result<(), LocalError>> {
         self.events.borrow_mut().push("merge");
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
     fn input_guards(&mut self) -> Result<(), LocalError> {
         self.events.borrow_mut().push("guard");
@@ -46,8 +47,11 @@ impl ParsedInput for Input {
     fn yes(&self) -> bool {
         self.yes
     }
-    fn read_only(&self) -> bool {
-        self.read_only
+    fn check_read_only(&self) -> Result<(), LocalError> {
+        if self.read_only {
+            return Err(LocalError::read_only("--read-only"));
+        }
+        Ok(())
     }
     fn query(&self) -> Option<&str> {
         self.query
@@ -70,15 +74,15 @@ impl Adapter<Input> for Stub {
     fn output<'a>(&self, _: &'a ()) -> Option<&'a str> {
         None
     }
-    fn profile_read_only(&self, _: &()) -> bool {
-        false
+    fn check_profile_read_only(&self, _: &()) -> Result<(), LocalError> {
+        Ok(())
     }
     fn execute<'a>(
         &'a mut self,
         _: &'a RequestContext,
         _: &'a (),
         _: &'a Input,
-    ) -> FutureResult<'a, Result<Option<render::Projected>, OperationFailure>> {
+    ) -> FutureResult<'a, ExecutionResult> {
         self.events.borrow_mut().push("execute");
         let fail = self.fail;
         let billing = self.billing;
@@ -98,7 +102,7 @@ impl Adapter<Input> for Stub {
                     query_partial: false,
                 })
             } else {
-                Ok(Some(value))
+                Ok(Some(Ok(value)))
             }
         })
     }
@@ -110,7 +114,7 @@ impl Adapter<Input> for Stub {
     fn render_failure(&self, failure: RenderFailure) -> Option<LocalError> {
         (self.billing && failure == RenderFailure::TableLimit).then_some(LocalError {
             code: "QueryFailed",
-            message: "billing report withheld",
+            message: "billing report withheld".into(),
             exit: 1,
         })
     }
@@ -384,16 +388,8 @@ fn service_rules_use_fixed_ranks_and_reject_duplicates() {
 }
 
 #[test]
-fn registered_stub_waits_for_cancellation_and_exits_one() {
-    use greennode::cli::{Invocation, InvocationHandler, run_registered};
-    use greennode_sdk::{ConfigSource, SystemClock};
-    use std::ffi::{OsStr, OsString};
-    struct Source;
-    impl ConfigSource for Source {
-        fn var_os(&self, _: &OsStr) -> Option<OsString> {
-            None
-        }
-    }
+fn dispatched_operation_waits_for_cancellation_and_exits_one() {
+    use greennode_sdk::SystemClock;
     struct Waiting;
     impl Adapter<Input> for Waiting {
         type Settings = ();
@@ -406,15 +402,15 @@ fn registered_stub_waits_for_cancellation_and_exits_one() {
         fn output<'a>(&self, _: &'a ()) -> Option<&'a str> {
             None
         }
-        fn profile_read_only(&self, _: &()) -> bool {
-            false
+        fn check_profile_read_only(&self, _: &()) -> Result<(), LocalError> {
+            Ok(())
         }
         fn execute<'a>(
             &'a mut self,
             ctx: &'a RequestContext,
             _: &'a (),
             _: &'a Input,
-        ) -> FutureResult<'a, Result<Option<render::Projected>, OperationFailure>> {
+        ) -> FutureResult<'a, ExecutionResult> {
             Box::pin(async move {
                 Err(OperationFailure {
                     error: ctx.wait(&SystemClock).await.into(),
@@ -425,53 +421,26 @@ fn registered_stub_waits_for_cancellation_and_exits_one() {
             })
         }
     }
-    struct Handler;
-    impl InvocationHandler for Handler {
-        fn accepts(&self, args: &[OsString]) -> bool {
-            args == [OsString::from("greennode"), OsString::from("toy")]
-        }
-        fn run<'a>(
-            &'a mut self,
-            invocation: &'a mut Invocation<'_>,
-        ) -> FutureResult<'a, std::process::ExitCode> {
-            Box::pin(async move {
-                let status = dispatch::run(
-                    &mut Input::default(),
-                    &mut Waiting,
-                    invocation.context,
-                    invocation.stdout,
-                    invocation.stderr,
-                )
-                .await;
-                std::process::ExitCode::from(status)
-            })
-        }
-    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     runtime.block_on(async {
         let (context, cancel) = RequestContext::new();
-        let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
-        let invocation = Invocation {
-            args: vec!["greennode".into(), "toy".into()],
-            source: &Source,
-            stdin: &mut stdin,
-            stdout: &mut stdout,
-            stderr: &mut stderr,
-            stdin_terminal: false,
-            stdout_terminal: false,
-            stderr_terminal: false,
-            clock: &SystemClock,
-            context: &context,
-        };
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         tokio::spawn(async move {
             tokio::task::yield_now().await;
             cancel.cancel();
         });
-        let status = run_registered(invocation, &mut [&mut Handler]).await;
-        assert_eq!(status, std::process::ExitCode::from(1));
+        let status = dispatch::run(
+            &mut Input::default(),
+            &mut Waiting,
+            &context,
+            &mut stdout,
+            &mut stderr,
+        )
+        .await;
+        assert_eq!(status, 1);
         assert!(stdout.is_empty());
         assert!(stderr.starts_with(b"{\"error\":"));
     });

@@ -18,7 +18,10 @@ use std::{
 use tower_service::Service;
 
 #[derive(Clone)]
-pub(crate) struct DialConnector(HttpConnector);
+pub(crate) struct DialConnector(
+    HttpConnector,
+    #[cfg(feature = "test-support")] Option<std::net::SocketAddr>,
+);
 
 pub(crate) struct DialFailure(Box<dyn Error + Send + Sync>);
 
@@ -47,6 +50,25 @@ impl Service<http::Uri> for DialConnector {
     }
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
+        #[cfg(feature = "test-support")]
+        let uri = if let Some(address) = self.1 {
+            if !uri
+                .host()
+                .is_some_and(|host| fixture_host(address, host, uri.port_u16().unwrap_or(443)))
+            {
+                return Box::pin(async {
+                    Err(DialFailure(Box::new(std::io::Error::other(
+                        "endpoint outside the test fixture",
+                    ))))
+                });
+            }
+            match format!("https://{address}").parse() {
+                Ok(pinned) => pinned,
+                Err(error) => return Box::pin(async move { Err(DialFailure(Box::new(error))) }),
+            }
+        } else {
+            uri
+        };
         let future = self.0.call(uri);
         Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
     }
@@ -80,11 +102,66 @@ pub(crate) enum HeadLimit {
     S3,
 }
 
-pub(crate) struct Trust(RootCertStore);
+pub(crate) struct Trust(
+    RootCertStore,
+    #[cfg(feature = "test-support")] Option<std::net::SocketAddr>,
+);
+
+#[cfg(feature = "test-support")]
+fn fixture_host(address: std::net::SocketAddr, host: &str, port: u16) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    address.ip().is_loopback()
+        && port == address.port()
+        && (host.eq_ignore_ascii_case("localhost") || host.parse() == Ok(address.ip()))
+}
+
+#[cfg(feature = "test-support")]
+#[derive(Clone)]
+pub(crate) struct FixtureTrust {
+    address: std::net::SocketAddr,
+    root: rustls::pki_types::CertificateDer<'static>,
+}
+
+#[cfg(feature = "test-support")]
+impl FixtureTrust {
+    pub(crate) fn new(server: &crate::wire::test_server::Server) -> Self {
+        let (address, root) = server.fixture();
+        Self {
+            address,
+            root: root.clone(),
+        }
+    }
+
+    pub(crate) fn allows(&self, endpoint: &str) -> bool {
+        url::Url::parse(endpoint).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url
+                    .host_str()
+                    .is_some_and(|host| fixture_host(self.address, host, url.port().unwrap_or(443)))
+        })
+    }
+
+    pub(crate) fn trust(&self) -> Result<Trust, rustls::Error> {
+        let mut roots = RootCertStore::empty();
+        roots.add(self.root.clone())?;
+        Ok(Trust(roots, Some(self.address)))
+    }
+}
 
 impl Trust {
+    fn roots(roots: RootCertStore) -> Self {
+        Self(
+            roots,
+            #[cfg(feature = "test-support")]
+            None,
+        )
+    }
+
     pub(crate) fn webpki() -> Self {
-        Self(RootCertStore::from_iter(
+        Self::roots(RootCertStore::from_iter(
             webpki_roots::TLS_SERVER_ROOTS.iter().cloned(),
         ))
     }
@@ -97,14 +174,14 @@ impl Trust {
         for root in roots {
             store.add(root).unwrap();
         }
-        Self(store)
+        Self::roots(store)
     }
 
     #[cfg(test)]
     pub(crate) fn test(root: rustls::pki_types::CertificateDer<'static>) -> Self {
         let mut roots = RootCertStore::empty();
         roots.add(root).unwrap();
-        Self(roots)
+        Self::roots(roots)
     }
 }
 
@@ -125,7 +202,11 @@ pub(crate) fn client(
         .with_tls_config(tls)
         .https_only()
         .enable_http1()
-        .wrap_connector(DialConnector(http));
+        .wrap_connector(DialConnector(
+            http,
+            #[cfg(feature = "test-support")]
+            trust.1,
+        ));
     let mut builder = HyperClient::builder(TokioExecutor::new());
     builder
         .retry_canceled_requests(false)

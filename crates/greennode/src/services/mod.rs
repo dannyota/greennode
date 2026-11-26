@@ -1,4 +1,6 @@
-use crate::cli::op::Service;
+mod billing;
+
+use crate::cli::op::{Handler, Operation, Service};
 
 pub const GLOBAL_FLAGS: &[&str] = &[
     "profile",
@@ -110,16 +112,32 @@ impl Registry {
     pub fn services(&self) -> &'static [Service] {
         self.services
     }
+
+    pub(crate) fn select<'a>(
+        &self,
+        matches: &'a clap::ArgMatches,
+    ) -> Option<(&'static Operation, Handler, &'a clap::ArgMatches)> {
+        let (service_name, service_matches) = matches.subcommand()?;
+        let (operation_name, operation_matches) = service_matches.subcommand()?;
+        let operation = self
+            .services
+            .iter()
+            .find(|service| service.name == service_name)?
+            .operations
+            .iter()
+            .find(|operation| operation.name == operation_name)?;
+        Some((operation, operation.handler?, operation_matches))
+    }
 }
 
 pub fn registered() -> Result<Registry, RegistryError> {
-    Registry::new(&[])
+    Registry::new(&[billing::SERVICE])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::op::{Field, Kind, Operation};
+    use crate::cli::op::{Field, Kind};
 
     const OP: Operation = Operation {
         name: "inspect",
@@ -133,6 +151,7 @@ mod tests {
         json_fields: &[],
         extra_flags: &[],
         notes: &[],
+        handler: None,
     };
     const TOY: Service = Service {
         name: "toy",

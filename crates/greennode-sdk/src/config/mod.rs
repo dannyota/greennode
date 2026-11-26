@@ -5,6 +5,7 @@ mod session;
 
 pub use auth::{IamUserAuth, SecretTotp, ServiceAccountAuth, TotpFn, TotpProvider};
 pub use endpoints::EndpointOverrides;
+pub(crate) use session::Session;
 mod file;
 mod ini;
 mod load;
@@ -46,6 +47,8 @@ pub struct ConfigOptions {
     token_cache: Option<std::path::PathBuf>,
     iam_details: Option<IamUserAuth>,
     endpoint_overrides: EndpointOverrides,
+    #[cfg(feature = "test-support")]
+    billing_fixture: Option<crate::wire::connection::FixtureTrust>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -57,6 +60,20 @@ struct ParseHooks {
 }
 
 impl ConfigOptions {
+    #[cfg(feature = "test-support")]
+    pub(crate) fn with_billing_loopback(mut self, server: &crate::testing::Server) -> Self {
+        if self
+            .endpoint_overrides
+            .billing
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            self.endpoint_overrides.billing = Some(server.origin.clone());
+        }
+        self.billing_fixture = Some(crate::wire::connection::FixtureTrust::new(server));
+        self
+    }
+
     fn credential_options(&self) -> credentials::Options {
         credentials::Options {
             provider: self.provider.clone(),
@@ -199,6 +216,10 @@ impl ResolvedProfile {
 }
 
 impl Config {
+    pub(crate) fn session(&self) -> &std::sync::Arc<Session> {
+        &self.session
+    }
+
     /// Constructs an offline configuration using only the supplied options.
     #[expect(
         clippy::result_large_err,
@@ -240,6 +261,12 @@ impl Config {
             None,
             (options.iam_details, options.endpoint_overrides),
         )?;
+        #[cfg(feature = "test-support")]
+        if let Some(fixture) = options.billing_fixture {
+            session
+                .set_billing_fixture(&fixture)
+                .map_err(|error| *error)?;
+        }
         Ok(Self {
             region,
             settings: Default::default(),

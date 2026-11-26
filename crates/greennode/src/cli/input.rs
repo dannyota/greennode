@@ -53,9 +53,29 @@ pub fn parse<T: 'static>(
     json: Option<&str>,
     project: Option<&str>,
 ) -> Result<ParsedOperationInput<T>, InputError> {
+    before_input(descriptor, matches, json)?;
+    let input = merge(descriptor, matches, json, project)?;
+    check_guards(descriptor, &input, matches)?;
+    Ok(input)
+}
+
+pub(crate) fn before_input<T>(
+    descriptor: &InputDescriptor<T>,
+    matches: &ArgMatches,
+    json: Option<&str>,
+) -> Result<(), InputError> {
     if let Some(guard) = descriptor.pre_guard {
         guard(matches, json)?;
     }
+    Ok(())
+}
+
+pub(crate) fn merge<T>(
+    descriptor: &InputDescriptor<T>,
+    matches: &ArgMatches,
+    json: Option<&str>,
+    project: Option<&str>,
+) -> Result<ParsedOperationInput<T>, InputError> {
     let mut value = (descriptor.defaults)();
     let mut present = HashSet::new();
     if let Some(raw) = json.filter(|raw| !raw.is_empty()) {
@@ -103,6 +123,14 @@ pub fn parse<T: 'static>(
         setter(&mut value, project);
         present.insert(field);
     }
+    Ok(ParsedOperationInput { value, present })
+}
+
+pub(crate) fn check_guards<T>(
+    descriptor: &InputDescriptor<T>,
+    input: &ParsedOperationInput<T>,
+    matches: &ArgMatches,
+) -> Result<(), InputError> {
     if !descriptor.allow_query
         && matches.try_contains_id("query").unwrap_or(false)
         && matches.value_source("query") == Some(ValueSource::CommandLine)
@@ -110,9 +138,9 @@ pub fn parse<T: 'static>(
         return Err(InputError("--query is disabled"));
     }
     if let Some(guard) = descriptor.guard {
-        guard(&value, matches)?;
+        guard(&input.value, matches)?;
     }
-    Ok(ParsedOperationInput { value, present })
+    Ok(())
 }
 
 pub fn validate_descriptor<T: 'static>(descriptor: &InputDescriptor<T>) -> Result<(), InputError> {

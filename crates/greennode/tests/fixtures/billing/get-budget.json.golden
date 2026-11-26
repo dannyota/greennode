@@ -1,0 +1,26 @@
+{
+  "Budget": {
+    "UUID": "b-1",
+    "ID": 1,
+    "Name": "monthly",
+    "PeriodType": "MONTHLY",
+    "Type": "ACTUAL",
+    "LimitAmount": 100,
+    "Currency": "VND",
+    "Status": "ACTIVE",
+    "PeriodKey": "2026-01",
+    "PeriodStart": "2026-01-01",
+    "PeriodEnd": "2026-01-31",
+    "StartDate": "2026-01-01",
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "UpdatedAt": "2026-01-01T00:00:00Z",
+    "ActualCost": null,
+    "ForecastedCost": null,
+    "ActualPercentage": null,
+    "ForecastedPercentage": null,
+    "ThresholdPercentage": null,
+    "Alarm": false,
+    "ThresholdCount": 0,
+    "AlarmThresholdCount": 0
+  }
+}

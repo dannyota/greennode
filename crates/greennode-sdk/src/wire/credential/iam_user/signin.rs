@@ -136,6 +136,15 @@ pub(super) async fn signin(
     let text = String::from_utf8_lossy(&page.body);
     let csrf = extract_csrf(&text)
         .ok_or_else(|| LoginError::new("signin page", Some(page.status.as_u16()), false))?;
+    for value in [
+        &csrf,
+        login.password,
+        &Secret::new(login.root_email),
+        &Secret::new(login.username),
+        &Secret::new(&pkce.1),
+    ] {
+        jar.record_form(value);
+    }
     let form = password_form(&csrf, login.root_email, login.username, login.password);
     let mut request = Request::post(target.as_str())
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")

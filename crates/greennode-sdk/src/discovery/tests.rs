@@ -17,6 +17,7 @@ impl BearerSource for Source {
             Ok(BearerToken {
                 token: Token::new(Secret::new("toy-token"), None),
                 obtained_at: None,
+                signin_credentials: None,
             })
         })
     }
@@ -72,6 +73,7 @@ async fn call_at(
     discovery
         .require(
             Runtime {
+                configured_credentials: None,
                 client: &clients,
                 ctx,
                 clock,

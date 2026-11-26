@@ -1,3 +1,4 @@
+use crate::wire::product::sender::SentCredentials;
 use crate::wire::strict_json::{Field, field_matches, validate};
 use crate::{LoginError, Secret, Token};
 use serde_json::value::RawValue;
@@ -58,6 +59,7 @@ fn decode(
 #[derive(Debug)]
 pub(crate) struct TimedToken {
     pub(crate) token: Token,
+    pub(crate) credentials: SentCredentials,
     pub(crate) started_wall: time::OffsetDateTime,
     pub(crate) started_monotonic: tokio::time::Instant,
 }
@@ -152,6 +154,7 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<TimedToken, LoginErr
     )
     .map(|token| TimedToken {
         token,
+        credentials: SentCredentials::default(),
         started_wall: started,
         started_monotonic,
     })

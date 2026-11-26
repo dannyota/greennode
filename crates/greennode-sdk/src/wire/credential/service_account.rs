@@ -1,5 +1,6 @@
 use crate::wire::{
     connection::{HeadLimit, OneSendClient, Trust},
+    product::sender::SentCredentials,
     send::{self, Encoding},
 };
 use crate::{Clock, Error, ErrorClass, RequestContext, Secret, ServiceAccountLoginError, Token};
@@ -70,6 +71,7 @@ fn request(id: &str, secret: &Secret, url: &str) -> Option<Request<Full<Bytes>>>
 
 pub(crate) struct TimedToken {
     pub(crate) token: Token,
+    pub(crate) credentials: SentCredentials,
     pub(crate) started_wall: OffsetDateTime,
     pub(crate) started_monotonic: tokio::time::Instant,
 }
@@ -216,6 +218,16 @@ async fn exchange_timed_at(
         return Err(failed(None));
     }
     let request = request(id, secret, url).ok_or_else(|| failed(None))?;
+    let authorization = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Basic "))
+        .ok_or_else(|| failed(None))?;
+    let mut credentials = SentCredentials::default();
+    credentials.record(&Secret::new(authorization));
+    credentials.record(&Secret::new(id));
+    credentials.record(secret);
     let client = OneSendClient::new(HeadLimit::Api, trust).map_err(|_| failed(None))?;
     let deadline = clock
         .monotonic_now()
@@ -290,6 +302,7 @@ async fn exchange_timed_at(
     }
     Ok(TimedToken {
         token,
+        credentials,
         started_wall: start,
         started_monotonic: started,
     })

@@ -24,6 +24,28 @@ fn title(name: &str) -> String {
     }
 }
 
+fn table<const N: usize>(page: &mut String, header: [&str; N], rows: &[[String; N]]) {
+    let mut widths = header.map(|cell| cell.len().max(3));
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.len());
+        }
+    }
+    let mut write_row = |row: [&str; N]| {
+        page.push('|');
+        for (cell, width) in row.into_iter().zip(widths) {
+            let _ = write!(page, " {cell:width$} |");
+        }
+        page.push('\n');
+    };
+    write_row(header);
+    let rule = widths.map(|width| "-".repeat(width));
+    write_row(rule.each_ref().map(String::as_str));
+    for row in rows {
+        write_row(row.each_ref().map(String::as_str));
+    }
+}
+
 fn service_page(service: &Service) -> String {
     let mut page = format!("{MARKER}\n\n# CLI: {}\n\n", title(service.name));
     let mut operations: Vec<_> = service.operations.iter().collect();
@@ -47,30 +69,31 @@ fn service_page(service: &Service) -> String {
         {
             page.push_str("No fields.\n\n");
         } else {
-            page.push_str("| Flag | Type | Required |\n|-|-|-|\n");
-            for field in op
+            let rows: Vec<_> = op
                 .flags
                 .iter()
                 .chain(op.inherited_bindings.iter().map(|b| &b.flag))
                 .chain(op.extra_flags)
-            {
-                let _ = writeln!(
-                    page,
-                    "| `--{}` | `{}` | {} |",
-                    field.name,
-                    field.go_type,
-                    if field.required { "yes" } else { "" }
-                );
-            }
-            for field in op.json_fields {
-                let _ = writeln!(
-                    page,
-                    "| `{}` (via `--cli-input-json` only) | `{}` | {} |",
-                    field.name,
-                    field.go_type,
-                    if field.required { "yes" } else { "" }
-                );
-            }
+                .map(|field| (format!("`--{}`", field.name), field))
+                .chain(op.json_fields.iter().map(|field| {
+                    (
+                        format!("`{}` (via `--cli-input-json` only)", field.name),
+                        field,
+                    )
+                }))
+                .map(|(name, field)| {
+                    [
+                        name,
+                        format!("`{}`", field.go_type),
+                        if field.required {
+                            "yes".into()
+                        } else {
+                            String::new()
+                        },
+                    ]
+                })
+                .collect();
+            table(&mut page, ["Flag", "Type", "Required"], &rows);
             page.push('\n');
         }
         let mut example = op.example.map(str::to_owned).unwrap_or_else(|| {
@@ -112,6 +135,7 @@ fn service_page(service: &Service) -> String {
         }
         let _ = write!(page, "```sh\n{example}```\n\n");
     }
+    page.pop();
     page
 }
 
@@ -128,7 +152,45 @@ pub(crate) fn generate(dir: &Path, registry: &Registry) -> io::Result<()> {
         fs::write(dir.join(&file), service_page(service))?;
         keep.insert(file);
     }
-    page.push_str("\n## Global flags\n\n| Flag | Meaning |\n|-|-|\n| `--profile` | Profile to use |\n| `--region` | Region to use |\n| `--project-id` | Project ID to use |\n| `--output` | `json`, `table`, or `text`; default from the profile's `output`, else `json` |\n| `--query` | JMESPath expression to filter output |\n| `--yes` | Confirm a destructive operation |\n| `--debug` | Log requests to stderr |\n| `--read-only` | Refuse every write command |\n\n## --cli-input-json\n\nOperations accept an inline JSON object or `file://` followed by a local path, unless the operation disables input JSON. Keys use exact, case-sensitive Go input field names. Explicit flags override JSON. Unknown fields and trailing data are errors.\n\n## Exit codes\n\n| Code | Meaning |\n|-|-|\n| 0 | Success |\n| 1 | API or network error, or a canceled command |\n| 2 | Usage or config error |\n| 3 | No credentials, login failure, or HTTP 401 |\n| 4 | Not found |\n");
+    page.push_str("\n## Global flags\n\n");
+    table(
+        &mut page,
+        ["Flag", "Meaning"],
+        &[
+            ["`--profile`", "Profile to use"],
+            ["`--region`", "Region to use"],
+            ["`--project-id`", "Project ID to use"],
+            [
+                "`--output`",
+                "`json`, `table`, or `text`; default from the profile's `output`, else `json`",
+            ],
+            ["`--query`", "JMESPath expression to filter output"],
+            ["`--yes`", "Confirm a destructive operation"],
+            ["`--debug`", "Log requests to stderr"],
+            ["`--read-only`", "Refuse every write command"],
+        ]
+        .map(|row| row.map(str::to_owned)),
+    );
+    page.push_str(concat!(
+        "\n## --cli-input-json\n\n",
+        "Operations accept an inline JSON object or `file://` followed by a local path,\n",
+        "unless the operation disables input JSON. Keys use exact, case-sensitive Go\n",
+        "input field names. Explicit flags override JSON. Unknown fields and trailing\n",
+        "data are errors.\n",
+        "\n## Exit codes\n\n",
+    ));
+    table(
+        &mut page,
+        ["Code", "Meaning"],
+        &[
+            ["0", "Success"],
+            ["1", "API or network error, or a canceled command"],
+            ["2", "Usage or config error"],
+            ["3", "No credentials, login failure, or HTTP 401"],
+            ["4", "Not found"],
+        ]
+        .map(|row| row.map(str::to_owned)),
+    );
     fs::write(dir.join("CLI.md"), page)?;
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -170,13 +232,20 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn global_flag_table_matches_baseline() {
+    fn generated_docs_match_the_committed_pages() {
         let dir =
             std::env::temp_dir().join(format!("greennode-docs-golden-{}", std::process::id()));
-        generate(&dir, &Registry::new(&[]).unwrap()).unwrap();
-        let page = fs::read_to_string(dir.join("CLI.md")).unwrap();
-        let expected = "| Flag | Meaning |\n|-|-|\n| `--profile` | Profile to use |\n| `--region` | Region to use |\n| `--project-id` | Project ID to use |\n| `--output` | `json`, `table`, or `text`; default from the profile's `output`, else `json` |\n| `--query` | JMESPath expression to filter output |\n| `--yes` | Confirm a destructive operation |\n| `--debug` | Log requests to stderr |\n| `--read-only` | Refuse every write command |\n";
-        assert!(page.contains(expected));
+        let registry = crate::services::registered().unwrap();
+        generate(&dir, &registry).unwrap();
+        for (name, expected) in [
+            ("CLI.md", include_str!("../../../../docs/wiki/CLI.md")),
+            (
+                "CLI-Billing.md",
+                include_str!("../../../../docs/wiki/CLI-Billing.md"),
+            ),
+        ] {
+            assert_eq!(fs::read_to_string(dir.join(name)).unwrap(), expected);
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 }

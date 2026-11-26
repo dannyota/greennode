@@ -91,6 +91,7 @@ pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
     let mut root = command();
     for service in registry.services() {
         let mut service_command = Command::new(service.name)
+            .args_override_self(true)
             .disable_help_flag(true)
             .disable_help_subcommand(true);
         for operation in service.operations {
@@ -98,17 +99,7 @@ pub fn command_with_registry(registry: &crate::services::Registry) -> Command {
                 .disable_help_flag(true)
                 .args_override_self(true)
                 .about(operation.short_help);
-            if service.name != "storage"
-                || ![
-                    "put-object",
-                    "get-object",
-                    "list-objects",
-                    "head-object",
-                    "delete-object",
-                    "copy-object",
-                ]
-                .contains(&operation.name)
-            {
+            if operation.handler.is_none_or(|handler| handler.allow_json) {
                 operation_command = operation_command.arg(
                     Arg::new("cli-input-json")
                         .long("cli-input-json")
@@ -190,21 +181,6 @@ fn version() -> String {
     format!("greennode {} {os}/{arch}", env!("CARGO_PKG_VERSION"))
 }
 
-pub fn run<I, T>(args: I, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
-    let registry = match crate::services::registered() {
-        Ok(registry) => registry,
-        Err(error) => {
-            let _ = writeln!(stderr, "invalid command registry: {error:?}");
-            return ExitCode::FAILURE;
-        }
-    };
-    run_with_registry(args, stdout, stderr, &registry)
-}
-
 fn render_help_path(registry: &crate::services::Registry, path: &[&str]) -> Option<String> {
     let mut root = command_with_registry(registry);
     root.build();
@@ -240,37 +216,39 @@ pub(super) fn refuse_configure_write(stderr: &mut dyn Write) -> ExitCode {
     ExitCode::from(2)
 }
 
-fn run_with_registry<I, T>(
-    args: I,
+pub(super) fn parse(
+    args: Vec<OsString>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     registry: &crate::services::Registry,
-) -> ExitCode
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
-    let parsed = command_with_registry(registry).try_get_matches_from(args);
-    let matches = match parsed {
-        Ok(matches) => matches,
+) -> Result<clap::ArgMatches, ExitCode> {
+    match command_with_registry(registry).try_get_matches_from(args) {
+        Ok(matches) => Ok(matches),
+        Err(error) if !error.use_stderr() => {
+            let _ = write!(stdout, "{}", error.render());
+            Err(ExitCode::SUCCESS)
+        }
         Err(error) => {
-            if !error.use_stderr() {
-                let _ = write!(stdout, "{}", error.render());
-                return ExitCode::SUCCESS;
-            }
             let message = match error.kind() {
                 clap::error::ErrorKind::InvalidSubcommand => "unknown command",
                 clap::error::ErrorKind::UnknownArgument => "unknown argument or flag",
                 clap::error::ErrorKind::InvalidValue => "invalid flag value",
                 _ => "invalid command usage",
             };
-            let _ = writeln!(
+            Err(ExitCode::from(super::dispatch::local(
                 stderr,
-                "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"{message}\"}}}}"
-            );
-            return ExitCode::from(2);
+                super::dispatch::LocalError::usage(message),
+            )))
         }
-    };
+    }
+}
+
+pub(super) fn run_local(
+    matches: &clap::ArgMatches,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    registry: &crate::services::Registry,
+) -> Option<ExitCode> {
     if let Some(help) = matches.subcommand_matches("help") {
         let path: Vec<&str> = help
             .get_many::<String>("path")
@@ -278,35 +256,35 @@ where
             .flatten()
             .map(String::as_str)
             .collect();
-        return match render_help_path(registry, &path) {
+        return Some(match render_help_path(registry, &path) {
             Some(text) => {
                 let _ = write!(stdout, "{text}");
                 ExitCode::SUCCESS
             }
             None => invalid_command(stderr),
-        };
+        });
     }
     if matches.get_count("help-flag") > 0 {
         let mut path = Vec::new();
-        let mut current = &matches;
+        let mut current = matches;
         while let Some((name, submatches)) = current.subcommand() {
             path.push(name);
             current = submatches;
         }
-        return match render_help_path(registry, &path) {
+        return Some(match render_help_path(registry, &path) {
             Some(text) => {
                 let _ = write!(stdout, "{text}");
                 ExitCode::SUCCESS
             }
             None => invalid_command(stderr),
-        };
+        });
     }
     #[cfg(windows)]
     if matches
         .subcommand_matches("configure")
         .is_some_and(|configure| matches!(configure.subcommand_name(), None | Some("set")))
     {
-        return refuse_configure_write(stderr);
+        return Some(refuse_configure_write(stderr));
     }
     if matches.get_flag("version-flag") || matches.subcommand_name() == Some("version") {
         let _ = writeln!(stdout, "{}", version());
@@ -318,20 +296,21 @@ where
                 stderr,
                 "{{\"error\":{{\"code\":\"InvalidUsage\",\"message\":\"cannot generate documentation\"}}}}"
             );
-            return ExitCode::from(2);
+            return Some(ExitCode::from(2));
         }
     } else if matches.subcommand_name() == Some("__command-inventory") {
         let _ = write!(stdout, "{}", inventory(registry));
     } else if let Some((name, submatches)) = matches.subcommand() {
-        if submatches.subcommand().is_none()
-            && let Some(text) = render_help_path(registry, &[name])
-        {
+        if submatches.subcommand().is_some() {
+            return None;
+        }
+        if let Some(text) = render_help_path(registry, &[name]) {
             let _ = write!(stdout, "{text}");
         }
     } else {
         let _ = write!(stdout, "{}", command_with_registry(registry).render_help());
     }
-    ExitCode::SUCCESS
+    Some(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
@@ -339,6 +318,25 @@ mod tests {
     use super::{command, command_with_registry};
     use crate::cli::op::{Kind, Operation, Service};
     use crate::services::Registry;
+    use std::io::Write;
+    use std::process::ExitCode;
+
+    fn run_with_registry(
+        args: impl IntoIterator<Item = &'static str>,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+        registry: &Registry,
+    ) -> ExitCode {
+        match super::parse(
+            args.into_iter().map(Into::into).collect(),
+            stdout,
+            stderr,
+            registry,
+        ) {
+            Ok(matches) => super::run_local(&matches, stdout, stderr, registry).unwrap(),
+            Err(exit) => exit,
+        }
+    }
 
     #[test]
     fn clustered_service_help_validates_all_arguments() {
@@ -354,6 +352,7 @@ mod tests {
             json_fields: &[],
             extra_flags: &[],
             notes: &[],
+            handler: None,
         };
         let registry = Registry::new(&[Service {
             name: "toy",
@@ -365,7 +364,7 @@ mod tests {
             ["greennode", "toy", "inspect", "-hh"],
         ] {
             let (mut out, mut err) = (Vec::new(), Vec::new());
-            let code = super::run_with_registry(args, &mut out, &mut err, &registry);
+            let code = run_with_registry(args, &mut out, &mut err, &registry);
             if args[2] == "-hh" {
                 assert_eq!(code, std::process::ExitCode::from(2));
                 assert!(out.is_empty());
@@ -390,6 +389,7 @@ mod tests {
             json_fields: &[],
             extra_flags: &[],
             notes: &[],
+            handler: None,
         };
         let registry = Registry::new(&[Service {
             name: "toy",
@@ -397,7 +397,7 @@ mod tests {
         }])
         .unwrap();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = super::run_with_registry(["greennode", "toy"], &mut out, &mut err, &registry);
+        let code = run_with_registry(["greennode", "toy"], &mut out, &mut err, &registry);
         assert_eq!(code, std::process::ExitCode::SUCCESS);
         assert!(String::from_utf8(out).unwrap().contains("inspect"));
         assert!(err.is_empty());
@@ -417,6 +417,7 @@ mod tests {
             json_fields: &[],
             extra_flags: &[],
             notes: &[],
+            handler: None,
         };
         let registry = Registry::new(&[Service {
             name: "toy",

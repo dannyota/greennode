@@ -2,13 +2,21 @@
 mod tests;
 
 use super::{EndpointOverrides, IamUserAuth, credentials};
-use crate::wire::product::sender::BearerSource;
-use crate::{Error, ErrorClass, RequestContext, Secret};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use crate::wire::connection::{HeadLimit, OneSendClient, PooledClient, Trust};
+use crate::wire::product::sender::{BearerSource, Clients, Runtime, SentCredentials, Sleeper};
+use crate::{Clock, Error, ErrorClass, RequestContext, Secret};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
+use std::{path::PathBuf, time::Duration};
 
-pub(super) struct Session {
+pub(crate) struct Session {
     auth: Auth,
+    configured_credentials: SentCredentials,
     _endpoints: crate::endpoint::EndpointSet,
+    clients: OnceLock<Result<Clients, rustls::Error>>,
+    clock: Arc<dyn Clock>,
+    timeout: Duration,
     _profile: String,
     _project_id: Option<String>,
     _cdn_key: Option<Secret>,
@@ -21,7 +29,130 @@ enum Auth {
     IamUser(Box<crate::session::iam_user::IamUser>),
 }
 
+impl BearerSource for Session {
+    fn refreshable(&self) -> bool {
+        !matches!(self.auth, Auth::Static(_))
+    }
+
+    fn token<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<crate::wire::product::sender::BearerToken, Error>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            match &self.auth {
+                Auth::Static(token) => Ok(crate::wire::product::sender::BearerToken {
+                    token: crate::Token::new(token.clone(), None),
+                    obtained_at: None,
+                    signin_credentials: None,
+                }),
+                Auth::Provider(provider) => {
+                    crate::wire::product::sender::PublicSource(provider.as_ref())
+                        .token(ctx)
+                        .await
+                }
+                Auth::ServiceAccount(source) => source.token(ctx).await,
+                Auth::IamUser(source) => source.token(ctx).await,
+            }
+        })
+    }
+
+    fn rejected<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        sent: &'a Secret,
+        evict: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async move {
+            match &self.auth {
+                Auth::Static(_) => Ok(()),
+                Auth::Provider(provider) => {
+                    crate::wire::product::sender::PublicSource(provider.as_ref())
+                        .rejected(ctx, sent, evict)
+                        .await
+                }
+                Auth::ServiceAccount(source) => source.rejected(ctx, sent, evict).await,
+                Auth::IamUser(source) => source.rejected(ctx, sent, evict).await,
+            }
+        })
+    }
+}
+
 impl Session {
+    pub(crate) fn endpoints(&self) -> &crate::endpoint::EndpointSet {
+        &self._endpoints
+    }
+
+    pub(crate) fn bearer_source(&self) -> &dyn BearerSource {
+        self
+    }
+
+    pub(crate) fn runtime<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        jitter: &'a mut (dyn FnMut() -> u64 + Send),
+    ) -> Result<Runtime<'a>, Box<Error>> {
+        if let Some(end) = ctx.check(self.clock.as_ref()) {
+            return Err(Box::new(end.into()));
+        }
+        let deadline = self.clock.monotonic_now() + self.timeout;
+        let client = self
+            .clients
+            .get_or_init(|| product_clients(|| Ok(Trust::webpki())))
+            .as_ref()
+            .map_err(|_| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+        Ok(Runtime {
+            client,
+            ctx,
+            configured_credentials: Some(&self.configured_credentials),
+            clock: self.clock.as_ref(),
+            deadline,
+            sleeper: self,
+            jitter,
+        })
+    }
+
+    pub(crate) fn retry_jitter(&self) -> u64 {
+        let mut bytes = [0; 8];
+        match getrandom::fill(&mut bytes) {
+            Ok(()) => u64::from_ne_bytes(bytes),
+            Err(_) => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_product_root(&self, root: rustls::pki_types::CertificateDer<'static>) {
+        assert!(
+            self.clients
+                .set(product_clients(|| Ok(Trust::test(root.clone()))))
+                .is_ok()
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(super) fn set_billing_fixture(
+        &self,
+        fixture: &crate::wire::connection::FixtureTrust,
+    ) -> Result<(), Box<Error>> {
+        let invalid = || Box::new(Error::new(ErrorClass::InvalidConfig));
+        if !self
+            .endpoints()
+            .billing
+            .as_deref()
+            .is_some_and(|url| fixture.allows(url))
+        {
+            return Err(invalid());
+        }
+        let clients = product_clients(|| fixture.trust()).map_err(|_| invalid())?;
+        self.clients.set(Ok(clients)).map_err(|_| invalid())
+    }
+
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
@@ -64,6 +195,26 @@ impl Session {
         }
         let clock: Arc<dyn crate::Clock> = Arc::new(crate::SystemClock);
         let timeout = Duration::from_secs(120);
+        let mut configured_credentials = SentCredentials::default();
+        if let Some(key) = &selected.cdn_key {
+            configured_credentials.record(key);
+        }
+        match &selected.kind {
+            credentials::Kind::StaticToken(token) => configured_credentials.record(token),
+            credentials::Kind::ServiceAccount(account) => {
+                configured_credentials.record(&account.client_secret)
+            }
+            credentials::Kind::IamUser(user) => {
+                configured_credentials.record(&user.password);
+                if let Some(seed) = &user.totp_secret {
+                    configured_credentials.record(seed);
+                    configured_credentials.record(
+                        &crate::wire::credential::iam_user::totp::normalized_seed(seed),
+                    );
+                }
+            }
+            credentials::Kind::Provider(_) => {}
+        }
         let auth = match selected.kind {
             credentials::Kind::Provider(provider) => Auth::Provider(provider),
             credentials::Kind::StaticToken(token) => Auth::Static(token),
@@ -74,7 +225,7 @@ impl Session {
                     profile.clone(),
                     directory,
                     home,
-                    clock,
+                    Arc::clone(&clock),
                     timeout,
                 ),
             )),
@@ -115,7 +266,7 @@ impl Session {
                         signin,
                         dashboard,
                         token_url,
-                        clock,
+                        clock: Arc::clone(&clock),
                         timeout,
                     },
                 )))
@@ -123,7 +274,11 @@ impl Session {
         };
         Ok(Self {
             auth,
+            configured_credentials,
             _endpoints: endpoints,
+            clients: OnceLock::new(),
+            clock,
+            timeout,
             _profile: profile,
             _project_id: project_id,
             _cdn_key: selected.cdn_key,
@@ -167,5 +322,21 @@ impl Session {
                 .await
             }
         }
+    }
+}
+
+fn product_clients(
+    trust: impl Fn() -> Result<Trust, rustls::Error>,
+) -> Result<Clients, rustls::Error> {
+    Ok(Clients {
+        pooled: PooledClient::new(HeadLimit::Api, trust()?)?,
+        one_send: OneSendClient::new(HeadLimit::Api, trust()?)?,
+    })
+}
+
+impl Sleeper for Session {
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.clock
+            .sleep_until(self.clock.monotonic_now() + duration)
     }
 }

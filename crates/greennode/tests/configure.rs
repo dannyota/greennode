@@ -660,6 +660,7 @@ fn invoke_configure(
             .map(OsString::from)
             .collect(),
         source,
+        config_options: greennode_sdk::ConfigOptions::default(),
         stdin: input,
         stdout: &mut stdout,
         stderr: &mut stderr,
