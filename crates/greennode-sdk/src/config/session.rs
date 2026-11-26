@@ -2,13 +2,20 @@
 mod tests;
 
 use super::{EndpointOverrides, IamUserAuth, credentials};
-use crate::wire::product::sender::BearerSource;
-use crate::{Error, ErrorClass, RequestContext, Secret};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use crate::wire::connection::{HeadLimit, OneSendClient, PooledClient, Trust};
+use crate::wire::product::sender::{BearerSource, Clients, Runtime, Sleeper};
+use crate::{Clock, Error, ErrorClass, RequestContext, Secret};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
+use std::{path::PathBuf, time::Duration};
 
 pub(crate) struct Session {
     auth: Auth,
     _endpoints: crate::endpoint::EndpointSet,
+    clients: OnceLock<Result<Clients, rustls::Error>>,
+    clock: Arc<dyn Clock>,
+    timeout: Duration,
     _profile: String,
     _project_id: Option<String>,
     _cdn_key: Option<Secret>,
@@ -76,6 +83,55 @@ impl BearerSource for Session {
 }
 
 impl Session {
+    pub(crate) fn endpoints(&self) -> &crate::endpoint::EndpointSet {
+        &self._endpoints
+    }
+
+    pub(crate) fn bearer_source(&self) -> &dyn BearerSource {
+        self
+    }
+
+    pub(crate) fn runtime<'a>(
+        &'a self,
+        ctx: &'a RequestContext,
+        jitter: &'a mut (dyn FnMut() -> u64 + Send),
+    ) -> Result<Runtime<'a>, Box<Error>> {
+        if let Some(end) = ctx.check(self.clock.as_ref()) {
+            return Err(Box::new(end.into()));
+        }
+        let deadline = self.clock.monotonic_now() + self.timeout;
+        let client = self
+            .clients
+            .get_or_init(|| product_clients(Trust::webpki))
+            .as_ref()
+            .map_err(|_| Box::new(Error::new(ErrorClass::InvalidConfig)))?;
+        Ok(Runtime {
+            client,
+            ctx,
+            clock: self.clock.as_ref(),
+            deadline,
+            sleeper: self,
+            jitter,
+        })
+    }
+
+    pub(crate) fn retry_jitter(&self) -> u64 {
+        let mut bytes = [0; 8];
+        match getrandom::fill(&mut bytes) {
+            Ok(()) => u64::from_ne_bytes(bytes),
+            Err(_) => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_product_root(&self, root: rustls::pki_types::CertificateDer<'static>) {
+        assert!(
+            self.clients
+                .set(product_clients(|| Trust::test(root.clone())))
+                .is_ok()
+        );
+    }
+
     #[expect(
         clippy::result_large_err,
         reason = "The public API returns Error by value"
@@ -128,7 +184,7 @@ impl Session {
                     profile.clone(),
                     directory,
                     home,
-                    clock,
+                    Arc::clone(&clock),
                     timeout,
                 ),
             )),
@@ -169,7 +225,7 @@ impl Session {
                         signin,
                         dashboard,
                         token_url,
-                        clock,
+                        clock: Arc::clone(&clock),
                         timeout,
                     },
                 )))
@@ -178,6 +234,9 @@ impl Session {
         Ok(Self {
             auth,
             _endpoints: endpoints,
+            clients: OnceLock::new(),
+            clock,
+            timeout,
             _profile: profile,
             _project_id: project_id,
             _cdn_key: selected.cdn_key,
@@ -221,5 +280,19 @@ impl Session {
                 .await
             }
         }
+    }
+}
+
+fn product_clients(trust: impl Fn() -> Trust) -> Result<Clients, rustls::Error> {
+    Ok(Clients {
+        pooled: PooledClient::new(HeadLimit::Api, trust())?,
+        one_send: OneSendClient::new(HeadLimit::Api, trust())?,
+    })
+}
+
+impl Sleeper for Session {
+    fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        self.clock
+            .sleep_until(self.clock.monotonic_now() + duration)
     }
 }

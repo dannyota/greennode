@@ -5,6 +5,7 @@ mod session;
 
 pub use auth::{IamUserAuth, SecretTotp, ServiceAccountAuth, TotpFn, TotpProvider};
 pub use endpoints::EndpointOverrides;
+pub(crate) use session::Session;
 mod file;
 mod ini;
 mod load;
@@ -199,6 +200,10 @@ impl ResolvedProfile {
 }
 
 impl Config {
+    pub(crate) fn session(&self) -> &std::sync::Arc<Session> {
+        &self.session
+    }
+
     /// Constructs an offline configuration using only the supplied options.
     #[expect(
         clippy::result_large_err,

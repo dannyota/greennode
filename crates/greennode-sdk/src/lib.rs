@@ -1,7 +1,8 @@
-//! Unofficial Rust SDK for GreenNode, formerly VNG Cloud. No API is implemented yet.
+//! Unofficial Rust SDK for GreenNode, formerly VNG Cloud.
 
 #![warn(missing_docs)]
 
+pub mod billing;
 mod cache;
 mod clock;
 mod config;
