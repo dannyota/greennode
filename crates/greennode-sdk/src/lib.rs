@@ -8,6 +8,7 @@ mod cache;
 mod clock;
 mod config;
 mod context;
+pub mod database;
 mod discovery;
 pub mod dns;
 mod endpoint;

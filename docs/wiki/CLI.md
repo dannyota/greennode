@@ -6,6 +6,7 @@
 
 - [Backup](CLI-Backup.md)
 - [Billing](CLI-Billing.md)
+- [Database](CLI-Database.md)
 - [DNS](CLI-DNS.md)
 - [Portal](CLI-Portal.md)
 - [Project](CLI-Project.md)

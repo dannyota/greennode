@@ -1,0 +1,14 @@
+{
+  "ProjectID": "project-1",
+  "Items": [
+    {
+      "ID": 1,
+      "Type": "SSD",
+      "MinVolumeSize": 10,
+      "MaxVolumeSize": 100,
+      "ZoneID": "",
+      "VolumeTypeZoneID": "",
+      "VolumeTypeSKU": ""
+    }
+  ]
+}

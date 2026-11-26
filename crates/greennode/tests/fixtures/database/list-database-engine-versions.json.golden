@@ -1,0 +1,11 @@
+{
+  "Items": [
+    {
+      "Name": "MySQL",
+      "Type": "mysql",
+      "VersionName": "MySQL 8",
+      "Version": "8.0",
+      "LicenseName": "GPL"
+    }
+  ]
+}

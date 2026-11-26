@@ -1,0 +1,19 @@
+{
+  "Items": [
+    {
+      "UUID": "network-1",
+      "DisplayName": "Network",
+      "Status": "",
+      "ZoneID": "",
+      "Subnets": [
+        {
+          "UUID": "subnet-1",
+          "NetworkUUID": "network-1",
+          "Name": "Subnet",
+          "Status": "",
+          "ZoneID": ""
+        }
+      ]
+    }
+  ]
+}
