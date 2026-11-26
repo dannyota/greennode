@@ -91,6 +91,10 @@ fn get_refuses_group_readable_credentials_without_disclosing_value() {
     std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o640)).unwrap();
     let output = home.run(&["configure", "get", "password"]);
     assert_eq!(output.status.code(), Some(3));
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("credentials"));
+    assert!(diagnostic.contains("~/.greennode"));
+    assert!(diagnostic.contains("chmod 600"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("toy-canary"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("toy-canary"));
 }
@@ -196,4 +200,36 @@ fn config_get_does_not_open_insecure_credentials() {
     let output = home.run(&["configure", "list"]);
     assert_eq!(output.status.code(), Some(3));
     assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn get_help_does_not_require_key() {
+    let home = Home::new();
+    let output = home.run(&["configure", "get", "--help"]);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
+    assert!(output.stderr.is_empty());
+    assert_eq!(home.run(&["configure", "get"]).status.code(), Some(2));
+}
+
+#[test]
+fn invalid_profile_reports_usage_and_syntax() {
+    let output = Home::new().run(&["--profile", "bad[name", "configure", "get", "region"]);
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("InvalidUsage"));
+    assert!(error.contains("leading or trailing whitespace"));
+}
+
+#[test]
+fn malformed_config_diagnostic_includes_line() {
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("config"), "[default]\ninvalid\n").unwrap();
+    let output = home.run(&["configure", "get", "region"]);
+    assert_eq!(output.status.code(), Some(2));
+    let error = String::from_utf8(output.stderr).unwrap();
+    assert!(error.contains("config (~/.greennode):2"));
+    assert!(error.contains("line has no '='"));
 }

@@ -126,7 +126,12 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
         },
     };
     if profile.trim() != profile || profile.contains(['\r', '\n', '[', ']']) {
-        return fail(invocation, "InvalidConfig", "invalid profile name", 2);
+        return fail(
+            invocation,
+            "InvalidUsage",
+            "profile name must not contain a newline, '[', ']', or leading or trailing whitespace",
+            2,
+        );
     }
     let cwd = std::env::current_dir().ok();
     let selection = match select(None, None, invocation.source, cwd.as_deref()) {
@@ -202,31 +207,103 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
                 .var_os(OsStr::new(name))
                 .is_none_or(|v| v.is_empty())
         })
+        && hint(invocation, &selection).is_err()
     {
-        hint(invocation, &selection);
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }
 
 fn sdk_error(invocation: &mut Invocation<'_>, error: &greennode_sdk::Error) -> ExitCode {
     let classified = super::errors::classify(error, &[]);
-    super::errors::write_error(invocation.stderr, &classified.envelope);
+    let diagnostic = error
+        .detail::<greennode_sdk::FileDiagnostic>()
+        .map(|detail| {
+            let slot = match detail.slot() {
+                FileSlot::Config => "config",
+                FileSlot::Credentials => "credentials",
+            };
+            let line = detail
+                .line()
+                .map_or_else(String::new, |line| format!(":{line}"));
+            format!("{slot} ({}){line}: {}", detail.source(), detail.reason())
+        });
+    let envelope = super::errors::Envelope {
+        message: diagnostic.as_deref().unwrap_or(classified.envelope.message),
+        ..classified.envelope
+    };
+    super::errors::write_error(invocation.stderr, &envelope);
     ExitCode::from(classified.exit)
 }
 
-fn hint(invocation: &mut Invocation<'_>, selection: &Selection) {
+fn hint(invocation: &mut Invocation<'_>, selection: &Selection) -> std::io::Result<()> {
     let (Some(config), Some(credentials)) = (&selection.config, &selection.credentials) else {
-        return;
+        return Ok(());
     };
     let prefix = if selection.mode == greennode_sdk::Mode::Legacy {
         "VNGCLOUD"
     } else {
         "GREENNODE"
     };
-    let _ = writeln!(
+    writeln!(
         invocation.stderr,
         "hint: no region is set; read {} and {}. Set {prefix}_REGION or run: greennode configure set region <region>",
         escape(&config.to_string_lossy()),
         escape(&credentials.to_string_lossy())
-    );
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Write};
+    use std::path::PathBuf;
+
+    struct Source(PathBuf);
+    impl greennode_sdk::ConfigSource for Source {
+        fn var_os(&self, _: &OsStr) -> Option<OsString> {
+            None
+        }
+        fn home_dir(&self) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    struct Failing;
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn list_fails_when_hint_cannot_be_written() {
+        let home =
+            std::env::temp_dir().join(format!("greennode-configure-hint-{}", std::process::id()));
+        std::fs::create_dir(&home).unwrap();
+        let source = Source(home.clone());
+        let (context, _) = greennode_sdk::RequestContext::new();
+        let mut input = io::empty();
+        let mut output = Vec::new();
+        let mut error = Failing;
+        let mut invocation = Invocation {
+            args: ["greennode", "configure", "list"]
+                .map(OsString::from)
+                .to_vec(),
+            source: &source,
+            stdin: &mut input,
+            stdout: &mut output,
+            stderr: &mut error,
+            stdin_terminal: false,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &greennode_sdk::SystemClock,
+            context: &context,
+        };
+        assert_eq!(run(&mut invocation), ExitCode::FAILURE);
+        std::fs::remove_dir(home).unwrap();
+    }
 }

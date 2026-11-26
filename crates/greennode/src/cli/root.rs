@@ -36,7 +36,7 @@ fn command() -> Command {
                 .subcommand(
                     Command::new("get")
                         .disable_help_flag(true)
-                        .arg(Arg::new("key").required(true)),
+                        .arg(Arg::new("key").required_unless_present("help-flag")),
                 )
                 .subcommand(Command::new("list").disable_help_flag(true)),
         )
