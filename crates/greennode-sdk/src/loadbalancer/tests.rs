@@ -1,3 +1,4 @@
+mod child_deletes;
 mod create_writes;
 
 use super::*;

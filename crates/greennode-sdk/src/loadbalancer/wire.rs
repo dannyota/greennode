@@ -43,7 +43,7 @@ impl Read {
         Box::new(self.api("", &message, evidence).with_detail(detail))
     }
 
-    fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
+    pub(super) fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
         Error::from_api(ApiError::without_fallback(
             self.id,
             None,
@@ -159,6 +159,24 @@ impl Envelope<'_> {
             .take(2)
             .count()
             > 1
+        {
+            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
+        }
+        Ok(self.0.get(name).map_or("null", |raw| raw.get()))
+    }
+
+    pub(super) fn canonical_raw(
+        &self,
+        read: &Read,
+        evidence: &Evidence,
+        name: &str,
+    ) -> Result<&str, Box<Error>> {
+        if self
+            .0
+            .keys()
+            .filter(|key| field_matches(name, key))
+            .nth(1)
+            .is_some()
         {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }

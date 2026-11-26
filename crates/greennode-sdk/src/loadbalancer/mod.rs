@@ -1,6 +1,7 @@
 //! Read regional load balancers, their catalogs and children, and price quotes.
 
 mod certificate_import;
+mod child_deletes;
 mod deletes;
 mod models;
 mod paid;
@@ -20,6 +21,7 @@ use crate::{
 };
 
 pub use certificate_import::*;
+pub use child_deletes::*;
 pub use deletes::*;
 pub use models::*;
 pub use paid::*;

@@ -38,6 +38,23 @@ Reads the certificate before deleting it and refuses if a listener uses it.
 greennode loadbalancer delete-certificate --certificate-id <certificate-id> --yes
 ```
 
+## delete-listener
+
+Kind: Write, destructive.
+
+Waits for the load balancer and listener to be ready before sending the delete.
+Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--listener-id`      | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-listener --load-balancer-id <load-balancer-id> --listener-id <listener-id> --yes
+```
+
 ## delete-load-balancer
 
 Kind: Write, destructive.
@@ -52,6 +69,41 @@ return after acceptance or when a deletion is already in progress.
 
 ```sh
 greennode loadbalancer delete-load-balancer --load-balancer-id <load-balancer-id> --yes
+```
+
+## delete-policy
+
+Kind: Write, destructive.
+
+Waits for the load balancer and policy to be ready before sending the delete.
+Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--listener-id`      | `string` | yes      |
+| `--policy-id`        | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-policy --load-balancer-id <load-balancer-id> --listener-id <listener-id> --policy-id <policy-id> --yes
+```
+
+## delete-pool
+
+Kind: Write, destructive.
+
+Reads the load balancer’s listeners first and refuses to delete a pool that a
+listener uses as its default pool. Use `--no-wait` to return after acceptance.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--load-balancer-id` | `string` | yes      |
+| `--pool-id`          | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode loadbalancer delete-pool --load-balancer-id <load-balancer-id> --pool-id <pool-id> --yes
 ```
 
 ## get-certificate

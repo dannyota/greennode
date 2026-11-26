@@ -355,6 +355,9 @@ async fn errors_match_go_goldens() {
     }
 }
 
+#[path = "loadbalancer/child_writes.rs"]
+mod child_writes;
+
 #[tokio::test]
 async fn destructive_delete_requires_yes_and_obeys_read_only() {
     let server = Server::start(vec![]);

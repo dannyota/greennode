@@ -61,8 +61,10 @@ pub struct DeleteCertificateOutput {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WriteError {
-    /// A listener is using the certificate.
+    /// A listener is using the pool or certificate.
     ResourceInUse,
+    /// A load balancer or child did not become ready before the preflight bound.
+    ResourceBusy,
 }
 
 #[derive(Default)]
@@ -494,14 +496,14 @@ fn certificate_in_use(message: &str) -> bool {
         })
 }
 
-fn context_error(end: ContextEnd) -> Error {
+pub(super) fn context_error(end: ContextEnd) -> Error {
     Error::new(match end {
         ContextEnd::Cancelled => ErrorClass::Cancelled,
         ContextEnd::DeadlineExceeded => ErrorClass::DeadlineExceeded,
     })
 }
 
-fn safe_text<'a>(text: &'a str, evidence: &Evidence) -> &'a str {
+pub(super) fn safe_text<'a>(text: &'a str, evidence: &Evidence) -> &'a str {
     if evidence.text_reflects(text) {
         if evidence.text_reflects("<redacted>") {
             ""
@@ -513,7 +515,7 @@ fn safe_text<'a>(text: &'a str, evidence: &Evidence) -> &'a str {
     }
 }
 
-fn local(class: ErrorClass, message: &str, evidence: &Evidence) -> Error {
+pub(super) fn local(class: ErrorClass, message: &str, evidence: &Evidence) -> Error {
     Error::new(class).with_detail(RecoveryAdvice::new(safe_text(message, evidence)))
 }
 
