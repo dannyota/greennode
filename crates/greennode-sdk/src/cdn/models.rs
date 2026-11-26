@@ -116,10 +116,12 @@ pub(super) fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>
 }
 
 pub(super) fn flex_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-    match Value::deserialize(deserializer)? {
-        Value::Null => Ok(String::new()),
-        Value::String(text) => Ok(text),
-        Value::Number(number) => Ok(number.to_string()),
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    let token = raw.get();
+    match token.as_bytes().first() {
+        Some(b'"') => serde_json::from_str(token).map_err(serde::de::Error::custom),
+        Some(b'-' | b'0'..=b'9') => Ok(token.to_owned()),
+        _ if token == "null" => Ok(String::new()),
         _ => Err(serde::de::Error::custom(
             "CDN identifier must be a string or number",
         )),

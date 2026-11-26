@@ -1,6 +1,8 @@
+use crate::wire::product::evidence::Evidence;
 use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -137,6 +139,12 @@ const STATE: Shape<'static> = Shape::Object(&[
     },
 ]);
 
+pub(super) struct WebDetail {
+    pub(super) raw: Box<RawValue>,
+    pub(super) status: i64,
+    pub(super) model: WebAccelerator,
+}
+
 impl Client {
     /// Lists Web Accelerators in the account.
     pub async fn list_web_accelerators(
@@ -165,22 +173,43 @@ impl Client {
         if !PathIds::Strict.allows(&input.cdn_id) {
             return Err(invalid());
         }
-        let answer = self
-            .call(ctx, &GET_WEB, &[&input.cdn_id], Bytes::new())
+        let mut evidence = Evidence::new();
+        let mut detail = self
+            .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
             .await
             .map_err(convert)?;
-        let malformed = || read_failure(GET_WEB.unexpected(200));
-        let raw = answer.data.as_deref().ok_or_else(malformed)?.get();
-        validate_shape(raw.as_bytes(), &STATE, raw.len()).map_err(|_| malformed())?;
-        let state: State = serde_json::from_str(raw).map_err(|_| malformed())?;
-        if state.id != input.cdn_id {
+        detail.model.redact(&evidence);
+        Ok(GetWebAcceleratorOutput {
+            web_accelerator: detail.model,
+        })
+    }
+
+    pub(super) async fn read_web_detail(
+        &self,
+        ctx: &RequestContext,
+        id: &'static str,
+        cdn_id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<WebDetail, Failure<()>> {
+        let call = Call { id, ..GET_WEB };
+        let data = self
+            .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
+            .await?;
+        let malformed = || read_failure(call.unexpected(200));
+        let raw = data.ok_or_else(malformed)?;
+        let text = raw.get();
+        validate_shape(text.as_bytes(), &STATE, text.len()).map_err(|_| malformed())?;
+        let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
+        if state.id != cdn_id {
             return Err(malformed());
         }
-        let mut web_accelerator: WebAccelerator =
-            serde_json::from_str(raw).map_err(|_| malformed())?;
-        web_accelerator.status = super::Field::Value(state.status);
-        web_accelerator.redact(&answer.evidence);
-        Ok(GetWebAcceleratorOutput { web_accelerator })
+        let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
+        model.status = super::Field::Value(state.status);
+        Ok(WebDetail {
+            raw,
+            status: state.status,
+            model,
+        })
     }
 
     /// Lists certificate metadata without PEM text.

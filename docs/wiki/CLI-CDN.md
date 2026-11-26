@@ -2,6 +2,59 @@
 
 # CLI: CDN
 
+## delete-web-accelerator
+
+Kind: Write, destructive.
+
+Deletes the CDN and its generated CNAME target after verifying the CDN ID and
+status. Pass `--yes` to confirm.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--cdn-id` | `string` | yes      |
+
+```sh
+greennode cdn delete-web-accelerator --cdn-id <cdn-id> --yes
+```
+
+## disable-web-accelerator
+
+Kind: Write, destructive.
+
+Verifies the CDN ID and status before writing. Confirms the toggle with reads at
+0, 2, 4, and 8 seconds.
+
+Use `--no-wait` to skip settlement after confirmation. If the CDN does not
+settle, stdout holds the last safe detail and the command exits 1.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--cdn-id`  | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode cdn disable-web-accelerator --cdn-id <cdn-id> --yes
+```
+
+## enable-web-accelerator
+
+Kind: Write.
+
+Verifies the CDN ID and status before writing. Confirms the toggle with reads at
+0, 2, 4, and 8 seconds.
+
+Use `--no-wait` to skip settlement after confirmation. If the CDN does not
+settle, stdout holds the last safe detail and the command exits 1.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--cdn-id`  | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode cdn enable-web-accelerator --cdn-id <cdn-id>
+```
+
 ## get-cache-status
 
 Kind: Read.
@@ -163,4 +216,46 @@ No fields.
 
 ```sh
 greennode cdn list-web-accelerators
+```
+
+## purge-paths
+
+Kind: Write.
+
+Supply `Paths` through `--cli-input-json`. Wait at least 30 seconds between
+purges of a CDN. Each purge counts against the package's daily limit.
+
+| Flag                                  | Type       | Required |
+| ------------------------------------- | ---------- | -------- |
+| `--cdn-domain`                        | `string`   | yes      |
+| `Paths` (via `--cli-input-json` only) | `[]string` | yes      |
+
+```sh
+greennode cdn purge-paths --cdn-domain <cdn-domain> --cli-input-json '{"Paths":["/<path>"]}'
+```
+
+## update-web-accelerator
+
+Kind: Write.
+
+Merges changes into a fresh detail with an explicit status and a matching CDN
+ID. Supply lists through `--cli-input-json`.
+
+Use `--no-wait` to return after one follow-up read.
+
+| Flag                                               | Type                    | Required |
+| -------------------------------------------------- | ----------------------- | -------- |
+| `--cdn-id`                                         | `string`                | yes      |
+| `--lb-type`                                        | `*string`               |          |
+| `--certificate-id`                                 | `*string`               |          |
+| `--origin-host-header`                             | `*string`               |          |
+| `--no-wait`                                        | `bool`                  |          |
+| `SetRuleActions` (via `--cli-input-json` only)     | `[]cdn.RuleActionInput` |          |
+| `RemoveRuleActions` (via `--cli-input-json` only)  | `[]string`              |          |
+| `Upstreams` (via `--cli-input-json` only)          | `[]cdn.UpstreamInput`   |          |
+| `FailOverErrorCodes` (via `--cli-input-json` only) | `[]string`              |          |
+| `CNames` (via `--cli-input-json` only)             | `[]string`              |          |
+
+```sh
+greennode cdn update-web-accelerator --cdn-id <cdn-id> --cli-input-json file://changes.json
 ```

@@ -5,11 +5,13 @@ mod models;
 mod page;
 mod reads;
 mod wire;
+mod writes;
 
 pub use analytics::*;
 pub use models::*;
 pub use page::{ListIpRangesInput, ListIpRangesOutput};
 pub use reads::*;
+pub use writes::*;
 
 use std::sync::Arc;
 
@@ -42,6 +44,10 @@ pub enum ErrorDetail {
     ResourceBusy,
     /// A purge must wait for the cooldown since the last purge.
     PurgeCooldown,
+    /// No read confirmed that the toggle began.
+    StatusUnconfirmed,
+    /// The observed CDN status does not allow the operation to proceed.
+    UnexpectedStatus,
 }
 
 fn invalid<T>() -> Failure<T> {

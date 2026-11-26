@@ -1,5 +1,8 @@
 #![cfg(feature = "test-support")]
 
+#[path = "cdn/writes.rs"]
+mod writes;
+
 use greennode_sdk::cdn::*;
 use greennode_sdk::testing::{Product, Response, Server, with_product_loopback};
 use greennode_sdk::{Config, ConfigOptions, EndpointOverrides, ErrorClass, RequestContext, Secret};

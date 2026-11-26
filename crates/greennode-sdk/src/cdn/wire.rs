@@ -31,6 +31,8 @@ pub(super) struct Call {
     pub(super) method: &'static Method,
     pub(super) sensitive: bool,
     pub(super) not_found: Option<&'static str>,
+    pub(super) write: bool,
+    pub(super) retry: Retry,
 }
 
 impl Call {
@@ -41,6 +43,8 @@ impl Call {
             method: &Method::GET,
             sensitive: false,
             not_found: None,
+            write: false,
+            retry: Retry::Repeatable,
         }
     }
 
@@ -48,6 +52,27 @@ impl Call {
         Self {
             method: &Method::POST,
             ..Self::get(id, route)
+        }
+    }
+
+    pub(super) const fn write(
+        id: &'static str,
+        route: &'static str,
+        method: &'static Method,
+    ) -> Self {
+        Self {
+            method,
+            write: true,
+            retry: Retry::Once,
+            ..Self::get(id, route)
+        }
+    }
+
+    fn dispatch(&self, sent: bool) -> WriteDispatch {
+        match (self.write, sent) {
+            (false, _) => WriteDispatch::NotAWrite,
+            (true, false) => WriteDispatch::NotSent,
+            (true, true) => WriteDispatch::MayHaveBeenSent,
         }
     }
 
@@ -60,6 +85,11 @@ impl Call {
             ErrorClass::Api,
             false,
         )
+    }
+
+    fn key_error(&self, status: u16, error: &Error, message: &str) -> Error {
+        let code = error.api_error().map_or("", ApiError::code);
+        api_error(self.id, status, code, message, error_class(status), false)
     }
 
     fn short(&self) -> &str {
@@ -188,96 +218,96 @@ impl Client {
         body: Bytes,
     ) -> Result<Answer, Failure<()>> {
         let mut evidence = Evidence::new();
-        let operation = operation(
+        let data = self
+            .call_with_evidence(ctx, call, path, body, &mut evidence)
+            .await?;
+        Ok(Answer { data, evidence })
+    }
+
+    pub(super) async fn call_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        call: &Call,
+        path: &[&str],
+        body: Bytes,
+        evidence: &mut Evidence,
+    ) -> Result<Option<Box<RawValue>>, Failure<()>> {
+        let mut operation = operation(
             call.id,
             call.route,
             (*call.method).clone(),
             RESPONSE_CAP,
             call.sensitive,
         );
-        let reply = raw(self, ctx, &operation, path, body, &mut evidence, false)
+        if call.write {
+            operation.class = Classification::Write;
+        }
+        operation.retry = call.retry;
+        let sent_failure = |error| Failure::new(error, None, call.dispatch(true));
+        let reply = raw(self, ctx, &operation, path, body, evidence, false)
             .await
             .map_err(|failure| {
-                let status = failure
-                    .error()
+                let dispatch = match failure.write_dispatch() {
+                    WriteDispatch::NotAWrite => call.dispatch(false),
+                    dispatch => dispatch,
+                };
+                let (error, _, _) = failure.into_parts();
+                let status = error
                     .detail::<StatusCode>()
                     .map(StatusCode::as_u16)
-                    .or_else(|| failure.error().api_error().and_then(ApiError::status));
-                if let Some(status) = status
-                    && let Some(message) = key_message(status)
-                {
-                    return read_failure(api_error(
-                        call.id,
-                        status,
-                        "",
-                        message,
-                        error_class(status),
-                        false,
-                    ));
-                }
-                if let Some(status) = failure.error().detail::<StatusCode>()
-                    && status.is_success()
-                {
-                    return read_failure(call.unexpected(status.as_u16()));
-                }
-                if status == Some(400) && failure.error().class() == ErrorClass::Api {
-                    let (error, _, dispatch) = failure.into_parts();
-                    return Failure::new(
-                        Error::new(ErrorClass::InvalidInput).with_cause(error),
-                        None,
-                        dispatch,
-                    );
-                }
-                if failure.error().class() == ErrorClass::NoCredentials {
-                    return read_failure(
-                        Error::new(ErrorClass::NoCredentials)
-                            .with_outer_detail(ErrorDetail::MissingApiKey),
-                    );
-                }
-                failure
+                    .or_else(|| error.api_error().and_then(ApiError::status));
+                let error = match status {
+                    Some(status) if let Some(message) = key_message(status) => {
+                        call.key_error(status, &error, message)
+                    }
+                    Some(status) if (200..300).contains(&status) => call.unexpected(status),
+                    Some(400) if error.class() == ErrorClass::Api => {
+                        Error::new(ErrorClass::InvalidInput).with_cause(error)
+                    }
+                    _ if error.has_class(ErrorClass::NoCredentials) => {
+                        error.with_outer_detail(ErrorDetail::MissingApiKey)
+                    }
+                    _ => error,
+                };
+                Failure::new(error, None, dispatch)
             })?;
         let status = reply.status.as_u16();
         if !OK.contains(&reply.status) {
             if reply.status.is_success() {
-                return Err(read_failure(call.unexpected(status)));
+                return Err(sent_failure(call.unexpected(status)));
             }
-            if let Some(message) = key_message(status) {
-                return Err(read_failure(api_error(
-                    call.id,
-                    status,
-                    "",
-                    message,
-                    error_class(status),
-                    false,
-                )));
-            }
+            let fixed_key_message = key_message(status);
             let error = classify(
                 call.id,
                 reply.status,
                 Bytes::from(reply.reply.body),
                 OK,
-                (true, call.sensitive, operation.retry),
+                (
+                    true,
+                    call.sensitive && fixed_key_message.is_none(),
+                    operation.retry,
+                ),
                 evidence.credentials(),
             )
             .err()
             .map_or_else(|| call.unexpected(status), |error| *error);
-            return Err(read_failure(if status == 400 {
+            let error = if let Some(message) = fixed_key_message {
+                call.key_error(status, &error, message)
+            } else if status == 400 {
                 Error::new(ErrorClass::InvalidInput).with_cause(error)
             } else {
                 error
-            }));
+            };
+            return Err(sent_failure(error));
         }
         validate_shape(&reply.body, &ENVELOPE, RESPONSE_CAP)
-            .map_err(|_| read_failure(call.unexpected(status)))?;
+            .map_err(|_| sent_failure(call.unexpected(status)))?;
         let envelope: Envelope = serde_json::from_slice(&reply.body)
-            .map_err(|_| read_failure(call.unexpected(status)))?;
+            .map_err(|_| sent_failure(call.unexpected(status)))?;
         if !envelope.success {
-            return Err(read_failure(call.refused(status, &envelope, &evidence)));
+            return Err(sent_failure(call.refused(status, &envelope, evidence)));
         }
-        Ok(Answer {
-            data: envelope.data,
-            evidence,
-        })
+        Ok(envelope.data)
     }
 }
 
