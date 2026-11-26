@@ -1,4 +1,6 @@
 pub(crate) mod pricing;
+pub(crate) mod server;
+pub(crate) mod wire;
 
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -95,6 +97,29 @@ impl<'de> Deserialize<'de> for Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_server_keeps_wire_shapes_and_go_projection() {
+        let wire = r#"{"UUID":"server_1","secGroups":[],"serverGroupId":{"key":true},"flavor":{"cpu":-0},"internalInterfaces":[{"floatingIp":"::ffff:192.0.2.1"},{"floatingIp":"192.0.2.1"}]}"#;
+        let server: crate::model::server::Server = serde_json::from_str(wire).unwrap();
+        let output = serde_json::to_value(server).unwrap();
+        assert_eq!(output["UUID"], "server_1");
+        assert_eq!(output["PublicIP"], "192.0.2.1");
+        assert_eq!(output["SecurityGroups"], serde_json::json!([]));
+        assert_eq!(output["ExternalInterfaces"], serde_json::json!([]));
+        assert_eq!(output["Flavor"]["CPU"], 0);
+        assert_eq!(output["ServerGroupID"]["key"], true);
+    }
+
+    #[test]
+    fn shared_server_rejects_ambiguous_and_non_numeric_wire_values() {
+        for wire in [
+            r#"{"zone":{"name":"one","NAME":"two"}}"#,
+            r#"{"flavor":{"cpu":{"$serde_json::private::Number":"1"}}}"#,
+        ] {
+            assert!(serde_json::from_str::<crate::model::server::Server>(wire).is_err());
+        }
+    }
 
     #[test]
     fn project_list_matches_go_golden() {

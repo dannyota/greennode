@@ -1,0 +1,23 @@
+{
+  "Items": [
+    {
+      "UUID": "group-1",
+      "ServerGroupID": 3,
+      "Name": "web",
+      "Description": "",
+      "PolicyID": "",
+      "PolicyName": "",
+      "CreatedAt": "",
+      "Servers": [
+        {
+          "Name": "web",
+          "UUID": "server_1"
+        }
+      ]
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10000,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

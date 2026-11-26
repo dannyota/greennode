@@ -1,0 +1,1 @@
+{"listData":[{"uuid":"server-1","name":"web","bootVolumeId":"disk-1","status":"ACTIVE","internalInterfaces":[{"floatingIp":"::ffff:192.0.2.1"}],"secGroups":[{"uuid":"group-1","name":"web"}]}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}

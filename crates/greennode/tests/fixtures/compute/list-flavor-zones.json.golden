@@ -1,0 +1,10 @@
+{
+  "Items": [
+    {
+      "ID": "general-1",
+      "Name": "general",
+      "Description": "",
+      "ZoneID": "zone-1"
+    }
+  ]
+}

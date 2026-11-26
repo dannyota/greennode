@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "ID": "image-1",
+      "ImageType": "ubuntu",
+      "ImageVersion": "",
+      "Licence": false,
+      "FlavorZoneIDs": [],
+      "PackageLimit": {
+        "CPU": 1,
+        "DiskSize": 10,
+        "Memory": 0
+      },
+      "LicenseKey": null,
+      "DefaultTagIDs": [],
+      "ZoneID": "",
+      "Description": ""
+    }
+  ]
+}
