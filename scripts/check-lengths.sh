@@ -49,6 +49,7 @@ if [[ -n "$base_ref" ]]; then
     printf 'check-lengths: %s has no baseline; skipping base comparison\n' "$base_ref"
   fi
   ((base_has_baseline)) && while read -r cap file || [[ -n "$cap" ]]; do
+    case "$file" in docs/wiki/*.md | docs/wiki/*.markdown) continue ;; esac
     base_cap=$(cap_for "$file" <<<"$base_baseline")
     if [[ -z "$base_cap" ]]; then
       printf '%s: baseline entry absent from base ref\n' "$file"
@@ -104,7 +105,7 @@ while IFS= read -r -d '' file; do
       fi
       ;;
     *.md | *.markdown)
-      case "$file" in docs/plans/*) continue ;; esac
+      case "$file" in docs/plans/* | docs/wiki/*) continue ;; esac
       limit=$MD_MAX
       ;;
     *) continue ;;
@@ -131,6 +132,7 @@ while IFS= read -r -d '' file; do
 done <"$work/files"
 
 while read -r cap file || [[ -n "$cap" ]]; do
+  case "$file" in docs/wiki/*.md | docs/wiki/*.markdown) continue ;; esac
   scanned=0
   while IFS= read -r -d '' path; do
     if [[ "$path" == "$file" ]]; then

@@ -64,10 +64,19 @@ chmod +x "$WORK/bin/git"
 PATH="$WORK/bin:$PATH" expect 'file enumeration failure' 1 'check-lengths: file enumeration failed'
 
 fresh_repo
+lines_file docs/wiki/service.md 401
+expect 'generated wiki Markdown exempt' 0
 lines_file docs/page.md 400
 expect 'Markdown at limit' 0
 lines_file docs/page.md 401
 expect 'Markdown over limit' 1 'docs/page.md: 401 lines (limit 400)'
+
+fresh_repo
+lines_file docs/wiki/service.md 401
+git -C "$REPO" add scripts/lengths-baseline.txt
+git -C "$REPO" -c user.name=Test -c user.email=test@example.invalid -c commit.gpgsign=false commit -qm baseline
+printf '401 docs/wiki/service.md\n' >"$REPO/scripts/lengths-baseline.txt"
+expect 'wiki baseline exempt from growth and stale checks' 0 '' --base-ref HEAD
 
 fresh_repo
 lines_file src/main.rs 700
