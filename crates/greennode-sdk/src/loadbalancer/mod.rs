@@ -1,10 +1,13 @@
 //! Read regional load balancers, their catalogs and children, and price quotes.
 
+mod certificate_import;
 mod deletes;
 mod models;
+mod paid;
 mod quotes;
 mod types;
 mod wire;
+mod write;
 
 #[cfg(test)]
 mod tests;
@@ -16,8 +19,10 @@ use crate::{
     Config, DEFAULT_PAGE, DEFAULT_PAGE_SIZE, Error, Failure, List, RequestContext, WriteDispatch,
 };
 
+pub use certificate_import::*;
 pub use deletes::*;
 pub use models::*;
+pub use paid::*;
 pub use quotes::{CreateLoadBalancerInput, ResizeLoadBalancerInput};
 pub use types::*;
 pub use wire::DecodeError;

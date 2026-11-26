@@ -1,3 +1,6 @@
+#[path = "loadbalancer/create_writes.rs"]
+mod create_writes;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -8,6 +11,67 @@ use greennode_sdk::{
 };
 
 const BEARER: &str = "toy-cli-bearer";
+
+#[tokio::test]
+async fn certificate_import_refuses_json_secrets_and_read_only() {
+    let server = Server::start(vec![]);
+    for (args, expected) in [
+        (
+            vec![
+                "import-certificate",
+                "--cli-input-json",
+                r#"{"PrivateKey":"toy-key"}"#,
+            ],
+            "secret field is forbidden",
+        ),
+        (
+            vec![
+                "import-certificate",
+                "--certificate-file",
+                "unused.pem",
+                "--private-key-file",
+                "-",
+                "--read-only",
+            ],
+            "read-only",
+        ),
+    ] {
+        let (status, stdout, stderr) = invoke(&server, &args, false).await;
+        assert_ne!(status, ExitCode::SUCCESS);
+        assert!(stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&stderr);
+        assert!(stderr.contains(expected));
+        assert!(!stderr.contains("toy-key"));
+    }
+}
+
+#[tokio::test]
+async fn paid_load_balancer_writes_apply_confirmation_and_read_only() {
+    let server = Server::start(vec![]);
+    let (status, stdout, stderr) = invoke(
+        &server,
+        &["create-load-balancer", "--scheme", "Internet"],
+        false,
+    )
+    .await;
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("pass --yes"));
+    for args in [
+        vec![
+            "create-load-balancer",
+            "--scheme",
+            "Internal",
+            "--read-only",
+        ],
+        vec!["resize-load-balancer", "--read-only"],
+    ] {
+        let (status, stdout, stderr) = invoke(&server, &args, false).await;
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("read-only"));
+    }
+}
 
 struct Source;
 impl ConfigSource for Source {
@@ -31,8 +95,28 @@ async fn invoke(server: &Server, args: &[&str], terminal: bool) -> (ExitCode, Ve
     } else {
         Product::Vlb
     };
+    let options = with_product_loopback(
+        product,
+        ConfigOptions::default()
+            .with_static_token(Secret::new(BEARER))
+            .with_endpoint_overrides(EndpointOverrides {
+                vlb: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
+        server,
+    );
+    invoke_options(args, terminal, options, &mut std::io::empty()).await
+}
+
+async fn invoke_options(
+    args: &[&str],
+    terminal: bool,
+    config_options: ConfigOptions,
+    stdin: &mut dyn greennode::cli::Stdin,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
-    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let status = run_invocation(Invocation {
         args: ["greennode", "--region", "hcm-3", "loadbalancer"]
             .into_iter()
@@ -40,18 +124,8 @@ async fn invoke(server: &Server, args: &[&str], terminal: bool) -> (ExitCode, Ve
             .map(OsString::from)
             .collect(),
         source: &Source,
-        config_options: with_product_loopback(
-            product,
-            ConfigOptions::default()
-                .with_static_token(Secret::new(BEARER))
-                .with_endpoint_overrides(EndpointOverrides {
-                    vlb: Some(format!("{}/", server.origin)),
-                    portal: Some(format!("{}/portal/", server.origin)),
-                    ..Default::default()
-                }),
-            server,
-        ),
-        stdin: &mut stdin,
+        config_options,
+        stdin,
         stdout: &mut stdout,
         stderr: &mut stderr,
         stdin_terminal: false,

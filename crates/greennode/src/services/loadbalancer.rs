@@ -172,21 +172,43 @@ const SUBNET_ID: Field = flag("subnet-id", "string", false);
 const TYPE: Field = flag("type", "string", false);
 const ZONE_ID: Field = flag("zone-id", "string", false);
 
+mod certificate_import;
+mod paid;
+
 pub(super) const SERVICE: Service = Service {
     name: "loadbalancer",
-    error_rules: &[Rule {
-        identity: "loadbalancer.resource-in-use",
-        matches: |error| error.detail::<sdk::WriteError>() == Some(&sdk::WriteError::ResourceInUse),
-        name: Some(RuleName {
-            rank: 34,
-            code: "ResourceInUse",
-            include_api_status: false,
-            operation: RuleOperation::Omit,
-        }),
-        exit: None,
-        message: None,
-    }],
+    error_rules: &[
+        Rule {
+            identity: "loadbalancer.resource-busy",
+            matches: |error| error.detail::<sdk::ResourceBusy>().is_some(),
+            name: Some(RuleName {
+                rank: 37,
+                code: "ResourceBusy",
+                include_api_status: false,
+                operation: RuleOperation::Omit,
+            }),
+            exit: None,
+            message: None,
+        },
+        Rule {
+            identity: "loadbalancer.resource-in-use",
+            matches: |error| {
+                error.detail::<sdk::WriteError>() == Some(&sdk::WriteError::ResourceInUse)
+            },
+            name: Some(RuleName {
+                rank: 34,
+                code: "ResourceInUse",
+                include_api_status: false,
+                operation: RuleOperation::Omit,
+            }),
+            exit: None,
+            message: None,
+        },
+    ],
     operations: &[
+        paid::CREATE,
+        paid::RESIZE,
+        certificate_import::IMPORT,
         operation!(
             @kind Kind::DestructiveWrite,
             DeleteCertificateInput, delete_certificate, "delete-certificate", "DeleteCertificate",

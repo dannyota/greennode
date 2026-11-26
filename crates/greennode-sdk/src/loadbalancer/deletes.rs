@@ -235,7 +235,7 @@ impl Client {
         Err(Failure::new(error, None, dispatch))
     }
 
-    async fn lock_load_balancer(
+    pub(super) async fn lock_load_balancer(
         &self,
         ctx: &RequestContext,
         id: &str,

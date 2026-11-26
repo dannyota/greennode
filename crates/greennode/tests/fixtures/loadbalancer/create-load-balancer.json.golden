@@ -1,0 +1,29 @@
+{
+  "LoadBalancer": {
+    "UUID": "lb-1",
+    "Name": "toy-lb",
+    "DisplayStatus": "",
+    "Address": "",
+    "PrivateSubnetID": "subnet-1",
+    "PrivateSubnetCIDR": "",
+    "Type": "Layer 4",
+    "DisplayType": "",
+    "LoadBalancerSchema": "Internal",
+    "PackageID": "package-1",
+    "Description": "",
+    "Location": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ProgressStatus": "",
+    "Status": "",
+    "BackendSubnetID": "",
+    "Internal": false,
+    "AutoScalable": false,
+    "ZoneID": "zone-1",
+    "MinSize": 0,
+    "MaxSize": 0,
+    "TotalNodes": 0,
+    "Nodes": []
+  },
+  "QuotedPrice": 9
+}

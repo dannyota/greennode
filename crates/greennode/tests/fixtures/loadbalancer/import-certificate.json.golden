@@ -1,0 +1,19 @@
+{
+  "Certificate": {
+    "UUID": "cert-1",
+    "Name": "toy-ca",
+    "CertificateType": "CA",
+    "ExpiredAt": "",
+    "ImportedAt": "",
+    "NotAfter": 0,
+    "KeyAlgorithm": "",
+    "Serial": "",
+    "Subject": "",
+    "DomainName": "",
+    "InUse": false,
+    "Issuer": "",
+    "SignatureAlgorithm": "",
+    "NotBefore": 0,
+    "SubjectAlternativeNames": []
+  }
+}

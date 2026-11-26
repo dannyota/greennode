@@ -18,14 +18,28 @@ struct ManagementAdapter<'a, T> {
     source: &'a dyn ConfigSource,
     view: OutputView,
     error_rules: &'static [errors::Rule],
-    password_input: Option<PasswordInput<'a, T>>,
+    file_input: Option<FileInput<'a, T>>,
 }
 
-struct PasswordInput<'a, T> {
+struct FileInput<'a, T> {
     stdin: &'a mut dyn Stdin,
     terminal: bool,
     clock: &'a dyn Clock,
-    bind: fn(&mut T, greennode_sdk::Secret),
+    bind: FileBinding<T>,
+}
+
+pub(crate) type InputPreparation<T> = for<'a> fn(
+    &'a RequestContext,
+    &'a dyn Clock,
+    &'a ArgMatches,
+    &'a mut dyn Stdin,
+    bool,
+    &'a mut T,
+) -> FutureResult<'a, Result<(), LocalError>>;
+
+enum FileBinding<T> {
+    Password(fn(&mut T, greennode_sdk::Secret)),
+    Custom(InputPreparation<T>),
 }
 
 struct ManagementInput<'a, T: 'static> {
@@ -251,14 +265,29 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         input: &'a mut ManagementInput<'_, T>,
     ) -> FutureResult<'a, Result<(), LocalError>> {
         Box::pin(async {
-            if let Some(password) = &mut self.password_input
-                && let Some(path) = password::path(self.matches)
-            {
+            if let Some(files) = &mut self.file_input {
                 let input = input.value.as_mut().ok_or_else(LocalError::missing_input)?;
-                let secret =
-                    password::read(ctx, password.clock, path, password.stdin, password.terminal)
-                        .await?;
-                (password.bind)(&mut input.value, secret);
+                match files.bind {
+                    FileBinding::Password(bind) => {
+                        if let Some(path) = password::path(self.matches) {
+                            let secret =
+                                password::read(ctx, files.clock, path, files.stdin, files.terminal)
+                                    .await?;
+                            bind(&mut input.value, secret);
+                        }
+                    }
+                    FileBinding::Custom(prepare) => {
+                        prepare(
+                            ctx,
+                            files.clock,
+                            self.matches,
+                            files.stdin,
+                            files.terminal,
+                            &mut input.value,
+                        )
+                        .await?
+                    }
+                }
             }
             Ok(())
         })
@@ -355,7 +384,31 @@ pub(crate) async fn management_with_password<T: Send + 'static>(
         Hooks {
             view: OutputView::default(),
             check_json: None,
-            bind: Some(bind),
+            bind: Some(FileBinding::Password(bind)),
+            confirmation: None,
+        },
+    )
+    .await
+}
+
+pub(crate) async fn management_with_input_preparation<T: Send + 'static>(
+    invocation: &mut Invocation<'_>,
+    selected: SelectedOperation,
+    matches: &ArgMatches,
+    descriptor: &'static InputDescriptor<T>,
+    execute: ManagementOperation<T>,
+    prepare: InputPreparation<T>,
+) -> u8 {
+    run_management(
+        invocation,
+        selected,
+        matches,
+        descriptor,
+        execute,
+        Hooks {
+            view: OutputView::default(),
+            check_json: None,
+            bind: Some(FileBinding::Custom(prepare)),
             confirmation: None,
         },
     )
@@ -389,7 +442,7 @@ pub(crate) async fn management_with_confirmation<T: Send + 'static>(
 struct Hooks<T> {
     view: OutputView,
     check_json: Option<input::JsonChecks>,
-    bind: Option<fn(&mut T, greennode_sdk::Secret)>,
+    bind: Option<FileBinding<T>>,
     confirmation: Option<&'static str>,
 }
 
@@ -418,7 +471,7 @@ async fn run_management<T: Send + 'static>(
         source: invocation.source,
         view: hooks.view,
         error_rules: selected.error_rules,
-        password_input: hooks.bind.map(|bind| PasswordInput {
+        file_input: hooks.bind.map(|bind| FileInput {
             stdin: invocation.stdin,
             terminal: invocation.stdin_terminal,
             clock: invocation.clock,

@@ -78,11 +78,7 @@ impl Client {
             &ids
         };
         validate_ids(OP, ids, PathIds::WithUnderscore).map_err(failure)?;
-        let details = BTreeMap::from([
-            ("packageId".into(), json!(input.package_id)),
-            ("zoneId".into(), json!(input.zone_id)),
-            ("isBuyMorePoc".into(), json!(false)),
-        ]);
+        let details = create_quote_info(&input);
         self.request_quote(ctx, &mut evidence, "create", details)
             .await
     }
@@ -105,15 +101,12 @@ impl Client {
             PathIds::WithUnderscore,
         )
         .map_err(failure)?;
-        let details = BTreeMap::from([
-            ("loadBalancerId".into(), json!(input.load_balancer_id)),
-            ("packageId".into(), json!(input.package_id)),
-        ]);
+        let details = resize_quote_info(&input);
         self.request_quote(ctx, &mut evidence, "resize", details)
             .await
     }
 
-    fn quote_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
+    pub(super) fn quote_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self.session.runtime(ctx, &mut jitter)?;
         let mut evidence = Evidence::new();
@@ -150,4 +143,23 @@ impl Client {
                 ))
             })
     }
+}
+
+pub(super) fn create_quote_info(
+    input: &CreateLoadBalancerInput,
+) -> BTreeMap<String, serde_json::Value> {
+    BTreeMap::from([
+        ("packageId".into(), json!(input.package_id)),
+        ("zoneId".into(), json!(input.zone_id)),
+        ("isBuyMorePoc".into(), json!(false)),
+    ])
+}
+
+pub(super) fn resize_quote_info(
+    input: &ResizeLoadBalancerInput,
+) -> BTreeMap<String, serde_json::Value> {
+    BTreeMap::from([
+        ("loadBalancerId".into(), json!(input.load_balancer_id)),
+        ("packageId".into(), json!(input.package_id)),
+    ])
 }
