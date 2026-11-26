@@ -106,7 +106,7 @@ impl Client {
         validate(&input).map_err(|error| not_sent(*error))?;
         self.write_provenance()?;
         let mut evidence = Evidence::new();
-        evidence.add_database_password(&input.password);
+        evidence.add_operation_password(&input.password);
         let engine = self.plan_create(ctx, &input, &mut evidence).await?;
         let package = input.flavor_id.to_string();
         let body = create_body(&input, &engine, &package)
@@ -119,7 +119,9 @@ impl Client {
         );
         let options = Options {
             headers: &[("user-type", "IAM_USER")],
-            database_password: Some(&input.password),
+            password_slot: Some(crate::wire::product::options::PasswordSlot::DatabaseUser(
+                &input.password,
+            )),
             ..Options::DEFAULT
         };
         let reply = match self

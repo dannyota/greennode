@@ -6,6 +6,10 @@ mod models;
 mod policies;
 mod principal_guard;
 mod service_account_writes;
+mod user_guard;
+mod user_mfa;
+mod user_password;
+mod user_writes;
 mod wire;
 mod writes;
 
@@ -34,6 +38,8 @@ pub use groups::*;
 pub use models::*;
 pub use policies::*;
 pub use service_account_writes::*;
+pub use user_mfa::*;
+pub use user_writes::*;
 pub use writes::WriteError;
 
 const OBJECT_CAP: usize = 256 << 10;

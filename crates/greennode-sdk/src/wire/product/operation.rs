@@ -1,5 +1,5 @@
 use super::evidence::{Evidence, may_reflect_rendered_number};
-use super::options::Options;
+use super::options::{Options, PasswordSlot};
 use super::{redirect, retry, sender};
 use crate::wire::send;
 use crate::wire::strict_json::Shape;
@@ -167,13 +167,20 @@ async fn send_route<T>(
     if path.iter().any(|id| !options.path_ids.allows(id)) {
         return Err(invalid());
     }
-    if options.database_password.is_some()
-        && !(operation.id == "database.CreateDatabaseInstance"
-            && operation.method == Method::POST
-            && matches!(operation.class, redirect::Classification::Write)
-            && matches!(auth, RouteAuth::Bearer(_)))
-    {
-        return Err(invalid());
+    if let Some(slot) = options.password_slot {
+        let allowed = match slot {
+            PasswordSlot::DatabaseUser(_) => operation.id == "database.CreateDatabaseInstance",
+            PasswordSlot::IamUser(_) => {
+                matches!(operation.id, "iam.CreateUser" | "iam.ResetUserPassword")
+            }
+        };
+        if !allowed
+            || operation.method != Method::POST
+            || !matches!(operation.class, redirect::Classification::Write)
+            || !matches!(auth, RouteAuth::Bearer(_))
+        {
+            return Err(invalid());
+        }
     }
     let mut parts = operation.template.split("{}");
     let mut rendered = parts.next().ok_or_else(invalid)?.to_owned();
@@ -294,7 +301,7 @@ async fn send_route<T>(
         sender::RouteInputs {
             path,
             query,
-            database_password: options.database_password,
+            password_slot: options.password_slot,
         },
     )
     .await

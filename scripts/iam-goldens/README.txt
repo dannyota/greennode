@@ -22,3 +22,8 @@ into `internal/cli`. It reads and writes `service-account-writes/` in the same
 fixture directory. Run:
 
     GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMServiceAccountWritePortGoldens$' -count=1
+
+For user writes, also copy `iam_user_writes_goldens_test.go` into `internal/cli`.
+It reads and writes `user-writes/` in the same fixture directory. Run:
+
+    GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMUserWritePortGoldens$' -count=1

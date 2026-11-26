@@ -331,7 +331,7 @@ pub(crate) struct Runtime<'a> {
 pub(super) struct RouteInputs<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
-    pub(super) database_password: Option<&'a Secret>,
+    pub(super) password_slot: Option<super::options::PasswordSlot<'a>>,
 }
 
 impl RouteInputs<'_> {
@@ -514,7 +514,7 @@ async fn run_inner(
                 || super::evidence::body_reflects(
                     &request.body,
                     &credentials,
-                    route_inputs.database_password,
+                    route_inputs.password_slot,
                 )
             {
                 return Err(Error::Provider(Box::new(crate::Error::new(

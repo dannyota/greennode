@@ -2,6 +2,8 @@
 mod group_writes;
 #[path = "iam/service_account_writes.rs"]
 mod service_account_writes;
+#[path = "iam/user_writes.rs"]
+mod user_writes;
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -74,7 +76,12 @@ async fn invoke(args: &[&str], server: &Server, bearer: &str) -> (ExitCode, Vec<
     .await;
     for stream in [&stdout, &stderr] {
         let text = String::from_utf8_lossy(stream);
-        assert!(!text.contains(bearer) && !text.contains("private-toy"));
+        assert!(
+            !text.contains(bearer)
+                && !text.contains("private-toy")
+                && !text.contains("toy-factor-seed")
+                && !text.contains("toy-recovery-code")
+        );
     }
     (status, stdout, stderr)
 }

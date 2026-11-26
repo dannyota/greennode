@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 use regex_lite::Regex;
@@ -82,15 +82,17 @@ impl Client {
             ));
         }
         let actions = self.guard_write_actions(ctx, evidence).await?;
-        let protected = self
-            .paged_policies_are_privileged(
+        let ids = self
+            .paged_policy_ids(
                 ctx,
                 op,
                 ACCOUNT_POLICIES,
                 ("ServiceAccountID", id),
-                &actions,
                 evidence,
             )
+            .await?;
+        let protected = self
+            .policy_ids_are_privileged(ctx, ids, &actions, &mut HashMap::new(), evidence)
             .await?;
         if protected {
             return Err(guard_refusal(
@@ -108,7 +110,7 @@ impl Client {
         Ok(())
     }
 
-    async fn guard_write_actions<O>(
+    pub(super) async fn guard_write_actions<O>(
         &self,
         ctx: &RequestContext,
         evidence: &mut Evidence,
@@ -140,15 +142,14 @@ impl Client {
         Ok(names)
     }
 
-    async fn paged_policies_are_privileged<O>(
+    pub(super) async fn paged_policy_ids<O>(
         &self,
         ctx: &RequestContext,
         op: &'static str,
         route: &'static str,
         id: (&str, &str),
-        actions: &[String],
         evidence: &mut Evidence,
-    ) -> Result<bool, Failure<O>> {
+    ) -> Result<Vec<String>, Failure<O>> {
         let page: AttachmentPage = self
             .fetch(
                 ctx,
@@ -180,26 +181,42 @@ impl Client {
             "iam: guard: policy attachments withheld",
             evidence,
         )?;
-        let mut seen = HashSet::new();
-        for item in &items {
-            if seen.insert(item.id.as_str())
-                && self
-                    .policy_is_privileged(ctx, &item.id, actions, evidence)
-                    .await?
-            {
+        Ok(items.into_iter().map(|item| item.id).collect())
+    }
+
+    pub(super) async fn policy_ids_are_privileged<O>(
+        &self,
+        ctx: &RequestContext,
+        ids: Vec<String>,
+        actions: &[String],
+        seen: &mut HashMap<String, Policy>,
+        evidence: &mut Evidence,
+    ) -> Result<bool, Failure<O>> {
+        for id in ids {
+            if evidence.id_reflects(&id) {
+                return Err(guard_refusal("IAM policy identity withheld", None));
+            }
+            let policy = match seen.entry(id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let policy = self.fetch_guard_policy(ctx, entry.key(), evidence).await?;
+                    entry.insert(policy)
+                }
+            };
+            require_safe(policy, "iam: iam.GetPolicy: unsafe policy", evidence)?;
+            if policy_has_write_actions(policy, actions) {
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    async fn policy_is_privileged<O>(
+    async fn fetch_guard_policy<O>(
         &self,
         ctx: &RequestContext,
         id: &str,
-        actions: &[String],
         evidence: &mut Evidence,
-    ) -> Result<bool, Failure<O>> {
+    ) -> Result<Policy, Failure<O>> {
         let policy: Policy = self
             .fetch(
                 ctx,
@@ -218,22 +235,25 @@ impl Client {
             evidence,
         )
         .map_err(guard_failed)?;
-        require_safe(&policy, "iam: iam.GetPolicy: unsafe policy", evidence)?;
-        Ok(policy.statements.is_empty()
-            || policy.statements.iter().any(|statement| {
-                let effect = &statement.effect;
-                !effect.eq_ignore_ascii_case("deny")
-                    && (!effect.eq_ignore_ascii_case("allow")
-                        || statement.actions.is_empty()
-                        || statement
-                            .actions
-                            .iter()
-                            .any(|pattern| matches_write_action(pattern, actions)))
-            }))
+        Ok(policy)
     }
 }
 
-fn guard_read(id: &'static str, route: &'static str, cap: usize) -> Operation {
+fn policy_has_write_actions(policy: &Policy, actions: &[String]) -> bool {
+    policy.statements.is_empty()
+        || policy.statements.iter().any(|statement| {
+            let effect = &statement.effect;
+            !effect.eq_ignore_ascii_case("deny")
+                && (!effect.eq_ignore_ascii_case("allow")
+                    || statement.actions.is_empty()
+                    || statement
+                        .actions
+                        .iter()
+                        .any(|pattern| matches_write_action(pattern, actions)))
+        })
+}
+
+pub(super) fn guard_read(id: &'static str, route: &'static str, cap: usize) -> Operation {
     Operation {
         sensitive: true,
         ..read_operation(id, route, cap, false)

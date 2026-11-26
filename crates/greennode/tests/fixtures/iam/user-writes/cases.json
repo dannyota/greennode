@@ -1,0 +1,444 @@
+[
+  {
+    "name": "create-user",
+    "args": [
+      "create-user",
+      "--username",
+      "worker",
+      "--password-file",
+      "$PASSWORD"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users",
+        "status": 201,
+        "body": {
+          "id": "user-1"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "create-user-generated",
+    "args": [
+      "create-user",
+      "--username",
+      "worker",
+      "--secret-file",
+      "$SECRET"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users",
+        "status": 201,
+        "body": {
+          "id": "user-1"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "delete-user",
+    "args": [
+      "delete-user",
+      "--user-id",
+      "user-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "caller-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "reset-user-password-password",
+    "args": [
+      "reset-user-password",
+      "--user-id",
+      "user-1",
+      "--password-file",
+      "$PASSWORD",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "caller-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions",
+        "status": 200,
+        "body": [
+          {
+            "action": "CreatePolicy",
+            "label": "Write"
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/policies",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users/user-1/reset-password",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "reset-user-password-secret",
+    "args": [
+      "reset-user-password",
+      "--user-id",
+      "user-1",
+      "--secret-file",
+      "$SECRET",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "caller-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions",
+        "status": 200,
+        "body": [
+          {
+            "action": "CreatePolicy",
+            "label": "Write"
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/policies",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users/user-1/reset-password",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "enable-user-mfa",
+    "args": [
+      "enable-user-mfa",
+      "--user-id",
+      "user-1",
+      "--method",
+      "google",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "caller-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions",
+        "status": 200,
+        "body": [
+          {
+            "action": "CreatePolicy",
+            "label": "Write"
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/policies",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users/user-1/activate-google",
+        "status": 204,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": true,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "disable-user-mfa",
+    "args": [
+      "disable-user-mfa",
+      "--user-id",
+      "user-1",
+      "--method",
+      "google",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "caller-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": true,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions",
+        "status": 200,
+        "body": [
+          {
+            "action": "CreatePolicy",
+            "label": "Write"
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/policies",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/iam-users/user-1/groups",
+        "status": 200,
+        "body": []
+      },
+      {
+        "method": "POST",
+        "route": "/accounts-api/v1/iam-users/user-1/deactivate-google",
+        "status": 204,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/iam-users/user-1",
+        "status": 200,
+        "body": {
+          "id": "user-1",
+          "username": "worker",
+          "from": "iam",
+          "twoFactorAuth": {
+            "googleAuthenticator": {
+              "verified": true,
+              "enabled": false,
+              "secret": "toy-factor-seed"
+            }
+          }
+        }
+      }
+    ]
+  }
+]

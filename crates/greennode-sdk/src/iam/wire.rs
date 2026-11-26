@@ -343,7 +343,11 @@ impl<T: Wire> Output for Body<T> {
                 != Some(false)
         {
             return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
-                crate::RecoveryAdvice::new("iam: iam.GetServiceAccount: unsafe guard response"),
+                crate::RecoveryAdvice::new(if operation.id == "iam.GetServiceAccount" {
+                    "iam: iam.GetServiceAccount: unsafe guard response"
+                } else {
+                    "IAM user response withheld"
+                }),
             )));
         }
         Ok(Self(value))
@@ -379,9 +383,9 @@ pub(super) fn private_status_error(
         "accounts-api/v1/auth/userinfo" => Some("caller identity"),
         "policies-api/v1/actions" => Some("action list"),
         "policies-api/v1/policies/{}" => Some("policy"),
-        "policies-api/v1/user-attachments/service-accounts/{}/policies" => {
-            Some("policy attachments")
-        }
+        "policies-api/v1/user-attachments/service-accounts/{}/policies"
+        | "policies-api/v1/user-attachments/iam-users/{}/policies" => Some("policy attachments"),
+        "policies-api/v1/user-attachments/iam-users/{}/groups" => Some("attachment array"),
         _ => None,
     };
     let message = label.map_or_else(
