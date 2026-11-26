@@ -346,7 +346,23 @@ impl Write<'_> {
         let reply = self
             .request(ctx, &operation, &[id], None)
             .await
-            .map_err(|failure| Box::new(failure.into_parts().0))?;
+            .map_err(|failure| {
+                let error = failure.into_parts().0;
+                if error.is_body_too_large()
+                    && error.detail::<StatusCode>() == Some(&StatusCode::NOT_FOUND)
+                {
+                    Box::new(
+                        super::write::status_rejection(
+                            operation.id,
+                            StatusCode::NOT_FOUND,
+                            self.evidence.credentials(),
+                        )
+                        .with_detail(ConfirmedAbsence),
+                    )
+                } else {
+                    Box::new(error)
+                }
+            })?;
         match reply.status {
             StatusCode::OK => decode(&operation, &reply.body, &DETAIL_SHAPE),
             status => {

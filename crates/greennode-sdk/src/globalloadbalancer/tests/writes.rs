@@ -85,6 +85,7 @@ async fn conflicting_or_reflected_acceptance_ids_never_start_confirmation() {
     for body in [
         r#"{"globalLoadBalancer":{"id":"glb-1","ID":"glb-2"}}"#,
         r#"{"globalLoadBalancer":{"id":"toy-id"}}"#,
+        r#"{"globalLoadBalancer":{"id":"dG95LWlk"}}"#,
     ] {
         let server = Server::start(vec![response("202 Accepted", body)]);
         let (ctx, _) = RequestContext::new();
@@ -176,6 +177,70 @@ async fn create_keeps_safe_provider_refusals_and_never_replays() {
         assert!(api.message() == message);
         assert_eq!(server.requests(), 1);
     }
+}
+
+#[tokio::test]
+async fn truncated_create_forbidden_is_classified_and_hides_reflected_status() {
+    for token in ["toy-token", "403"] {
+        let server = Server::start(vec![Response::RawClose(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Length: 9\r\n\r\n{}".to_vec(),
+        )]);
+        let (ctx, _) = RequestContext::new();
+        let failure = write_client(&server, token)
+            .create_load_balancer(&ctx, CreateLoadBalancerInput::new("demo", "pkg-1"))
+            .await
+            .unwrap_err();
+        assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.code(), "Forbidden");
+        assert_eq!(api.status(), if token == "403" { None } else { Some(403) });
+    }
+}
+
+#[tokio::test]
+async fn truncated_rate_limit_is_not_retryable() {
+    for (reply, retryable) in [
+        (response("429 Too Many Requests", "{}"), true),
+        (
+            Response::RawClose(
+                b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 9\r\n\r\n{}".to_vec(),
+            ),
+            false,
+        ),
+    ] {
+        let server = Server::start(vec![reply]);
+        let (ctx, _) = RequestContext::new();
+        let failure = write_client(&server, TOKEN)
+            .create_load_balancer(&ctx, CreateLoadBalancerInput::new("demo", "pkg-1"))
+            .await
+            .unwrap_err();
+        assert!(failure.error().has_class(ErrorClass::RateLimited));
+        assert_eq!(failure.error().api_error().unwrap().retryable(), retryable);
+    }
+}
+
+#[tokio::test]
+async fn oversized_not_found_preserves_delete_status() {
+    let body = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![response("404 Not Found", body.clone())]);
+    let (ctx, _) = RequestContext::new();
+    let failure = write_client(&server, TOKEN)
+        .delete_load_balancer(&ctx, DeleteLoadBalancerInput::new(GLB))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotFound));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+
+    let server = Server::start(vec![
+        response("200 OK", DETAIL),
+        response("202 Accepted", ""),
+        response("404 Not Found", body),
+    ]);
+    let output = write_client(&server, TOKEN)
+        .delete_load_balancer(&ctx, DeleteLoadBalancerInput::new(GLB))
+        .await
+        .unwrap();
+    assert!(output.deleted);
 }
 
 #[tokio::test]

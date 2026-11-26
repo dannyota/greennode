@@ -52,7 +52,7 @@ impl Client {
             && self.session.uses_default_auth_endpoints()
             && same(&current.global_load_balancer, &default.global_load_balancer)
             && same(&current.dashboard, &default.dashboard);
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
         let trusted = trusted
             || self
                 .session
@@ -167,13 +167,20 @@ impl Write<'_> {
         uncertain: &'static str,
     ) -> Failure<O> {
         let (error, _, dispatch) = failure.into_parts();
-        if dispatch == WriteDispatch::NotSent
-            || error
-                .api_error()
-                .and_then(ApiError::status)
-                .is_some_and(|status| (400..500).contains(&status))
-        {
+        if dispatch == WriteDispatch::NotSent {
             return Failure::new(error, None, dispatch);
+        }
+        if let Some(status) = error
+            .api_error()
+            .and_then(ApiError::status)
+            .and_then(|status| StatusCode::from_u16(status).ok())
+            .filter(StatusCode::is_client_error)
+        {
+            return Failure::new(
+                status_rejection(self.id, status, self.evidence.credentials()),
+                None,
+                dispatch,
+            );
         }
         self.finish(Settlement::Unknown(uncertain), partial)
     }
@@ -271,6 +278,36 @@ pub(super) fn guard_operation(id: &'static str, template: &'static str) -> Opera
         sensitive: true,
         no_redirect: true,
         ..read_operation(id, template)
+    }
+}
+
+pub(super) fn status_rejection(
+    id: &'static str,
+    status: StatusCode,
+    credentials: &crate::wire::product::sender::SentCredentials,
+) -> Error {
+    let status_error = Error::from_api(ApiError::new(
+        id,
+        Some(status.as_u16()),
+        SafeText::new("", &[]),
+        SafeText::new("", &[]),
+        false,
+    ));
+    let class = status_error.class();
+    let api = status_error.api_error();
+    let safe_status = Some(status.as_u16())
+        .filter(|value| !response::reflects_credential_forms(&value.to_string(), credentials));
+    let error = Error::from_api(ApiError::without_fallback(
+        id,
+        safe_status,
+        response::sanitize_error_text(api.map_or("", ApiError::code), credentials),
+        response::sanitize_error_text(api.map_or("", ApiError::message), credentials),
+        false,
+    ));
+    if safe_status.is_none() && class != ErrorClass::Api {
+        error.with_cause(Error::new(class))
+    } else {
+        error
     }
 }
 
