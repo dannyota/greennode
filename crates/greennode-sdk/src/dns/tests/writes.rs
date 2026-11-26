@@ -340,3 +340,163 @@ async fn a_delete_probe_preserves_404_when_the_error_body_exceeds_its_cap() {
         .unwrap();
     assert_eq!(server.requests(), 3);
 }
+
+#[tokio::test]
+async fn settlement_diagnostics_omit_unsafe_ids() {
+    use crate::{CredentialsProvider, Token};
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    struct FailsAfterCreation(AtomicBool);
+
+    impl CredentialsProvider for FailsAfterCreation {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+            let result = if self.0.swap(true, Ordering::Relaxed) {
+                Err(Error::provider_failed())
+            } else {
+                Ok(Token::new(Secret::new(BEARER), None))
+            };
+            Box::pin(ready(result))
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+
+    let encoded = "%73ynthetic-sdk-dns-bearer";
+    let (ctx, _) = RequestContext::new();
+    let mut screened = Vec::new();
+    for (id, fails_signin) in [
+        (encoded, false),
+        (BEARER, false),
+        ("untracked-zone-id", true),
+    ] {
+        let created = format!(r#"{{"data":{{"hostedZoneId":"{id}"}}}}"#);
+        let server = Server::start(vec![response("200 OK", &created)]);
+        let client = if fails_signin {
+            let config = Config::new(
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_credentials_provider(Arc::new(FailsAfterCreation(AtomicBool::new(false))))
+                    .with_endpoint_overrides(EndpointOverrides {
+                        dns: Some(server.origin.clone()),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
+            config
+                .session()
+                .set_test_product_root(server.root_der.clone());
+            Client::new(&config)
+        } else {
+            client(&server, BEARER)
+        };
+        let failure = client
+            .create_hosted_zone(
+                &ctx,
+                CreateHostedZoneInput::new("example.test", vec!["vpc-1".into()]),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+        let message = failure
+            .error()
+            .detail::<String>()
+            .map(String::as_str)
+            .or_else(|| failure.error().api_error().map(ApiError::message))
+            .unwrap();
+        assert!(message.contains("hosted zone"));
+        screened.push(!message.contains(id));
+        if fails_signin {
+            assert!(failure.partial().is_none());
+        }
+        assert_eq!(server.requests(), 1);
+    }
+    assert_eq!(screened, [true, true, true]);
+}
+
+#[tokio::test]
+async fn a_settlement_error_keeps_the_actual_api_failure() {
+    let server = Server::start(vec![
+        response("200 OK", ZONE),
+        response("204 No Content", ""),
+        response("404 Not Found", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .update_record(
+            &ctx,
+            UpdateRecordInput {
+                ttl: Some(40),
+                no_wait: true,
+                ..UpdateRecordInput::new("zone-1", "record-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(404));
+    assert!(failure.error().has_class(ErrorClass::NotFound));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_some());
+}
+
+#[tokio::test]
+async fn partial_dns_resources_withhold_malformed_and_credential_bearing_ids() {
+    let encoded = "%73ynthetic-sdk-dns-bearer";
+    let zone_response = json!({"data": {
+        "hostedZoneId": encoded,
+        "assocVpcIds": ["vpc-1", BEARER, "malformed/id"],
+        "assocVpcMapRegion": [{"vpcId":encoded,"region":"hcm-3"}]
+    }})
+    .to_string();
+    let record_response = json!({"data": {
+        "recordId": "record/bad",
+        "hostedZoneId": encoded
+    }})
+    .to_string();
+    let server = Server::start(vec![
+        response("200 OK", &zone_response),
+        response("200 OK", ZONE),
+        response("200 OK", &record_response),
+        response("200 OK", ZONE),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, BEARER);
+    let zone = client
+        .create_hosted_zone(
+            &ctx,
+            CreateHostedZoneInput::new("example.test", vec!["vpc-1".into()]),
+        )
+        .await
+        .unwrap_err();
+    let record = client
+        .create_record(&ctx, CreateRecordInput::new("zone-1", "A", vec![]))
+        .await
+        .unwrap_err();
+    assert_eq!(zone.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(record.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    let zone = serde_json::to_value(zone.partial().unwrap()).unwrap();
+    let record = serde_json::to_value(record.partial().unwrap()).unwrap();
+    let screened = [
+        zone["HostedZone"]["ID"] == "<redacted>",
+        zone["HostedZone"]["AssociatedVPCIDs"] == json!(["vpc-1", "<redacted>", "<redacted>"]),
+        zone["HostedZone"]["AssocVPCMapRegion"][0]["VPCID"] == "<redacted>",
+        record["Record"]["ID"] == "<redacted>",
+        record["Record"]["HostedZoneID"] == "<redacted>",
+    ];
+    assert_eq!(screened, [true; 5]);
+    assert_eq!(server.requests(), 4);
+}

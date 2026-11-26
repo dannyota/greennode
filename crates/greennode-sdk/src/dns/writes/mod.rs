@@ -42,10 +42,7 @@ impl Client {
     ) -> Result<CreateHostedZoneOutput, Failure<CreateHostedZoneOutput>> {
         require(
             CREATE_ZONE,
-            &[
-                ("DomainName", !input.domain_name.is_empty()),
-                ("VPCIDs", !input.vpc_ids.is_empty()),
-            ],
+            &[("DomainName", !input.domain_name.is_empty())],
         )?;
         let body = encode(&CreateZoneBody {
             domain_name: &input.domain_name,
@@ -136,7 +133,7 @@ impl Client {
                 ))
                 .with_cause(error);
             return Err(flow.after_write(error, || UpdateHostedZoneOutput {
-                hosted_zone: flow.clean(fallback),
+                hosted_zone: flow.clean_partial(fallback),
             }));
         }
         let description = fallback.description.clone();
@@ -188,7 +185,6 @@ impl Client {
             &[
                 ("HostedZoneID", !zone_id.is_empty()),
                 ("Type", !input.record_type.is_empty()),
-                ("Values", !input.values.is_empty()),
             ],
         )?;
         validate_ids(CREATE_RECORD, &[("HostedZoneID", zone_id)])

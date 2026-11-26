@@ -21,7 +21,7 @@ impl<T: DeserializeOwned + Default + Resource> Output for Detail<Option<T>> {
     }]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        decode(operation, response)
+        decode(operation, response, true)
     }
 }
 
@@ -52,7 +52,7 @@ impl Output for Detail<Option<ZoneSnapshot>> {
     const SCHEMA: Shape<'static> = Detail::<Option<HostedZone>>::SCHEMA;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        decode(operation, response)
+        decode(operation, response, true)
     }
 }
 
@@ -63,7 +63,7 @@ impl Output for Acknowledgement {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        decode(operation, response)
+        decode(operation, response, true)
     }
 }
 

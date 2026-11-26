@@ -4,6 +4,7 @@ use greennode_sdk::dns::{
 };
 use greennode_sdk::{Config, RequestContext};
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use super::{HOSTED_ZONE_ID, RECORD_ID, check_input_source};
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
@@ -119,13 +120,7 @@ const CREATE_ZONE_INPUT: InputDescriptor<CreateHostedZoneInput> = descriptor(
             scalar,
             Requirement::Nonzero(|input| !input.domain_name.is_empty())
         ),
-        input_field!(
-            "VPCIDs",
-            VPCS,
-            vpc_ids,
-            array,
-            Requirement::Nonzero(|input| !input.vpc_ids.is_empty())
-        ),
+        input_field!("VPCIDs", VPCS, vpc_ids, array, Requirement::Presence),
         input_field!(
             "Description",
             DESCRIPTION,
@@ -183,7 +178,7 @@ const CREATE_RECORD_INPUT: InputDescriptor<CreateRecordInput> = descriptor(
                 Ok(())
             },
             set_flag: None,
-            requirement: Requirement::Nonzero(|input| !input.values.is_empty()),
+            requirement: Requirement::Presence,
         },
         input_field!(
             "SubDomain",
@@ -269,27 +264,40 @@ const DELETE_RECORD_INPUT: InputDescriptor<DeleteRecordInput> = descriptor(
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct JsonRecordValue {
-    #[serde(alias = "Value")]
     value: Option<String>,
-    #[serde(alias = "Location")]
     location: Option<String>,
-    #[serde(alias = "Weight")]
     weight: Option<i64>,
 }
 
-fn values(value: serde_json::Value) -> Result<Vec<RecordValue>, ()> {
-    let values: Vec<Option<JsonRecordValue>> = serde_json::from_value(value).map_err(|_| ())?;
-    Ok(values
-        .into_iter()
-        .map(|value| {
-            let value = value.unwrap_or_default();
-            RecordValue {
-                value: value.value.unwrap_or_default(),
-                location: value.location,
-                weight: value.weight.map(DnsField::Value),
-            }
-        })
-        .collect())
+fn values(value: Value) -> Result<Vec<RecordValue>, ()> {
+    let Value::Array(items) = value else {
+        return Err(());
+    };
+    items.into_iter().map(record_value).collect()
+}
+
+fn record_value(value: Value) -> Result<RecordValue, ()> {
+    let fields = match value {
+        Value::Null => return Ok(RecordValue::default()),
+        Value::Object(fields) => fields,
+        _ => return Err(()),
+    };
+    let mut normalized = Map::new();
+    for (name, value) in fields {
+        if normalized
+            .insert(name.to_ascii_lowercase(), value)
+            .is_some()
+        {
+            return Err(());
+        }
+    }
+    let value: JsonRecordValue =
+        serde_json::from_value(Value::Object(normalized)).map_err(|_| ())?;
+    Ok(RecordValue {
+        value: value.value.unwrap_or_default(),
+        location: value.location,
+        weight: value.weight.map(DnsField::Value),
+    })
 }
 
 const WAIT_NOTE: &str = "Each readiness or settlement wait shares the earlier of the caller's deadline and 60 seconds. Sends the write once. Read the current state before another write if the outcome is uncertain.";

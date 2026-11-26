@@ -221,6 +221,7 @@ pub(super) trait Resource: Default {
     const SHAPE: Shape<'static>;
 
     fn redact(&mut self, credentials: &SentCredentials);
+    fn redact_ids(&mut self, keep: impl Fn(&str) -> bool);
 }
 
 impl Resource for HostedZone {
@@ -268,6 +269,19 @@ impl Resource for HostedZone {
             &mut self.updated_at,
             credentials,
         );
+    }
+
+    fn redact_ids(&mut self, keep: impl Fn(&str) -> bool) {
+        for id in std::iter::once(&mut self.id)
+            .chain(&mut self.associated_vpc_ids)
+            .chain(
+                self.assoc_vpc_map_region
+                    .iter_mut()
+                    .map(|association| &mut association.vpc_id),
+            )
+        {
+            redact_id(id, &keep);
+        }
     }
 }
 
@@ -320,6 +334,18 @@ impl Resource for Record {
             &mut self.updated_at,
             credentials,
         );
+    }
+
+    fn redact_ids(&mut self, keep: impl Fn(&str) -> bool) {
+        for id in [&mut self.id, &mut self.hosted_zone_id] {
+            redact_id(id, &keep);
+        }
+    }
+}
+
+fn redact_id(id: &mut String, keep: &impl Fn(&str) -> bool) {
+    if !id.is_empty() && !keep(id) {
+        *id = REDACTED.into();
     }
 }
 

@@ -520,3 +520,142 @@ async fn partial_dns_write_output_ignores_query_and_omits_nested_http_status() {
     assert!(error["error"].get("status").is_none());
     assert!(error["error"].get("operation").is_none());
 }
+
+#[tokio::test]
+async fn dns_values_require_objects_and_accept_case_insensitive_member_names() {
+    let mut outcomes = Vec::new();
+    for command in ["create-record", "update-record"] {
+        for (input, accepted) in [
+            (r#"{"Values":[["192.0.2.1",null,0]]}"#, false),
+            (r#"{"Values":[{"VALUE":"192.0.2.1","wEiGhT":0}]}"#, true),
+            (r#"{"Values":[{"unknown":true}]}"#, false),
+        ] {
+            let server = Server::start(if command == "create-record" {
+                vec![response("200 OK", ZONE), response("200 OK", RECORD)]
+            } else {
+                vec![
+                    response("200 OK", ZONE),
+                    response("204 No Content", ""),
+                    response("200 OK", RECORD),
+                ]
+            });
+            let mut args = vec![
+                command,
+                "--hosted-zone-id",
+                "zone-1",
+                "--no-wait",
+                "--cli-input-json",
+                input,
+            ];
+            args.extend(if command == "create-record" {
+                ["--type", "A"]
+            } else {
+                ["--record-id", "record-1"]
+            });
+            let (status, _, _) = invoke(&server, BEARER, &args).await;
+            let expected = if accepted {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(2)
+            };
+            outcomes.push(status == expected);
+            if accepted && status == ExitCode::SUCCESS {
+                let body: serde_json::Value = serde_json::from_slice(&server.bodies()[1]).unwrap();
+                assert_eq!(
+                    body["value"],
+                    serde_json::json!([{"value":"192.0.2.1","weight":0}])
+                );
+            } else if !accepted && status == ExitCode::from(2) {
+                assert_eq!(server.requests(), 0);
+            }
+        }
+    }
+    assert!(outcomes.into_iter().all(std::convert::identity));
+}
+
+#[tokio::test]
+async fn dns_write_conflict_uses_status_code_when_the_response_omits_a_code() {
+    let server = Server::start(vec![response(
+        "409 Conflict",
+        r#"{"message":"zone already exists"}"#,
+    )]);
+    let (status, stdout, stderr) = invoke(
+        &server,
+        BEARER,
+        &[
+            "create-hosted-zone",
+            "--domain-name",
+            "example.test",
+            "--vpc-ids",
+            "vpc-1",
+            "--no-wait",
+        ],
+    )
+    .await;
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(
+        error["error"],
+        serde_json::json!({"code":"Conflict","message":"zone already exists","status":409,"operation":"dns.CreateHostedZone"})
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn dns_create_preserves_empty_lists_and_rejects_missing_lists() {
+    let mut outcomes = Vec::new();
+    for (command, member, json_key, flags, replies, body_index) in [
+        (
+            "create-hosted-zone",
+            "assocVpcIds",
+            "VPCIDs",
+            ["--domain-name", "example.test"],
+            vec![("200 OK", ZONE)],
+            0,
+        ),
+        (
+            "create-record",
+            "value",
+            "Values",
+            ["--hosted-zone-id", "zone-1"],
+            vec![("200 OK", ZONE), ("200 OK", RECORD)],
+            1,
+        ),
+    ] {
+        for (input, accepted) in [
+            (format!(r#"{{"{json_key}":[]}}"#), true),
+            ("{}".into(), false),
+            (format!(r#"{{"{json_key}":null}}"#), false),
+        ] {
+            let server = Server::start(
+                replies
+                    .iter()
+                    .map(|(status, body)| response(status, body))
+                    .collect(),
+            );
+            let mut args = vec![command, "--no-wait", "--cli-input-json", &input];
+            args.extend(flags);
+            if command == "create-record" {
+                args.extend(["--type", "A"]);
+            }
+            let (status, _, _) = invoke(&server, BEARER, &args).await;
+            outcomes.push(
+                status
+                    == if accepted {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(2)
+                    },
+            );
+            if status == ExitCode::SUCCESS {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&server.bodies()[body_index]).unwrap();
+                assert_eq!(body[member], serde_json::json!([]));
+            } else {
+                assert_eq!(server.requests(), 0);
+            }
+        }
+    }
+    assert!(outcomes.into_iter().all(std::convert::identity));
+}

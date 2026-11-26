@@ -74,7 +74,7 @@ impl<T: DeserializeOwned + Resource> Output for PageResponse<T> {
     ]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        let mut decoded: Self = decode(operation, response)?;
+        let mut decoded: Self = decode(operation, response, false)?;
         let page = &mut decoded.page;
         decoded.incomplete = matches!(page.total_page, Field::Value(total) if total > 1)
             || matches!(page.total_item, Field::Value(total) if total > page.items.len() as i64);
@@ -107,7 +107,7 @@ impl<T: DeserializeOwned + Resource> Output for Detail<T> {
     }]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        let mut decoded: Self = decode(operation, response)?;
+        let mut decoded: Self = decode(operation, response, false)?;
         decoded.data.redact(&response.credentials);
         Ok(decoded)
     }
@@ -116,6 +116,7 @@ impl<T: DeserializeOwned + Resource> Output for Detail<T> {
 pub(super) fn decode<T: Output>(
     operation: &Operation,
     response: &Response,
+    status_code_fallback: bool,
 ) -> Result<T, Box<Error>> {
     if !operation.success.contains(&response.status) {
         return crate::wire::product::response::classify(
@@ -123,7 +124,7 @@ pub(super) fn decode<T: Output>(
             response.status,
             bytes::Bytes::copy_from_slice(&response.body),
             operation.success,
-            (false, operation.sensitive, operation.retry),
+            (status_code_fallback, operation.sensitive, operation.retry),
             &response.credentials,
         )
         .map(|_| T::default());

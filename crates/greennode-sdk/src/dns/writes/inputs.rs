@@ -7,7 +7,7 @@ use super::super::{GetHostedZoneOutput, GetRecordOutput, RecordValue};
 pub struct CreateHostedZoneInput {
     /// Domain name of the hosted zone.
     pub domain_name: String,
-    /// One or more associated VPC identifiers.
+    /// Associated VPC identifiers. An empty list is sent as supplied.
     pub vpc_ids: Vec<String>,
     /// Description to send when creating the zone.
     pub description: String,
@@ -88,7 +88,7 @@ pub struct CreateRecordInput {
     pub hosted_zone_id: String,
     /// DNS record type.
     pub record_type: String,
-    /// One or more record values.
+    /// Record values. An empty list is sent as supplied.
     pub values: Vec<RecordValue>,
     /// Relative record name. An empty value selects the apex.
     pub sub_domain: String,

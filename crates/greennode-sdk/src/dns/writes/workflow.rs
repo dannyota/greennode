@@ -16,9 +16,7 @@ use crate::wire::product::{
     options::Options,
     redirect::{Classification, Retry},
 };
-use crate::{
-    ApiError, Clock, ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch,
-};
+use crate::{Clock, ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 pub(super) const ZONES: &str = "v1/dns/hosted-zone";
 pub(super) const ZONE: &str = "v1/dns/hosted-zone/{}";
@@ -203,12 +201,12 @@ impl<'a> Workflow<'a> {
                 flow.diagnostic(
                     ErrorClass::Api,
                     &format!(
-                        "dns: zone busy: {}: hosted zone {} was not confirmed ready within 1m0s",
+                        "dns: zone busy: {}: {} was not confirmed ready within 1m0s",
                         flow.id,
-                        flow.safe_id(zone_id)
+                        flow.zone_label(zone_id)
                     ),
                 )
-                .with_detail(ErrorDetail::ZoneBusy)
+                .with_outer_detail(ErrorDetail::ZoneBusy)
             },
             async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, zone_id).await?;
@@ -227,13 +225,13 @@ impl<'a> Workflow<'a> {
         settled: impl Fn(&HostedZone) -> bool,
         output: impl Fn(HostedZone) -> O,
     ) -> Result<O, Failure<O>> {
-        let resource = format!("hosted zone {}", self.safe_id(id));
+        let resource = |flow: &Self| flow.zone_label(id);
         let mut last = fallback;
         let result = if no_wait {
             self.zone(self.ctx, id).await.map(|zone| last = zone)
         } else {
             self.poll(
-                |flow| flow.unconfirmed(&format!("{resource} was accepted; do not send the same write again")),
+                |flow| flow.unconfirmed(&format!("{} was accepted; do not send the same write again", resource(flow))),
                 async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, id).await?;
                 last = zone;
@@ -241,14 +239,14 @@ impl<'a> Workflow<'a> {
                     Ok(Some(()))
                 } else if last.status == ERROR {
                     Err(Box::new(flow.diagnostic(ErrorClass::Failed, &format!(
-                        "vngcloud: write failed: {}: {resource} is ERROR; every associated VPC needs Private DNS ENABLED, not ENABLING", flow.id,
+                        "vngcloud: write failed: {}: {} is ERROR; every associated VPC needs Private DNS ENABLED, not ENABLING", flow.id, resource(flow),
                     ))))
                 } else {
                     Ok(None)
                 }
             }).await
         };
-        self.finish(result, last, &resource, output)
+        self.finish(result, last, &resource(self), output)
     }
 
     pub(super) async fn settle_record<O>(
@@ -260,15 +258,7 @@ impl<'a> Workflow<'a> {
         output: impl Fn(Record) -> O,
     ) -> Result<O, Failure<O>> {
         let (zone_id, id) = path;
-        let resource = if no_wait {
-            format!("record {}", self.safe_id(id))
-        } else {
-            format!(
-                "record {} in hosted zone {}",
-                self.safe_id(id),
-                self.safe_id(zone_id)
-            )
-        };
+        let resource = |flow: &Self| flow.record_label(id, (!no_wait).then_some(zone_id));
         let mut last = fallback;
         let result = if no_wait {
             self.record(self.ctx, zone_id, id)
@@ -278,7 +268,8 @@ impl<'a> Workflow<'a> {
             self.poll(
                 |flow| {
                     flow.unconfirmed(&format!(
-                        "{resource} was accepted; do not send the same write again"
+                        "{} was accepted; do not send the same write again",
+                        resource(flow)
                     ))
                 },
                 async |flow: &mut Self, ctx: &RequestContext| {
@@ -287,7 +278,11 @@ impl<'a> Workflow<'a> {
                     if zone.status == ERROR || last.status == ERROR {
                         Err(Box::new(flow.diagnostic(
                             ErrorClass::Failed,
-                            &format!("vngcloud: write failed: {}: {resource} is ERROR", flow.id),
+                            &format!(
+                                "vngcloud: write failed: {}: {} is ERROR",
+                                flow.id,
+                                resource(flow)
+                            ),
                         )))
                     } else {
                         Ok((zone.status == ACTIVE && settled(&last, &zone)).then_some(()))
@@ -296,7 +291,7 @@ impl<'a> Workflow<'a> {
             )
             .await
         };
-        self.finish(result, last, &resource, output)
+        self.finish(result, last, &resource(self), output)
     }
 
     pub(super) async fn wait_gone<O>(
@@ -305,18 +300,17 @@ impl<'a> Workflow<'a> {
         record_id: Option<&str>,
         output: O,
     ) -> Result<O, Failure<O>> {
-        let resource = match record_id {
-            Some(id) => format!(
-                "record {} in hosted zone {}",
-                self.safe_id(id),
-                self.safe_id(zone_id)
-            ),
-            None => format!("hosted zone {}", self.safe_id(zone_id)),
+        let resource = |flow: &Self| match record_id {
+            Some(id) => flow.record_label(id, Some(zone_id)),
+            None => flow.zone_label(zone_id),
         };
         let result = self
             .poll(
                 |flow| {
-                    flow.unconfirmed(&format!("{resource} was accepted; do not delete it again"))
+                    flow.unconfirmed(&format!(
+                        "{} was accepted; do not delete it again",
+                        resource(flow)
+                    ))
                 },
                 async |flow: &mut Self, ctx: &RequestContext| {
                     let read = match record_id {
@@ -333,7 +327,9 @@ impl<'a> Workflow<'a> {
             .await;
         match result {
             Ok(()) => Ok(output),
-            Err(error) => Err(self.after_write(self.wrap_outcome(*error, &resource), || output)),
+            Err(error) => {
+                Err(self.after_write(self.wrap_outcome(*error, &resource(self)), || output))
+            }
         }
     }
 
@@ -370,6 +366,11 @@ impl<'a> Workflow<'a> {
         resource
     }
 
+    pub(super) fn clean_partial<T: Resource>(&self, mut resource: T) -> T {
+        resource.redact_ids(|id| self.can_show_id(id));
+        self.clean(resource)
+    }
+
     fn finish<T: Resource, O>(
         &self,
         result: Result<(), Box<Error>>,
@@ -377,10 +378,11 @@ impl<'a> Workflow<'a> {
         label: &str,
         output: impl Fn(T) -> O,
     ) -> Result<O, Failure<O>> {
-        let projected = || output(self.clean(resource));
         match result {
-            Ok(()) => Ok(projected()),
-            Err(error) => Err(self.after_write(self.wrap_outcome(*error, label), projected)),
+            Ok(()) => Ok(output(self.clean(resource))),
+            Err(error) => Err(self.after_write(self.wrap_outcome(*error, label), || {
+                output(self.clean_partial(resource))
+            })),
         }
     }
 
@@ -418,21 +420,36 @@ impl<'a> Workflow<'a> {
         } else {
             message
         };
-        Error::new(class).with_cause(Error::from_api(ApiError::without_fallback(
-            "",
-            None,
-            SafeText::new("", &[]),
-            safe,
-            false,
-        )))
+        Error::new(class).with_detail(safe.as_str().to_owned())
     }
 
-    fn safe_id<'s>(&self, id: &'s str) -> &'s str {
-        if self.evidence.credentials().reflects(id.as_bytes()) {
-            "<redacted>"
-        } else {
-            id
+    fn zone_label(&self, id: &str) -> String {
+        let mut label = String::from("hosted zone");
+        self.append_id(&mut label, id);
+        label
+    }
+
+    fn record_label(&self, record_id: &str, zone_id: Option<&str>) -> String {
+        let mut label = String::from("record");
+        self.append_id(&mut label, record_id);
+        if let Some(zone_id) = zone_id {
+            label.push_str(" in hosted zone");
+            self.append_id(&mut label, zone_id);
         }
+        label
+    }
+
+    fn append_id(&self, label: &mut String, id: &str) {
+        if self.can_show_id(id) {
+            label.push(' ');
+            label.push_str(id);
+        }
+    }
+
+    fn can_show_id(&self, id: &str) -> bool {
+        self.evidence.can_retain_partial()
+            && Options::DEFAULT.path_ids.allows(id)
+            && !self.evidence.credentials().reflects(id.as_bytes())
     }
 }
 
