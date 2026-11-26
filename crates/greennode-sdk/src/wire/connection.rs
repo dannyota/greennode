@@ -18,8 +18,8 @@ use std::{
 use tower_service::Service;
 
 #[derive(Clone)]
-pub(crate) struct DialConnector(
-    HttpConnector,
+pub(crate) struct DialConnector<C = HttpConnector>(
+    C,
     #[cfg(feature = "test-support")] Option<std::net::SocketAddr>,
 );
 
@@ -40,8 +40,14 @@ impl Error for DialFailure {
         Some(self.0.as_ref())
     }
 }
-impl Service<http::Uri> for DialConnector {
-    type Response = <HttpConnector as Service<http::Uri>>::Response;
+impl<C> Service<http::Uri> for DialConnector<C>
+where
+    C: Service<http::Uri> + Clone + Send + 'static,
+    C::Response: Send + 'static,
+    C::Error: Error + Send + Sync + 'static,
+    C::Future: Send + 'static,
+{
+    type Response = C::Response;
     type Error = DialFailure;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -51,9 +57,9 @@ impl Service<http::Uri> for DialConnector {
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
         #[cfg(any(test, feature = "test-support"))]
-        if !uri.host().is_some_and(test_host_allowed) {
+        let Some(host) = uri.host().and_then(test_host) else {
             return Box::pin(async { Err(test_dial_failure()) });
-        }
+        };
         #[cfg(feature = "test-support")]
         let uri = if let Some(address) = self.1 {
             if !uri
@@ -73,52 +79,65 @@ impl Service<http::Uri> for DialConnector {
         } else {
             uri
         };
+        #[cfg(feature = "test-support")]
+        let host = self.1.map_or(host, |address| TestHost::Ip(address.ip()));
         #[cfg(any(test, feature = "test-support"))]
         {
-            if uri
-                .host()
-                .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
-            {
-                let port = uri.port_u16().unwrap_or(443);
-                let mut connector = self.0.clone();
-                return Box::pin(async move {
-                    let addresses = tokio::net::lookup_host(("localhost", port))
+            let port = uri.port_u16().unwrap_or(443);
+            let mut connector = self.0.clone();
+            Box::pin(async move {
+                let addresses = match host {
+                    TestHost::Localhost => tokio::net::lookup_host(("localhost", port))
                         .await
                         .map_err(|_| test_dial_failure())?
-                        .collect::<Vec<_>>();
-                    if addresses.is_empty() || addresses.iter().any(|addr| !addr.ip().is_loopback())
-                    {
-                        return Err(test_dial_failure());
+                        .collect::<Vec<_>>(),
+                    TestHost::Ip(ip) => vec![std::net::SocketAddr::new(ip, port)],
+                };
+                if addresses.is_empty() || addresses.iter().any(|addr| !addr.ip().is_loopback()) {
+                    return Err(test_dial_failure());
+                }
+                let mut last = None;
+                for address in addresses {
+                    let pinned = format!("https://{address}")
+                        .parse()
+                        .map_err(|_| test_dial_failure())?;
+                    match connector.call(pinned).await {
+                        Ok(connection) => return Ok(connection),
+                        Err(error) => last = Some(error),
                     }
-                    let mut last = None;
-                    for address in addresses {
-                        let pinned = format!("https://{address}")
-                            .parse()
-                            .map_err(|_| test_dial_failure())?;
-                        match connector.call(pinned).await {
-                            Ok(connection) => return Ok(connection),
-                            Err(error) => last = Some(error),
-                        }
-                    }
-                    Err(last.map_or_else(test_dial_failure, |error| DialFailure(Box::new(error))))
-                });
-            }
+                }
+                Err(last.map_or_else(test_dial_failure, |error| DialFailure(Box::new(error))))
+            })
         }
-        let future = self.0.call(uri);
-        Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            let future = self.0.call(uri);
+            Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
+        }
     }
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn test_host_allowed(host: &str) -> bool {
+#[derive(Clone, Copy)]
+enum TestHost {
+    Localhost,
+    Ip(std::net::IpAddr),
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn test_host(host: &str) -> Option<TestHost> {
     let host = host
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
+    if host.eq_ignore_ascii_case("localhost") {
+        Some(TestHost::Localhost)
+    } else {
+        host.parse::<std::net::IpAddr>()
+            .ok()
+            .filter(std::net::IpAddr::is_loopback)
+            .map(TestHost::Ip)
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -278,53 +297,80 @@ pub(crate) fn client(
 mod tests {
     use super::Trust;
 
+    #[derive(Clone, Default)]
+    struct RecordingConnector(std::sync::Arc<std::sync::Mutex<Vec<http::Uri>>>);
+
+    impl tower_service::Service<http::Uri> for RecordingConnector {
+        type Response = ();
+        type Error = std::io::Error;
+        type Future = std::future::Ready<Result<(), std::io::Error>>;
+
+        fn poll_ready(
+            &mut self,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, uri: http::Uri) -> Self::Future {
+            self.0.lock().unwrap().push(uri);
+            std::future::ready(Err(std::io::Error::other("recorded")))
+        }
+    }
+
     #[tokio::test]
-    async fn requests_to_non_loopback_hosts_fail_before_connecting() {
+    async fn non_loopback_requests_never_reach_the_transport() {
         use std::error::Error;
         use tower_service::Service;
 
+        let recording = RecordingConnector::default();
         let mut connector = super::DialConnector(
-            hyper_util::client::legacy::connect::HttpConnector::new(),
+            recording.clone(),
             #[cfg(feature = "test-support")]
             None,
         );
         for uri in ["https://signin.greennode.ai", "https://192.0.2.1"] {
-            let error = match connector.call(uri.parse().unwrap()).await {
-                Ok(_) => panic!("non-loopback connection succeeded"),
-                Err(error) => error,
-            };
+            let error = connector.call(uri.parse().unwrap()).await.unwrap_err();
             assert_eq!(
                 error.source().unwrap().to_string(),
                 "test connections require loopback"
             );
         }
+        assert!(recording.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn signin_request_is_blocked_by_the_client() {
-        use std::error::Error;
+    async fn bracketed_localhost_reaches_transport_only_as_numeric_loopback() {
+        use tower_service::Service;
 
-        let client = super::client(false, super::HeadLimit::Api, Trust::webpki()).unwrap();
-        let error = client
-            .get("https://signin.greennode.ai/".parse().unwrap())
-            .await
-            .unwrap_err();
-        let mut source: Option<&(dyn Error + 'static)> = Some(&error);
-        let mut found = false;
-        while let Some(error) = source {
-            found |= error.to_string() == "test connections require loopback";
-            source = error.source();
+        let recording = RecordingConnector::default();
+        let mut connector = super::DialConnector(
+            recording.clone(),
+            #[cfg(feature = "test-support")]
+            None,
+        );
+        let _ = connector
+            .call("https://[localhost]:443".parse().unwrap())
+            .await;
+        let uris = recording.0.lock().unwrap();
+        assert!(!uris.is_empty());
+        for uri in uris.iter() {
+            let host = uri
+                .host()
+                .unwrap()
+                .trim_start_matches('[')
+                .trim_end_matches(']');
+            assert!(host.parse::<std::net::IpAddr>().unwrap().is_loopback());
         }
-        assert!(found);
     }
 
     #[test]
     fn test_host_guard_rejects_non_loopback_destinations() {
         for host in ["signin.greennode.ai", "192.0.2.1", "[::ffff:127.0.0.1]"] {
-            assert!(!super::test_host_allowed(host));
+            assert!(super::test_host(host).is_none());
         }
-        for host in ["localhost", "127.0.0.2", "[::1]"] {
-            assert!(super::test_host_allowed(host));
+        for host in ["localhost", "[localhost]", "127.0.0.2", "[::1]"] {
+            assert!(super::test_host(host).is_some());
         }
     }
 
