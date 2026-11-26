@@ -6,6 +6,7 @@ mod cache;
 mod clock;
 mod config;
 mod context;
+mod discovery;
 mod endpoint;
 mod error;
 mod event;

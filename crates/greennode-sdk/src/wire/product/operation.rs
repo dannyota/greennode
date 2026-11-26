@@ -19,6 +19,7 @@ pub(crate) struct Operation {
     pub(crate) keep_status: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
+    pub(crate) reject_reflected_credentials: bool,
     pub(crate) no_redirect: bool,
     pub(crate) retry_config: retry::Config,
 }
@@ -189,6 +190,13 @@ pub(crate) async fn execute<T: Output>(
         &response.credentials,
     )
     .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    if operation.reject_reflected_credentials && reflects_json(&body, &response.credentials) {
+        return Err(crate::Failure::new(
+            api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status),
+            None,
+            dispatch,
+        ));
+    }
     if operation.no_output {
         return Ok((status, T::default()));
     }
@@ -200,6 +208,40 @@ pub(crate) async fn execute<T: Output>(
         )
     })?;
     Ok((status, output))
+}
+
+fn reflects_json(body: &[u8], credentials: &sender::SentCredentials) -> bool {
+    if credentials.reflects(body)
+        || serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err()
+    {
+        return true;
+    }
+    let mut index = 0;
+    while index < body.len() {
+        if body[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < body.len() && body[index] != b'"' {
+            if body[index] == b'\\' {
+                index += 1;
+            }
+            index += 1;
+        }
+        if index >= body.len() {
+            return true;
+        }
+        let Ok(value) = serde_json::from_slice::<String>(&body[start..=index]) else {
+            return true;
+        };
+        if credentials.reflects(value.as_bytes()) {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -337,6 +379,7 @@ mod tests {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: false,
+            reject_reflected_credentials: false,
             no_redirect: false,
             retry_config: retry::Config::default(),
         }
@@ -598,6 +641,46 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert_eq!(error.error().class(), crate::ErrorClass::NotFound);
         assert_eq!(error.error().api_error().unwrap().status(), Some(404));
+    }
+
+    #[tokio::test]
+    async fn reflected_success_bearer_is_rejected_when_enabled() {
+        let escaped = format!(r#"{{"id":"toy{}u002dtoken"}}"#, char::from(92));
+        for body in [br#"{"id":"toy-token"}"#.as_slice(), escaped.as_bytes()] {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let mut op = declaration();
+            op.reject_reflected_credentials = true;
+            let Err(failure) = call(&server, &op, &["one"]).await else {
+                panic!("reflected response accepted");
+            };
+            assert_eq!(failure.error().class(), crate::ErrorClass::Api);
+            assert_eq!(
+                failure.error().detail::<StatusCode>(),
+                Some(&StatusCode::OK)
+            );
+        }
+        let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
+        assert!(call(&server, &declaration(), &["one"]).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rejects_escaped_bearer_with_invalid_ignored_string() {
+        let body = format!(
+            r#"{{"id":"one","ignored":"{}ud800","name":"toy{}u002dtoken"}}"#,
+            char::from(92),
+            char::from(92)
+        );
+        assert!(serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err());
+        let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+        let mut op = declaration();
+        op.reject_reflected_credentials = true;
+        op.no_output = true;
+        assert!(call(&server, &op, &["one"]).await.is_err());
+        let server = Server::start(vec![response(
+            "200 OK",
+            br#"{"id":"one","ignored":1e1000}"#,
+        )]);
+        assert!(call(&server, &op, &["one"]).await.is_ok());
     }
 
     #[tokio::test]
