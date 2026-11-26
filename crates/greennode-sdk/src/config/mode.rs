@@ -10,8 +10,11 @@ pub(super) enum Presence {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Mode {
+/// The selected configuration family.
+pub enum Mode {
+    /// GreenNode configuration.
     Greennode,
+    /// Legacy VNG Cloud configuration.
     Legacy,
 }
 
@@ -22,21 +25,38 @@ pub(super) enum ConfigSlot {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) struct Paths {
+/// Selected paths and their origins.
+pub struct Paths {
+    /// Selected configuration family.
     pub mode: Mode,
+    /// Configuration file path, if a home or override was supplied.
     pub config: Option<PathBuf>,
+    /// Credentials file path, if a home or override was supplied.
     pub credentials: Option<PathBuf>,
+    /// Whether the configuration path was explicitly supplied.
     pub config_named: bool,
+    /// Whether the credentials path was explicitly supplied.
     pub credentials_named: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct Selection {
-    pub paths: Paths,
-    pub config_present: bool,
-    pub credentials_present: bool,
-    pub config_source: Option<&'static str>,
-    pub credentials_source: Option<&'static str>,
+/// A snapshot of the selected paths and their observed presence.
+pub struct Selection {
+    pub(super) paths: Paths,
+    pub(super) config_present: bool,
+    pub(super) credentials_present: bool,
+    pub(super) config_source: Option<&'static str>,
+    pub(super) credentials_source: Option<&'static str>,
+}
+
+impl Selection {
+    /// Reports whether the selected slot was present when selection ran.
+    pub fn present(&self, slot: crate::FileSlot) -> bool {
+        match slot {
+            crate::FileSlot::Config => self.config_present,
+            crate::FileSlot::Credentials => self.credentials_present,
+        }
+    }
 }
 
 impl std::ops::Deref for Selection {
