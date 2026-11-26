@@ -64,9 +64,14 @@ fn interactive_configure_requires_terminal_stdin() {
     let output = home.run(&["configure"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.contains("InvalidUsage"));
-    assert!(error.contains("configure set <key> -"));
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("configure set <key> -")
+    );
     assert!(!home.0.join(".greennode").exists());
 }
 

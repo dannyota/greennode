@@ -197,17 +197,55 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
     }
 }
 
+fn write_string(writer: &mut dyn Write, value: &str) -> std::io::Result<()> {
+    write!(writer, "\"")?;
+    for ch in value.chars() {
+        match ch {
+            '"' => write!(writer, "\\\"")?,
+            '\\' => write!(writer, "\\\\")?,
+            '\n' => write!(writer, "\\n")?,
+            '\r' => write!(writer, "\\r")?,
+            '\t' => write!(writer, "\\t")?,
+            '\u{8}' => write!(writer, "\\b")?,
+            '\u{c}' => write!(writer, "\\f")?,
+            '\0'..='\u{1f}' | '<' | '>' | '&' | '\u{2028}' | '\u{2029}' => {
+                write!(writer, "\\u{:04x}", u32::from(ch))?
+            }
+            _ => write!(writer, "{ch}")?,
+        }
+    }
+    write!(writer, "\"")
+}
+
 pub fn write_error(writer: &mut dyn Write, envelope: &Envelope<'_>) {
     let _ = write!(writer, "{{\"error\":{{\"code\":");
-    let _ = serde_json::to_writer(&mut *writer, envelope.code);
+    let _ = write_string(writer, envelope.code);
     let _ = write!(writer, ",\"message\":");
-    let _ = serde_json::to_writer(&mut *writer, envelope.message);
+    let _ = write_string(writer, envelope.message);
     if let Some(status) = envelope.status {
         let _ = write!(writer, ",\"status\":{status}");
     }
     if let Some(operation) = envelope.operation {
         let _ = write!(writer, ",\"operation\":");
-        let _ = serde_json::to_writer(&mut *writer, operation);
+        let _ = write_string(writer, operation);
     }
     let _ = writeln!(writer, "}}}}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Envelope, write_error};
+
+    #[test]
+    fn error_envelope_uses_go_json_escaping() {
+        let envelope = Envelope {
+            code: "<code>",
+            message: "missing <path> & \"file\"\n\u{2028}\u{2029}\u{007f}",
+            status: Some(400),
+            operation: Some("a&b"),
+        };
+        let mut output = Vec::new();
+        write_error(&mut output, &envelope);
+        assert_eq!(output, "{\"error\":{\"code\":\"\\u003ccode\\u003e\",\"message\":\"missing \\u003cpath\\u003e \\u0026 \\\"file\\\"\\n\\u2028\\u2029\u{007f}\",\"status\":400,\"operation\":\"a\\u0026b\"}}\n".as_bytes());
+    }
 }
