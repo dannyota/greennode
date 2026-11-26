@@ -486,7 +486,8 @@ async fn run_inner(
                     || name == http::header::CONTENT_TYPE)
                     && value.as_bytes() == b"application/json";
                 !fixed_json
-                    && (sent.reflects(value.as_bytes())
+                    && (reflection.reflects(value.as_bytes())
+                        || sent.reflects(value.as_bytes())
                         || pending
                             .iter()
                             .any(|secret| contains_secret(value.as_bytes(), secret)))

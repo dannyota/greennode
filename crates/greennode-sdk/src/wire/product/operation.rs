@@ -1,3 +1,5 @@
+use super::evidence::{Evidence, may_reflect_rendered_number};
+use super::options::Options;
 use super::{redirect, retry, sender};
 use crate::wire::send;
 use crate::wire::strict_json::Shape;
@@ -34,6 +36,44 @@ pub(crate) async fn execute<T: Output>(
     source: &dyn sender::BearerSource,
     body: bytes::Bytes,
 ) -> Result<(StatusCode, T), crate::Failure<T>> {
+    execute_with_evidence(
+        runtime,
+        base,
+        operation,
+        &Options::DEFAULT,
+        path,
+        query,
+        source,
+        body,
+        &mut Evidence::new(),
+    )
+    .await
+}
+
+#[allow(dead_code, clippy::result_large_err, clippy::too_many_arguments)]
+pub(crate) async fn execute_with_evidence<T: Output>(
+    runtime: sender::Runtime<'_>,
+    base: &crate::endpoint::Base,
+    operation: &Operation,
+    options: &Options,
+    path: &[&str],
+    query: &[(&str, &str)],
+    source: &dyn sender::BearerSource,
+    body: bytes::Bytes,
+    evidence: &mut Evidence,
+) -> Result<(StatusCode, T), crate::Failure<T>> {
+    if let Some(credentials) = runtime.configured_credentials {
+        evidence.absorb(credentials);
+    }
+    let runtime = sender::Runtime {
+        configured_credentials: Some(evidence.credentials()),
+        client: runtime.client,
+        ctx: runtime.ctx,
+        clock: runtime.clock,
+        deadline: runtime.deadline,
+        sleeper: runtime.sleeper,
+        jitter: runtime.jitter,
+    };
     let dispatch = if matches!(operation.class, redirect::Classification::Write) {
         crate::WriteDispatch::NotSent
     } else {
@@ -46,10 +86,7 @@ pub(crate) async fn execute<T: Output>(
             dispatch,
         )
     };
-    if path
-        .iter()
-        .any(|id| id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
-    {
+    if path.iter().any(|id| !options.path_ids.allows(id)) {
         return Err(invalid());
     }
     let mut parts = operation.template.split("{}");
@@ -89,6 +126,9 @@ pub(crate) async fn execute<T: Output>(
             http::HeaderValue::from_static("application/json"),
         );
     }
+    options
+        .apply_headers(&mut headers)
+        .map_err(|()| invalid())?;
     let request = sender::Request {
         url,
         headers,
@@ -112,6 +152,7 @@ pub(crate) async fn execute<T: Output>(
     {
         Ok(response) => response,
         Err(failure) => {
+            evidence.absorb(&failure.credentials);
             if let Some(error) = T::credential_error(operation, &failure.credentials) {
                 return Err(crate::Failure::new(*error, None, failure.dispatch));
             }
@@ -186,6 +227,7 @@ pub(crate) async fn execute<T: Output>(
             return Err(crate::Failure::new(error, None, failure.dispatch));
         }
     };
+    evidence.absorb(&response.credentials);
     let status = response.status;
     let dispatch = if matches!(operation.class, redirect::Classification::Write) {
         crate::WriteDispatch::MayHaveBeenSent
@@ -236,13 +278,7 @@ pub(crate) fn reflects_json(
     if credentials.reflects(body) {
         return Some(true);
     }
-    let numeric_match_possible = check_rendered_numbers
-        && credentials.values().iter().any(|secret| {
-            secret
-                .expose_secret()
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e'))
-        });
+    let numeric_match_possible = check_rendered_numbers && may_reflect_rendered_number(credentials);
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {
@@ -513,6 +549,8 @@ mod tests {
         )
         .await
     }
+
+    mod evidence;
 
     #[tokio::test]
     async fn bearer_matching_static_json_headers_sends() {
