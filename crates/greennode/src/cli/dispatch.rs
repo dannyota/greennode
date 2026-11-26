@@ -7,7 +7,9 @@ use std::io::Write;
 use std::pin::Pin;
 
 use clap::ArgMatches;
-use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, Failure, RequestContext};
+use greennode_sdk::{
+    Clock, Config, ConfigOptions, ConfigSource, Error, ErrorClass, Failure, RequestContext,
+};
 
 use super::input::{self, InputDescriptor, ParsedOperationInput};
 use super::op::{Kind, Operation};
@@ -316,6 +318,13 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         self.view
     }
 
+    fn advice(&self, error: &Error) -> Option<&'static str> {
+        error
+            .detail::<&'static str>()
+            .copied()
+            .filter(|_| error.has_identity(ErrorClass::InvalidInput))
+    }
+
     fn execute<'a>(
         &'a mut self,
         ctx: &'a RequestContext,
@@ -380,6 +389,11 @@ pub(crate) async fn management_with_view<T: Send + 'static>(
         invocation.clock,
         invocation.stdout,
         invocation.stderr,
+        operation
+            .sdk_operation
+            .split_once('.')
+            .filter(|_| matches.get_one::<bool>("debug") == Some(&true))
+            .map(|(service, _)| (service, operation.name)),
     )
     .await
 }
@@ -458,6 +472,7 @@ pub async fn run<I: ParsedInput, A: Adapter<I>>(
         &greennode_sdk::SystemClock,
         stdout,
         stderr,
+        None,
     )
     .await
 }
@@ -469,6 +484,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     clock: &dyn Clock,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
+    write_debug: Option<(&'static str, &'static str)>,
 ) -> u8 {
     if let Some(end) = ctx.check(clock) {
         let error = Error::from(end);
@@ -574,7 +590,18 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
         return refuse(input, adapter, error, stdout, stderr);
     }
     let view = adapter.output_view();
-    match adapter.execute(ctx, &settings, input).await {
+    let log_write = |stderr: &mut dyn Write, message| {
+        if let Some((service, name)) = write_debug.filter(|_| input.is_write()) {
+            let _ = writeln!(
+                stderr,
+                "level=DEBUG msg=\"{message}\" operation=\"{service} {name}\""
+            );
+        }
+    };
+    log_write(stderr, "write started");
+    let result = adapter.execute(ctx, &settings, input).await;
+    log_write(stderr, "write finished");
+    match result {
         Ok(Some(output)) => match output
             .map_err(OutputError::from)
             .and_then(|output| render_output(stdout, &output, format, query.as_ref(), view))

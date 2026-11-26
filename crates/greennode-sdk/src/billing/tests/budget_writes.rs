@@ -110,6 +110,40 @@ async fn writes_never_replay_after_http_or_transport_failures() {
 }
 
 #[tokio::test]
+async fn truncated_created_response_leaves_outcome_unconfirmed() {
+    assert_truncated_write("201 Created", 201, "InvalidResponse", true).await;
+}
+
+#[tokio::test]
+async fn truncated_forbidden_response_keeps_status_classification() {
+    assert_truncated_write("403 Forbidden", 403, "Forbidden", false).await;
+}
+
+async fn assert_truncated_write(http: &str, status: u16, code: &str, advice: bool) {
+    let server = Server::start(vec![Response::RawClose(
+        format!("HTTP/1.1 {http}\r\nContent-Length: 256\r\n\r\n{{\"message\":\"{BEARER}")
+            .into_bytes(),
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .create_budget(&ctx, create_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    let api = failure.error().api_error().unwrap();
+    assert!(!api.message().contains(BEARER));
+    assert!(!format!("{failure:?} {}", failure.error()).contains(BEARER));
+    assert_eq!(api.status(), Some(status));
+    assert_eq!(api.code(), code);
+    assert_eq!(
+        api.message().contains("read current state before retrying"),
+        advice
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn malformed_and_reflected_successes_leave_outcome_unconfirmed() {
     let (ctx, _) = RequestContext::new();
     let reflected = format!(r#"{{"code":201,"data":{{"uuid":"budget-1","name":"{BEARER}"}}}}"#);

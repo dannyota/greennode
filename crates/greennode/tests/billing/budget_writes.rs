@@ -33,13 +33,72 @@ fn invoke_write(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) 
 #[test]
 fn delete_budget_requires_confirmation_before_connecting() {
     let server = Server::start(vec![]);
-    let (status, stdout, stderr) = invoke_write(DELETE, &server);
+    let mut args = DELETE.to_vec();
+    args.push("--debug");
+    let (status, stdout, stderr) = invoke_write(&args, &server);
     assert_eq!(status, ExitCode::from(2));
     assert!(stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["code"], "InvalidUsage");
     assert_eq!(error["error"]["message"], "confirmation requires --yes");
     assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn update_budget_without_changes_reports_the_reason() {
+    let server = Server::start(vec![]);
+    let (status, stdout, stderr) = invoke_write(
+        &["billing", "update-budget", "--budget-uuid", "budget-1"],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(
+        error["error"]["message"],
+        "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change"
+    );
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn debug_writes_emit_fixed_events_on_success_and_failure() {
+    let budget_id = "synthetic-budget-debug-canary";
+    for (http, exit) in [("204 No Content", 0), ("403 Forbidden", 1)] {
+        let server = Server::start(vec![response(http, String::new())]);
+        let (status, stdout, stderr) = invoke_write(
+            &[
+                "--debug",
+                "billing",
+                "delete-budget",
+                "--budget-uuid",
+                budget_id,
+                "--yes",
+            ],
+            &server,
+        );
+        assert_eq!(status, ExitCode::from(exit));
+        assert!(!String::from_utf8_lossy(&stdout).contains(budget_id));
+        let stderr = std::str::from_utf8(&stderr).unwrap();
+        assert!(!stderr.contains(budget_id));
+        let mut lines = stderr.lines();
+        assert!(
+            lines.next()
+                == Some(r#"level=DEBUG msg="write started" operation="billing delete-budget""#)
+        );
+        assert!(
+            lines.next()
+                == Some(r#"level=DEBUG msg="write finished" operation="billing delete-budget""#)
+        );
+        if exit == 0 {
+            assert!(lines.next().is_none());
+        } else {
+            let error: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+            assert_eq!(error["error"]["code"], "Forbidden");
+        }
+        assert_eq!(server.requests(), 1);
+    }
 }
 
 #[test]
@@ -68,7 +127,7 @@ fn read_only_latches_refuse_writes_before_connecting() {
         (&profile_source, "config", &["--read-only=false"][..]),
     ] {
         let mut args = DELETE.to_vec();
-        args.push("--yes");
+        args.extend_from_slice(&["--yes", "--debug"]);
         args.extend_from_slice(extra);
         let (status, stdout, stderr) = invoke_with_source(&args, Some(&server), BEARER, source);
         assert_eq!(status, ExitCode::from(2));

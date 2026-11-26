@@ -172,7 +172,9 @@ impl Client {
         .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
         .collect();
         if body.is_empty() {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
+            return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
+                "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change",
+            )));
         }
         self.write::<(), _>(
             ctx,
@@ -266,24 +268,27 @@ fn reconcile(operation: &Operation, error: Error) -> Error {
         .detail::<StatusCode>()
         .copied()
         .or_else(|| api.and_then(|api| StatusCode::from_u16(api.status()?).ok()));
-    if status.is_some_and(|status| status.is_client_error()) {
-        return error;
-    }
-    let code = if status.is_some_and(|status| {
-        status.is_redirection() || (status.is_success() && error.is_body_too_large())
-    }) {
+    let code = api.map_or("", ApiError::code);
+    let message = if let Some(status) = status.filter(StatusCode::is_client_error) {
+        if !code.is_empty() {
+            return error;
+        }
+        status.canonical_reason().unwrap_or_default()
+    } else {
+        "budget write outcome is unconfirmed; read current state before retrying"
+    };
+    let code = if status
+        .is_some_and(|status| status.is_redirection() || (status.is_success() && code.is_empty()))
+    {
         "InvalidResponse"
     } else {
-        api.map_or("", ApiError::code)
+        code
     };
     Error::from_api(ApiError::new(
         operation.id,
         status.map(|status| status.as_u16()),
         SafeText::new(code, &[]),
-        SafeText::new(
-            "budget write outcome is unconfirmed; read current state before retrying",
-            &[],
-        ),
+        SafeText::new(message, &[]),
         false,
     ))
     .with_cause(error)
