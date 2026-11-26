@@ -251,7 +251,6 @@ async fn create_rejects_reflected_bearer_in_an_unknown_reply_field_before_delive
 }
 
 #[tokio::test]
-#[ignore = "Enable after rebasing onto the shared hex matcher from PR #101"]
 async fn issued_key_hex_reflection_is_never_used_for_cleanup() {
     let directory = TestDirectory::new();
     let path = directory.0.join("toy.key");

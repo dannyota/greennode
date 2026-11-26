@@ -23,6 +23,7 @@ const CREATE: Mutation = Mutation {
     method: Method::POST,
     retry: Retry::NonIdempotent,
     success: &[StatusCode::CREATED],
+    overflow_overrides_status: false,
 };
 const IMPORT: Mutation = Mutation {
     id: "compute.ImportSSHKey",
@@ -30,6 +31,7 @@ const IMPORT: Mutation = Mutation {
     method: Method::POST,
     retry: Retry::NonIdempotent,
     success: &[StatusCode::CREATED],
+    overflow_overrides_status: false,
 };
 const DELETE: Mutation = Mutation {
     id: "compute.DeleteSSHKey",
@@ -37,6 +39,7 @@ const DELETE: Mutation = Mutation {
     method: Method::DELETE,
     retry: Retry::Repeatable,
     success: &[StatusCode::NO_CONTENT],
+    overflow_overrides_status: false,
 };
 
 /// Names the SSH key GreenNode will generate.

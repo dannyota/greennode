@@ -271,7 +271,6 @@ async fn create_requires_an_id_usable_for_cleanup() {
 }
 
 #[tokio::test]
-#[ignore = "Enable after rebasing onto the shared hex matcher from PR #101"]
 async fn issued_key_hex_reflection_is_redacted_from_the_returned_name() {
     let hex = data_encoding::HEXLOWER.encode(ISSUED.as_bytes());
     let body =
@@ -289,4 +288,27 @@ async fn issued_key_hex_reflection_is_redacted_from_the_returned_name() {
         .unwrap();
     assert!(output.ssh_key.name == "<redacted>");
     assert!(!serde_json::to_string(&output).unwrap().contains(&hex));
+}
+
+#[tokio::test]
+async fn oversized_ssh_create_refusal_uses_http_status_and_withholds_the_body() {
+    let body = format!(r#"{{"message":"{ISSUED}{}"}}"#, "x".repeat(8 << 20));
+    let server = TestServer::start(vec![http("409 Conflict", &body)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .create_ssh_key(
+            &ctx,
+            CreateSshKeyInput {
+                name: "example".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(409));
+    assert_eq!(api.code(), "Conflict");
+    assert!(!api.message().contains(ISSUED));
+    assert!(failure.error().detail::<crate::RecoveryAdvice>().is_none());
+    assert!(failure.partial().is_none());
+    assert_eq!(server.heads().len(), 1);
 }
