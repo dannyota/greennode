@@ -134,6 +134,12 @@ impl Client {
                 input.size, current.size
             ))));
         }
+        if !response_id(&current.volume_type_id) {
+            return Err(failure(super::wire::shape(
+                "volume.GetVolume",
+                super::wire::DETAIL_SHAPE,
+            )));
+        }
         let details = BTreeMap::from([
             ("newSize".into(), json!(input.size)),
             ("newVolumeTypeId".into(), json!(current.volume_type_id)),

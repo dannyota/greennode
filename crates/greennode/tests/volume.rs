@@ -286,3 +286,19 @@ fn invalid_sort_and_missing_volume_id_stop_before_requests() {
         assert_eq!(server.requests(), 0);
     }
 }
+
+#[test]
+fn integral_dynamic_volume_numbers_use_the_go_float_renderer() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"uuid":"volume-1","status":"AVAILABLE","throughPut":1.0,"volumeType":{"nested":[2.0]}}}"#,
+    )]);
+    let (status, stdout, _) = invoke(
+        &["get-volume", "--volume-id", "volume-1", "--output", "json"],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let stdout = String::from_utf8(stdout).unwrap();
+    assert!(!stdout.contains("1.0") && !stdout.contains("2.0"));
+    assert!(stdout.contains("\"Throughput\": 1,"));
+}

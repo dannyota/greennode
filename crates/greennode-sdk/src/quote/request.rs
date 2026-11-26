@@ -145,8 +145,27 @@ fn guard_discovery(
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
 ) -> Option<Box<Error>> {
-    (op != "pricing.GetQuote" && operation::unsafe_json_response(body, known, sent, true))
-        .then(|| invalid(op, status.as_u16()))
+    if op == "pricing.GetQuote" {
+        return None;
+    }
+    guard_exchange(op, status, body, known, sent)
+}
+
+fn guard_exchange(
+    op: &'static str,
+    status: StatusCode,
+    body: &[u8],
+    known: &sender::SentCredentials,
+    sent: &sender::SentCredentials,
+) -> Option<Box<Error>> {
+    let unsafe_body = operation::unsafe_json_response(body, known, sent, true)
+        || (op == "pricing.GetQuote"
+            && std::str::from_utf8(body).is_ok_and(|body| {
+                [known, sent].into_iter().any(|credentials| {
+                    crate::wire::product::response::reflects_encoded_text(body, credentials)
+                })
+            }));
+    unsafe_body.then(|| invalid(op, status.as_u16()))
 }
 
 fn response_body(op: &Operation, response: &sender::Response) -> Result<Bytes, Box<Error>> {
@@ -180,6 +199,7 @@ pub(crate) async fn exchange(
     let headers = region.map(|id| [("region", id), ("region_id", id)]);
     let options = Options {
         pacing,
+        response_guard: (!direct).then_some(guard_exchange),
         headers: headers.as_ref().map_or(&[], |headers| headers.as_slice()),
         ..Options::DEFAULT
     };

@@ -1,7 +1,7 @@
 use greennode_sdk::{List, PagedList, volume as sdk};
 use serde::{
     Serialize, Serializer,
-    ser::{SerializeSeq, SerializeStruct},
+    ser::{SerializeMap, SerializeSeq, SerializeStruct},
 };
 
 use crate::cli::render::DynamicMap;
@@ -11,7 +11,14 @@ struct Dynamic<'a>(&'a serde_json::Value);
 impl Serialize for Dynamic<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self.0 {
-            serde_json::Value::Object(_) => DynamicMap(self.0).serialize(serializer),
+            serde_json::Value::Object(items) => {
+                DynamicMap(DynamicObject(items)).serialize(serializer)
+            }
+            serde_json::Value::Number(number) => serializer.serialize_f64(
+                number
+                    .as_f64()
+                    .ok_or_else(|| serde::ser::Error::custom("invalid volume number"))?,
+            ),
             serde_json::Value::Array(items) => {
                 let mut seq = serializer.serialize_seq(Some(items.len()))?;
                 for item in items {
@@ -21,6 +28,18 @@ impl Serialize for Dynamic<'_> {
             }
             value => value.serialize(serializer),
         }
+    }
+}
+
+struct DynamicObject<'a>(&'a serde_json::Map<String, serde_json::Value>);
+
+impl Serialize for DynamicObject<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in self.0 {
+            map.serialize_entry(key, &Dynamic(value))?;
+        }
+        map.end()
     }
 }
 

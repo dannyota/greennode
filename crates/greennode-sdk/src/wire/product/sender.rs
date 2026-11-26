@@ -549,6 +549,19 @@ async fn run_inner(
             if hops == 0 && uri_contains_credential(&url, sent, &pending) {
                 return Err(Error::InvalidRequest);
             }
+            if !request.body.is_empty() {
+                let mut credentials = reflection.clone();
+                credentials.extend(sent);
+                for secret in &pending {
+                    credentials.record(secret);
+                }
+                let body = String::from_utf8_lossy(&request.body);
+                if super::response::reflects_encoded_text(&body, &credentials) {
+                    return Err(Error::Provider(Box::new(crate::Error::new(
+                        crate::ErrorClass::InvalidInput,
+                    ))));
+                }
+            }
             if let Some(pacing) = op.pacing {
                 bounded(&ctx, clock, || pacing.before_send(&ctx, clock))
                     .await?

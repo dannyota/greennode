@@ -274,9 +274,10 @@ impl Client {
                     let array = if raw.get().starts_with('{') {
                         let object = Object::parse(raw)?;
                         object
-                            .get("encryptionTypes")?
-                            .or(object.get("data")?)
-                            .or(object.get("items")?)
+                            .entry("encryptionTypes")?
+                            .or(object.entry("data")?)
+                            .or(object.entry("items")?)
+                            .filter(|value| value.get() != "null")
                     } else if raw.get() == "null" {
                         None
                     } else {

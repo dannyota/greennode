@@ -186,12 +186,12 @@ fn validate(input: &ListVolumePricesInput) -> Result<(), Box<Error>> {
 impl Discovery<'_> {
     async fn discover(&mut self, input: &ListVolumePricesInput) -> Result<(), Box<Error>> {
         let project = self.catalog.project().await?;
-        let zones = self.catalog.zones(&project).await?;
+        let zones = schema_operation(self.catalog.zones(&project).await)?;
         if !input.zone_id.is_empty() && !zones.iter().any(|zone| zone.id == input.zone_id) {
             return Err(invalid("vngcloud: invalid input: unknown ZoneID"));
         }
-        let parents = self.catalog.volume_parents(&project).await?;
-        let encryptions = self.catalog.encryptions(&project).await?;
+        let parents = schema_operation(self.catalog.volume_parents(&project).await)?;
+        let encryptions = schema_operation(self.catalog.encryptions(&project).await)?;
         let all_encryption = matches!(input.encryption.as_str(), "" | "all");
         let mut choices = Vec::new();
         if all_encryption || input.encryption == "none" {
@@ -204,15 +204,17 @@ impl Discovery<'_> {
                 .map(|row| row.key.as_str()),
         );
         for parent in parents {
-            let types = match self.catalog.volume_types(&project, &parent.id, true).await {
-                Ok(types) => types,
-                Err(error) => {
-                    if self.record(catalog::TYPES, &parent.id, error)? {
-                        return Ok(());
+            let types =
+                match schema_operation(self.catalog.volume_types(&project, &parent.id, true).await)
+                {
+                    Ok(types) => types,
+                    Err(error) => {
+                        if self.record(catalog::TYPES, &parent.id, error)? {
+                            return Ok(());
+                        }
+                        continue;
                     }
-                    continue;
-                }
-            };
+                };
             for volume_type in types {
                 if (!input.volume_type_id.is_empty()
                     && input.volume_type_id != volume_type.quote_id())
@@ -447,7 +449,17 @@ impl Discovery<'_> {
         }
         let safe = serde_json::to_value(&self.out)
             .is_ok_and(|value| !reflects(&self.catalog.evidence, &value));
-        if !safe {
+        let rounded_reflection = self.out.items.iter().any(|row| {
+            [row.price.monthly_price, row.price_per_gb]
+                .into_iter()
+                .flatten()
+                .any(|amount| {
+                    self.catalog
+                        .evidence
+                        .reflects_encoded_text(&crate::output_number::fixed_two(amount))
+                })
+        });
+        if !safe || rounded_reflection {
             return Err(failure(request::invalid(OP, 200)));
         }
         if self.errors.is_empty() {
@@ -471,6 +483,19 @@ impl Discovery<'_> {
             WriteDispatch::NotAWrite,
         ))
     }
+}
+
+fn schema_operation<T>(result: Result<T, Box<Error>>) -> Result<T, Box<Error>> {
+    result.map_err(|error| {
+        if error
+            .api_error()
+            .is_some_and(|api| api.status() == Some(200) && api.code() == "InvalidResponse")
+        {
+            request::invalid(OP, 200)
+        } else {
+            error
+        }
+    })
 }
 
 fn resolved_code(status: Option<u16>, api: bool) -> &'static str {
@@ -524,5 +549,69 @@ fn inapplicable(disabled: bool, outside: bool) -> Option<&'static str> {
         (true, false) => Some("The zone is disabled."),
         (false, true) => Some("The requested size is outside the offering's bounds."),
         (false, false) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn final_evidence_checks_rounded_amounts_for_success_and_partial() {
+        let config = crate::Config::new(
+            crate::ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(crate::Secret::new("toy-initial-bearer")),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        for has_failure in [false, true] {
+            for (monthly, per_gb) in [(12.339, 6.172), (24.682, 12.339)] {
+                let mut catalog = Catalog::new(config.session(), &ctx, 0);
+                catalog.evidence.add_secret(&crate::Secret::new("12.34"));
+                let out = ListVolumePricesOutput {
+                    items: vec![VolumePrice {
+                        volume_type: VolumeType::default(),
+                        zone_id: String::new(),
+                        zone_name: String::new(),
+                        encryption_type_id: String::new(),
+                        zone_enabled: None,
+                        size_gb: 1,
+                        price_per_gb: Some(per_gb),
+                        price: DiscoveryPrice {
+                            monthly_price: Some(monthly),
+                            ..Default::default()
+                        },
+                    }],
+                    metadata: DiscoveryMetadata {
+                        region: "hcm-3".into(),
+                        complete: !has_failure,
+                        requests: 0,
+                        quoted_at: time::OffsetDateTime::UNIX_EPOCH,
+                        failures: Vec::new(),
+                        notes: Vec::new(),
+                        excluded_groups: None,
+                    },
+                };
+                let errors = if has_failure {
+                    vec![Error::new(ErrorClass::Cancelled)]
+                } else {
+                    Vec::new()
+                };
+                let failure = Discovery {
+                    catalog,
+                    out,
+                    errors,
+                    allow_partial: true,
+                }
+                .finish()
+                .unwrap_err();
+                assert!(failure.partial().is_none());
+                assert_eq!(
+                    failure.error().api_error().unwrap().code(),
+                    "InvalidResponse"
+                );
+            }
+        }
     }
 }

@@ -313,3 +313,178 @@ async fn resize_quote_refuses_a_reflected_type_from_volume_detail() {
     assert_eq!(error.error().class(), crate::ErrorClass::InvalidInput);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn quote_refuses_body_against_provider_token_and_refreshed_token() {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+    struct Provider(AtomicBool);
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            Box::pin(async move {
+                let value = if self.0.load(Ordering::Relaxed) {
+                    "toy-refresh-bearer"
+                } else {
+                    "toy-first-bearer"
+                };
+                Ok(crate::Token::new(Secret::new(value), None))
+            })
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async move {
+                self.0.store(true, Ordering::Relaxed);
+                Ok(())
+            })
+        }
+    }
+    for (selector, sent) in [("toy%2dfirst%2dbearer", 0), ("toy%2drefresh%2dbearer", 1)] {
+        let server = Server::start(vec![
+            Response::Http {
+                status: "401 Unauthorized".into(),
+                headers: vec![("Content-Length".into(), "2".into())],
+                body: b"{}".to_vec(),
+            },
+            response(r#"{"optimumPrice":5}"#),
+        ]);
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_credentials_provider(Arc::new(Provider(AtomicBool::new(false))))
+                .with_region("hcm-3".into())
+                .with_endpoint_overrides(EndpointOverrides {
+                    portal: Some(format!("{}/portal/", server.origin)),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+        config
+            .session()
+            .set_test_product_root(server.root_der.clone());
+        let (ctx, _) = RequestContext::new();
+        let result = Client::new(&config)
+            .quote_create_volume(
+                &ctx,
+                CreateVolumeInput {
+                    volume_type_id: "type-1".into(),
+                    zone_id: selector.into(),
+                    size: 1,
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(server.requests(), sent);
+        assert_eq!(
+            result.unwrap_err().error().class(),
+            crate::ErrorClass::InvalidInput
+        );
+    }
+}
+
+#[tokio::test]
+async fn reflected_discovery_quote_status_is_refused_before_retry() {
+    let reflected = format!(r#"{{"message":"{}"}}"#, TOKEN.replace('-', "%2d"));
+    let server = Server::start(vec![
+        response(r#"{"data":[{"uuid":"zone-1","isEnabled":true}]}"#),
+        response(r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#),
+        response("[]"),
+        response(r#"{"volumeTypes":[{"id":"type-1","name":"SSD","minSize":1,"maxSize":10}]}"#),
+        Response::Http {
+            status: "503 Service Unavailable".into(),
+            headers: vec![("Content-Length".into(), reflected.len().to_string())],
+            body: reflected.into_bytes(),
+        },
+        response(r#"{"optimumPrice":5}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let error = client(&server, "hcm-3")
+        .list_volume_prices(
+            &ctx,
+            ListVolumePricesInput {
+                encryption: "none".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().api_error().unwrap().code(), "InvalidResponse");
+    assert_eq!(error.error().api_error().unwrap().status(), Some(503));
+    assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn resize_quote_refuses_invalid_returned_type_before_post() {
+    let (ctx, _) = RequestContext::new();
+    for kind in ["", "bad/type", "bad.type"] {
+        let detail = VOLUME.replace("type-1", kind);
+        let server = Server::start(vec![response(&detail), response(r#"{"optimumPrice":5}"#)]);
+        let result = client(&server, "hcm-3")
+            .quote_resize_volume(
+                &ctx,
+                ResizeVolumeInput {
+                    volume_id: "volume-1".into(),
+                    size: 100,
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn discovery_distinguishes_catalog_schema_and_http_operations() {
+    let (ctx, _) = RequestContext::new();
+    for (answer, operation, status) in [
+        (
+            response(r#"{"volumeTypeZones":null}"#),
+            "volume.ListVolumePrices",
+            200,
+        ),
+        (
+            Response::Http {
+                status: "400 Bad Request".into(),
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+            "volume.ListVolumeTypeZones",
+            400,
+        ),
+    ] {
+        let server = Server::start(vec![
+            response(r#"{"data":[{"uuid":"zone-1","isEnabled":true}]}"#),
+            answer,
+        ]);
+        let error = client(&server, "hcm-3")
+            .list_volume_prices(&ctx, ListVolumePricesInput::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.error().api_error().unwrap().operation(), operation);
+        assert_eq!(error.error().api_error().unwrap().status(), Some(status));
+    }
+}
+
+#[tokio::test]
+async fn null_encryption_wrapper_precedes_later_arrays() {
+    let server = Server::start(vec![response(
+        r#"{"encryptionTypes":null,"data":["toy-encryption-a"]}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let rows = client(&server, "hcm-3")
+        .list_encryption_types(&ctx, ListEncryptionTypesInput)
+        .await
+        .unwrap();
+    assert!(rows.items.is_empty());
+}
