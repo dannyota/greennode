@@ -282,6 +282,7 @@ fn call_regular(
         }
         ("to_string", [Argument::Reference(_)]) => {
             budget.charge(2)?;
+            budget.allocate(2)?;
             Ok(Value::String("{}".into()))
         }
         ("not_null", values) => {

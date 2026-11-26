@@ -375,6 +375,8 @@ pub(in crate::cli) fn evaluate(
 }
 
 pub(super) const RESULT_LIMIT: usize = 64 * 1024 * 1024;
+pub(super) const OBJECT_LEAF: usize =
+    11 * (std::mem::size_of::<String>() + std::mem::size_of::<Value>()) + 64;
 
 pub(super) fn value_size(value: &Value) -> Result<usize, EvaluationError> {
     let mut size = std::mem::size_of::<Value>();
@@ -392,9 +394,16 @@ pub(super) fn value_size(value: &Value) -> Result<usize, EvaluationError> {
             }
         }
         Value::Object(items) => {
-            for (key, item) in items {
+            size = size
+                .checked_add(OBJECT_LEAF)
+                .ok_or(EvaluationError::ResultSize)?;
+            for (index, (key, item)) in items.iter().enumerate() {
+                let entry = key
+                    .len()
+                    .checked_add(if index >= 11 { 128 } else { 0 })
+                    .ok_or(EvaluationError::ResultSize)?;
                 size = size
-                    .checked_add(128 + key.len())
+                    .checked_add(entry)
                     .and_then(|n| n.checked_add(value_size(item).ok()?))
                     .ok_or(EvaluationError::ResultSize)?;
             }
@@ -621,6 +630,7 @@ pub(super) fn execute(
                 return Ok(Value::Null);
             }
             budget.charge(1)?;
+            budget.allocate(OBJECT_LEAF)?;
             let mut result = BTreeMap::new();
             for child in &node.children {
                 let NodeValue::Text(key) = &child.value else {
@@ -628,7 +638,11 @@ pub(super) fn execute(
                 };
                 let value = execute(child, input, budget)?;
                 check(&value, 1, budget)?;
-                budget.allocate(128 + key.len())?;
+                budget.allocate(
+                    key.len()
+                        .checked_add(if result.len() >= 11 { 128 } else { 0 })
+                        .ok_or(EvaluationError::ResultSize)?,
+                )?;
                 budget.charge(1)?;
                 budget.charge_bytes(key)?;
                 budget.charge_map_key(key, result.len())?;
@@ -687,6 +701,28 @@ fn slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cloned_objects_charge_leaf_and_extra_entries() {
+        let object = |count: usize| {
+            Value::Object((0..count).map(|n| (n.to_string(), Value::Null)).collect())
+        };
+        let empty = value_size(&object(0)).unwrap();
+        assert_eq!(empty, std::mem::size_of::<Value>() + OBJECT_LEAF);
+        let eleven = value_size(&object(11)).unwrap();
+        let twelve = value_size(&object(12)).unwrap();
+        assert_eq!(twelve - eleven, 128 + 2 + std::mem::size_of::<Value>());
+    }
+
+    #[test]
+    fn projection_counts_each_object_leaf() {
+        let input = Value::Array(vec![Value::Number(1.0); 150_000]);
+        let query = super::super::compile("[*].{a:@}").unwrap();
+        assert!(matches!(
+            evaluate(&query, &input),
+            Err(EvaluationError::ResultSize)
+        ));
+    }
+
     #[test]
     fn cumulative_budget_bounds_projection_objects() {
         let input = Value::Array(vec![Value::Bool(true); 32]);

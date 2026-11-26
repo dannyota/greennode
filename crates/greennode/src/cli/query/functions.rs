@@ -5,7 +5,7 @@ use crate::cli::render::Value;
 use super::json_size::json_size;
 
 use super::interpreter::{
-    EvaluationError, WorkBudget, check, compare_numbers, compare_strings, stable_order,
+    EvaluationError, OBJECT_LEAF, WorkBudget, check, compare_numbers, compare_strings, stable_order,
 };
 
 #[derive(Clone, Copy)]
@@ -547,6 +547,7 @@ pub(super) fn call_budgeted(
         }
         ("merge", values) => {
             budget.charge(1)?;
+            budget.allocate(OBJECT_LEAF)?;
             let mut merged = std::collections::BTreeMap::new();
             for value in values {
                 let Value::Object(map) = value else {
@@ -557,7 +558,11 @@ pub(super) fn call_budgeted(
                     budget.charge_bytes(key)?;
                     budget.charge_value(value)?;
                     budget.charge_merge_key(key, merged.len())?;
-                    budget.allocate(128 + key.len())?;
+                    budget.allocate(
+                        key.len()
+                            .checked_add(if merged.len() >= 11 { 128 } else { 0 })
+                            .ok_or(EvaluationError::ResultSize)?,
+                    )?;
                     merged.insert(key.clone(), value.clone());
                 }
             }
@@ -582,17 +587,18 @@ pub(super) fn call_budgeted(
                 Err(EvaluationError::NonFinite)
             }
         }
-        ("type", [value]) => Ok(Value::String(
-            match value {
+        ("type", [value]) => {
+            let result = match value {
                 Value::Null => "null",
                 Value::Bool(_) => "boolean",
                 Value::Number(_) => "number",
                 Value::String(_) => "string",
                 Value::Array(_) => "array",
                 Value::Object(_) => "object",
-            }
-            .into(),
-        )),
+            };
+            budget.allocate(result.len())?;
+            Ok(Value::String(result.into()))
+        }
         ("not_null", values) => {
             for value in values {
                 budget.charge(1)?;
@@ -609,7 +615,9 @@ pub(super) fn call_budgeted(
                 budget.charge(1)?;
             }
             budget.charge(u64::try_from(value.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
-            Ok(Value::String(value.chars().rev().collect()))
+            let mut result = String::with_capacity(value.len());
+            result.extend(value.chars().rev());
+            Ok(Value::String(result))
         }
         ("reverse", [Value::Array(values)]) => {
             budget.charge(1)?;
@@ -646,6 +654,24 @@ pub(super) fn call_budgeted(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn to_string_charges_large_output_against_remaining_allocation_budget() {
+        use super::super::interpreter::{RESULT_LIMIT, unlimited_budget};
+        let input = Value::String("x".repeat(1024 * 1024));
+        let mut budget = unlimited_budget();
+        budget.allocate(RESULT_LIMIT - 1024 * 1024 + 1).unwrap();
+        assert_eq!(
+            call_budgeted("to_string", std::slice::from_ref(&input), &mut budget),
+            Err(EvaluationError::ResultSize)
+        );
+        let mut budget = unlimited_budget();
+        budget.allocate(RESULT_LIMIT - 1024 * 1024).unwrap();
+        assert_eq!(
+            call_budgeted("to_string", std::slice::from_ref(&input), &mut budget),
+            Ok(input.clone())
+        );
+    }
 
     #[test]
     fn function_results_stop_at_size_limit() {
