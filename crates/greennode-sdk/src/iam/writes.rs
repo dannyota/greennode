@@ -42,11 +42,8 @@ impl Client {
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
-        if ids
-            .iter()
-            .map(|(_, id)| *id)
-            .chain(fields.iter().copied())
-            .any(|field| evidence.text_reflects(field))
+        if ids.iter().any(|(_, id)| evidence.id_reflects(id))
+            || fields.iter().any(|field| evidence.text_reflects(field))
         {
             return Err(withheld_operand());
         }
@@ -195,14 +192,15 @@ pub(super) fn guard_refusal<O>(message: &str, detail: Option<WriteError>) -> Fai
 
 pub(super) fn settle<O>(
     failed: Failure<O>,
-    partial: O,
+    partial: Option<O>,
     message: &str,
     evidence: &Evidence,
 ) -> Failure<O> {
     let cause = failed.into_parts().0;
     const UNCONFIRMED: &str = "vngcloud: write outcome not confirmed";
-    let retain = evidence.can_retain_partial();
-    let advice = retain
+    let partial = partial.filter(|_| evidence.can_retain_partial());
+    let advice = partial
+        .is_some()
         .then(|| format!("{message}: {UNCONFIRMED}: {}", error_reason(&cause)))
         .filter(|message| !evidence.text_reflects(message));
     let error = Error::new(ErrorClass::NotSettled)
@@ -210,11 +208,7 @@ pub(super) fn settle<O>(
         .with_outer_detail(RecoveryAdvice::new(
             advice.as_deref().unwrap_or(UNCONFIRMED),
         ));
-    Failure::new(
-        error,
-        retain.then_some(partial),
-        WriteDispatch::MayHaveBeenSent,
-    )
+    Failure::new(error, partial, WriteDispatch::MayHaveBeenSent)
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -224,7 +218,7 @@ pub(super) fn confirmed_identity<O>(
     message: &'static str,
     evidence: &Evidence,
 ) -> Result<(), Failure<O>> {
-    if evidence.text_reflects(actual) || evidence.text_reflects(expected) {
+    if evidence.id_reflects(actual) || evidence.id_reflects(expected) {
         return Err(guard_refusal(message, None));
     }
     require_identity(actual, expected, message)

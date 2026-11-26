@@ -132,7 +132,7 @@ impl Client {
             .await
             .map_err(|failed| create_failed(failed, &evidence))?
             .0;
-        if !PathIds::WithUnderscore.allows(&id) || evidence.text_reflects(&id) {
+        if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
             return Err(Failure::new(
                 Error::from_api(ApiError::without_fallback(
                     CREATE,
@@ -162,7 +162,7 @@ impl Client {
             group.screen(&evidence);
             settle(
                 failed,
-                CreateGroupOutput { group },
+                (!evidence.id_reflects(&id)).then_some(CreateGroupOutput { group }),
                 &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
                 &evidence,
             )
@@ -223,10 +223,11 @@ impl Client {
             .fetch_group(ctx, id, false, &mut evidence)
             .await
             .map_err(|failed| {
+                let safe_id = !evidence.id_reflects(id) && !evidence.id_reflects(&fallback.id);
                 fallback.screen(&evidence);
                 settle(
                     failed,
-                    UpdateGroupOutput { group: fallback },
+                    safe_id.then_some(UpdateGroupOutput { group: fallback }),
                     &format!("{UPDATE}: group {id} was updated but the read to confirm it failed"),
                     &evidence,
                 )
@@ -293,6 +294,9 @@ impl Client {
         super::require_identity(&group.id, id, message)?;
         if require_name && (!has_name || evidence.text_reflects(&group.name)) {
             return Err(guard_refusal(message, None));
+        }
+        if evidence.id_reflects(&group.id) {
+            group.id = wire::REDACTED.to_owned();
         }
         group.screen(evidence);
         Ok(group)

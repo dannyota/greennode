@@ -169,20 +169,39 @@ async fn path_invalid_group_id_is_retained_without_a_confirmation_request() {
     assert_eq!(server.requests(), 1);
 }
 
-struct ConfirmationProvider(AtomicUsize);
+struct ConfirmationProvider {
+    attempts: AtomicUsize,
+    tokens: &'static [&'static str],
+}
+
+fn confirmation_client(server: &Server, provider: Arc<ConfirmationProvider>) -> Client {
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("han-1".into())
+            .with_credentials_provider(provider)
+            .with_endpoint_overrides(EndpointOverrides {
+                iam: Some(format!("{}/iam/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    Client::new(&config)
+}
 
 impl CredentialsProvider for ConfirmationProvider {
     fn token<'a>(
         &'a self,
         _: &'a RequestContext,
     ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
-        let attempt = self.0.fetch_add(1, Ordering::Relaxed);
+        let attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
         Box::pin(async move {
-            if attempt < 2 {
-                Ok(Token::new(Secret::new("toy-bearer"), None))
-            } else {
-                Err(Error::new(ErrorClass::Auth))
-            }
+            self.tokens
+                .get(attempt)
+                .map(|token| Token::new(Secret::new(*token), None))
+                .ok_or_else(|| Error::new(ErrorClass::Auth))
         })
     }
 
@@ -201,29 +220,20 @@ async fn failed_confirmation_sign_in_withholds_id_from_recovery_advice() {
         response("201 Created", br#"{"id":"group-1"}"#),
         response("401 Unauthorized", b"{}"),
     ]);
-    let provider = Arc::new(ConfirmationProvider(AtomicUsize::new(0)));
-    let config = Config::new(
-        ConfigOptions::default()
-            .with_region("han-1".into())
-            .with_credentials_provider(provider.clone())
-            .with_endpoint_overrides(EndpointOverrides {
-                iam: Some(format!("{}/iam/", server.origin)),
-                ..Default::default()
-            }),
-    )
-    .unwrap();
-    config
-        .session()
-        .set_test_product_root(server.root_der.clone());
+    let provider = Arc::new(ConfirmationProvider {
+        attempts: AtomicUsize::new(0),
+        tokens: &["toy-bearer", "toy-bearer"],
+    });
+    let client = confirmation_client(&server, provider.clone());
     let (ctx, _) = RequestContext::new();
-    let err = Client::new(&config)
+    let err = client
         .create_group(&ctx, CreateGroupInput::new("team"))
         .await
         .unwrap_err();
     let (error, partial, dispatch) = err.into_parts();
     assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
     assert_eq!(server.requests(), 2);
-    assert_eq!(provider.0.load(Ordering::Relaxed), 3);
+    assert_eq!(provider.attempts.load(Ordering::Relaxed), 3);
     assert!(error.has_identity(ErrorClass::NotSettled));
     assert!(partial.is_none());
     assert_eq!(
@@ -250,4 +260,68 @@ async fn short_base64_credential_in_created_group_id_is_withheld() {
     let message = error.api_error().unwrap().message();
     assert!(!message.contains(&encoded));
     assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn prefixed_short_base64_credentials_never_become_group_ids() {
+    for (bearer, encoding) in [
+        ("a?bcd", data_encoding::BASE64_NOPAD),
+        ("ab>de", data_encoding::BASE64URL_NOPAD),
+    ] {
+        let id = format!("group-{}", encoding.encode(bearer.as_bytes()));
+        let body = json!({"id": id}).to_string();
+        let server = Server::start(vec![
+            response("201 Created", body.as_bytes()),
+            response("404 Not Found", b"{}"),
+        ]);
+        let (ctx, _) = RequestContext::new();
+        let failure = client(&server, bearer)
+            .create_group(&ctx, CreateGroupInput::new("team"))
+            .await
+            .err()
+            .unwrap();
+        let (error, partial, dispatch) = failure.into_parts();
+        assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+        assert_eq!(server.requests(), 1);
+        assert!(partial.is_none());
+        assert!(!error.api_error().unwrap().message().contains(&id));
+    }
+}
+
+#[tokio::test]
+async fn a_new_bearer_before_confirmation_blocks_the_group_id_and_partial() {
+    let bearer = "ab>de";
+    let id = format!(
+        "group-{}",
+        data_encoding::BASE64URL_NOPAD.encode(bearer.as_bytes())
+    );
+    let body = json!({"id": id}).to_string();
+    let server = Server::start(vec![
+        response("201 Created", body.as_bytes()),
+        response("404 Not Found", b"{}"),
+    ]);
+    let client = confirmation_client(
+        &server,
+        Arc::new(ConfirmationProvider {
+            attempts: AtomicUsize::new(0),
+            tokens: &["toy-bearer", "ab>de"],
+        }),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .create_group(&ctx, CreateGroupInput::new("team"))
+        .await
+        .err()
+        .unwrap();
+    let (error, partial, dispatch) = failure.into_parts();
+    assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 1);
+    assert!(partial.is_none());
+    assert!(
+        !error
+            .detail::<RecoveryAdvice>()
+            .unwrap()
+            .message()
+            .contains(&id)
+    );
 }

@@ -337,9 +337,11 @@ impl RouteInputs<'_> {
     fn reflects(&self, credentials: &SentCredentials) -> bool {
         self.path
             .iter()
-            .copied()
-            .chain(self.query.iter().map(|(_, value)| *value))
-            .any(|input| super::response::reflects_credential(input, credentials))
+            .any(|id| super::response::reflects_identifier(id, credentials))
+            || self
+                .query
+                .iter()
+                .any(|(_, value)| super::response::reflects_credential(value, credentials))
     }
 }
 
@@ -500,7 +502,11 @@ async fn run_inner(
             for secret in &pending {
                 credentials.record(secret);
             }
-            if route_inputs.reflects(&credentials)
+            let reflected_route = route_inputs.reflects(&credentials);
+            if reflected_route {
+                reflection.extend(&credentials);
+            }
+            if reflected_route
                 || super::evidence::body_reflects(
                     &request.body,
                     &credentials,
@@ -613,7 +619,14 @@ async fn run_inner(
                             }
                             _ => uri_reflects_credential_forms(&next, &credentials),
                         };
-                        if reflected || uri_contains_credential(&next, &credentials, &[]) {
+                        let reflected_path =
+                            next.path_segments().into_iter().flatten().any(|segment| {
+                                super::response::reflects_identifier(segment, &credentials)
+                            });
+                        if reflected
+                            || reflected_path
+                            || uri_contains_credential(&next, &credentials, &[])
+                        {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }
                         hops += 1;

@@ -92,11 +92,8 @@ impl Client {
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
-        if path
-            .iter()
-            .copied()
-            .chain(query.iter().map(|(_, value)| *value))
-            .any(|value| evidence.text_reflects(value))
+        if path.iter().any(|id| evidence.id_reflects(id))
+            || query.iter().any(|(_, value)| evidence.text_reflects(value))
         {
             return Err(refusal(
                 ErrorClass::InvalidInput,
