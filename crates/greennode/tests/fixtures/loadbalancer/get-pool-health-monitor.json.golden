@@ -1,0 +1,18 @@
+{
+  "HealthMonitor": {
+    "Timeout": 5,
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DomainName": null,
+    "HTTPVersion": null,
+    "HealthCheckProtocol": "",
+    "Interval": 10,
+    "HealthyThreshold": 0,
+    "UnhealthyThreshold": 0,
+    "HealthCheckMethod": "GET",
+    "HealthCheckPath": "/health",
+    "SuccessCode": "200",
+    "ProgressStatus": "",
+    "DisplayStatus": ""
+  }
+}

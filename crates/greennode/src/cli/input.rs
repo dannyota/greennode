@@ -105,10 +105,13 @@ pub(crate) fn merge_checked<T>(
             }
             None => read_input(raw)?,
         };
-        let input: Option<HashMap<String, Value>> = serde_json::from_slice(&bytes)
-            .map_err(|_| InputError("--cli-input-json: invalid JSON object"))?;
+        let input: Option<HashMap<String, &serde_json::value::RawValue>> =
+            serde_json::from_slice(&bytes)
+                .map_err(|_| InputError("--cli-input-json: invalid JSON object"))?;
         if let Some(input) = input {
-            for (name, item) in input {
+            for (name, raw) in input {
+                let item =
+                    raw_value(raw).map_err(|_| InputError("--cli-input-json: invalid field"))?;
                 let field = descriptor
                     .fields
                     .iter()
@@ -216,6 +219,34 @@ pub fn check_required<T: 'static>(
     Ok(())
 }
 
+fn raw_value(raw: &serde_json::value::RawValue) -> Result<Value, serde_json::Error> {
+    raw_value_at(raw, 128)
+}
+
+fn raw_value_at(
+    raw: &serde_json::value::RawValue,
+    depth: usize,
+) -> Result<Value, serde_json::Error> {
+    if depth == 0 {
+        return Err(serde::de::Error::custom("JSON nesting limit exceeded"));
+    }
+    match raw.get().as_bytes().first() {
+        Some(b'{') => {
+            serde_json::from_str::<HashMap<String, &serde_json::value::RawValue>>(raw.get())?
+                .into_iter()
+                .map(|(key, value)| Ok((key, raw_value_at(value, depth - 1)?)))
+                .collect::<Result<_, _>>()
+                .map(Value::Object)
+        }
+        Some(b'[') => serde_json::from_str::<Vec<&serde_json::value::RawValue>>(raw.get())?
+            .into_iter()
+            .map(|value| raw_value_at(value, depth - 1))
+            .collect::<Result<_, _>>()
+            .map(Value::Array),
+        _ => serde_json::from_str(raw.get()),
+    }
+}
+
 fn read_input(raw: &str) -> Result<Vec<u8>, InputError> {
     let Some(path) = raw.strip_prefix("file://") else {
         return Ok(raw.as_bytes().to_vec());
@@ -309,6 +340,61 @@ mod tests {
             .try_get_matches_from(args)
             .unwrap()
     }
+    #[test]
+    fn raw_json_conversion_rejects_excessive_nesting() {
+        let nested = format!("{}0{}", "[".repeat(256), "]".repeat(256));
+        let raw: &serde_json::value::RawValue = serde_json::from_str(&nested).unwrap();
+        assert!(raw_value(raw).is_err());
+        let shallow: &serde_json::value::RawValue = serde_json::from_str("[[0]]").unwrap();
+        assert!(raw_value(shallow).is_ok());
+    }
+
+    #[test]
+    fn input_number_rejects_private_number_object() {
+        #[derive(Default)]
+        struct NumberInput {
+            page: i64,
+        }
+        const FIELDS: &[InputField<NumberInput>] = &[InputField {
+            json_name: "Page",
+            flag: None,
+            secret: false,
+            nullable: false,
+            set_json: |input, value| {
+                input.page = value.as_i64().ok_or(())?;
+                Ok(())
+            },
+            set_flag: None,
+            requirement: Requirement::Optional,
+        }];
+        let desc = InputDescriptor {
+            defaults: NumberInput::default,
+            fields: FIELDS,
+            allow_json: true,
+            allow_query: true,
+            project_binding: None,
+            pre_guard: None,
+            guard: None,
+        };
+        let args = matches(&["toy"]);
+        assert!(
+            parse(
+                &desc,
+                &args,
+                Some(r#"{"Page":{"$serde_json::private::Number":"1"}}"#),
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parse(&desc, &args, Some(r#"{"Page":1}"#), None)
+                .unwrap()
+                .value
+                .page,
+            1
+        );
+    }
+
     #[test]
     fn flags_override_json_and_track_presence() {
         let parsed = parse(

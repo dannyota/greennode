@@ -30,6 +30,30 @@ impl BearerSource for Source {
         Box::pin(async { Ok(()) })
     }
 }
+struct RotatingSource(std::sync::Mutex<&'static str>);
+impl BearerSource for RotatingSource {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<BearerToken, Error>> + Send + 'a>> {
+        let value = *self.0.lock().unwrap();
+        Box::pin(async move {
+            Ok(BearerToken {
+                token: Token::new(Secret::new(value), None),
+                obtained_at: None,
+                signin_credentials: None,
+            })
+        })
+    }
+    fn rejected<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+        _: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 struct Sleeper;
 impl sender::Sleeper for Sleeper {
     fn sleep(&self, _: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
@@ -65,6 +89,17 @@ async fn call_at(
     clock: &dyn Clock,
     deadline: tokio::time::Instant,
 ) -> Result<Project, Box<Error>> {
+    call_at_source(discovery, server, ctx, clock, deadline, &Source).await
+}
+
+async fn call_at_source(
+    discovery: &Discovery,
+    server: &Server,
+    ctx: &RequestContext,
+    clock: &dyn Clock,
+    deadline: tokio::time::Instant,
+    source: &dyn BearerSource,
+) -> Result<Project, Box<Error>> {
     let clients = sender::Clients {
         pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
         one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
@@ -82,7 +117,7 @@ async fn call_at(
                 jitter: &mut || 0,
             },
             &base,
-            &Source,
+            source,
             "han-1",
             ProjectRead::Id,
         )
@@ -122,6 +157,63 @@ async fn discovery_adds_bearer_to_caller_evidence() {
         .await
         .unwrap();
     assert!(evidence.reflected_in(&serde_json::json!("toy-token")));
+}
+
+#[tokio::test]
+async fn short_base64url_credential_cannot_be_cached_as_project_id() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projects":[{"projectId":"prefixYT9iY2Qsuffix"}]}"#,
+    )]);
+    let discovery = Discovery::default();
+    let source = RotatingSource(std::sync::Mutex::new("a?bcd"));
+    let (ctx, _) = RequestContext::new();
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    assert!(
+        call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
+            .await
+            .is_err()
+    );
+    assert!(
+        discovery
+            .project_id_context(&ctx, &SystemClock)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn credential_project_id_is_not_cached_after_rotation() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"projects":[{"projectId":"toy%2Dtoken"}]}"#),
+        response("200 OK", br#"{"projects":[{"projectId":"safe-project"}]}"#),
+    ]);
+    let discovery = Discovery::default();
+    let (ctx, _) = RequestContext::new();
+    let source = RotatingSource(std::sync::Mutex::new("toy-token"));
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    assert!(
+        call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
+            .await
+            .is_err()
+    );
+    assert!(
+        discovery
+            .project_id_context(&ctx, &SystemClock)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    *source.0.lock().unwrap() = "new-token";
+    assert_eq!(
+        call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
+            .await
+            .unwrap()
+            .id,
+        "safe-project"
+    );
+    assert_eq!(server.requests(), 2);
 }
 
 #[tokio::test]

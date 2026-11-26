@@ -1,0 +1,20 @@
+{
+  "listData": [
+    {
+      "uuid": "cert-1",
+      "name": "demo",
+      "notAfter": 1700000000,
+      "notBefore": 1600000000,
+      "subjectAlternativeNames": [
+        "demo.example"
+      ],
+      "inUse": true,
+      "privateKey": "ignored",
+      "certificate": "ignored"
+    }
+  ],
+  "page": 2,
+  "pageSize": 5,
+  "totalPage": 3,
+  "totalItem": 11
+}

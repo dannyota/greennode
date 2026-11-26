@@ -1,0 +1,17 @@
+{
+  "data": {
+    "uuid": "policy-1",
+    "name": "demo",
+    "redirectUrl": "https://demo.example",
+    "redirectHttpCode": 302,
+    "keepQueryString": true,
+    "l7Rules": [
+      {
+        "uuid": "rule_1",
+        "ruleType": "PATH",
+        "ruleValue": "/demo"
+      }
+    ],
+    "position": 1
+  }
+}

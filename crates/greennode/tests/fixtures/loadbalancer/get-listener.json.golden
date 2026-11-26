@@ -1,0 +1,29 @@
+{
+  "Listener": {
+    "UUID": "listener-1",
+    "Name": "demo",
+    "Description": "",
+    "Protocol": "HTTP",
+    "ProtocolPort": 80,
+    "ConnectionLimit": -1,
+    "DefaultPoolID": "",
+    "DefaultPoolName": "",
+    "TimeoutClient": 0,
+    "TimeoutMember": 0,
+    "TimeoutConnection": 0,
+    "AllowedCIDRs": "",
+    "CertificateAuthorities": [],
+    "DisplayStatus": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "DefaultCertificateAuthority": null,
+    "ClientCertificateAuthentication": "",
+    "ProgressStatus": "",
+    "InsertHeaders": [
+      {
+        "HeaderName": "X-Demo",
+        "HeaderValue": "demo-value"
+      }
+    ]
+  }
+}

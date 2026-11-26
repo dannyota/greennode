@@ -1,0 +1,16 @@
+{
+  "OptimumPrice": 12500,
+  "OriginalPrice": 0,
+  "DiscountPrice": 0,
+  "DiscountPercent": 0,
+  "Properties": [
+    {
+      "Name": "demo",
+      "Description": "tiny",
+      "OptimumPrice": 0,
+      "MonthlyPrice": 0,
+      "CurrentPrice": null,
+      "DiscountPercent": 0
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "Certificate": {
+    "UUID": "cert-1",
+    "Name": "demo",
+    "CertificateType": "",
+    "ExpiredAt": "",
+    "ImportedAt": "",
+    "NotAfter": 1700000000,
+    "KeyAlgorithm": "",
+    "Serial": "",
+    "Subject": "",
+    "DomainName": "",
+    "InUse": true,
+    "Issuer": "",
+    "SignatureAlgorithm": "",
+    "NotBefore": 1600000000,
+    "SubjectAlternativeNames": []
+  }
+}

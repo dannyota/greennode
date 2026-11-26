@@ -1,0 +1,14 @@
+{
+  "Items": [
+    {
+      "UUID": "package_1",
+      "Name": "small",
+      "Type": "",
+      "ConnectionNumber": 40,
+      "DataTransfer": 100,
+      "Mode": "",
+      "LBType": "",
+      "DisplayLBType": ""
+    }
+  ]
+}

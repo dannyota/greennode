@@ -1,0 +1,1 @@
+{"error":{"code":"NotFound","message":"pool not found","status":404,"operation":"loadbalancer.ListPoolMembers"}}

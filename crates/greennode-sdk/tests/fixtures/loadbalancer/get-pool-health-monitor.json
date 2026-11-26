@@ -1,0 +1,10 @@
+{
+  "data": {
+    "timeout": 5,
+    "interval": 10,
+    "healthCheckMethod": "GET",
+    "healthCheckPath": "/health",
+    "successCode": "200",
+    "domainName": null
+  }
+}
