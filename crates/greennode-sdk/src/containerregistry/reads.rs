@@ -52,10 +52,16 @@ pub struct GetRepositoryOutput {
 
 /// A registry user and its repository permissions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct User {
     /// User identifier.
-    #[serde(rename = "uuid", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "uuid", serialize = "ID"),
+        deserialize_with = "null_default"
+    )]
     pub id: String,
     /// User name.
     #[serde(deserialize_with = "null_default")]
@@ -67,7 +73,10 @@ pub struct User {
     #[serde(deserialize_with = "null_default")]
     pub description: String,
     /// Whether the user is disabled.
-    #[serde(rename = "disable", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "disable", serialize = "Disabled"),
+        deserialize_with = "null_default"
+    )]
     pub disabled: bool,
     /// Expiry timestamp.
     #[serde(deserialize_with = "null_default")]
@@ -76,13 +85,22 @@ pub struct User {
     #[serde(deserialize_with = "null_default")]
     pub created_at: String,
     /// Number of repositories.
-    #[serde(rename = "numberOfRepo", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "numberOfRepo", serialize = "NumberOfRepositories"),
+        deserialize_with = "null_default"
+    )]
     pub number_of_repositories: i64,
     /// Account identifier, accepted as a number or string.
-    #[serde(rename = "userId", deserialize_with = "user_id")]
+    #[serde(
+        rename(deserialize = "userId", serialize = "UserID"),
+        deserialize_with = "user_id"
+    )]
     pub user_id: String,
     /// Repository permissions.
-    #[serde(rename = "repoPermissionList", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "repoPermissionList", serialize = "Repositories"),
+        deserialize_with = "null_default"
+    )]
     pub repositories: Vec<RepositoryPermission>,
 }
 /// Permissions for a particular repository.
@@ -90,16 +108,28 @@ pub struct User {
 #[serde(default)]
 pub struct RepositoryPermission {
     /// Repository identifier.
-    #[serde(rename = "repoId", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "repoId", serialize = "RepositoryID"),
+        deserialize_with = "null_default"
+    )]
     pub repository_id: String,
     /// Repository name.
-    #[serde(rename = "repoName", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "repoName", serialize = "RepositoryName"),
+        deserialize_with = "null_default"
+    )]
     pub repository_name: String,
     /// Backend repository name.
-    #[serde(rename = "backendRepoName", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "backendRepoName", serialize = "BackendRepositoryName"),
+        deserialize_with = "null_default"
+    )]
     pub backend_repository_name: String,
     /// Granted policies.
-    #[serde(rename = "policyDtoList", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "policyDtoList", serialize = "Policies"),
+        deserialize_with = "null_default"
+    )]
     pub policies: Vec<Permission>,
 }
 fn user_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {

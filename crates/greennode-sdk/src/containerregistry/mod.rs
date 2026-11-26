@@ -43,10 +43,16 @@ pub type ListPermissionsOutput = List<Permission>;
 
 /// A container registry repository.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct Repository {
     /// Repository identifier.
-    #[serde(rename = "uuid", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "uuid", serialize = "ID"),
+        deserialize_with = "null_default"
+    )]
     pub id: String,
     /// Repository name.
     #[serde(deserialize_with = "null_default")]
@@ -58,10 +64,16 @@ pub struct Repository {
     #[serde(deserialize_with = "null_default")]
     pub access_level: String,
     /// Registry address.
-    #[serde(rename = "registryUrl", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "registryUrl", serialize = "RegistryURL"),
+        deserialize_with = "null_default"
+    )]
     pub registry_url: String,
     /// Quota in gigabytes.
-    #[serde(rename = "quotaLimit", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "quotaLimit", serialize = "QuotaLimitGB"),
+        deserialize_with = "null_default"
+    )]
     pub quota_limit_gb: i64,
     /// Used quota.
     #[serde(deserialize_with = "null_default")]
@@ -70,7 +82,10 @@ pub struct Repository {
     #[serde(deserialize_with = "null_default")]
     pub image_count: i64,
     /// Number of attached users.
-    #[serde(rename = "attachedUser", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "attachedUser", serialize = "AttachedUsers"),
+        deserialize_with = "null_default"
+    )]
     pub attached_users: i64,
     /// Creation timestamp.
     #[serde(deserialize_with = "null_default")]
@@ -82,10 +97,16 @@ pub struct Repository {
 #[serde(default)]
 pub struct Permission {
     /// Permission identifier.
-    #[serde(rename = "uuid", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "uuid", serialize = "ID"),
+        deserialize_with = "null_default"
+    )]
     pub id: String,
     /// Permitted action.
-    #[serde(rename = "action", deserialize_with = "null_default")]
+    #[serde(
+        rename(deserialize = "action", serialize = "Action"),
+        deserialize_with = "null_default"
+    )]
     pub action: String,
 }
 
@@ -385,7 +406,7 @@ mod tests {
         assert!(server.heads()[0].starts_with(b"GET /v1/user/permissions "));
         assert_eq!(output.items.len(), 3);
         assert_eq!(
-            serde_json::to_value(output).unwrap()["Items"][0]["uuid"],
+            serde_json::to_value(output).unwrap()["Items"][0]["ID"],
             "policy-1"
         );
     }
@@ -426,7 +447,7 @@ mod tests {
         assert!(server.heads()[0].starts_with(b"GET /v1/repository?accessLevel=ALL&name= "));
         assert_eq!(output.total_item, 1);
         assert_eq!(
-            serde_json::to_value(output).unwrap()["Items"][0]["uuid"],
+            serde_json::to_value(output).unwrap()["Items"][0]["ID"],
             "repo-1"
         );
     }

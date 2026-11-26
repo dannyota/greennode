@@ -1,0 +1,1 @@
+app-ci	2026-01-01T00:00:00Z	CI pull user	false	2026-06-01T00:00:00Z	ra-1	app-ci	2	[{"BackendRepositoryName":"app","Policies":[{"Action":"Pull Images","ID":"policy-1"}],"RepositoryID":"repo-1","RepositoryName":"app"},{"BackendRepositoryName":"web","Policies":[{"Action":"Push Images","ID":"policy-2"}],"RepositoryID":"repo-2","RepositoryName":"web"}]	1000001

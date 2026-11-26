@@ -1,0 +1,43 @@
+{
+  "Items": [
+    {
+      "ID": "ra-1",
+      "Name": "app-ci",
+      "BackendName": "app-ci",
+      "Description": "CI pull user",
+      "Disabled": false,
+      "ExpiredAt": "2026-06-01T00:00:00Z",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "NumberOfRepositories": 2,
+      "UserID": "1000001",
+      "Repositories": [
+        {
+          "RepositoryID": "repo-1",
+          "RepositoryName": "app",
+          "BackendRepositoryName": "app",
+          "Policies": [
+            {
+              "ID": "policy-1",
+              "Action": "Pull Images"
+            }
+          ]
+        },
+        {
+          "RepositoryID": "repo-2",
+          "RepositoryName": "web",
+          "BackendRepositoryName": "web",
+          "Policies": [
+            {
+              "ID": "policy-2",
+              "Action": "Push Images"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "Page": 2,
+  "PageSize": 10,
+  "TotalPage": 3,
+  "TotalItem": 21
+}
