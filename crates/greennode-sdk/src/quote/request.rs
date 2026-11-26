@@ -162,7 +162,7 @@ fn guard_exchange(
         || (op == "pricing.GetQuote"
             && std::str::from_utf8(body).is_ok_and(|body| {
                 [known, sent].into_iter().any(|credentials| {
-                    crate::wire::product::response::reflects_encoded_text(body, credentials)
+                    crate::wire::product::response::reflects_credential_forms(body, credentials)
                 })
             }));
     unsafe_body.then(|| invalid(op, status.as_u16()))

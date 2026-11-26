@@ -263,7 +263,7 @@ pub(super) trait Redact {
 
 impl Redact for String {
     fn redact(&mut self, evidence: &Evidence) {
-        if evidence.reflects_encoded_text(self) {
+        if evidence.text_reflects(self) {
             *self = "<redacted>".into();
         }
     }
@@ -300,7 +300,7 @@ impl Redact for Value {
             Value::String(value) => value.redact(evidence),
             Value::Array(items) => items.redact(evidence),
             Value::Object(map) => map.retain(|key, item| {
-                if evidence.reflects_encoded_text(key) {
+                if evidence.text_reflects(key) {
                     return false;
                 }
                 item.redact(evidence);
@@ -314,16 +314,16 @@ impl Redact for Value {
 
 pub(super) fn reflects(evidence: &Evidence, value: &Value) -> bool {
     match value {
-        Value::String(text) => evidence.reflects_encoded_text(text),
+        Value::String(text) => evidence.text_reflects(text),
         Value::Array(items) => items.iter().any(|item| reflects(evidence, item)),
         Value::Object(map) => map
             .iter()
-            .any(|(key, item)| evidence.reflects_encoded_text(key) || reflects(evidence, item)),
-        Value::Bool(true) => evidence.reflects_encoded_text("true"),
-        Value::Bool(false) => evidence.reflects_encoded_text("false"),
-        Value::Null => evidence.reflects_encoded_text("null"),
+            .any(|(key, item)| evidence.text_reflects(key) || reflects(evidence, item)),
+        Value::Bool(true) => evidence.text_reflects("true"),
+        Value::Bool(false) => evidence.text_reflects("false"),
+        Value::Null => evidence.text_reflects("null"),
         Value::Number(number) => {
-            evidence.reflects_encoded_text(number.as_str()) || evidence.reflected_in(value)
+            evidence.text_reflects(number.as_str()) || evidence.reflected_in(value)
         }
     }
 }

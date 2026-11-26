@@ -115,6 +115,10 @@
   "greennode vks list-cluster-versions",
   "greennode vks list-clusters",
   "greennode volume",
+  "greennode volume attach-volume",
+  "greennode volume create-volume",
+  "greennode volume delete-volume",
+  "greennode volume detach-volume",
   "greennode volume get-default-volume-type",
   "greennode volume get-underlying-volume",
   "greennode volume get-volume",
@@ -130,5 +134,6 @@
   "greennode volume list-volumes",
   "greennode volume list-volumes-by-server",
   "greennode volume quote-create-volume",
-  "greennode volume quote-resize-volume"
+  "greennode volume quote-resize-volume",
+  "greennode volume resize-volume"
 ]

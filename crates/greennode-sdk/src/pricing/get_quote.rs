@@ -78,6 +78,16 @@ impl Client {
         ctx: &RequestContext,
         input: GetQuoteInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
+        self.quote_with_evidence(ctx, input, &mut Evidence::new())
+            .await
+    }
+
+    pub(crate) async fn quote_with_evidence(
+        &self,
+        ctx: &RequestContext,
+        input: GetQuoteInput,
+        evidence: &mut Evidence,
+    ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         if input.resource_type.is_empty() {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
@@ -96,11 +106,10 @@ impl Client {
             &input.action
         };
         let body = input::regional(&input.resource_type, action, input.resource_info.as_ref());
-        let mut evidence = Evidence::new();
         let raw = request::exchange(
             &self.session,
             ctx,
-            &mut evidence,
+            evidence,
             Request {
                 operation: OP,
                 template: "v1/price",

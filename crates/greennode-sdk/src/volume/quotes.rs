@@ -56,50 +56,10 @@ impl Client {
         ctx: &RequestContext,
         volume: CreateVolumeInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "volume.QuoteCreateVolume";
-        if volume.zone_id.is_empty() || volume.size == 0 || volume.volume_type_id.is_empty() {
-            return Err(failure(invalid(
-                "vngcloud: invalid input: volume.QuoteCreateVolume requires ZoneID, Size and VolumeTypeID",
-            )));
-        }
-        if volume.size < 0 {
-            return Err(failure(invalid(format!(
-                "vngcloud: invalid input: {OP}: Size must be greater than 0, got {}",
-                volume.size
-            ))));
-        }
-        if !response_id(&volume.volume_type_id)
-            || (!volume.encryption_type_id.is_empty() && !response_id(&volume.encryption_type_id))
-        {
-            return Err(failure(invalid(
-                "vngcloud: invalid input: volume.QuoteCreateVolume requires valid VolumeTypeID and EncryptionTypeID",
-            )));
-        }
-        let body = input::volume(
-            &volume.zone_id,
-            &volume.volume_type_id,
-            volume.size,
-            &volume.encryption_type_id,
-        );
-        let mut evidence = Evidence::new();
-        self.guard_body(ctx, &mut evidence, &body)
-            .map_err(failure)?;
-        let details: Option<BTreeMap<String, Value>> = body
-            .get("resourceInfo")
-            .and_then(Value::as_object)
-            .map(|info| info.clone().into_iter().collect());
-        let quote = self
-            .pricing
-            .get_quote(
-                ctx,
-                GetQuoteInput {
-                    resource_type: "volume".into(),
-                    action: "create".into(),
-                    resource_info: details,
-                },
-            )
-            .await?;
-        screen(&evidence, quote, "pricing.GetQuote").map_err(failure)
+        let quote = create_quote("volume.QuoteCreateVolume", &volume).map_err(failure)?;
+        self.request_volume_quote(ctx, quote, &mut Evidence::new())
+            .await
+            .map_err(failure)
     }
 
     /// Reads the current size and type, then quotes a grow without resizing the volume.
@@ -128,36 +88,104 @@ impl Client {
             &json!([current.size, current.volume_type_id]),
         )
         .map_err(failure)?;
-        if u64::try_from(input.size).map_or(true, |size| size <= current.size) {
-            return Err(failure(invalid(format!(
-                "vngcloud: invalid input: {OP}: Size {} must be greater than the current size {}",
-                input.size, current.size
-            ))));
-        }
-        if !response_id(&current.volume_type_id) {
-            return Err(failure(super::wire::shape(
-                "volume.GetVolume",
-                super::wire::DETAIL_SHAPE,
-            )));
-        }
-        let details = BTreeMap::from([
-            ("newSize".into(), json!(input.size)),
-            ("newVolumeTypeId".into(), json!(current.volume_type_id)),
-            ("volumeId".into(), json!(input.volume_id)),
-        ]);
-        self.guard_body(ctx, &mut evidence, &json!(details))
-            .map_err(failure)?;
-        let quoted = self
-            .pricing
-            .get_quote(
-                ctx,
-                GetQuoteInput {
-                    resource_type: "volume".into(),
-                    action: "resize".into(),
-                    resource_info: Some(details),
-                },
-            )
-            .await?;
-        screen(&evidence, quoted, "pricing.GetQuote").map_err(failure)
+        let (_, _, quote) = resize_bodies(OP, &input, &current).map_err(failure)?;
+        self.request_volume_quote(ctx, quote, &mut evidence)
+            .await
+            .map_err(failure)
     }
+
+    pub(super) async fn request_volume_quote(
+        &self,
+        ctx: &RequestContext,
+        quote: GetQuoteInput,
+        evidence: &mut Evidence,
+    ) -> Result<GetQuoteOutput, Box<crate::Error>> {
+        self.guard_body(ctx, evidence, &json!(quote.resource_info))?;
+        let output = self
+            .pricing
+            .quote_with_evidence(ctx, quote, evidence)
+            .await
+            .map_err(|error| Box::new(error.into_parts().0))?;
+        screen(evidence, output, "pricing.GetQuote")
+    }
+}
+
+pub(super) fn create_quote(
+    op: &str,
+    volume: &CreateVolumeInput,
+) -> Result<GetQuoteInput, Box<crate::Error>> {
+    if volume.zone_id.is_empty() || volume.size == 0 || volume.volume_type_id.is_empty() {
+        return Err(invalid(format!(
+            "vngcloud: invalid input: {op} requires ZoneID, Size and VolumeTypeID"
+        )));
+    }
+    if volume.size < 0 {
+        return Err(invalid(format!(
+            "vngcloud: invalid input: {op}: Size must be greater than 0, got {}",
+            volume.size
+        )));
+    }
+    if !response_id(&volume.volume_type_id)
+        || (!volume.encryption_type_id.is_empty() && !response_id(&volume.encryption_type_id))
+    {
+        return Err(invalid(format!(
+            "vngcloud: invalid input: {op} requires valid VolumeTypeID and EncryptionTypeID"
+        )));
+    }
+    let body = input::volume(
+        &volume.zone_id,
+        &volume.volume_type_id,
+        volume.size,
+        &volume.encryption_type_id,
+    );
+    let details = body
+        .get("resourceInfo")
+        .and_then(Value::as_object)
+        .map(|info| {
+            info.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        });
+    Ok(GetQuoteInput {
+        resource_type: "volume".into(),
+        action: "create".into(),
+        resource_info: details,
+    })
+}
+
+pub(super) fn resize_bodies(
+    op: &str,
+    input: &ResizeVolumeInput,
+    volume: &super::Volume,
+) -> Result<(u64, Value, GetQuoteInput), Box<crate::Error>> {
+    let size = u64::try_from(input.size)
+        .ok()
+        .filter(|size| *size > volume.size)
+        .ok_or_else(|| {
+            invalid(format!(
+                "vngcloud: invalid input: {op}: Size {} must be greater than the current size {}",
+                input.size, volume.size,
+            ))
+        })?;
+    if !response_id(&volume.volume_type_id) {
+        return Err(super::wire::shape(
+            "volume.GetVolume",
+            super::wire::DETAIL_SHAPE,
+        ));
+    }
+    let mut details = BTreeMap::from([
+        ("newSize".into(), json!(input.size)),
+        ("newVolumeTypeId".into(), json!(volume.volume_type_id)),
+    ]);
+    let body = json!(details);
+    details.insert("volumeId".into(), json!(input.volume_id));
+    Ok((
+        size,
+        body,
+        GetQuoteInput {
+            resource_type: "volume".into(),
+            action: "resize".into(),
+            resource_info: Some(details),
+        },
+    ))
 }

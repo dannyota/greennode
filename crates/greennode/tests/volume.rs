@@ -26,6 +26,10 @@ fn response(status: &str, body: &str) -> Response {
 }
 
 fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_mode(args, server, true)
+}
+
+fn invoke_mode(args: &[&str], server: &Server, read_only: bool) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let config_options = with_billing_loopback(
@@ -45,7 +49,9 @@ fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
         .unwrap();
     let status = runtime.block_on(run_invocation(Invocation {
         args: std::iter::once("greennode")
-            .chain(["--project-id", "proj-1", "--read-only", "volume"])
+            .chain(["--project-id", "proj-1"])
+            .chain(read_only.then_some("--read-only"))
+            .chain(["volume"])
             .chain(args.iter().copied())
             .map(OsString::from)
             .collect(),
@@ -301,4 +307,211 @@ fn integral_dynamic_volume_numbers_use_the_go_float_renderer() {
     let stdout = String::from_utf8(stdout).unwrap();
     assert!(!stdout.contains("1.0") && !stdout.contains("2.0"));
     assert!(stdout.contains("\"Throughput\": 1,"));
+}
+
+#[test]
+fn volume_writes_refuse_read_only_before_transport() {
+    for args in [
+        &[
+            "attach-volume",
+            "--volume-id",
+            "volume-1",
+            "--server-id",
+            "server-1",
+        ][..],
+        &[
+            "create-volume",
+            "--name",
+            "toy-volume",
+            "--zone-id",
+            "zone-1",
+            "--volume-type-id",
+            "type-1",
+            "--size",
+            "10",
+        ][..],
+        &["delete-volume", "--volume-id", "volume-1", "--yes"][..],
+        &[
+            "detach-volume",
+            "--volume-id",
+            "volume-1",
+            "--server-id",
+            "server-1",
+            "--yes",
+        ][..],
+        &[
+            "resize-volume",
+            "--volume-id",
+            "volume-1",
+            "--size",
+            "10",
+            "--yes",
+        ][..],
+    ] {
+        let server = Server::start(vec![]);
+        let (status, stdout, stderr) = invoke(args, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+        assert_eq!(server.requests(), 0);
+    }
+}
+
+#[test]
+fn volume_write_output_matches_go() {
+    const AVAILABLE: &str = r#"{"data":{"uuid":"volume-1","name":"toy-volume","size":1,"status":"AVAILABLE","volumeTypeId":"type-1","serverId":null,"serverIdList":[]}}"#;
+    const IN_USE: &str = r#"{"data":{"uuid":"volume-1","name":"toy-volume","size":1,"status":"IN-USE","volumeTypeId":"type-1","serverId":"server-1","serverIdList":["server-1"]}}"#;
+    const EMPTY: &str = r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#;
+    const ACCEPTED: (&str, &str) = ("202 Accepted", "{}");
+    const VOLUME: (&str, &str) = ("200 OK", AVAILABLE);
+    const PRICE: (&str, &str) = ("200 OK", QUOTE);
+
+    macro_rules! write_goldens {
+        ($command:literal, $args:expr, $responses:expr) => {
+            for format in ["json", "table", "text"] {
+                let expected = match format {
+                    "json" => include_str!(concat!("fixtures/volume/", $command, ".json.golden")),
+                    "table" => include_str!(concat!("fixtures/volume/", $command, ".table.golden")),
+                    _ => include_str!(concat!("fixtures/volume/", $command, ".text.golden")),
+                };
+                let responses: &[(&str, &str)] = $responses;
+                let server = Server::start(
+                    responses
+                        .iter()
+                        .map(|(status, body)| response(status, body))
+                        .collect(),
+                );
+                let args: &[&str] = $args;
+                let args: Vec<_> = [$command, "--no-wait", "--output", format]
+                    .into_iter()
+                    .chain(args.iter().copied())
+                    .collect();
+                let (status, stdout, stderr) = invoke_mode(&args, &server, false);
+                assert_eq!(status, ExitCode::SUCCESS, "{}/{format}", $command);
+                assert!(stderr.is_empty());
+                assert_eq!(stdout, expected.as_bytes(), "{}/{format}", $command);
+                assert_eq!(server.requests(), responses.len());
+            }
+        };
+    }
+    write_goldens!(
+        "attach-volume",
+        &["--volume-id", "volume-1", "--server-id", "server-1"],
+        &[VOLUME, ACCEPTED]
+    );
+    write_goldens!(
+        "create-volume",
+        &[
+            "--name",
+            "toy-volume",
+            "--zone-id",
+            "zone-1",
+            "--volume-type-id",
+            "type-1",
+            "--size",
+            "1",
+            "--max-price",
+            "3200"
+        ],
+        &[
+            ("200 OK", EMPTY),
+            PRICE,
+            ("202 Accepted", r#"{"data":{"uuid":"volume-1"}}"#)
+        ]
+    );
+    write_goldens!(
+        "delete-volume",
+        &["--volume-id", "volume-1", "--yes"],
+        &[VOLUME, ACCEPTED]
+    );
+    write_goldens!(
+        "detach-volume",
+        &[
+            "--volume-id",
+            "volume-1",
+            "--server-id",
+            "server-1",
+            "--yes"
+        ],
+        &[
+            ("200 OK", IN_USE),
+            (
+                "200 OK",
+                r#"{"data":{"status":"STOPPED","bootVolumeId":"boot-1"}}"#
+            ),
+            ACCEPTED
+        ]
+    );
+    write_goldens!(
+        "resize-volume",
+        &[
+            "--volume-id",
+            "volume-1",
+            "--size",
+            "2",
+            "--max-price",
+            "3200",
+            "--yes"
+        ],
+        &[VOLUME, PRICE, ACCEPTED]
+    );
+}
+
+#[test]
+fn destructive_volume_commands_need_yes_and_retain_safety_codes() {
+    for args in [
+        &["delete-volume", "--volume-id", "volume-1"][..],
+        &[
+            "detach-volume",
+            "--volume-id",
+            "volume-1",
+            "--server-id",
+            "server-1",
+        ][..],
+        &["resize-volume", "--volume-id", "volume-1", "--size", "2"][..],
+    ] {
+        let server = Server::start(vec![]);
+        let (status, stdout, stderr) = invoke_mode(args, &server, false);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains("--yes"));
+        assert_eq!(server.requests(), 0);
+    }
+    let attached =
+        r#"{"data":{"uuid":"volume-1","size":1,"status":"IN-USE","serverId":"server-1"}}"#;
+    for (command, flags, replies, code) in [
+        (
+            "delete-volume",
+            &[][..],
+            vec![response("200 OK", attached)],
+            "VolumeInUse",
+        ),
+        (
+            "detach-volume",
+            &["--server-id", "server-1"][..],
+            vec![
+                response("200 OK", attached),
+                response(
+                    "200 OK",
+                    r#"{"data":{"status":"STOPPED","bootVolumeId":"volume-1"}}"#,
+                ),
+            ],
+            "BootVolume",
+        ),
+    ] {
+        let count = replies.len();
+        let server = Server::start(replies);
+        let args: Vec<_> = [command, "--yes", "--volume-id", "volume-1"]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .collect();
+        let (status, stdout, stderr) = invoke_mode(&args, &server, false);
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], code);
+        assert!(error["error"].get("operation").is_none());
+        assert!(error["error"].get("status").is_none());
+        assert_eq!(server.requests(), count);
+    }
 }

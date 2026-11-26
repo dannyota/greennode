@@ -129,15 +129,32 @@ impl Client {
         id: &str,
         evidence: &mut Evidence,
     ) -> Result<Volume, Box<Error>> {
+        self.volume_detail(ctx, id, evidence)
+            .await
+            .map(|(volume, _)| volume)
+    }
+
+    pub(super) async fn volume_detail(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<(Volume, bool), Box<Error>> {
         path_id(VOLUME.id, "VolumeID", id)?;
         let project = self.project(ctx, evidence).await?;
-        let volume = self
+        let (volume, attachment_known) = self
             .read_value(ctx, VOLUME, &[&project, id], &[], evidence, |raw| {
-                let volume: Volume = Object::parse(raw)?.require("data")?;
+                let raw = Object::parse(raw)?.get("data")?.ok_or(())?;
+                let volume = Volume::from_wire(raw)?;
+                let fields = Object::parse(raw)?;
+                let attachment_known = fields.entry("serverId")?.is_some()
+                    && volume.server_id.is_empty()
+                    && volume.server_id_list.as_ref().is_some_and(Vec::is_empty)
+                    && volume.server_name_list.as_ref().is_none_or(Vec::is_empty);
                 if volume.uuid != id {
                     return Err(());
                 }
-                Ok(volume)
+                Ok((volume, attachment_known))
             })
             .await?;
         if volume.status.trim().is_empty() {
@@ -151,7 +168,7 @@ impl Client {
                 .with_detail(UnexpectedStatus),
             ));
         }
-        Ok(volume)
+        Ok((volume, attachment_known))
     }
 
     /// Reads the backing volume mapping.

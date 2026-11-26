@@ -43,7 +43,7 @@ impl Serialize for DynamicObject<'_> {
     }
 }
 
-pub(super) struct VolumeView(sdk::Volume);
+pub(super) struct VolumeView(pub(super) sdk::Volume);
 
 impl Serialize for VolumeView {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

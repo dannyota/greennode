@@ -2,6 +2,87 @@
 
 # CLI: Volume
 
+## attach-volume
+
+Kind: Write.
+
+Returns `Changed: false` if the volume is already attached to this server. Waits
+up to five minutes to confirm attachment unless `--no-wait` is set.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--volume-id` | `string` | yes      |
+| `--server-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode volume attach-volume --volume-id <volume-id> --server-id <server-id>
+```
+
+## create-volume
+
+Kind: Write.
+
+Checks the exact name through the volume inventory and quotes the order before
+sending it. A quote must be positive and at most `--max-price`.
+
+An uncertain order may have created a volume. Check the inventory for the exact
+name before repeating the command.
+
+| Flag                   | Type      | Required |
+| ---------------------- | --------- | -------- |
+| `--name`               | `string`  | yes      |
+| `--zone-id`            | `string`  | yes      |
+| `--size`               | `int`     | yes      |
+| `--volume-type-id`     | `string`  | yes      |
+| `--encryption-type-id` | `string`  |          |
+| `--auto-renew`         | `bool`    |          |
+| `--max-price`          | `float64` |          |
+| `--no-wait`            | `bool`    |          |
+
+```sh
+greennode volume create-volume --name <name> --zone-id <zone-id> --size <size> --volume-type-id <volume-type-id>
+```
+
+## delete-volume
+
+Kind: Write, destructive.
+
+Requires `--yes` and a fresh read confirming the volume is detached. Deletion
+destroys the volume's data.
+
+Waits up to five minutes for `404` or `DELETED` unless `--no-wait` is set.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--volume-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode volume delete-volume --volume-id <volume-id> --yes
+```
+
+## detach-volume
+
+Kind: Write, destructive.
+
+Requires `--yes`. Refuses to detach a boot volume or detach when the boot volume
+cannot be confirmed.
+
+`--allow-running` skips the stopped-server check. Unmount the volume before
+detaching it from a running server.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--volume-id`     | `string` | yes      |
+| `--server-id`     | `string` | yes      |
+| `--allow-running` | `bool`   |          |
+| `--no-wait`       | `bool`   |          |
+
+```sh
+greennode volume detach-volume --volume-id <volume-id> --server-id <server-id> --yes
+```
+
 ## get-default-volume-type
 
 Kind: Read.
@@ -237,4 +318,25 @@ Reads the existing volume before quoting its resize.
 
 ```sh
 greennode volume quote-resize-volume --volume-id <volume-id> --size <size>
+```
+
+## resize-volume
+
+Kind: Write, destructive.
+
+Requires `--yes`. The requested size must exceed the current size and the quote
+must be positive and at most `--max-price`.
+
+Use `get-volume` to check an uncertain outcome. Grow the filesystem separately
+after the block device settles.
+
+| Flag          | Type      | Required |
+| ------------- | --------- | -------- |
+| `--volume-id` | `string`  | yes      |
+| `--size`      | `int`     | yes      |
+| `--max-price` | `float64` |          |
+| `--no-wait`   | `bool`    |          |
+
+```sh
+greennode volume resize-volume --volume-id <volume-id> --size <size> --yes
 ```

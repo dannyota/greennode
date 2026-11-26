@@ -9,14 +9,18 @@ import (
 	"testing"
 )
 
-func TestVolumeReadGoldens(t *testing.T) {
+func TestVolumeGoldens(t *testing.T) {
 	dir := os.Getenv("VOLUME_GOLDEN_DIR")
 	if dir == "" {
 		t.Fatal("VOLUME_GOLDEN_DIR is required")
 	}
+	fixtures := os.Getenv("VOLUME_FIXTURE_DIR")
+	if fixtures == "" {
+		fixtures = filepath.Join("..", "..", "testdata", "volume")
+	}
 	fixture := func(t *testing.T, name string) string {
 		t.Helper()
-		body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "volume", name+".json"))
+		body, err := os.ReadFile(filepath.Join(fixtures, name+".json"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -63,6 +67,52 @@ func TestVolumeReadGoldens(t *testing.T) {
 			"/v1/price":                           jsonHandler(200, fixture(t, "discovery_quote_plain")),
 		}},
 	}
+	const detached = `{"data":{"uuid":"volume-1","name":"toy-volume","size":1,"status":"AVAILABLE","volumeTypeId":"type-1","serverId":null,"serverIdList":[]}}`
+	const attached = `{"data":{"uuid":"volume-1","name":"toy-volume","size":1,"status":"IN-USE","volumeTypeId":"type-1","serverId":"server-1","serverIdList":["server-1"]}}`
+	const emptyInventory = `{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}`
+	volumeRoute := func(current string) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				jsonHandler(200, current)(w, r)
+				return
+			}
+			jsonHandler(202, `{}`)(w, r)
+		}
+	}
+	writes := []struct {
+		command string
+		flags   string
+		routes  gateway
+	}{
+		{"attach-volume", "--volume-id volume-1 --server-id server-1 --no-wait", gateway{
+			volumePath + "/volume-1":                         jsonHandler(200, detached),
+			volumePath + "/volume-1/servers/server-1/attach": jsonHandler(202, `{}`),
+		}},
+		{"create-volume", "--name toy-volume --zone-id zone-1 --volume-type-id type-1 --size 1 --max-price 3200 --no-wait", gateway{
+			volumePath: func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					jsonHandler(200, emptyInventory)(w, r)
+					return
+				}
+				jsonHandler(202, `{"data":{"uuid":"volume-1"}}`)(w, r)
+			},
+			"/v1/price": jsonHandler(200, fixture(t, "discovery_quote_plain")),
+		}},
+		{"delete-volume", "--volume-id volume-1 --yes --no-wait", gateway{volumePath + "/volume-1": volumeRoute(detached)}},
+		{"detach-volume", "--volume-id volume-1 --server-id server-1 --yes --no-wait", gateway{
+			volumePath + "/volume-1":                         jsonHandler(200, attached),
+			"/v2/proj-1/servers/server-1":                    jsonHandler(200, `{"data":{"status":"STOPPED","bootVolumeId":"boot-1"}}`),
+			volumePath + "/volume-1/servers/server-1/detach": jsonHandler(202, `{}`),
+		}},
+		{"resize-volume", "--volume-id volume-1 --size 2 --max-price 3200 --yes --no-wait", gateway{
+			volumePath + "/volume-1":        jsonHandler(200, detached),
+			"/v1/price":                     jsonHandler(200, fixture(t, "discovery_quote_plain")),
+			volumePath + "/volume-1/resize": jsonHandler(202, `{}`),
+		}},
+	}
+	if os.Getenv("VOLUME_GOLDEN_WRITES") == "1" {
+		cases = writes
+	}
 	for _, tc := range cases {
 		for _, format := range []string{"json", "table", "text"} {
 			t.Run(tc.command+"/"+format, func(t *testing.T) {
@@ -71,7 +121,11 @@ func TestVolumeReadGoldens(t *testing.T) {
 				if tc.command == "list-snapshot-backends" || tc.command == "list-snapshot-policies" {
 					root, stdout, stderr = newSnapshotReadRoot(t, fixture)
 				}
-				args := []string{"--region", "hcm-3", "--project-id", "proj-1", "--read-only", "--output", format, "volume", tc.command}
+				args := []string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format}
+				if os.Getenv("VOLUME_GOLDEN_WRITES") != "1" {
+					args = append(args, "--read-only")
+				}
+				args = append(args, "volume", tc.command)
 				root.SetArgs(append(args, strings.Fields(tc.flags)...))
 				ctx := context.Background()
 				if tc.command == "list-volume-prices" {

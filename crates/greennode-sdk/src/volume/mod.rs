@@ -1,18 +1,23 @@
 //! Read vServer volume inventory, snapshots, and prices.
 
+mod attachment;
 mod catalog;
 mod inventory;
 mod model;
+mod paid;
 mod prices;
 mod quotes;
 mod snapshots;
 #[cfg(test)]
 mod tests;
 mod wire;
+mod write;
 
+pub use attachment::*;
 pub use catalog::*;
 pub use inventory::*;
 pub use model::*;
+pub use paid::*;
 pub use prices::*;
 pub use quotes::*;
 pub use snapshots::*;
@@ -151,7 +156,7 @@ impl Client {
             .iter()
             .copied()
             .chain(query.iter().map(|(_, value)| *value))
-            .any(|value| evidence.reflects_encoded_text(value))
+            .any(|value| evidence.text_reflects(value))
         {
             return Err(invalid(
                 "vngcloud: invalid input: request contains credential material",

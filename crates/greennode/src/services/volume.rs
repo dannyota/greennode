@@ -113,6 +113,7 @@ mod prices;
 mod projection;
 mod quotes;
 mod snapshots;
+mod writes;
 
 const DEFAULT_VIEW: dispatch::OutputView = dispatch::OutputView {
     table: None,
@@ -472,7 +473,12 @@ pub(super) const SERVICE: Service = Service {
         },
         Rule {
             identity: "volume-unexpected-status",
-            matches: |error| error.detail::<volume::UnexpectedStatus>().is_some(),
+            matches: |error| {
+                error.detail::<volume::UnexpectedStatus>().is_some()
+                    && error
+                        .api_error()
+                        .is_some_and(|api| api.operation() == "volume.GetVolume")
+            },
             name: Some(RuleName {
                 rank: 25,
                 code: "UnexpectedStatus",
@@ -482,8 +488,67 @@ pub(super) const SERVICE: Service = Service {
             exit: Some(RuleExit::Failure),
             message: Some("volume.GetVolume: volume status is missing; body withheld (status 200)"),
         },
+        Rule {
+            identity: "volume-resize-unexpected-status",
+            matches: |error| error.detail::<volume::UnexpectedStatus>().is_some(),
+            name: Some(RuleName {
+                rank: 29,
+                code: "UnexpectedStatus",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
+            identity: "volume-volumeinuse",
+            matches: |error| {
+                error.detail::<volume::WriteRefusal>() == Some(&volume::WriteRefusal::VolumeInUse)
+            },
+            name: Some(RuleName {
+                rank: 26,
+                code: "VolumeInUse",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
+            identity: "volume-bootvolume",
+            matches: |error| {
+                error.detail::<volume::WriteRefusal>() == Some(&volume::WriteRefusal::BootVolume)
+            },
+            name: Some(RuleName {
+                rank: 27,
+                code: "BootVolume",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
+            identity: "volume-serverrunning",
+            matches: |error| {
+                error.detail::<volume::WriteRefusal>() == Some(&volume::WriteRefusal::ServerRunning)
+            },
+            name: Some(RuleName {
+                rank: 28,
+                code: "ServerRunning",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
     ],
     operations: &[
+        writes::ATTACH_VOLUME,
+        writes::CREATE_VOLUME,
+        writes::DELETE_VOLUME,
+        writes::DETACH_VOLUME,
+        writes::RESIZE_VOLUME,
         GET_DEFAULT_VOLUME_TYPE,
         GET_UNDERLYING_VOLUME,
         GET_VOLUME,

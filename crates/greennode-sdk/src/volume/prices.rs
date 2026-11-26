@@ -456,7 +456,7 @@ impl Discovery<'_> {
                 .any(|amount| {
                     self.catalog
                         .evidence
-                        .reflects_encoded_text(&crate::output_number::fixed_two(amount))
+                        .text_reflects(&crate::output_number::fixed_two(amount))
                 })
         });
         if !safe || rounded_reflection {
@@ -534,7 +534,7 @@ fn copy_error(error: &Error) -> Error {
 }
 
 fn safe_text(text: &str, evidence: &crate::wire::product::evidence::Evidence) -> String {
-    if evidence.reflects_encoded_text(text) {
+    if evidence.text_reflects(text) {
         "<redacted>".into()
     } else {
         text.into()
