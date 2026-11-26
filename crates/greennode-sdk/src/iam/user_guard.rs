@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::value::RawValue;
 
 use super::principal_guard::{guard_read, optional_field, require_safe};
-use super::wire::Wire;
-use super::writes::{confirmed_identity, guard_failed, guard_refusal};
+use super::wire::{ObservedResponse, Wire};
+use super::writes::{confirmed_identity, error_reason, guard_failed, guard_refusal, not_sent};
 use super::{Api, Client, LIST_CAP, OBJECT_CAP, Operation, UserDetail, WriteError, read_operation};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{Failure, RequestContext};
+use crate::{Error, ErrorClass, Failure, RecoveryAdvice, RequestContext};
 
 pub(super) const USER: &str = "accounts-api/v1/iam-users/{}";
 const USER_POLICIES: &str = "policies-api/v1/user-attachments/iam-users/{}/policies";
@@ -66,16 +66,20 @@ impl Client {
                 evidence,
             )
             .await?;
-        let origin = || unproven_origin(op);
-        let user = user.ok_or_else(origin)?;
+        let invalid = || {
+            guard_refusal(
+                &format!("iam: {op}: target identity or origin is unproven"),
+                None,
+            )
+        };
+        let user = user.ok_or_else(invalid)?;
         confirmed_identity::<O>(&user.id, id, "user identity is unproven", evidence)
-            .map_err(|_| origin())?;
+            .map_err(|_| invalid())?;
         if user.from != "iam" || evidence.id_reflects(&user.id) || evidence.id_reflects(&user.from)
         {
-            return Err(origin());
+            return Err(invalid());
         }
-        require_safe(&user, "IAM user response withheld", evidence)
-            .map_err(|_: Failure<O>| origin())?;
+        require_safe(&user, "IAM user response withheld", evidence)?;
         Ok(user)
     }
 
@@ -108,15 +112,16 @@ impl Client {
             .fetch_verified_user(ctx, op, id, evidence)
             .await
             .map_err(|failure: Failure<O>| {
-                if failure
-                    .error()
-                    .api_error()
-                    .and_then(|api| api.status())
-                    .is_some()
+                if failure.error().detail::<ObservedResponse>().is_some()
+                    || failure
+                        .error()
+                        .api_error()
+                        .and_then(|api| api.status())
+                        .is_some()
                 {
                     guard_failed(failure)
                 } else {
-                    unproven_origin(op)
+                    unproven_origin(op, Some(failure.into_parts().0), evidence)
                 }
             })?;
         if !administer {
@@ -174,18 +179,34 @@ impl Client {
             }
         }
         if evidence.id_reflects(id) || evidence.id_reflects(&target.id) {
-            return Err(unproven_origin(op));
+            return Err(unproven_origin(op, None, evidence));
         }
         require_safe(&target, "IAM user response withheld", evidence)?;
         Ok(target)
     }
 }
 
-fn unproven_origin<O>(op: &str) -> Failure<O> {
-    guard_refusal(
-        &format!(
-            "iam: refused: target IAM origin is unproven: {op}: target identity or origin is unproven"
-        ),
-        Some(WriteError::OriginNotIam),
+fn unproven_origin<O>(op: &str, cause: Option<Error>, evidence: &Evidence) -> Failure<O> {
+    const REFUSAL: &str = "iam: refused: target IAM origin is unproven";
+    let message = format!("{REFUSAL}: {op}: target identity or origin is unproven");
+    let (error, message) = match cause {
+        Some(cause) => {
+            let message = format!(
+                "{op}: read target user: {REFUSAL}: {}",
+                error_reason(&cause)
+            );
+            (Error::new(ErrorClass::Api).with_cause(cause), message)
+        }
+        None => (Error::new(ErrorClass::Api), message),
+    };
+    let message = if evidence.can_retain_partial() && !evidence.text_reflects(&message) {
+        &message
+    } else {
+        REFUSAL
+    };
+    not_sent(
+        error
+            .with_outer_detail(WriteError::OriginNotIam)
+            .with_outer_detail(RecoveryAdvice::new(message)),
     )
 }

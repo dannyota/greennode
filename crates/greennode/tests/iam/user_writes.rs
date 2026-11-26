@@ -359,3 +359,62 @@ async fn uncertain_create_delivers_generated_password_without_printing_a_partial
     );
     assert_eq!(server.requests(), 1);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejected_create_does_not_save_password_when_status_is_withheld() {
+    let tmp = PrivateDir::new();
+    let file = tmp.0.join("generated");
+    let server = Server::start(vec![reply(404, "{}")]);
+    let (exit, stdout, stderr) = invoke(
+        &[
+            "iam",
+            "create-user",
+            "--username",
+            "worker",
+            "--secret-file",
+            file.to_str().unwrap(),
+        ],
+        &server,
+        "404",
+    )
+    .await;
+    assert_eq!(exit, ExitCode::from(4));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "NotFound");
+    assert!(error["error"].get("status").is_none());
+    assert!(!file.exists());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn mfa_confirmation_wrong_user_or_origin_is_not_settled() {
+    for confirmation in [
+        r#"{"id":"wrong-user","from":"iam"}"#,
+        r#"{"id":"user-1","from":"idp"}"#,
+    ] {
+        let mut replies = admin_guard(USER);
+        replies.extend([reply(204, ""), reply(200, confirmation)]);
+        let server = Server::start(replies);
+        let (exit, stdout, stderr) = invoke(
+            &[
+                "iam",
+                "enable-user-mfa",
+                "--user-id",
+                "user-1",
+                "--method",
+                "google",
+                "--yes",
+            ],
+            &server,
+            BEARER,
+        )
+        .await;
+        assert_eq!(exit, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "NotSettled");
+        assert_eq!(server.requests(), 7);
+    }
+}

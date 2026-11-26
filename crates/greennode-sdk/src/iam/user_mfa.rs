@@ -126,40 +126,43 @@ impl Client {
             Retry::Once,
             &[StatusCode::NO_CONTENT],
         );
-        if let Err(failure) = self
+        let response_failure = match self
             .write::<Value, _>(ctx, Api::Accounts, &operation, &[id], None, &mut evidence)
             .await
         {
-            if definite_refusal(&failure) {
-                return Err(failure);
-            }
-            if accepted(&failure) {
-                return Err(settle(
-                    failure,
-                    Some(output(None, true, &evidence)),
-                    op,
-                    &evidence,
-                ));
-            }
-            return Err(uncertain_write(failure, op, None, &evidence));
-        }
+            Ok(_) => None,
+            Err(failure) if definite_refusal(&failure) => return Err(failure),
+            Err(failure) if accepted(&failure) => Some(failure),
+            Err(failure) => return Err(uncertain_write(failure, op, None, &evidence)),
+        };
         let confirmed = self
             .fetch_verified_user(ctx, op, id, &mut evidence)
             .await
             .and_then(|user| google_state(&user).ok_or_else(|| unavailable(op)));
         let state = confirmed.as_ref().ok().map(|(_, enabled)| *enabled);
-        match confirmed {
+        let confirmation_failure = match confirmed {
             Ok((verified, active))
                 if active == enable && (!enable || verified) && !evidence.text_reflects(method) =>
             {
-                Ok(output(Some(active), true, &evidence))
+                None
             }
-            other => Err(settle(
-                other.err().unwrap_or_else(|| unavailable(op)),
-                Some(output(state, true, &evidence)),
-                op,
-                &evidence,
-            )),
+            other => Some(other.err().unwrap_or_else(|| unavailable(op))),
+        };
+        let partial = output(state, true, &evidence);
+        match (response_failure, confirmation_failure) {
+            (None, None) => Ok(partial),
+            (Some(response), None) | (None, Some(response)) => {
+                Err(settle(response, Some(partial), op, &evidence))
+            }
+            (Some(response), Some(confirmation)) => {
+                let (error, _, dispatch) = response.into_parts();
+                let combined = Failure::new(
+                    error.with_cause(confirmation.into_parts().0),
+                    None,
+                    dispatch,
+                );
+                Err(settle(combined, Some(partial), op, &evidence))
+            }
         }
     }
 }

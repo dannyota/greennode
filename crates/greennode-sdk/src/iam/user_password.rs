@@ -1,7 +1,12 @@
+use std::fmt;
+
 use zeroize::Zeroizing;
 
+use super::user_writes::{CreateUserInput, ResetUserPasswordInput};
+use super::wire::REDACTED;
 use super::writes::not_sent;
 use super::{Client, invalid_input};
+use crate::wire::product::evidence::Evidence;
 use crate::{ContextEnd, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, Secret};
 
 const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@";
@@ -85,4 +90,57 @@ impl Client {
         }
         Err(entropy_failed("iam: password entropy budget exhausted"))
     }
+}
+
+impl fmt::Debug for CreateUserInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_password_input(
+            formatter,
+            "CreateUserInput",
+            ("username", &self.username),
+            self.password.as_ref(),
+            self.password_length,
+        )
+    }
+}
+
+impl fmt::Debug for ResetUserPasswordInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_password_input(
+            formatter,
+            "ResetUserPasswordInput",
+            ("user_id", &self.user_id),
+            self.password.as_ref(),
+            self.password_length,
+        )
+    }
+}
+
+fn debug_password_input(
+    formatter: &mut fmt::Formatter<'_>,
+    name: &str,
+    (label, operand): (&str, &str),
+    password: Option<&Secret>,
+    length: i64,
+) -> fmt::Result {
+    let mut evidence = Evidence::new();
+    if let Some(password) = password {
+        evidence.add_redaction(password);
+    }
+    let operand = if evidence.id_reflects(operand) {
+        REDACTED
+    } else {
+        operand
+    };
+    let length: &dyn fmt::Debug = if evidence.id_reflects(&length.to_string()) {
+        &REDACTED
+    } else {
+        &length
+    };
+    formatter
+        .debug_struct(name)
+        .field(label, &operand)
+        .field("password", &password)
+        .field("password_length", length)
+        .finish()
 }

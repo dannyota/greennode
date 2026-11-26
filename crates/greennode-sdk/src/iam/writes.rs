@@ -2,7 +2,7 @@ use bytes::Bytes;
 use http::{Method, StatusCode};
 use serde_json::Value;
 
-use super::wire::{Body, Wire};
+use super::wire::{Body, ObservedResponse, Wire};
 use super::{Api, Client, DEFAULT_CAP, OBJECT_CAP, read_operation, require_identity, screen_error};
 use crate::error::RecoveryAdvice;
 use crate::wire::product::{
@@ -165,8 +165,14 @@ impl Client {
         .map(|(_, Body(value))| value)
         .map_err(|failed| {
             let (error, _, dispatch) = failed.into_parts();
+            let observed = ObservedResponse::status(&error).map(ObservedResponse::from_status);
             let error = super::wire::private_status_error(operation, error, evidence);
-            Failure::new(screen_error(error, evidence), None, dispatch)
+            let error = screen_error(error, evidence);
+            let error = match observed {
+                Some(outcome) => error.with_outer_detail(outcome),
+                None => error,
+            };
+            Failure::new(error, None, dispatch)
         })
     }
 

@@ -6,7 +6,7 @@ use serde_json::{Value, value::RawValue};
 
 use super::user_guard::USER;
 use super::user_password::validate_password;
-use super::wire::{REDACTED, Screen, Wire};
+use super::wire::{ObservedResponse, REDACTED, Screen, Wire};
 use super::writes::{error_reason, guard_failed, guard_refusal, settle, write_operation};
 use super::{
     Api, Client, LIST_CAP, Operation, Page, User, UserDetail, WriteError, id_input, invalid_input,
@@ -23,7 +23,7 @@ const RESET: &str = "iam.ResetUserPassword";
 const WRITE_CAP: usize = 64 << 10;
 
 /// Creates an IAM user with a supplied or generated password.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateUserInput {
     /// Required username without whitespace or controls.
     pub username: String,
@@ -104,7 +104,7 @@ id_input!(
 pub struct DeleteUserOutput {}
 
 /// Resets a user's password using a supplied or generated password.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ResetUserPasswordInput {
     /// Required IAM user resource ID.
     pub user_id: String,
@@ -264,7 +264,7 @@ impl Client {
             Err(failure) if definite_refusal(&failure) => return Err(failure),
             Err(failure) => {
                 return Err(create_failed(
-                    failure.into_parts().0,
+                    Some(failure.into_parts().0),
                     WriteError::UserCreateUncertain,
                     fallback_user(&username, "", "", &evidence),
                     generated.then_some(password),
@@ -277,12 +277,15 @@ impl Client {
             CreateAck::Object(id) => id,
         };
         if id.is_empty() {
-            let candidate = self
+            let (candidate, cause) = match self
                 .lookup_created_user(ctx, &username, &mut evidence)
                 .await
-                .unwrap_or_default();
+            {
+                Ok(candidate) => (candidate.unwrap_or_default(), None),
+                Err(failure) => (String::new(), Some(failure.into_parts().0)),
+            };
             return Err(create_failed(
-                Error::new(ErrorClass::Api),
+                cause,
                 WriteError::UserCreateUncertain,
                 fallback_user(&username, "", &candidate, &evidence),
                 generated.then_some(password),
@@ -291,7 +294,7 @@ impl Client {
         }
         if !safe_user_id(&id, &evidence) {
             return Err(create_failed(
-                Error::new(ErrorClass::Api),
+                None,
                 WriteError::UserCreateUncertain,
                 fallback_user(&username, "", "", &evidence),
                 generated.then_some(password),
@@ -311,7 +314,7 @@ impl Client {
                 evidence,
             }),
             Err(failure) => Err(create_failed(
-                failure.into_parts().0,
+                Some(failure.into_parts().0),
                 WriteError::CreateUnconfirmed,
                 fallback_user(&username, &id, "", &evidence),
                 generated.then_some(password),
@@ -414,7 +417,7 @@ impl Client {
         ctx: &RequestContext,
         username: &str,
         evidence: &mut Evidence,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, Failure<()>> {
         let op = Operation {
             sensitive: true,
             reject_reflected_credentials: true,
@@ -433,18 +436,20 @@ impl Client {
                 ],
                 evidence,
             )
-            .await
-            .ok()?;
-        let count = i64::try_from(page.items.len()).ok()?;
+            .await?;
+        let lookup_failure = |reason| guard_refusal(&format!("iam: {CREATE}: {reason}"), None);
+        let count = i64::try_from(page.items.len()).unwrap_or(i64::MAX);
         if page.page_number != Some(0)
             || !page
                 .page_size
                 .is_some_and(|size| (1..=1000).contains(&size) && count <= size)
             || page.total_items != Some(count)
-            || page.total_pages != Some(1)
-            || count == 0
+            || (page.total_pages != Some(1) && !(count == 0 && page.total_pages == Some(0)))
         {
-            return None;
+            return Err(lookup_failure("incomplete user lookup page"));
+        }
+        if count == 0 {
+            return Ok(None);
         }
         let (mut ids, mut names) = (HashSet::new(), HashSet::new());
         let mut found = None;
@@ -453,20 +458,20 @@ impl Client {
                 || !valid_username(&user.username)
                 || evidence.text_reflects(&user.username)
                 || evidence.text_reflects(&user.created_at)
-                || !ids.insert(user.id.to_ascii_lowercase())
-                || !names.insert(&user.username)
             {
-                return None;
+                return Err(lookup_failure("invalid user lookup row"));
+            }
+            if !ids.insert(user.id.to_ascii_lowercase()) || !names.insert(&user.username) {
+                return Err(lookup_failure("ambiguous user lookup page"));
             }
             if user.username == username {
                 found = Some(user.id.as_str());
             }
         }
-        let found = found?;
-        self.confirm_created_user::<()>(ctx, found, username, evidence)
+        let found = found.ok_or_else(|| lookup_failure("no exact user lookup match"))?;
+        self.confirm_created_user(ctx, found, username, evidence)
             .await
-            .ok()
-            .map(|user| user.id)
+            .map(|user| Some(user.id))
     }
 }
 
@@ -486,16 +491,12 @@ pub(super) fn user_write(
 }
 
 pub(super) fn accepted<T>(failure: &Failure<T>) -> bool {
-    failure.error().detail::<StatusCode>() == Some(&StatusCode::NO_CONTENT)
+    failure.error().detail::<ObservedResponse>() == Some(&ObservedResponse::NoContent)
 }
 
 pub(super) fn definite_refusal<T>(failure: &Failure<T>) -> bool {
     failure.write_dispatch() == WriteDispatch::NotSent
-        || failure
-            .error()
-            .api_error()
-            .and_then(|api| api.status())
-            .is_some_and(|status| (400..500).contains(&status))
+        || failure.error().detail::<ObservedResponse>() == Some(&ObservedResponse::ClientRejection)
 }
 
 pub(super) fn uncertain_write<T>(
@@ -596,27 +597,30 @@ fn redact_delivery_path<'a>(
 }
 
 fn create_failed(
-    cause: Error,
+    cause: Option<Error>,
     detail: WriteError,
     output: CreateUserOutput,
     password: Option<Secret>,
     evidence: &Evidence,
 ) -> Failure<CreateUserOutput> {
-    let message = if detail == WriteError::CreateUnconfirmed {
-        format!(
-            "{CREATE}: iam: created but not confirmed by a read: {}",
-            error_reason(&cause)
-        )
+    let advice = if detail == WriteError::CreateUnconfirmed {
+        "iam.CreateUser: iam: created but not confirmed by a read"
     } else {
-        "iam.CreateUser: password ownership is unproven; establish ownership with other administrators before trusting the password, resetting or deleting a candidate: iam: user create outcome is uncertain".to_owned()
+        "iam.CreateUser: password ownership is unproven; establish ownership with other administrators before trusting the password, resetting or deleting a candidate: iam: user create outcome is uncertain"
+    };
+    let (error, message) = match cause {
+        Some(cause) => {
+            let message = format!("{advice}: {}", error_reason(&cause));
+            (Error::new(ErrorClass::Api).with_cause(cause), message)
+        }
+        None => (Error::new(ErrorClass::Api), advice.to_owned()),
     };
     let message = if evidence.can_retain_partial() && !evidence.text_reflects(&message) {
         &message
     } else {
         "iam: user create outcome is uncertain"
     };
-    let error = Error::new(ErrorClass::Api)
-        .with_cause(cause)
+    let error = error
         .with_outer_detail(detail)
         .with_outer_detail(RecoveryAdvice::new(message));
     retain_password(
