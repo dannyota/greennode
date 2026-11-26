@@ -17,7 +17,7 @@ published on crates.io under the current name.
 1. The product is written in Rust and named `greennode`: the command, the
    command-line crate, and the repository `dannyota/greennode`, public, with
    `master` as its default branch.
-2. It is a port of vngcloud. vngcloud at tag `v1.7.0` is the baseline that
+2. It is a port of vngcloud. vngcloud at tag `v1.8.0` is the baseline that
    defines commands, flags, output, and exit codes.
 3. Releases go to crates.io. The owner publishes the first version from the
    owner's Mac; later versions publish from GitHub Actions through Trusted
@@ -45,7 +45,7 @@ published on crates.io under the current name.
 - greennode reads vngcloud's settings and credentials but never writes them, and
   each tool keeps its own token cache. A user who signs in with a one-time code
   in both tools within 30 seconds can have the second sign-in refused.
-- A fix in vngcloud after `v1.7.0` reaches greennode only when the owner moves
+- A fix in vngcloud after `v1.8.0` reaches greennode only when the owner moves
   the baseline.
 
 ## Alternatives rejected
@@ -73,3 +73,4 @@ published on crates.io under the current name.
   service was ported.
 
 - 2026-11-26: The owner moved the baseline from `v1.2.0` to `v1.7.0`.
+- 2026-11-26: The owner moved the baseline from `v1.7.0` to `v1.8.0`.

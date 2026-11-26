@@ -26,7 +26,7 @@ part has its own design:
 ## Baseline
 
 The baseline is [vngcloud](https://github.com/dannyota/vngcloud) at tag
-`v1.7.0`, commit `8cc8463df39a9c72fa32dcfb359c09618402288f`. Its
+`v1.8.0`, commit `85458dfb6b373116be410ec8be845257ad545f96`. Its
 `docs/design/cli.md` and `docs/design/sdk-and-cli.md` define the contract this
 port keeps, and its per-domain designs define each operation. Only the owner
 moves the baseline to a newer tag. A move updates this section, the baseline

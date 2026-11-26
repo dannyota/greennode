@@ -1,6 +1,6 @@
 {
-  "tag": "v1.7.0",
-  "commit": "8cc8463df39a9c72fa32dcfb359c09618402288f",
+  "tag": "v1.8.0",
+  "commit": "85458dfb6b373116be410ec8be845257ad545f96",
   "services": [
     {
       "name": "backup",
@@ -999,6 +999,11 @@
           "flags": [
             {
               "name": "zone-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "root-disk-type-id",
               "type": "string",
               "required": false
             },
@@ -5417,6 +5422,26 @@
               "required": true
             },
             {
+              "name": "availability-zone-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "category-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "service-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "package-id",
+              "type": "string",
+              "required": false
+            },
+            {
               "name": "max-price",
               "type": "*float64",
               "required": true
@@ -5980,6 +6005,11 @@
           "flags": []
         },
         {
+          "name": "list-bandwidth-packages",
+          "kind": "Read",
+          "flags": []
+        },
+        {
           "name": "list-dhcp-options",
           "kind": "Read",
           "flags": [
@@ -6414,6 +6444,26 @@
               "name": "subnet-id",
               "type": "string",
               "required": true
+            },
+            {
+              "name": "availability-zone-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "category-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "service-id",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "package-id",
+              "type": "string",
+              "required": false
             }
           ],
           "json_fields": [

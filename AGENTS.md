@@ -21,7 +21,7 @@ The SDK has configuration, both sign-in kinds with the token cache, the request 
 |Why was a choice made?|[ADRs](docs/adr/README.md)|
 |What work remains, in what order?|[Plans](docs/plans/)|
 |How should documents and comments be written?|[Engineering standard](docs/standards/engineering.md)|
-|What did the Go CLI do?|The [baseline](instructions/porting.md#baseline), `vngcloud` at tag `v1.7.0`|
+|What did the Go CLI do?|The [baseline](instructions/porting.md#baseline), `vngcloud` at tag `v1.8.0`|
 |What does the system do now?|Code and tests|
 
 |Doing|Read first|
