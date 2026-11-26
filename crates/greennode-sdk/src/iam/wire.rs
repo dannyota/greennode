@@ -324,7 +324,13 @@ impl<T: Wire> Output for Body<T> {
             response.status,
             bytes::Bytes::copy_from_slice(&response.body),
             operation.success,
-            (true, label.is_some(), operation.retry),
+            (
+                true,
+                label.is_some()
+                    || (operation.sensitive
+                        && matches!(operation.class, super::Classification::Write)),
+                operation.retry,
+            ),
             &response.credentials,
         )?;
         if operation.no_output || (body.is_empty() && operation.allow_empty) {

@@ -16,3 +16,9 @@ It uses `writes/cases.json` from the same fixture directory and writes the
 results beside it. Run:
 
     GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMWritePortGoldens$' -count=1
+
+For service-account writes, also copy `iam_service_account_writes_goldens_test.go`
+into `internal/cli`. It reads and writes `service-account-writes/` in the same
+fixture directory. Run:
+
+    GOPROXY=off GOTOOLCHAIN=local go test ./internal/cli -run '^TestIAMServiceAccountWritePortGoldens$' -count=1

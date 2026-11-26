@@ -17,8 +17,14 @@ use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WriteError {
-    /// The caller type cannot be classified for the guard.
+    /// The target could be the current caller.
+    SelfChange,
+    /// The caller or target cannot be proved safe for a guarded write.
     PrivilegedChange,
+    /// The create returned but could not be confirmed.
+    CreateUnconfirmed,
+    /// The service acknowledged a write without returning its one-time credential.
+    NoSecret,
     /// A resource still has an attachment that prevents deletion.
     ResourceInUse,
 }
@@ -105,7 +111,7 @@ impl Client {
         ctx: &RequestContext,
         op: &str,
         evidence: &mut Evidence,
-    ) -> Result<(), Failure<O>> {
+    ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
         let caller: super::GetCallerIdentityOutput = self
             .fetch::<_, O>(
                 ctx,
@@ -143,7 +149,7 @@ impl Client {
                 Some(WriteError::PrivilegedChange),
             ));
         }
-        Ok(())
+        Ok(caller)
     }
 }
 

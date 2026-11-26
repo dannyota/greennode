@@ -1,0 +1,64 @@
+[
+  {
+    "name": "create-service-account",
+    "args": ["create-service-account", "--name", "worker", "--secret-file", "$SECRET"],
+    "exit": 0,
+    "replies": [
+      {"method":"POST","route":"/accounts-api/v1/service-accounts","status":201,"body":{"id":"sa-1","clientSecret":"private-toy"}},
+      {"method":"GET","route":"/accounts-api/v1/service-accounts/sa-1","status":200,"body":{"id":"sa-1","clientId":"client-1","name":"worker","enabled":true}}
+    ]
+  },
+  {
+    "name": "update-service-account",
+    "args": ["update-service-account", "--service-account-id", "sa-1", "--description", "new", "--access-token-life-span", "0"],
+    "exit": 0,
+    "guard": true,
+    "replies": [
+      {"method":"PATCH","route":"/accounts-api/v1/service-accounts/sa-1","status":200,"body":null},
+      {"method":"GET","route":"/accounts-api/v1/service-accounts/sa-1","status":200,"body":{"id":"sa-1","name":"worker","description":"new"}}
+    ]
+  },
+  {
+    "name": "delete-service-account",
+    "args": ["delete-service-account", "--service-account-id", "sa-1", "--yes"],
+    "exit": 0,
+    "guard": true,
+    "replies": [
+      {"method":"DELETE","route":"/accounts-api/v1/service-accounts/sa-1","status":204,"body":null}
+    ]
+  },
+  {
+    "name": "reset-service-account-secret",
+    "args": ["reset-service-account-secret", "--service-account-id", "sa-1", "--secret-file", "$SECRET", "--yes"],
+    "exit": 0,
+    "guard": true,
+    "replies": [
+      {"method":"POST","route":"/accounts-api/v1/service-accounts/sa-1/reset-secret","status":200,"body":{"clientSecret":"private-toy"}}
+    ]
+  },
+  {
+    "name": "reset-service-account-missing-secret",
+    "args": ["reset-service-account-secret", "--service-account-id", "sa-1", "--secret-file", "$SECRET", "--yes"],
+    "exit": 1,
+    "guard": true,
+    "replies": [
+      {"method":"POST","route":"/accounts-api/v1/service-accounts/sa-1/reset-secret","status":200,"body":{}}
+    ]
+  },
+  {
+    "name": "service-account-caller",
+    "args": ["delete-service-account", "--service-account-id", "sa-1", "--yes"],
+    "exit": 1,
+    "replies": [
+      {"method":"GET","route":"/accounts-api/v1/auth/userinfo","status":200,"body":{"userId":"caller","userType":"user-sa"}}
+    ]
+  },
+  {
+    "name": "create-service-account-unsafe-id",
+    "args": ["create-service-account", "--name", "worker", "--secret-file", "$SECRET"],
+    "exit": 1,
+    "replies": [
+      {"method":"POST","route":"/accounts-api/v1/service-accounts","status":201,"body":{"id":"private-toy","clientSecret":"private-toy"}}
+    ]
+  }
+]

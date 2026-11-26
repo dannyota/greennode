@@ -1,5 +1,7 @@
 #[path = "iam/group_writes.rs"]
 mod group_writes;
+#[path = "iam/service_account_writes.rs"]
+mod service_account_writes;
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
