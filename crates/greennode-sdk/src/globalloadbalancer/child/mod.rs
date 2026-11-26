@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use std::time::Duration;
 
-use super::load_balancer_writes::{decode, decode_with};
+use super::load_balancer_writes::decode_with;
 use super::wire::{DecodeError, WireField};
 use super::write::{
     PROVENANCE, Settlement, Write, guard_operation, local, not_sent, rejected_response,
@@ -23,8 +23,10 @@ use super::write::{
 use super::{Client, invalid_input};
 use crate::endpoint::Base;
 use crate::quote::{catalog::unique, request};
-use crate::wire::product::{evidence::Evidence, options::PathIds, sender::Response};
-use crate::wire::strict_json;
+use crate::wire::product::{
+    evidence::Evidence, operation::Operation, options::PathIds, sender::Response,
+};
+use crate::wire::strict_json::{self, Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 use model::{Group, ListenerWire, Member, Parent, PoolWire};
 
@@ -153,12 +155,7 @@ impl Child<'_> {
         if reply.body.is_empty() || super::wire::go_json(&reply.body).trim() == "null" {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
-        let validation = if template == PACKAGES {
-            strict_json::validate_canonical_shape
-        } else {
-            strict_json::validate_shape
-        };
-        let result: T = decode_with(&op, &reply.body, &T::SHAPE, validation).map_err(|error| {
+        let result: T = decode_canonical(&op, &reply.body, &T::SHAPE).map_err(|error| {
             self.invalid(
                 error
                     .detail::<DecodeError>()
@@ -217,7 +214,7 @@ impl Child<'_> {
 
     fn acceptance(&self, reply: &Response, template: &'static str) -> Option<model::Acceptance> {
         let op = guard_operation(self.0.id, template);
-        let result = decode(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
+        let result = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
         if !self.clean_document(&reply.body) {
             None
         } else {
@@ -396,20 +393,28 @@ impl Child<'_> {
 
 struct Absent;
 
+fn decode_canonical<T: serde::de::DeserializeOwned + Default>(
+    op: &Operation,
+    body: &[u8],
+    shape: &Shape<'_>,
+) -> Result<T, Box<Error>> {
+    decode_with(op, body, shape, strict_json::validate_canonical_shape)
+}
+
 fn internal_error(reply: &Response) -> bool {
     if reply.status != StatusCode::INTERNAL_SERVER_ERROR {
         return false;
     }
     let op = guard_operation("", "");
-    let shape = crate::wire::strict_json::Shape::Object(&[crate::wire::strict_json::ShapeField {
+    let shape = Shape::Object(&[ShapeField {
         name: "code",
-        shape: crate::wire::strict_json::Shape::Any,
+        shape: Shape::Any,
     }]);
     #[derive(Default, serde::Deserialize)]
     struct Code {
         code: Option<String>,
     }
-    decode::<Code>(&op, &reply.body, &shape)
+    decode_canonical::<Code>(&op, &reply.body, &shape)
         .is_ok_and(|envelope| envelope.code.as_deref() == Some("internal_error"))
 }
 
