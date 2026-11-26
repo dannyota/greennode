@@ -13,7 +13,8 @@ impl ConfigSource for Source {
 
 #[test]
 fn registry_reads_match_go_goldens() {
-    let cases: &[(&str, &[&str], &[u8], [&[u8]; 3])] = &[
+    type Case<'a> = (&'a str, &'a [&'a str], &'a [u8], [&'a [u8]; 3]);
+    let cases: &[Case<'_>] = &[
         (
             "list-repositories",
             &[],
