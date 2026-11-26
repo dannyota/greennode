@@ -19,6 +19,7 @@ pub(crate) struct Operation {
     pub(crate) keep_status: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
+    pub(crate) reject_reflected_credentials: bool,
     pub(crate) no_redirect: bool,
     pub(crate) retry_config: retry::Config,
 }
@@ -189,6 +190,13 @@ pub(crate) async fn execute<T: Output>(
         &response.credentials,
     )
     .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    if operation.reject_reflected_credentials && reflects_json(&body, &response.credentials) {
+        return Err(crate::Failure::new(
+            api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status),
+            None,
+            dispatch,
+        ));
+    }
     if operation.no_output {
         return Ok((status, T::default()));
     }
@@ -200,6 +208,22 @@ pub(crate) async fn execute<T: Output>(
         )
     })?;
     Ok((status, output))
+}
+
+fn reflects_json(body: &[u8], credentials: &sender::SentCredentials) -> bool {
+    fn contains(value: &serde_json::Value, credentials: &sender::SentCredentials) -> bool {
+        match value {
+            serde_json::Value::String(text) => credentials.reflects(text.as_bytes()),
+            serde_json::Value::Array(items) => items.iter().any(|item| contains(item, credentials)),
+            serde_json::Value::Object(fields) => fields.iter().any(|(key, value)| {
+                credentials.reflects(key.as_bytes()) || contains(value, credentials)
+            }),
+            _ => false,
+        }
+    }
+    credentials.reflects(body)
+        || serde_json::from_slice::<serde_json::Value>(body)
+            .is_ok_and(|value| contains(&value, credentials))
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -337,6 +361,7 @@ mod tests {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: false,
+            reject_reflected_credentials: false,
             no_redirect: false,
             retry_config: retry::Config::default(),
         }
@@ -598,6 +623,26 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert_eq!(error.error().class(), crate::ErrorClass::NotFound);
         assert_eq!(error.error().api_error().unwrap().status(), Some(404));
+    }
+
+    #[tokio::test]
+    async fn reflected_success_bearer_is_rejected_when_enabled() {
+        let escaped = format!(r#"{{"id":"toy{}u002dtoken"}}"#, char::from(92));
+        for body in [br#"{"id":"toy-token"}"#.as_slice(), escaped.as_bytes()] {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let mut op = declaration();
+            op.reject_reflected_credentials = true;
+            let Err(failure) = call(&server, &op, &["one"]).await else {
+                panic!("reflected response accepted");
+            };
+            assert_eq!(failure.error().class(), crate::ErrorClass::Api);
+            assert_eq!(
+                failure.error().detail::<StatusCode>(),
+                Some(&StatusCode::OK)
+            );
+        }
+        let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
+        assert!(call(&server, &declaration(), &["one"]).await.is_ok());
     }
 
     #[tokio::test]

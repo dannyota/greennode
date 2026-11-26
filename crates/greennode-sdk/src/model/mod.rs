@@ -1,5 +1,20 @@
 use serde::Serialize;
 
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Project {
+    #[serde(rename = "projectId")]
+    pub id: String,
+    pub name: String,
+    pub region: String,
+    pub status: String,
+    #[serde(rename = "isDefault")]
+    pub is_default: bool,
+    #[serde(rename = "userId")]
+    pub user_id: i64,
+}
+
 /// Default one-based page number.
 pub const DEFAULT_PAGE: i64 = 1;
 /// Default maximum number of items requested per page.
