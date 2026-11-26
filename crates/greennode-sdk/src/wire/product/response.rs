@@ -105,6 +105,22 @@ fn matches_credential_forms(text: &str, credentials: &SentCredentials, error_tex
     let mut encoded_needles: Vec<Zeroizing<String>> = Vec::new();
     for secret in credentials.values() {
         let value = secret.expose_secret();
+        if !value.is_empty() {
+            for encoding in [
+                data_encoding::BASE64,
+                data_encoding::BASE64_NOPAD,
+                data_encoding::BASE64URL,
+                data_encoding::BASE64URL_NOPAD,
+            ] {
+                let encoded = Zeroizing::new(encoding.encode(value.as_bytes()).into_bytes());
+                if !encoded_needles
+                    .iter()
+                    .any(|existing: &Zeroizing<Vec<u8>>| existing.as_slice() == encoded.as_slice())
+                {
+                    encoded_needles.push(encoded);
+                }
+            }
+        }
         for part in std::iter::once(value)
             .chain(value.lines().map(str::trim).filter(|line| line.len() >= 8))
         {
@@ -926,6 +942,39 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+    }
+
+    #[test]
+    fn embedded_complete_short_base64_credentials_are_withheld() {
+        for secret in ["a?bcd", "123456"] {
+            let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+            for encoding in [
+                data_encoding::BASE64,
+                data_encoding::BASE64_NOPAD,
+                data_encoding::BASE64URL,
+                data_encoding::BASE64URL_NOPAD,
+            ] {
+                let encoded = encoding.encode(secret.as_bytes());
+                let text = format!("prefix {encoded} suffix");
+                assert!(reflects_credential(&text, &credentials));
+                let body = serde_json::json!({"message": text}).to_string();
+                let failure = classify(
+                    "test",
+                    StatusCode::FORBIDDEN,
+                    Bytes::from(body),
+                    &[StatusCode::OK],
+                    (true, false, Retry::Repeatable),
+                    &credentials,
+                )
+                .unwrap_err();
+                assert_eq!(failure.api_error().unwrap().message(), "Forbidden");
+            }
+            assert!(!reflects_credential("ordinary text", &credentials));
+            assert_eq!(
+                sanitize_error_text("ordinary text", &credentials).as_str(),
+                "ordinary text"
+            );
+        }
     }
 
     #[test]
