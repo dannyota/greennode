@@ -104,10 +104,10 @@ pub(crate) fn defaults(region: &str, overrides: EndpointOverrides) -> Result<End
             "han-1" => Some("https://vks-han-1.console.greennode.ai/vks-api/".into()),
             _ => None,
         },
-        vserver_backup: (region == "hcm-3")
-            .then(|| "https://hcm-3.console.greennode.ai/vserver/vbackup-gateway/".into()),
-        backup_center: (region == "hcm-3")
-            .then(|| "https://hcm-3.api.vngcloud.vn/vbackup-gateway/".into()),
+        vserver_backup: matches!(region, "hcm-3" | "han-1")
+            .then(|| format!("https://{region}.console.greennode.ai/vserver/vbackup-gateway/")),
+        backup_center: matches!(region, "hcm-3" | "han-1")
+            .then(|| format!("https://{region}.api.vngcloud.vn/vbackup-gateway/")),
         database: Some("https://vdb.console.greennode.ai/vdb/".into()),
     };
     macro_rules! apply {
@@ -133,10 +133,14 @@ pub(crate) fn defaults(region: &str, overrides: EndpointOverrides) -> Result<End
         storage,
         cdn,
         vks,
-        vserver_backup,
-        backup_center,
         database
     );
+    if set.vserver_backup.is_some() {
+        apply!(vserver_backup);
+    }
+    if set.backup_center.is_some() {
+        apply!(backup_center);
+    }
     macro_rules! normalize {
         ($($field:ident),+ $(,)?) => { $(
             if let Some(value) = &mut set.$field {
@@ -611,18 +615,33 @@ mod tests {
         field!(
             vserver_backup,
             Some("https://hcm-3.console.greennode.ai/vserver/vbackup-gateway/"),
-            None
+            Some("https://han-1.console.greennode.ai/vserver/vbackup-gateway/")
         );
         field!(
             backup_center,
             Some("https://hcm-3.api.vngcloud.vn/vbackup-gateway/"),
-            None
+            Some("https://han-1.api.vngcloud.vn/vbackup-gateway/")
         );
         field!(
             database,
             Some("https://vdb.console.greennode.ai/vdb/"),
             Some("https://vdb.console.greennode.ai/vdb/")
         );
+    }
+
+    #[test]
+    fn backup_overrides_cannot_enable_unmapped_region() {
+        let set = defaults(
+            "other-1",
+            EndpointOverrides {
+                vserver_backup: Some("https://override.test/".into()),
+                backup_center: Some("https://override.test/".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(set.vserver_backup.is_none());
+        assert!(set.backup_center.is_none());
     }
 
     #[test]

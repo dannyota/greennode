@@ -390,10 +390,10 @@ capture canaries. [Request policies](sdk-requests.md#policy-tests) specifies the
 loopback and secret tests. No test calls GreenNode or uses the real home.
 
 [go-sdk]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/sdk-and-cli.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/sdk-and-cli.md
 [go-auth]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/service-account-auth.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/service-account-auth.md
 [go-waits]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/pricing-discovery.md#shared-waits-and-cancellation
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/pricing-discovery.md#shared-waits-and-cancellation
 [go-writes]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0002-write-api-conventions.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/adr/0002-write-api-conventions.md

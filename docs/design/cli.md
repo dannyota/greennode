@@ -383,15 +383,15 @@ cancellation, Unix echo restoration, Windows prompt refusal and pipe input, lock
 contention, permission checks and atomic replacement. Test projections against
 the [baseline goldens][goldens].
 
-[baseline]: https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli.md
+[baseline]: https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/cli.md
 [reads]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli-reads.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/cli-reads.md
 [usability]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli-usability.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/cli-usability.md
 [writes]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0002-write-api-conventions.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/adr/0002-write-api-conventions.md
 [toggles]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/adr/0003-toggle-writes.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/adr/0003-toggle-writes.md
 [password]: https://docs.rs/rpassword/7.5.5/rpassword/
 [file-lock]: https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock
 [goldens]: cli-output.md#goldens
