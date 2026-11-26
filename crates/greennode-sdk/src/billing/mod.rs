@@ -1,6 +1,7 @@
 //! Read budgets and spend summaries for the authenticated account.
 
 mod budget_reads;
+mod cost;
 mod envelope;
 mod model;
 #[cfg(test)]
@@ -10,6 +11,11 @@ pub use budget_reads::{
     Alert, GetCurrentPeriodCostInput, GetCurrentPeriodCostOutput, ListBudgetAlertsInput,
     ListBudgetAlertsOutput, ListBudgetThresholdsInput, ListBudgetThresholdsOutput, PeriodCost,
     Threshold,
+};
+pub use cost::{
+    Balances, CostBreakdown, CostResource, CostResourceSummary, CostSeries, CostSeriesGroup,
+    CostSeriesPoint, CostSummary, GetBalancesInput, GetBalancesOutput, GetCostOverviewInput,
+    GetCostOverviewOutput, ListCostResourcesInput, ListCostResourcesOutput,
 };
 pub use model::Budget;
 

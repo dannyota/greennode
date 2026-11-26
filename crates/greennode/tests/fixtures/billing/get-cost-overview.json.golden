@@ -1,0 +1,159 @@
+{
+  "Summary": {
+    "CurrentCost": 360,
+    "LastPeriodCost": 400,
+    "ChangePercent": -10,
+    "ForecastCost": 1200,
+    "ActiveCount": 12,
+    "Breakdown": [
+      {
+        "Key": "vserver",
+        "Cost": 270,
+        "Percent": 75
+      },
+      {
+        "Key": "vstorage",
+        "Cost": 90,
+        "Percent": 25
+      },
+      {
+        "Key": "vmonitor",
+        "Cost": 0,
+        "Percent": 0
+      }
+    ]
+  },
+  "Series": [],
+  "GroupedSeries": [
+    {
+      "Key": "vmonitor",
+      "Color": "#005AAB",
+      "Points": [
+        {
+          "Date": "2026-11-01",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-02",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-03",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-04",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-05",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-06",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-07",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-08",
+          "Cost": 0
+        },
+        {
+          "Date": "2026-11-09",
+          "Cost": 0
+        }
+      ]
+    },
+    {
+      "Key": "vserver",
+      "Color": "#11B895",
+      "Points": [
+        {
+          "Date": "2026-11-01",
+          "Cost": 20
+        },
+        {
+          "Date": "2026-11-02",
+          "Cost": 25
+        },
+        {
+          "Date": "2026-11-03",
+          "Cost": 30
+        },
+        {
+          "Date": "2026-11-04",
+          "Cost": 35
+        },
+        {
+          "Date": "2026-11-05",
+          "Cost": 40
+        },
+        {
+          "Date": "2026-11-06",
+          "Cost": 45
+        },
+        {
+          "Date": "2026-11-07",
+          "Cost": 35
+        },
+        {
+          "Date": "2026-11-08",
+          "Cost": 25
+        },
+        {
+          "Date": "2026-11-09",
+          "Cost": 15
+        }
+      ]
+    },
+    {
+      "Key": "vstorage",
+      "Color": "#5B5AA8",
+      "Points": [
+        {
+          "Date": "2026-11-01",
+          "Cost": 5
+        },
+        {
+          "Date": "2026-11-02",
+          "Cost": 10
+        },
+        {
+          "Date": "2026-11-03",
+          "Cost": 15
+        },
+        {
+          "Date": "2026-11-04",
+          "Cost": 10
+        },
+        {
+          "Date": "2026-11-05",
+          "Cost": 5
+        },
+        {
+          "Date": "2026-11-06",
+          "Cost": 15
+        },
+        {
+          "Date": "2026-11-07",
+          "Cost": 10
+        },
+        {
+          "Date": "2026-11-08",
+          "Cost": 15
+        },
+        {
+          "Date": "2026-11-09",
+          "Cost": 5
+        }
+      ]
+    }
+  ],
+  "Interval": "daily",
+  "StartDate": "2026-11-01",
+  "EndDate": "2026-11-09",
+  "GroupBy": "product"
+}

@@ -16,6 +16,10 @@ async fn current_period_cost_reads_account_cost() {
     assert_eq!(output.period_cost.period_key, "2026-09");
     assert_eq!(output.period_cost.actual_cost, 4_200_000.0);
     assert_eq!(output.period_cost.forecasted_cost, 5_100_000.0);
+    assert_eq!(
+        serde_json::to_value(output).unwrap()["PeriodCost"]["ActualCost"],
+        4_200_000.0,
+    );
 }
 
 #[tokio::test]
@@ -35,6 +39,10 @@ async fn list_budget_thresholds_reads_nullable_fields_and_ignores_metadata() {
     assert!(!threshold.enabled);
     assert_eq!(threshold.reminder_interval_hours, 24);
     assert!(threshold.last_alert_at.is_empty());
+    assert_eq!(
+        serde_json::to_value(output).unwrap()["Items"][0]["UUID"],
+        "threshold-1",
+    );
 }
 
 #[tokio::test]
@@ -147,15 +155,11 @@ async fn current_period_cost_requires_both_costs_and_rejects_reflection_after_ro
         ),
         response(
             "200 OK",
-            br#"{"code":200,"data":{"actualCost":1e6,"forecastedCost":0}}"#,
-        ),
-        response(
-            "200 OK",
             br#"{"code":200,"data":{"actualCost":0.0000001,"forecastedCost":0}}"#,
         ),
     ]);
     let (ctx, _) = RequestContext::new();
-    for bearer in [BEARER, BEARER, "e+06", "e-7"] {
+    for bearer in [BEARER, BEARER, "e-7"] {
         let failure = client(&server, bearer)
             .get_current_period_cost(&ctx, GetCurrentPeriodCostInput::default())
             .await
@@ -163,6 +167,20 @@ async fn current_period_cost_requires_both_costs_and_rejects_reflection_after_ro
         assert!(!format!("{failure:?} {}", failure.error()).contains(bearer));
         assert_invalid_response(failure);
     }
+}
+
+#[tokio::test]
+async fn current_period_cost_accepts_an_unused_numeric_spelling() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"code":200,"data":{"actualCost":1e6,"forecastedCost":0}}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server, "e+06")
+        .get_current_period_cost(&ctx, GetCurrentPeriodCostInput::default())
+        .await
+        .unwrap();
+    assert_eq!(output.period_cost.actual_cost, 1_000_000.0);
 }
 
 #[tokio::test]

@@ -4,10 +4,8 @@ use crate::cli::input::{InputDescriptor, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation};
 use greennode_sdk::billing::{
     Client, GetCurrentPeriodCostInput, ListBudgetAlertsInput, ListBudgetThresholdsInput,
-    PeriodCost, Threshold,
 };
-use greennode_sdk::{Config, List, RequestContext};
-use serde::Serialize;
+use greennode_sdk::{Config, RequestContext};
 
 const PERIOD_KEY: Field = Field {
     name: "period-key",
@@ -165,9 +163,7 @@ fn get_current_period_cost<'a>(
         let result = Client::new(config)
             .get_current_period_cost(ctx, GetCurrentPeriodCostInput::default())
             .await;
-        dispatch::project_result(result, |output| PeriodCostOutputView {
-            period_cost: PeriodCostView(output.period_cost),
-        })
+        dispatch::project_result(result, std::convert::identity)
     })
 }
 
@@ -179,9 +175,7 @@ fn list_budget_thresholds<'a>(
     Box::pin(async move {
         let input = ListBudgetThresholdsInput::new(&staged.budget_uuid);
         let result = Client::new(config).list_budget_thresholds(ctx, input).await;
-        dispatch::project_result(result, |output| List {
-            items: output.items.into_iter().map(ThresholdView).collect(),
-        })
+        dispatch::project_result(result, std::convert::identity)
     })
 }
 
@@ -198,41 +192,4 @@ fn list_budget_alerts<'a>(
         let result = Client::new(config).list_budget_alerts(ctx, input).await;
         dispatch::project_result(result, std::convert::identity)
     })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "PascalCase")]
-struct PeriodCostOutputView {
-    period_cost: PeriodCostView,
-}
-
-#[derive(Serialize)]
-struct PeriodCostView(#[serde(with = "PeriodCostFields")] PeriodCost);
-
-#[derive(Serialize)]
-#[serde(remote = "PeriodCost", rename_all = "PascalCase")]
-struct PeriodCostFields {
-    period_key: String,
-    period_start: String,
-    period_end: String,
-    actual_cost: f64,
-    forecasted_cost: f64,
-}
-
-#[derive(Serialize)]
-struct ThresholdView(#[serde(with = "ThresholdFields")] Threshold);
-
-#[derive(Serialize)]
-#[serde(remote = "Threshold", rename_all = "PascalCase")]
-struct ThresholdFields {
-    #[serde(rename = "UUID")]
-    uuid: String,
-    threshold_type: String,
-    threshold_percentage: f64,
-    comparison_operator: String,
-    enabled: bool,
-    max_alerts_per_period: i64,
-    reminder_interval_hours: i64,
-    notification_state: String,
-    last_alert_at: String,
 }

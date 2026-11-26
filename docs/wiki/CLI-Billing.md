@@ -2,6 +2,16 @@
 
 # CLI: Billing
 
+## get-balances
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode billing get-balances --query Balances
+```
+
 ## get-budget
 
 Kind: Read.
@@ -12,6 +22,25 @@ Kind: Read.
 
 ```sh
 greennode billing get-budget --budget-uuid <budget-uuid> --query Budget
+```
+
+## get-cost-overview
+
+Kind: Read.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--start-date`    | `string` | yes      |
+| `--end-date`      | `string` | yes      |
+| `--product`       | `string` |          |
+| `--resource-type` | `string` |          |
+| `--resource-id`   | `string` |          |
+| `--search`        | `string` |          |
+| `--group-by`      | `string` |          |
+| `--interval`      | `string` |          |
+
+```sh
+greennode billing get-cost-overview --start-date <start-date> --end-date <end-date>
 ```
 
 ## get-current-period-cost
@@ -59,4 +88,25 @@ Kind: Read.
 
 ```sh
 greennode billing list-budgets
+```
+
+## list-cost-resources
+
+Kind: Read.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--start-date`    | `string` | yes      |
+| `--end-date`      | `string` | yes      |
+| `--product`       | `string` |          |
+| `--resource-type` | `string` |          |
+| `--resource-id`   | `string` |          |
+| `--search`        | `string` |          |
+| `--page`          | `int`    |          |
+| `--size`          | `int`    |          |
+| `--sort`          | `string` |          |
+| `--order`         | `string` |          |
+
+```sh
+greennode billing list-cost-resources --start-date <start-date> --end-date <end-date>
 ```

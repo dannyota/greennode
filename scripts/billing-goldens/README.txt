@@ -13,3 +13,8 @@ use '^TestBillingBudgetReadGoldens$' instead. The test reads the pinned
 baseline's testdata/billing response fixtures and writes nine stdout goldens.
 Copy them to crates/greennode/tests/fixtures/billing/. Each case expects exit
 zero and empty stderr.
+
+For cost explorer and balances, copy cost_goldens_test.go into internal/cli
+and run go test ./internal/cli -run '^TestBillingCostGoldens$' -count=1 with
+the same environment. The balances case substitutes a long decimal for
+cashAvailable. Copy the nine files to crates/greennode/tests/fixtures/billing/.

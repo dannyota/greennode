@@ -1,0 +1,31 @@
+{
+  "Items": [
+    {
+      "ResourceID": "server-1",
+      "ResourceName": "web-1",
+      "ResourceType": "server",
+      "Product": "compute",
+      "Cost": 250000,
+      "DailyAverage": 125000.5,
+      "StartDate": "2026-09-01"
+    },
+    {
+      "ResourceID": "vol-1",
+      "ResourceName": "data-1",
+      "ResourceType": "volume",
+      "Product": "volume",
+      "Cost": 90000,
+      "DailyAverage": 45000.25,
+      "StartDate": "2026-09-02"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 200,
+  "TotalPage": 1,
+  "TotalItem": 2,
+  "Summary": {
+    "TotalAll": 340000,
+    "ActiveCount": 2,
+    "AvgPerResource": 170000
+  }
+}

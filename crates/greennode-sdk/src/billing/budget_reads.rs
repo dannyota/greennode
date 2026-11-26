@@ -1,10 +1,11 @@
 use super::envelope::BudgetData;
-use super::model::field;
+use super::model::{field, null_default, reflects_integer};
 use super::{Client, read_operation};
+use crate::output_number;
 use crate::wire::product::sender::SentCredentials;
 use crate::wire::strict_json::Shape;
 use crate::{Failure, List, RequestContext};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Selects the account's current billing period without filters.
 #[derive(Clone, Debug, Default)]
@@ -20,7 +21,7 @@ pub struct GetCurrentPeriodCostOutput {
 
 /// Dates and spend for the current billing period.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct PeriodCost {
     /// Billing period key in `YYYY-MM` form.
     #[serde(default, deserialize_with = "null_default")]
@@ -58,10 +59,13 @@ pub type ListBudgetThresholdsOutput = List<Threshold>;
 
 /// The settings and notification state of a budget threshold.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct Threshold {
     /// Threshold UUID used in requests.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "UUID"), deserialize_with = "null_default")]
     pub uuid: String,
     /// Spend measured by the threshold, such as `ACTUAL` or `FORECASTED`.
     #[serde(deserialize_with = "null_default")]
@@ -268,7 +272,9 @@ impl BudgetData for PeriodCost {
     ]);
 
     fn valid(&self, credentials: &SentCredentials) -> bool {
-        !reflects_numbers(credentials, [self.actual_cost, self.forecasted_cost])
+        ![self.actual_cost, self.forecasted_cost]
+            .into_iter()
+            .any(|value| output_number::reflects(value, credentials, true))
     }
 }
 
@@ -286,7 +292,11 @@ impl BudgetData for Vec<Threshold> {
     ]));
 
     fn valid(&self, credentials: &SentCredentials) -> bool {
-        !reflects_numbers(credentials, self.iter().map(|row| row.threshold_percentage))
+        self.iter().all(|row| {
+            !output_number::reflects(row.threshold_percentage, credentials, true)
+                && !reflects_integer(row.max_alerts_per_period, credentials)
+                && !reflects_integer(row.reminder_interval_hours, credentials)
+        })
     }
 }
 
@@ -303,45 +313,18 @@ impl BudgetData for Vec<Alert> {
 
     fn valid(&self, credentials: &SentCredentials) -> bool {
         self.iter().all(|row| {
-            !reflects_numbers(
-                credentials,
-                [
-                    row.threshold_percentage,
-                    row.triggered_value,
-                    row.actual_percentage,
-                ],
-            ) && !row
-                .recipients
-                .iter()
-                .flatten()
-                .any(|recipient| credentials.reflects(recipient.as_bytes()))
+            ![
+                row.threshold_percentage,
+                row.triggered_value,
+                row.actual_percentage,
+            ]
+            .into_iter()
+            .any(|value| output_number::reflects(value, credentials, true))
+                && !row
+                    .recipients
+                    .iter()
+                    .flatten()
+                    .any(|recipient| credentials.reflects(recipient.as_bytes()))
         })
     }
-}
-
-fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
-    deserializer: D,
-) -> Result<T, D::Error> {
-    Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
-}
-
-fn reflects_numbers(credentials: &SentCredentials, values: impl IntoIterator<Item = f64>) -> bool {
-    values.into_iter().any(|value| {
-        if credentials.reflects(value.to_string().as_bytes())
-            || credentials.reflects(format!("{value:?}").as_bytes())
-        {
-            return true;
-        }
-        let scientific = format!("{value:e}");
-        let Some((mantissa, exponent)) = scientific.split_once('e') else {
-            return false;
-        };
-        let Ok(exponent) = exponent.parse::<i32>() else {
-            return false;
-        };
-        (!(-4..6).contains(&exponent)
-            && credentials.reflects(format!("{mantissa}e{exponent:+03}").as_bytes()))
-            || (!(-6..21).contains(&exponent)
-                && credentials.reflects(format!("{mantissa}e{exponent:+}").as_bytes()))
-    })
 }

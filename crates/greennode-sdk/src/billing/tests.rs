@@ -331,3 +331,6 @@ fn assert_invalid_response<T>(failure: Failure<T>) {
     assert!(api.code() == "InvalidResponse");
     assert!(!format!("{failure:?} {}", failure.error()).contains(BEARER));
 }
+
+#[path = "cost/tests.rs"]
+mod cost;

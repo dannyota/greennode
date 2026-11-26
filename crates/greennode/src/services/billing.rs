@@ -1,4 +1,5 @@
 mod budget_reads;
+mod cost;
 
 use clap::ArgMatches;
 use greennode_sdk::billing::{Client, GetBudgetInput, ListBudgetsInput};
@@ -149,6 +150,9 @@ pub(super) const SERVICE: Service = Service {
         budget_reads::GET_CURRENT_PERIOD_COST,
         budget_reads::LIST_BUDGET_THRESHOLDS,
         budget_reads::LIST_BUDGET_ALERTS,
+        cost::GET_COST_OVERVIEW,
+        cost::LIST_COST_RESOURCES,
+        cost::GET_BALANCES,
     ],
 };
 
