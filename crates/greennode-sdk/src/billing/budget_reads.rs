@@ -278,8 +278,8 @@ impl BudgetData for PeriodCost {
     }
 }
 
-impl BudgetData for Vec<Threshold> {
-    const SCHEMA: Shape<'static> = Shape::Array(&Shape::Object(&[
+impl Threshold {
+    const SCHEMA: Shape<'static> = Shape::Object(&[
         field("uuid"),
         field("thresholdType"),
         field("thresholdPercentage"),
@@ -289,14 +289,44 @@ impl BudgetData for Vec<Threshold> {
         field("reminderIntervalHours"),
         field("notificationState"),
         field("lastAlertAt"),
-    ]));
+    ]);
+
+    fn reflects_numbers(&self, credentials: &SentCredentials) -> bool {
+        output_number::reflects(self.threshold_percentage, credentials, true)
+            || reflects_integer(self.max_alerts_per_period, credentials)
+            || reflects_integer(self.reminder_interval_hours, credentials)
+    }
+}
+
+impl BudgetData for Threshold {
+    const SCHEMA: Shape<'static> = Threshold::SCHEMA;
 
     fn valid(&self, credentials: &SentCredentials) -> bool {
-        self.iter().all(|row| {
-            !output_number::reflects(row.threshold_percentage, credentials, true)
-                && !reflects_integer(row.max_alerts_per_period, credentials)
-                && !reflects_integer(row.reminder_interval_hours, credentials)
-        })
+        !self.uuid.trim().is_empty()
+            && !self.reflects_numbers(credentials)
+            && !credentials.reflects(if self.enabled { b"true" } else { b"false" })
+    }
+
+    fn redact(&mut self, credentials: &SentCredentials) {
+        for field in [
+            &mut self.uuid,
+            &mut self.threshold_type,
+            &mut self.comparison_operator,
+            &mut self.notification_state,
+            &mut self.last_alert_at,
+        ] {
+            if credentials.reflects(field.as_bytes()) {
+                *field = "<redacted>".into();
+            }
+        }
+    }
+}
+
+impl BudgetData for Vec<Threshold> {
+    const SCHEMA: Shape<'static> = Shape::Array(&Threshold::SCHEMA);
+
+    fn valid(&self, credentials: &SentCredentials) -> bool {
+        self.iter().all(|row| !row.reflects_numbers(credentials))
     }
 }
 

@@ -110,6 +110,9 @@ func TestBillingBudgetWriteGoldens(t *testing.T) {
 		{"create-budget", "CreateBudget", "", http.StatusCreated, []string{"--name", "example-budget", "--period-type", "MONTHLY", "--type", "ACTUAL", "--limit-amount", "1000000"}},
 		{"update-budget", "UpdateBudget", "/budget-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--status", "PAUSED"}},
 		{"delete-budget", "DeleteBudget", "/budget-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--yes"}},
+		{"create-budget-threshold", "CreateBudgetThreshold", "/budget-1/thresholds", http.StatusCreated, []string{"--budget-uuid", "budget-1", "--threshold-type", "ACTUAL", "--threshold-percentage", "100"}},
+		{"update-budget-threshold", "UpdateBudgetThreshold", "/budget-1/thresholds/threshold-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--threshold-uuid", "threshold-1", "--enabled=false"}},
+		{"delete-budget-threshold", "DeleteBudgetThreshold", "/budget-1/thresholds/threshold-1", http.StatusOK, []string{"--budget-uuid", "budget-1", "--threshold-uuid", "threshold-1", "--yes"}},
 	} {
 		body, err := os.ReadFile(filepath.Join("..", "..", "testdata", "billing", tc.fixture+".json"))
 		if err != nil {

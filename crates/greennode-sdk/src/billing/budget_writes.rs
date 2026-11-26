@@ -212,7 +212,7 @@ impl Client {
         Ok(DeleteBudgetOutput {})
     }
 
-    async fn write<T: BudgetData, O>(
+    pub(super) async fn write<T: BudgetData, O>(
         &self,
         ctx: &RequestContext,
         operation: &Operation,
@@ -258,7 +258,7 @@ impl Client {
     }
 }
 
-fn not_sent<T>(error: Error) -> Failure<T> {
+pub(super) fn not_sent<T>(error: Error) -> Failure<T> {
     Failure::new(error, None, WriteDispatch::NotSent)
 }
 
@@ -294,7 +294,7 @@ fn reconcile(operation: &Operation, error: Error) -> Error {
     .with_cause(error)
 }
 
-fn write_operation(
+pub(super) fn write_operation(
     id: &'static str,
     method: Method,
     template: &'static str,

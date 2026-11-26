@@ -2,6 +2,31 @@ use super::*;
 
 const DELETE: &[&str] = &["billing", "delete-budget", "--budget-uuid", "budget-1"];
 
+const CREATE_THRESHOLD: &[&str] = &[
+    "billing",
+    "create-budget-threshold",
+    "--cli-input-json",
+    r#"{"BudgetUUID":"budget-1","ThresholdType":"ACTUAL","ThresholdPercentage":100}"#,
+];
+
+const UPDATE_THRESHOLD: &[&str] = &[
+    "billing",
+    "update-budget-threshold",
+    "--budget-uuid",
+    "budget-1",
+    "--threshold-uuid",
+    "threshold-1",
+];
+
+const DELETE_THRESHOLD: &[&str] = &[
+    "billing",
+    "delete-budget-threshold",
+    "--budget-uuid",
+    "budget-1",
+    "--threshold-uuid",
+    "threshold-1",
+];
+
 struct WriteSource {
     env_read_only: bool,
     home: Option<std::path::PathBuf>,
@@ -201,6 +226,24 @@ fn writes_match_the_baseline_goldens() {
             include_str!("../../../greennode-sdk/src/billing/fixtures/DeleteBudget.json"),
             golden_formats!("delete-budget"),
         ),
+        (
+            CREATE_THRESHOLD,
+            "201 Created",
+            include_str!("../../../greennode-sdk/src/billing/fixtures/CreateBudgetThreshold.json"),
+            golden_formats!("create-budget-threshold"),
+        ),
+        (
+            &[UPDATE_THRESHOLD, &["--enabled=false"]].concat(),
+            "200 OK",
+            include_str!("../../../greennode-sdk/src/billing/fixtures/UpdateBudgetThreshold.json"),
+            golden_formats!("update-budget-threshold"),
+        ),
+        (
+            &[DELETE_THRESHOLD, &["--yes"]].concat(),
+            "200 OK",
+            include_str!("../../../greennode-sdk/src/billing/fixtures/DeleteBudgetThreshold.json"),
+            golden_formats!("delete-budget-threshold"),
+        ),
     ] {
         let server = Server::start(
             formats
@@ -285,4 +328,169 @@ fn duplicate_budget_type_keeps_the_server_error_and_exit_one() {
         "A budget of type ACTUAL already exists for this user"
     );
     assert_eq!(server.requests(), 1);
+}
+
+#[test]
+fn delete_threshold_requires_confirmation_before_connecting() {
+    let server = Server::start(vec![]);
+    let args = [DELETE_THRESHOLD, &["--debug"]].concat();
+    let (status, stdout, stderr) = invoke_write(&args, &server);
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(error["error"]["message"], "confirmation requires --yes");
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn read_only_refuses_every_threshold_write_before_connecting() {
+    let server = Server::start(vec![]);
+    for args in [
+        CREATE_THRESHOLD.to_vec(),
+        [UPDATE_THRESHOLD, &["--enabled=false"]].concat(),
+        [DELETE_THRESHOLD, &["--yes"]].concat(),
+    ] {
+        let args = [&args[..], &["--debug", "--read-only"]].concat();
+        let (status, stdout, stderr) = invoke_write(&args, &server);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "ReadOnly");
+        assert_eq!(
+            error["error"]["message"],
+            "read-only: write refused (--read-only)"
+        );
+        assert!(error["error"]["operation"].is_null());
+    }
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn threshold_update_merges_json_and_flags_and_keeps_false() {
+    let server = Server::start(vec![response("204 No Content", String::new())]);
+    let args = [
+        UPDATE_THRESHOLD,
+        &[
+            "--cli-input-json",
+            r#"{"Enabled":true,"ThresholdPercentage":0,"MaxAlertsPerPeriod":null}"#,
+            "--enabled=false",
+        ],
+    ]
+    .concat();
+    let (status, stdout, stderr) = invoke_write(&args, &server);
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(stdout, b"{}\n");
+    assert!(stderr.is_empty());
+    assert_eq!(server.requests(), 1);
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&server.bodies()[0]).unwrap()
+            == serde_json::json!({"enabled": false, "thresholdPercentage": 0})
+    );
+}
+
+#[test]
+fn invalid_threshold_uuid_names_the_flag_without_echoing_its_value() {
+    let server = Server::start(vec![]);
+    let value = "invalid_uuid-canary";
+    let args = [
+        "billing",
+        "update-budget-threshold",
+        "--budget-uuid",
+        "budget-1",
+        "--threshold-uuid",
+        value,
+        "--enabled=false",
+    ];
+    let (status, stdout, stderr) = invoke_write(&args, &server);
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains(value));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(
+        error["error"]["message"],
+        "--threshold-uuid must contain only ASCII letters, digits, and hyphens"
+    );
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn threshold_update_without_changes_reports_the_reason() {
+    let server = Server::start(vec![]);
+    let (status, stdout, stderr) = invoke_write(UPDATE_THRESHOLD, &server);
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(
+        error["error"]["message"],
+        "greennode: invalid input: billing.UpdateBudgetThreshold requires at least one field to change"
+    );
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
+fn threshold_delete_emits_fixed_debug_events_on_failure() {
+    let server = Server::start(vec![response(
+        "503 Service Unavailable",
+        format!(r#"{{"code":503,"message":"{BEARER}"}}"#),
+    )]);
+    let args = [DELETE_THRESHOLD, &["--yes", "--debug"]].concat();
+    let (status, stdout, stderr) = invoke_write(&args, &server);
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    let stderr = std::str::from_utf8(&stderr).unwrap();
+    assert!(!stderr.contains(BEARER));
+    assert!(!stderr.contains("threshold-1"));
+    let mut lines = stderr.lines();
+    assert!(
+        lines.next()
+            == Some(
+                r#"level=DEBUG msg="write started" operation="billing delete-budget-threshold""#
+            )
+    );
+    assert!(
+        lines.next()
+            == Some(
+                r#"level=DEBUG msg="write finished" operation="billing delete-budget-threshold""#
+            )
+    );
+    let error: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert_eq!(error["error"]["code"], "ServerError");
+    assert_eq!(error["error"]["status"], 503);
+    assert_eq!(error["error"]["operation"], "billing.DeleteBudgetThreshold");
+    assert_eq!(
+        error["error"]["message"],
+        "budget write outcome is unconfirmed; read current state before retrying"
+    );
+    assert!(lines.next().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[test]
+fn created_threshold_redacts_reflected_strings_before_rendering() {
+    let body = format!(
+        r#"{{"code":201,"data":{{"uuid":"threshold-1","thresholdType":"ACTUAL","notificationState":"reflected {BEARER}"}}}}"#
+    );
+    let server = Server::start(
+        (0..4)
+            .map(|_| response("201 Created", body.clone()))
+            .collect(),
+    );
+    for extra in [
+        &["--output", "json"][..],
+        &["--output", "table"],
+        &["--output", "text"],
+        &["--query", "Threshold.NotificationState"],
+    ] {
+        let args = [CREATE_THRESHOLD, extra].concat();
+        let (status, stdout, stderr) = invoke_write(&args, &server);
+        assert_eq!(status, ExitCode::SUCCESS);
+        let stdout = std::str::from_utf8(&stdout).unwrap();
+        assert!(!stdout.contains(BEARER));
+        assert!(stdout.contains("redacted"));
+        assert!(stderr.is_empty());
+    }
+    assert_eq!(server.requests(), 4);
 }

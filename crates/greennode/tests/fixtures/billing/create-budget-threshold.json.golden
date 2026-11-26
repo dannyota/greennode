@@ -1,0 +1,13 @@
+{
+  "Threshold": {
+    "UUID": "threshold-1",
+    "ThresholdType": "ACTUAL",
+    "ThresholdPercentage": 100,
+    "ComparisonOperator": "GTE",
+    "Enabled": true,
+    "MaxAlertsPerPeriod": 1,
+    "ReminderIntervalHours": 648,
+    "NotificationState": "OK",
+    "LastAlertAt": ""
+  }
+}

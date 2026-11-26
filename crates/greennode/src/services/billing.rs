@@ -2,6 +2,7 @@ mod budget_reads;
 mod budget_writes;
 mod cost;
 mod history;
+mod threshold_writes;
 
 use clap::ArgMatches;
 use greennode_sdk::billing::{Client, GetBudgetInput, ListBudgetsInput};
@@ -159,6 +160,9 @@ pub(super) const SERVICE: Service = Service {
         budget_writes::CREATE_BUDGET,
         budget_writes::UPDATE_BUDGET,
         budget_writes::DELETE_BUDGET,
+        threshold_writes::CREATE_BUDGET_THRESHOLD,
+        threshold_writes::UPDATE_BUDGET_THRESHOLD,
+        threshold_writes::DELETE_BUDGET_THRESHOLD,
         cost::GET_COST_OVERVIEW,
         cost::LIST_COST_RESOURCES,
         cost::GET_BALANCES,
