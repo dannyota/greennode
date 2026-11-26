@@ -133,7 +133,34 @@ impl Policy {
                 .and_then(|daily| daily.backup_type.as_deref()),
         )
         .any(|text| credentials.reflects(text.as_bytes()))
+            || [
+                self.is_default,
+                self.config.hourly_enabled,
+                self.config.daily_enabled,
+                self.config.weekly_enabled,
+                self.config.monthly_enabled,
+                self.config.is_protected_server,
+            ]
+            .into_iter()
+            .any(|value| credentials.reflects(if value { b"true" } else { b"false" }))
+            || [
+                self.backup_instance_count,
+                self.config.hour,
+                self.config.minute,
+            ]
+            .into_iter()
+            .chain(self.config.daily_config.iter().flat_map(|daily| {
+                [daily.retention, daily.incremental_quantity]
+                    .into_iter()
+                    .flatten()
+            }))
+            .any(|value| reflects_integer(value, credentials))
     }
+}
+
+pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> bool {
+    credentials.reflects(value.to_string().as_bytes())
+        || crate::output_number::reflects(value as f64, credentials, false)
 }
 
 fn default_if_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>

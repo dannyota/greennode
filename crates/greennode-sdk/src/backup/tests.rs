@@ -166,6 +166,52 @@ async fn retained_response_strings_refuse_reflected_bearer() {
 }
 
 #[tokio::test]
+async fn retained_response_numbers_refuse_reflected_bearer() {
+    let token = "9007199254740992";
+    let backend = BACKENDS.replace("\"totalItems\": 1", &format!("\"totalItems\": {token}"));
+    let policies = POLICIES.replace(
+        "\"backupInstanceCount\": 3",
+        "\"backupInstanceCount\": 9007199254740993",
+    );
+    let policy = POLICY.replace("\"retention\": 0", "\"retention\": 90071992547409920e-1");
+    let server = Server::start(vec![
+        response("200 OK", &backend),
+        response("200 OK", &policies),
+        response("200 OK", &policy),
+        response("200 OK", BACKENDS),
+    ]);
+    let client = configured_client(
+        &server,
+        "han-1",
+        ConfigOptions::default().with_static_token(Secret::new(token)),
+    );
+    let (ctx, _) = RequestContext::new();
+    let Err(backends) = client.list_backends(&ctx, ListBackendsInput).await else {
+        panic!("reflected totalItems accepted");
+    };
+    let Err(policies) = client
+        .list_policies(&ctx, ListPoliciesInput::default())
+        .await
+    else {
+        panic!("reflected backupInstanceCount accepted");
+    };
+    let Err(policy) = client
+        .get_policy(&ctx, GetPolicyInput::new("synthetic"))
+        .await
+    else {
+        panic!("reflected retention accepted");
+    };
+    assert!(
+        backends.partial().is_none() && policies.partial().is_none() && policy.partial().is_none()
+    );
+    for error in [backends.error(), policies.error(), policy.error()] {
+        assert_eq!(error.api_error().unwrap().code(), "InvalidResponse");
+        assert!(!format!("{error} {error:?}").contains(token));
+    }
+    assert!(client.list_backends(&ctx, ListBackendsInput).await.is_ok());
+}
+
+#[tokio::test]
 async fn validates_region_paths_and_paging_before_sending() {
     let server = Server::start(vec![]);
     let (ctx, _) = RequestContext::new();
@@ -319,22 +365,63 @@ async fn malformed_shapes_never_yield_partial_results() {
             .await
             .unwrap_err();
         assert!(failure.partial().is_none());
-        assert_eq!(failure.error().api_error().unwrap().status(), Some(200));
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(200));
+        assert_eq!(
+            api.message(),
+            "unrecognized Backup Center response; body withheld"
+        );
     }
     let failure = client
         .list_policies(&ctx, ListPoliciesInput::default())
         .await
         .unwrap_err();
     assert!(failure.partial().is_none());
-    assert_eq!(failure.error().api_error().unwrap().status(), Some(200));
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(200));
+    assert_eq!(
+        api.message(),
+        "unrecognized Backup Center response; body withheld"
+    );
     for _ in invalid_details {
         let failure = client
             .get_policy(&ctx, GetPolicyInput::new("policy-1"))
             .await
             .unwrap_err();
         assert!(failure.partial().is_none());
-        assert_eq!(failure.error().api_error().unwrap().status(), Some(200));
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(200));
+        assert_eq!(
+            api.message(),
+            "unrecognized Backup Center response; body withheld"
+        );
         assert!(!failure.error().to_string().contains("different-policy"));
+    }
+}
+
+#[tokio::test]
+async fn malformed_json_reports_decode_failure_for_each_read() {
+    let body = format!(r#"{{"name":"{TOKEN}","#);
+    let server = Server::start((0..3).map(|_| response("200 OK", &body)).collect());
+    let client = client(&server, "han-1");
+    let (ctx, _) = RequestContext::new();
+    let backends = client
+        .list_backends(&ctx, ListBackendsInput)
+        .await
+        .unwrap_err();
+    let policies = client
+        .list_policies(&ctx, ListPoliciesInput::default())
+        .await
+        .unwrap_err();
+    let policy = client
+        .get_policy(&ctx, GetPolicyInput::new("policy-1"))
+        .await
+        .unwrap_err();
+    for error in [backends.error(), policies.error(), policy.error()] {
+        let api = error.api_error().unwrap();
+        assert_eq!(api.status(), Some(200));
+        assert_eq!(api.message(), "response failed to decode; body withheld");
+        assert!(!format!("{error} {error:?}").contains(TOKEN));
     }
 }
 

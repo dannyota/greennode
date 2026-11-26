@@ -167,16 +167,28 @@ fn flags_override_json_and_queries_use_go_keys() {
 #[test]
 fn refusals_exit_before_request() {
     let server = Server::start(vec![]);
-    for (args, code) in [
-        (&["backup", "get-policy"][..], "InvalidUsage"),
+    for (args, code, message) in [
+        (&["backup", "get-policy"][..], "InvalidUsage", None),
         (
             &["backup", "get-policy", "--policy-id", "../SECRET-MARKER"],
             "InvalidUsage",
+            Some(
+                "vngcloud: invalid input: backup.GetPolicy requires PolicyID to match ^[A-Za-z0-9-]+$",
+            ),
         ),
-        (&["backup", "list-policies", "--size", "-1"], "InvalidUsage"),
+        (
+            &["backup", "list-policies", "--size", "-1"],
+            "InvalidUsage",
+            Some(
+                "vngcloud: invalid input: backup.ListPolicies: Page and Size must not be negative",
+            ),
+        ),
         (
             &["--region", "hcm-4", "backup", "list-backends"],
             "InvalidConfig",
+            Some(
+                "vngcloud: invalid config: backup.ListBackends: requires a supported Backup Center region",
+            ),
         ),
     ] {
         let (status, stdout, stderr) = invoke(args, &server);
@@ -184,8 +196,36 @@ fn refusals_exit_before_request() {
         assert!(stdout.is_empty());
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], code);
+        if let Some(message) = message {
+            assert_eq!(
+                error["error"],
+                serde_json::json!({"code": code, "message": message})
+            );
+        }
     }
     assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn oversized_lists_report_plain_transport_limit_error() {
+    let oversized = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![
+        response("200 OK", &oversized),
+        response("200 OK", &oversized),
+    ]);
+    for command in ["list-backends", "list-policies"] {
+        let (status, stdout, stderr) = invoke(&["backup", command], &server);
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(
+            error["error"],
+            serde_json::json!({
+                "code": "RequestFailed",
+                "message": "transport: response body exceeds limit",
+            })
+        );
+    }
 }
 
 #[test]

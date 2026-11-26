@@ -23,6 +23,8 @@ use crate::{Config, Error, ErrorClass, Failure, PagedList, RequestContext, Write
 
 use wire::{Collection, Detail, invalid_body, reflected_credential, withhold};
 
+const GET_POLICY: &str = "backup.GetPolicy";
+
 /// Client for token-scoped Backup Center reads in `hcm-3` and `han-1`.
 #[derive(Clone)]
 pub struct Client {
@@ -103,7 +105,9 @@ impl Client {
         ctx: &RequestContext,
         _input: ListBackendsInput,
     ) -> Result<ListBackendsOutput, Failure<ListBackendsOutput>> {
-        let base = self.base()?;
+        let base = self.base(
+            "vngcloud: invalid config: backup.ListBackends: requires a supported Backup Center region",
+        )?;
         let result: Collection<Backend, Option<i64>> = self
             .read(
                 ctx,
@@ -128,9 +132,13 @@ impl Client {
         ctx: &RequestContext,
         input: ListPoliciesInput,
     ) -> Result<ListPoliciesOutput, Failure<ListPoliciesOutput>> {
-        let base = self.base()?;
+        let base = self.base(
+            "vngcloud: invalid config: backup.ListPolicies: requires a supported Backup Center region",
+        )?;
         if input.page < 0 || input.size < 0 {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
+                "vngcloud: invalid input: backup.ListPolicies: Page and Size must not be negative",
+            )));
         }
         let page = input.page.max(1).to_string();
         let size = if input.size == 0 { 200 } else { input.size }.to_string();
@@ -158,8 +166,20 @@ impl Client {
         ctx: &RequestContext,
         input: GetPolicyInput,
     ) -> Result<GetPolicyOutput, Failure<GetPolicyOutput>> {
-        let base = self.base()?;
-        let operation = read_operation("backup.GetPolicy", "v1/backup-policies/{}");
+        let base = self.base(
+            "vngcloud: invalid config: backup.GetPolicy: requires a supported Backup Center region",
+        )?;
+        if input.policy_id.is_empty()
+            || !input
+                .policy_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
+                "vngcloud: invalid input: backup.GetPolicy requires PolicyID to match ^[A-Za-z0-9-]+$",
+            )));
+        }
+        let operation = read_operation(GET_POLICY, "v1/backup-policies/{}");
         let result: Detail = self
             .read(ctx, base, &operation, &[&input.policy_id], &[])
             .await?;
@@ -174,12 +194,12 @@ impl Client {
         })
     }
 
-    fn base<O>(&self) -> Result<&Base, Failure<O>> {
+    fn base<O>(&self, message: &'static str) -> Result<&Base, Failure<O>> {
         self.session
             .endpoints()
             .backup_center
             .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))
+            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig).with_detail(message)))
     }
 
     async fn read<T: Output, O>(

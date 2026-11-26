@@ -7,9 +7,7 @@ use std::io::Write;
 use std::pin::Pin;
 
 use clap::ArgMatches;
-use greennode_sdk::{
-    Clock, Config, ConfigOptions, ConfigSource, Error, ErrorClass, Failure, RequestContext,
-};
+use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, Failure, RequestContext};
 
 use super::input::{self, InputDescriptor, ParsedOperationInput};
 use super::op::{Kind, Operation};
@@ -319,10 +317,7 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
     }
 
     fn advice(&self, error: &Error) -> Option<&'static str> {
-        error
-            .detail::<&'static str>()
-            .copied()
-            .filter(|_| error.has_identity(ErrorClass::InvalidInput))
+        error.detail::<&'static str>().copied()
     }
 
     fn execute<'a>(

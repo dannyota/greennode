@@ -8,9 +8,9 @@ use crate::wire::product::{
     sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{ApiError, Error};
+use crate::{ApiError, Error, ErrorClass};
 
-use super::{Backend, Policy};
+use super::{Backend, GET_POLICY, Policy, model::reflects_integer};
 
 const WITHHELD: &str = "Backup Center response withheld";
 const INVALID_BODY: &str = "unrecognized Backup Center response; body withheld";
@@ -63,7 +63,7 @@ impl Row for Policy {
     }
 }
 
-impl<T: Row, P: DeserializeOwned + Default> Output for Collection<T, P> {
+impl<T: Row, P: DeserializeOwned + Default + Copy + Into<Option<i64>>> Output for Collection<T, P> {
     const SCHEMA: Shape<'static> = Shape::Object(&[
         field("items", Shape::Array(&T::SHAPE)),
         field("page", Shape::Any),
@@ -74,10 +74,13 @@ impl<T: Row, P: DeserializeOwned + Default> Output for Collection<T, P> {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let output: Self = decode(operation, response)?;
-        if output
-            .items
-            .iter()
-            .any(|item| item.reflects(&response.credentials))
+        let credentials = &response.credentials;
+        if output.items.iter().any(|item| item.reflects(credentials))
+            || [output.page.into(), output.page_size.into()]
+                .into_iter()
+                .flatten()
+                .chain([output.total_pages, output.total_items])
+                .any(|value| reflects_integer(value, credentials))
         {
             return Err(Box::new(reflected_credential(operation)));
         }
@@ -117,11 +120,20 @@ impl Output for Detail {
 
 fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Box<Error>> {
     operation::decode_response(operation, response).map_err(|error| {
-        if response.status == StatusCode::OK {
-            Box::new(invalid_body(operation))
-        } else {
-            error
+        if response.status != StatusCode::OK {
+            return error;
         }
+        if !response.body.is_empty() && serde_json::from_slice::<&RawValue>(&response.body).is_err()
+        {
+            return Box::new(response_error(
+                operation,
+                response.status.as_u16(),
+                "",
+                "response failed to decode; body withheld",
+                false,
+            ));
+        }
+        Box::new(invalid_body(operation))
     })
 }
 
@@ -178,6 +190,11 @@ pub(super) fn reflected_credential(operation: &Operation) -> Error {
 
 pub(super) fn withhold(operation: &Operation, error: Error) -> Error {
     if error.is_body_too_large() {
+        if operation.id != GET_POLICY {
+            return Error::new(ErrorClass::Api)
+                .with_detail("transport: response body exceeds limit")
+                .with_body_too_large();
+        }
         return match error.detail::<StatusCode>() {
             Some(status) => {
                 response_error(operation, status.as_u16(), "", WITHHELD, false).with_cause(error)
