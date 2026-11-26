@@ -167,3 +167,194 @@ async fn a_truncated_acceptance_does_not_start_confirmation() {
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 3);
 }
+
+const POOL_READY: &str = r#"{"data":{"uuid":"pool-1","progressStatus":"CREATED"}}"#;
+
+fn pool_input(no_wait: bool) -> DeletePoolInput {
+    DeletePoolInput {
+        load_balancer_id: "lb-1".into(),
+        pool_id: "pool-1".into(),
+        no_wait,
+    }
+}
+
+fn pool_preflight() -> [Response; 3] {
+    [
+        response("200 OK", r#"{"data":[]}"#),
+        lb_status("CREATED"),
+        response("200 OK", POOL_READY),
+    ]
+}
+
+#[tokio::test]
+async fn malformed_parent_never_confirms_child_deletion() {
+    let malformed = || {
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"lb-1","progressStatus":"CREATED","internal":"no"}}"#,
+        )
+    };
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("202 Accepted", ""),
+        response("404 Not Found", "{}"),
+        malformed(),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .delete_listener(&ctx, listener_input(false))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert_eq!(
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+    assert_eq!(failure.partial(), Some(&DeleteListenerOutput {}));
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::RecoveryAdvice>()
+            .unwrap()
+            .message(),
+        "vngcloud: write outcome not confirmed: loadbalancer.DeleteListener: listener listener-1: loadbalancer.GetLoadBalancer: request failed: response failed to decode"
+    );
+    assert_eq!(server.requests(), 5);
+
+    let server = Server::start(vec![malformed()]);
+    let failure = client(&server, CANARY)
+        .delete_listener(&ctx, listener_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        failure.error().detail::<DecodeError>(),
+        Some(&DecodeError::InvalidShape)
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn conflict_arrays_require_go_error_fields_and_accept_detail_text() {
+    let cases = [
+        (
+            r#"[{"message":"pool is updating"},{"detail":42}]"#,
+            None,
+            "Conflict",
+        ),
+        (
+            r#"[{"detail":"pool is used in listener"}]"#,
+            Some(&WriteError::ResourceInUse),
+            "pool is used in listener",
+        ),
+    ];
+    for (body, expected, message) in cases {
+        let server = Server::start(
+            pool_preflight()
+                .into_iter()
+                .chain([response("409 Conflict", body)])
+                .collect(),
+        );
+        let (ctx, _) = RequestContext::new();
+        let failure = client(&server, CANARY)
+            .delete_pool(&ctx, pool_input(true))
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error().detail::<WriteError>(), expected);
+        assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+        assert_eq!(failure.error().api_error().unwrap().message(), message);
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert_eq!(server.requests(), 4);
+    }
+}
+
+#[tokio::test]
+async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":[{"uuid":"toy-secret","defaultPoolId":"pool-1"}]}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .delete_pool(&ctx, pool_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<WriteError>(),
+        Some(&WriteError::ResourceInUse)
+    );
+    assert!(!failure.error().has_class(ErrorClass::InvalidInput));
+    let message = failure
+        .error()
+        .detail::<crate::RecoveryAdvice>()
+        .unwrap()
+        .message();
+    assert!(!message.contains(CANARY));
+    assert!(message.contains("<redacted>"));
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn pool_delete_classifies_in_use_on_the_readiness_retry() {
+    let server = Server::start(
+        pool_preflight()
+            .into_iter()
+            .chain([
+                response("409 Conflict", r#"{"message":"pool is updating"}"#),
+                lb_status("CREATED"),
+                response(
+                    "409 Conflict",
+                    r#"[{"detail":"pool is used in listener: toy%2Dsecret"}]"#,
+                ),
+            ])
+            .collect(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .delete_pool(&ctx, pool_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<WriteError>(),
+        Some(&WriteError::ResourceInUse)
+    );
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    let message = failure
+        .error()
+        .detail::<crate::RecoveryAdvice>()
+        .unwrap()
+        .message();
+    assert!(!message.contains(CANARY));
+    assert!(!message.contains("toy%2Dsecret"));
+    assert_eq!(server.requests(), 6);
+}
+
+#[tokio::test]
+async fn child_delete_internal_bound_is_not_a_caller_deadline() {
+    let (arrived, poll_started) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("202 Accepted", ""),
+        Response::StallBeforeHead(arrived),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, CANARY);
+    let (result, ()) = tokio::join!(client.delete_listener(&ctx, listener_input(false)), async {
+        poll_started.await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(600)).await;
+    });
+    let failure = result.unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert!(!failure.error().has_class(ErrorClass::DeadlineExceeded));
+    assert_eq!(failure.partial(), Some(&DeleteListenerOutput {}));
+    let message = failure
+        .error()
+        .detail::<crate::RecoveryAdvice>()
+        .unwrap()
+        .message();
+    assert!(message.contains("did not settle within 10m0s"));
+}

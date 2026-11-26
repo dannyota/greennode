@@ -18,6 +18,45 @@ pub(crate) fn classify(
     rules: (bool, bool, Retry),
     credentials: &SentCredentials,
 ) -> Result<Bytes, Box<crate::Error>> {
+    classify_with_decoder(
+        operation,
+        status,
+        body,
+        success,
+        rules,
+        credentials,
+        |body| decode(body, !credentials.values().is_empty()),
+    )
+}
+
+pub(crate) fn classify_full(
+    operation: &'static str,
+    status: StatusCode,
+    body: Bytes,
+    success: &[StatusCode],
+    rules: (bool, bool, Retry),
+    credentials: &SentCredentials,
+) -> Result<Bytes, Box<crate::Error>> {
+    classify_with_decoder(
+        operation,
+        status,
+        body,
+        success,
+        rules,
+        credentials,
+        |body| full_error(body).unwrap_or_default(),
+    )
+}
+
+fn classify_with_decoder(
+    operation: &'static str,
+    status: StatusCode,
+    body: Bytes,
+    success: &[StatusCode],
+    rules: (bool, bool, Retry),
+    credentials: &SentCredentials,
+    decode: impl FnOnce(&[u8]) -> (String, String),
+) -> Result<Bytes, Box<crate::Error>> {
     if success.contains(&status) {
         return Ok(body);
     }
@@ -25,7 +64,7 @@ pub(crate) fn classify(
     let (code, message) = if sensitive {
         (String::new(), String::new())
     } else {
-        decode(&body, !credentials.values().is_empty())
+        decode(&body)
     };
     let secrets: Vec<_> = credentials.values().iter().collect();
     let safe = |text: &str| sanitize_error_text(text, credentials);
@@ -71,6 +110,43 @@ pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) ->
     }
     let (_, message) = decode(body, true);
     predicate(&Zeroizing::new(message))
+}
+
+pub(crate) fn inspect_error_message<T>(body: &[u8], inspect: impl FnOnce(&str) -> T) -> Option<T> {
+    full_error(body).map(|(_, message)| inspect(&Zeroizing::new(message)))
+}
+
+fn full_error(body: &[u8]) -> Option<(String, String)> {
+    use crate::wire::strict_json::{Field, validate};
+
+    const fn scalar(name: &str) -> Field<'_> {
+        Field {
+            name,
+            children: &[],
+        }
+    }
+
+    const SCALARS: &[Field<'_>] = &[
+        scalar("message"),
+        scalar("error"),
+        scalar("detail"),
+        scalar("title"),
+        scalar("code"),
+    ];
+    let fields = [
+        Field {
+            name: "errors",
+            children: SCALARS,
+        },
+        scalar("message"),
+        scalar("error"),
+        scalar("detail"),
+        scalar("title"),
+        scalar("code"),
+    ];
+    let text = crate::model::wire::go_json(body);
+    validate(text.as_bytes(), &fields, text.len()).ok()?;
+    Some(decode(text.as_bytes(), false))
 }
 
 pub(crate) fn sanitize_error_text(

@@ -16,8 +16,11 @@ use crate::wire::product::{
 use crate::{ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::deletes::{context_error, local, safe_text};
-use super::wire::{CompleteNotFound, DecodeError, Envelope, Read, screen_input, validate_ids};
-use super::{Client, WriteError};
+use super::wire::{
+    CompleteNotFound, DecodeError, Envelope, PoolInUseRefusal, Read, pool_in_use_refusal,
+    screen_input, validate_ids,
+};
+use super::{Client, WriteError, ZonedLoadBalancer, guard};
 
 const LOAD_BALANCER: Read = Read {
     id: "loadbalancer.GetLoadBalancer",
@@ -214,7 +217,13 @@ impl Client {
             Err(failure) if failure.error().detail::<BusyRefusal>().is_some() => {
                 self.wait_child_ready(ctx, &child, &mut evidence)
                     .await
-                    .map_err(|error| Failure::new(*error, None, failure.write_dispatch()))?;
+                    .map_err(|error| {
+                        Failure::new(
+                            child.in_use_refusal(*error, &evidence),
+                            None,
+                            failure.write_dispatch(),
+                        )
+                    })?;
                 self.send_child_delete(ctx, &child, &mut evidence)
                     .await
                     .map_err(|failure| {
@@ -272,18 +281,19 @@ impl Client {
             let fields = Envelope::parse(row.get(), &LISTENERS, evidence)?;
             let id: String = canonical_field(&fields, &LISTENERS, evidence, "uuid")?;
             let default: String = canonical_field(&fields, &LISTENERS, evidence, "defaultPoolId")?;
-            if !PathIds::WithUnderscore.allows(&id)
+            if (!evidence.text_reflects(&id) && !PathIds::WithUnderscore.allows(&id))
                 || (!default.is_empty() && !PathIds::WithUnderscore.allows(&default))
                 || !seen.insert(id.clone())
             {
                 return Err(LISTENERS.decode_error(evidence, DecodeError::InvalidShape));
             }
-            screen_input(evidence, [id.as_str(), default.as_str()])?;
+            screen_input(evidence, [default.as_str()])?;
             if default == child.id {
                 used_by.get_or_insert(id);
             }
         }
         if let Some(id) = used_by {
+            let id = safe_text(&id, evidence);
             let message = format!(
                 "loadbalancer: resource in use: {}: pool {} is used in listener {id} as its default pool",
                 child.operation, child.id
@@ -388,13 +398,17 @@ impl Client {
     ) -> Result<String, Box<Error>> {
         let text = self.read_text(ctx, read, ids, &[], evidence, true).await?;
         let wrapper = Envelope::parse(&text, read, evidence)?;
-        let fields = Envelope::parse(
-            wrapper.canonical_raw(read, evidence, "data")?,
-            read,
-            evidence,
-        )?;
-        let uuid: String = canonical_field(&fields, read, evidence, "uuid")?;
-        let progress: String = canonical_field(&fields, read, evidence, "progressStatus")?;
+        let data = wrapper.canonical_raw(read, evidence, "data")?;
+        let (uuid, progress) = if read.id == LOAD_BALANCER.id {
+            let ZonedLoadBalancer(row) = guard::parse(read, data, &guard::LOAD_BALANCER, evidence)?;
+            (row.uuid, row.progress_status)
+        } else {
+            let fields = Envelope::parse(data, read, evidence)?;
+            (
+                canonical_field::<String>(&fields, read, evidence, "uuid")?,
+                canonical_field::<String>(&fields, read, evidence, "progressStatus")?,
+            )
+        };
         if uuid != id || progress.is_empty() {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
@@ -464,7 +478,7 @@ impl Client {
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
         let busy = status.is_client_error()
-            && response::error_message_matches(&body, |message| {
+            && response::inspect_error_message(&body, |message| {
                 message_has_phrase(
                     message,
                     &[
@@ -474,13 +488,12 @@ impl Client {
                         b"is deleting",
                     ],
                 )
-            });
-        let in_use = child.kind == "pool"
-            && !operation.success.contains(&status)
-            && response::error_message_matches(&body, |message| {
-                message_has_phrase(message, &[b"is used in listener"])
-            });
-        response::classify(
+            })
+            .unwrap_or(false);
+        let in_use = (child.kind == "pool" && !operation.success.contains(&status))
+            .then(|| pool_in_use_refusal(&body, evidence))
+            .flatten();
+        response::classify_full(
             operation.id,
             status,
             body,
@@ -491,8 +504,8 @@ impl Client {
         .map(|_| ())
         .map_err(|error| {
             let mut error = screen(*error);
-            if in_use {
-                error = child.in_use_refusal(error, evidence);
+            if let Some(in_use) = in_use {
+                error = child.in_use_refusal(error.with_outer_detail(in_use), evidence);
             }
             if busy {
                 error = error.with_outer_detail(BusyRefusal);
@@ -504,16 +517,30 @@ impl Client {
 
 impl Child<'_> {
     fn in_use_refusal(&self, error: Error, evidence: &Evidence) -> Error {
+        use std::fmt::Write as _;
+
+        let Some(refusal) = error
+            .detail::<PoolInUseRefusal>()
+            .filter(|_| self.kind == "pool")
+        else {
+            return error;
+        };
         let id = safe_text(self.id, evidence);
         let mut message = format!(
             "loadbalancer: resource in use: {}: pool {id}",
             self.operation
         );
-        if let Some(api) = error.api_error()
-            && (!api.message().is_empty() || api.status().is_some())
-        {
-            message.push_str(": ");
-            message.push_str(&api_error_text(api));
+        if let Some(api) = error.api_error() {
+            let reason = refusal.0.as_str();
+            if !reason.is_empty() {
+                if !api.operation().is_empty() {
+                    let _ = write!(message, ": {}", api.operation());
+                }
+                let _ = write!(message, ": {reason}");
+            }
+            if let Some(status) = api.status() {
+                let _ = write!(message, " (status {status})");
+            }
         }
         local(ErrorClass::Api, &message, evidence)
             .with_outer_detail(WriteError::ResourceInUse)
@@ -531,9 +558,13 @@ impl Child<'_> {
 
     fn unconfirmed(&self, evidence: &Evidence, cause: Error) -> Box<Error> {
         let id = safe_text(self.id, evidence);
-        let reason = cause
-            .api_error()
-            .map_or_else(|| "confirmation read failed".into(), api_error_text);
+        let reason = match cause.api_error() {
+            Some(api) if cause.detail::<DecodeError>().is_some() && !api.message().is_empty() => {
+                api.message().to_owned()
+            }
+            Some(api) => api_error_text(api),
+            None => "confirmation read failed".into(),
+        };
         let message = format!(
             "vngcloud: write outcome not confirmed: {}: {} {id}: {reason}",
             self.operation, self.kind
@@ -605,9 +636,13 @@ fn check_confirm_time(
         "vngcloud: write outcome not confirmed: {}: {} {id} {reason}; delete was sent and a rerun is safe",
         child.operation, child.kind
     );
-    Err(Box::new(
-        local(ErrorClass::NotSettled, &message, evidence).with_cause(context_error(end)),
-    ))
+    let error = local(ErrorClass::NotSettled, &message, evidence);
+    let error = if let Some(end) = parent.check(clock) {
+        error.with_cause(context_error(end))
+    } else {
+        error
+    };
+    Err(Box::new(error))
 }
 
 fn child_busy(progress: &str) -> bool {
