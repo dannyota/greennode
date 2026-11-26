@@ -184,7 +184,7 @@ fn compare_tree(
     let mut seen_services = std::collections::BTreeSet::new();
     for service_command in tree
         .get_subcommands()
-        .filter(|c| !c.is_hide_set() && !["version", "help"].contains(&c.get_name()))
+        .filter(|c| !c.is_hide_set() && !["version", "help", "configure"].contains(&c.get_name()))
     {
         let name = service_command.get_name();
         if !seen_services.insert(name) {
