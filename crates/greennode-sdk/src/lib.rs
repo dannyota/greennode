@@ -23,6 +23,7 @@ pub mod globalloadbalancer;
 pub mod iam;
 pub mod loadbalancer;
 mod model;
+pub mod monitor;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod output_number;

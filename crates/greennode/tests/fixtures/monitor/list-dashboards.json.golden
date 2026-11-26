@@ -1,0 +1,16 @@
+{
+  "Items": [
+    {
+      "ID": "dash-1",
+      "Name": "Synthetic",
+      "System": true,
+      "Favorite": true,
+      "CreatedAt": "created",
+      "UpdatedAt": "updated"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

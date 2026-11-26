@@ -332,6 +332,7 @@ pub(super) struct RouteInputs<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
     pub(super) password_slot: Option<super::options::PasswordSlot<'a>>,
+    pub(super) identifier_query_keys: &'a [&'a str],
 }
 
 impl RouteInputs<'_> {
@@ -339,10 +340,13 @@ impl RouteInputs<'_> {
         self.path
             .iter()
             .any(|id| super::response::reflects_identifier(id, credentials))
-            || self
-                .query
-                .iter()
-                .any(|(_, value)| super::response::reflects_credential(value, credentials))
+            || self.query.iter().any(|(key, value)| {
+                if self.identifier_query_keys.contains(key) {
+                    super::response::reflects_identifier(value, credentials)
+                } else {
+                    super::response::reflects_credential(value, credentials)
+                }
+            })
     }
 }
 

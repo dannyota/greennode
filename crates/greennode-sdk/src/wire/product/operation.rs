@@ -302,6 +302,7 @@ async fn send_route<T>(
             path,
             query,
             password_slot: options.password_slot,
+            identifier_query_keys: options.identifier_query_keys,
         },
     )
     .await
