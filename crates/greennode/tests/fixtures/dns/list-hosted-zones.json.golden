@@ -1,0 +1,29 @@
+{
+  "Items": [
+    {
+      "hostedZoneId": "zone-1",
+      "domainName": "\u003chostname\u003e",
+      "status": "ACTIVE",
+      "description": "",
+      "type": "PRIVATE",
+      "countRecords": 1,
+      "assocVpcIds": [
+        "vpc-1"
+      ],
+      "assocVpcMapRegion": [
+        {
+          "vpcId": "vpc-1",
+          "region": "hcm-3"
+        }
+      ],
+      "portalUserId": 0,
+      "createdAt": "0001-01-01T00:00:00Z",
+      "deletedAt": null,
+      "updatedAt": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 20,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

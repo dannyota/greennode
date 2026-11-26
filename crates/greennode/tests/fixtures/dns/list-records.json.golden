@@ -1,0 +1,26 @@
+{
+  "Items": [
+    {
+      "recordId": "record-1",
+      "subDomain": "\u003cname\u003e",
+      "hostedZoneId": "zone-1",
+      "status": "ACTIVE",
+      "type": "A",
+      "routingPolicy": "simple",
+      "value": [
+        {
+          "value": "\u003cip\u003e"
+        }
+      ],
+      "ttl": 300,
+      "enableStickySession": null,
+      "createdAt": "0001-01-01T00:00:00Z",
+      "deletedAt": null,
+      "updatedAt": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 20,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

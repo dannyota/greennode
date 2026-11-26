@@ -1,0 +1,1 @@
+{"createdAt":"0001-01-01T00:00:00Z","deletedAt":null,"enableStickySession":null,"hostedZoneId":"zone-1","recordId":"record-1","routingPolicy":"","status":"ACTIVE","subDomain":"\u003cname\u003e","ttl":300,"type":"A","updatedAt":"0001-01-01T00:00:00Z","value":[{"value":"\u003cip\u003e"}]}

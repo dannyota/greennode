@@ -1,0 +1,18 @@
+{
+  "HostedZone": {
+    "hostedZoneId": "zone-1",
+    "domainName": "\u003chostname\u003e",
+    "status": "ACTIVE",
+    "description": "",
+    "type": "PRIVATE",
+    "countRecords": 0,
+    "assocVpcIds": [
+      "vpc-1"
+    ],
+    "assocVpcMapRegion": [],
+    "portalUserId": 0,
+    "createdAt": "0001-01-01T00:00:00Z",
+    "deletedAt": null,
+    "updatedAt": "0001-01-01T00:00:00Z"
+  }
+}
