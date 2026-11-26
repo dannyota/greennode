@@ -9,8 +9,8 @@ REAL_CARGO_HOME := $(or $(CARGO_HOME),$(HOME)/.cargo)
 REAL_RUSTUP_HOME := $(or $(RUSTUP_HOME),$(HOME)/.rustup)
 BIN := node_modules/.bin
 BASELINE_REPO := https://github.com/dannyota/vngcloud
-BASELINE_TAG := v1.2.0
-BASELINE_COMMIT := f99c71490b1006a95a6dac7b0eac7f182b34e917
+BASELINE_TAG := v1.7.0
+BASELINE_COMMIT := 8cc8463df39a9c72fa32dcfb359c09618402288f
 
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed -E 's/^([a-z-]+):.*## /\1\t/'

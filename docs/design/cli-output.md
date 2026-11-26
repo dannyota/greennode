@@ -185,28 +185,28 @@ presentation timestamps and failed stdout. The query engine's
 semantics separately.
 
 [baseline]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli.md#output
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/cli.md#output
 [lists]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/cli-usability.md#list-output-shape
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/cli-usability.md#list-output-shape
 [encoder]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/encode.go
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/encode.go
 [renderer]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/render.go
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/render.go
 [map-redaction]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/redact_maps.go
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/redact_maps.go
 [check-test]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/redact_maps_test.go#L177
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/redact_maps_test.go#L177
 [check-model]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/monitor/models.go#L70
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/monitor/models.go#L70
 [glb-header]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/globalloadbalancer/globalloadbalancer.go#L528
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/globalloadbalancer/globalloadbalancer.go#L528
 [lb-header]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/loadbalancer/loadbalancer.go#L562
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/loadbalancer/loadbalancer.go#L562
 [head-metadata]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/storage/objects_head.go#L24
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/storage/objects_head.go#L24
 [head-cli]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/svc_storage_object_operations.go#L191
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/svc_storage_object_operations.go#L191
 [head-filter]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/storage/object_errors.go#L40
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/storage/object_errors.go#L40
 [console-log]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/internal/cli/svc_compute_console_log.go#L18
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/internal/cli/svc_compute_console_log.go#L18

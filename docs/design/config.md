@@ -96,9 +96,9 @@ files, even if options supply all required values. The config section reserves
 non-empty `client_id` and `client_secret`; refuse them before exposing settings.
 
 [baseline-sdk]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/sdk-and-cli.md#configuration-and-credentials
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/sdk-and-cli.md#configuration-and-credentials
 [baseline-auth]:
-  https://github.com/dannyota/vngcloud/blob/v1.2.0/docs/design/service-account-auth.md
+  https://github.com/dannyota/vngcloud/blob/v1.7.0/docs/design/service-account-auth.md
 
 ## File mode and paths
 

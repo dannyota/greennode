@@ -1,6 +1,6 @@
 {
-  "tag": "v1.2.0",
-  "commit": "f99c71490b1006a95a6dac7b0eac7f182b34e917",
+  "tag": "v1.7.0",
+  "commit": "8cc8463df39a9c72fa32dcfb359c09618402288f",
   "services": [
     {
       "name": "backup",
@@ -4506,6 +4506,17 @@
           ]
         },
         {
+          "name": "get-dashboard",
+          "kind": "Read",
+          "flags": [
+            {
+              "name": "dashboard-id",
+              "type": "string",
+              "required": true
+            }
+          ]
+        },
+        {
           "name": "get-log-project",
           "kind": "Read",
           "flags": [
@@ -4642,9 +4653,51 @@
           ]
         },
         {
+          "name": "list-check-response-times",
+          "kind": "Read",
+          "flags": [
+            {
+              "name": "check-id",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "start",
+              "type": "string",
+              "required": false
+            },
+            {
+              "name": "end",
+              "type": "string",
+              "required": false
+            }
+          ]
+        },
+        {
           "name": "list-checks",
           "kind": "Read",
           "flags": []
+        },
+        {
+          "name": "list-dashboards",
+          "kind": "Read",
+          "flags": [
+            {
+              "name": "page",
+              "type": "int",
+              "required": false
+            },
+            {
+              "name": "size",
+              "type": "int",
+              "required": false
+            },
+            {
+              "name": "system",
+              "type": "bool",
+              "required": false
+            }
+          ]
         },
         {
           "name": "list-locations",
@@ -5808,6 +5861,22 @@
           ]
         },
         {
+          "name": "get-nat-instance",
+          "kind": "Read",
+          "flags": [
+            {
+              "name": "nat-id",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "zone-id",
+              "type": "string",
+              "required": false
+            }
+          ]
+        },
+        {
           "name": "get-network-acl",
           "kind": "Read",
           "flags": [
@@ -5990,6 +6059,22 @@
             {
               "name": "size",
               "type": "int",
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "list-nat-inbound-rules",
+          "kind": "Read",
+          "flags": [
+            {
+              "name": "nat-id",
+              "type": "string",
+              "required": true
+            },
+            {
+              "name": "zone-id",
+              "type": "string",
               "required": false
             }
           ]

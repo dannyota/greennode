@@ -7,7 +7,7 @@ of copying it.
 | --------------------------------------------- | ------------------------------------------------------------------------------ |
 | What should the product become?               | [`design/`](design/README.md)                                                  |
 | Why was a choice made?                        | [`adr/`](adr/README.md)                                                        |
-| What did the Go CLI do?                       | [vngcloud](https://github.com/dannyota/vngcloud) at tag `v1.2.0`, the baseline |
+| What did the Go CLI do?                       | [vngcloud](https://github.com/dannyota/vngcloud) at tag `v1.7.0`, the baseline |
 | What does the repository implement now?       | Code and tests                                                                 |
 | What runs next?                               | [`plans/`](plans/)                                                             |
 | How should documents and comments be written? | [`standards/engineering.md`](standards/engineering.md)                         |
