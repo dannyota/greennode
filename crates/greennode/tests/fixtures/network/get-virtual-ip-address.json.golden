@@ -1,0 +1,32 @@
+{
+  "VirtualIPAddress": {
+    "UUID": "vip-1",
+    "ID": "",
+    "Name": "\u003cname\u003e",
+    "EndpointAddress": "\u003cip\u003e",
+    "VPCID": "vpc-1",
+    "SubnetID": "subnet-1",
+    "Description": "",
+    "SubnetCIDR": "",
+    "VPCCIDR": "",
+    "AddressPairIPs": [],
+    "Status": "ACTIVE",
+    "CreatedAt": "",
+    "NetworkName": "",
+    "SubnetName": "",
+    "Type": "",
+    "Mode": "",
+    "Zone": {
+      "UUID": "",
+      "Name": "",
+      "ZoneType": "",
+      "IsDefault": false,
+      "Description": "",
+      "IsEnabled": false,
+      "OpenStackZone": "",
+      "IPRanges": [],
+      "ServerCount": 0,
+      "VolumeCount": 0
+    }
+  }
+}

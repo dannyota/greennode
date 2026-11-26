@@ -51,6 +51,18 @@ reports `NotFound`.
 greennode network get-network-acl --network-acl-id <network-acl-id> --query ACL
 ```
 
+## get-route-table
+
+Kind: Read.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--route-table-id` | `string` | yes      |
+
+```sh
+greennode network get-route-table --route-table-id <route-table-id> --query RouteTable
+```
+
 ## get-security-group
 
 Kind: Read.
@@ -76,6 +88,18 @@ Kind: Read.
 greennode network get-subnet --vpc-id <vpc-id> --subnet-id <subnet-id> --query Subnet
 ```
 
+## get-virtual-ip-address
+
+Kind: Read.
+
+| Flag                      | Type     | Required |
+| ------------------------- | -------- | -------- |
+| `--virtual-ip-address-id` | `string` | yes      |
+
+```sh
+greennode network get-virtual-ip-address --virtual-ip-address-id <virtual-ip-address-id> --query VirtualIPAddress
+```
+
 ## get-vpc
 
 Kind: Read.
@@ -86,6 +110,30 @@ Kind: Read.
 
 ```sh
 greennode network get-vpc --vpc-id <vpc-id> --query VPC
+```
+
+## list-address-pairs-by-virtual-ip-address
+
+Kind: Read.
+
+| Flag                      | Type     | Required |
+| ------------------------- | -------- | -------- |
+| `--virtual-ip-address-id` | `string` | yes      |
+
+```sh
+greennode network list-address-pairs-by-virtual-ip-address --virtual-ip-address-id <virtual-ip-address-id>
+```
+
+## list-address-pairs-by-virtual-subnet
+
+Kind: Read.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--virtual-subnet-id` | `string` | yes      |
+
+```sh
+greennode network list-address-pairs-by-virtual-subnet --virtual-subnet-id <virtual-subnet-id>
 ```
 
 ## list-all-security-group-rules
@@ -103,6 +151,16 @@ No fields.
 
 ```sh
 greennode network list-all-security-group-rules
+```
+
+## list-all-virtual-ip-address-address-pairs
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode network list-all-virtual-ip-address-address-pairs
 ```
 
 ## list-bandwidth-packages
@@ -127,6 +185,20 @@ Kind: Read.
 
 ```sh
 greennode network list-dhcp-options
+```
+
+## list-interconnects
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-interconnects
 ```
 
 ## list-nat-inbound-rules
@@ -159,6 +231,58 @@ Kind: Read.
 
 ```sh
 greennode network list-network-acls
+```
+
+## list-network-interfaces
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-network-interfaces
+```
+
+## list-peerings
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-peerings
+```
+
+## list-route-table-routes
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode network list-route-table-routes
+```
+
+## list-route-tables
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-route-tables
 ```
 
 ## list-security-group-rules
@@ -212,6 +336,20 @@ Kind: Read.
 greennode network list-subnets-by-vpc --vpc-id <vpc-id>
 ```
 
+## list-virtual-ip-addresses
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-virtual-ip-addresses
+```
+
 ## list-vpcs
 
 Kind: Read.
@@ -224,4 +362,41 @@ Kind: Read.
 
 ```sh
 greennode network list-vpcs
+```
+
+## list-vpn-connections
+
+Kind: Read.
+
+Reads one page in `hcm-3` or `han-1`. Read-only profiles can run this command.
+`--page` defaults to 1 and `--size` defaults to 10. No automatic paging occurs.
+Live multi-page behavior remains unverified. Sites and tunnels are inline.
+
+Table and text output use one row per VPN with compact JSON for nested fields.
+The example selects site and tunnel counts. Status describes provisioning.
+Pre-shared keys are omitted. Server error messages and codes are withheld.
+
+| Flag     | Type  | Required |
+| -------- | ----- | -------- |
+| `--page` | `int` |          |
+| `--size` | `int` |          |
+
+```sh
+greennode network list-vpn-connections --page 1 --size 10 \
+  --query "Items[].{ID:UUID,Name:VPNName,Sites:length(VPNSites),\
+Status:Status,Tunnels:length(VPNSites[].Tunnels[])}" --output table
+```
+
+## list-wanips
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-wanips
 ```

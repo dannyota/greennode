@@ -1,0 +1,30 @@
+{
+  "Items": [
+    {
+      "UUID": "link_1",
+      "ID": "",
+      "Name": "link",
+      "Status": "ACTIVE",
+      "Description": "",
+      "TypeID": "",
+      "TypeName": "",
+      "PackageID": "",
+      "CreatedAt": "",
+      "ProjectID": "",
+      "CircuitID": {
+        "number": 42,
+        "zone": "zone-1"
+      },
+      "EnableGW2": true,
+      "GW01IP": "192.0.2.8",
+      "GW02IP": "",
+      "GWVIP": "",
+      "RemoteGW01IP": "",
+      "RemoteGW02IP": ""
+    }
+  ],
+  "Page": 2,
+  "PageSize": 5,
+  "TotalPage": 2,
+  "TotalItem": 6
+}

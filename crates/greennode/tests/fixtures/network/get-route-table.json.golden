@@ -1,0 +1,19 @@
+{
+  "RouteTable": {
+    "UUID": "rt-2",
+    "Name": "\u003cname\u003e",
+    "Status": "ACTIVE",
+    "NetworkID": "vpc-1",
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "Routes": [
+      {
+        "UUID": "route-1",
+        "RouteTableID": "rt-2",
+        "RoutingType": "internet",
+        "DestinationCIDRBlock": "\u003ccidr\u003e",
+        "Target": "\u003cip\u003e",
+        "Status": "ACTIVE"
+      }
+    ]
+  }
+}

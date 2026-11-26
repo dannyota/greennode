@@ -1,0 +1,24 @@
+{
+  "Items": [
+    {
+      "UUID": "nic-1",
+      "ID": "",
+      "Name": "\u003cname\u003e",
+      "FixedIP": "\u003cip\u003e",
+      "IPAddress": "",
+      "MAC": "fa:16:3e:00:00:01",
+      "NetworkID": "vpc-1",
+      "NetworkUUID": "",
+      "SubnetID": "subnet-1",
+      "SubnetUUID": "",
+      "ServerID": "server-1",
+      "ServerUUID": "",
+      "Status": "ACTIVE",
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

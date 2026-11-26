@@ -1,0 +1,13 @@
+{
+  "Items": [
+    {
+      "UUID": "\u003caddress-pair-id\u003e",
+      "VirtualIPAddressID": "\u003cvirtual-ip-id\u003e",
+      "VirtualSubnetID": "subnet-1",
+      "NetworkInterfaceIP": "\u003cip\u003e",
+      "NetworkInterfaceID": "\u003cinterface-id\u003e",
+      "CIDR": "\u003cip\u003e/32",
+      "CreatedAt": ""
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+mod routes;
+
 use clap::ArgMatches;
 use greennode_sdk::network::{
     Client, GetNatInstanceInput, ListBandwidthPackagesInput, ListNatInboundRulesInput,
@@ -115,6 +117,19 @@ pub(super) const SERVICE: Service = Service {
     name: "network",
     error_rules: &[],
     operations: &[
+        routes::GET_ROUTE_TABLE,
+        routes::GET_VIRTUAL_IP_ADDRESS,
+        routes::LIST_PAIRS_BY_VIP,
+        routes::LIST_PAIRS_BY_SUBNET,
+        routes::LIST_ALL_VIP_PAIRS,
+        routes::LIST_INTERCONNECTS,
+        routes::LIST_NETWORK_INTERFACES,
+        routes::LIST_PEERINGS,
+        routes::LIST_ROUTE_TABLE_ROUTES,
+        routes::LIST_ROUTE_TABLES,
+        routes::LIST_VIRTUAL_IP_ADDRESSES,
+        routes::LIST_VPN_CONNECTIONS,
+        routes::LIST_WAN_IPS,
         read!(
             "get-nat-instance",
             "network.GetNATInstance",

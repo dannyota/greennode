@@ -1,0 +1,40 @@
+{
+  "Items": [
+    {
+      "UUID": "vip-1",
+      "ID": "",
+      "Name": "\u003cname\u003e",
+      "EndpointAddress": "\u003cip\u003e",
+      "VPCID": "vpc-1",
+      "SubnetID": "subnet-1",
+      "Description": "\u003cdescription\u003e",
+      "SubnetCIDR": "",
+      "VPCCIDR": "",
+      "AddressPairIPs": [
+        "\u003cip\u003e"
+      ],
+      "Status": "ACTIVE",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "NetworkName": "",
+      "SubnetName": "",
+      "Type": "",
+      "Mode": "",
+      "Zone": {
+        "UUID": "",
+        "Name": "",
+        "ZoneType": "",
+        "IsDefault": false,
+        "Description": "",
+        "IsEnabled": false,
+        "OpenStackZone": "",
+        "IPRanges": [],
+        "ServerCount": 0,
+        "VolumeCount": 0
+      }
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

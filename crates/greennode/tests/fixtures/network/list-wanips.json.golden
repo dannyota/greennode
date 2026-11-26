@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "UUID": "wan-1",
+      "ID": "",
+      "Name": "\u003cname\u003e",
+      "IPAddress": "\u003cip\u003e",
+      "FloatingIP": "",
+      "NetworkInterfaceID": "nic-1",
+      "ServerID": "server-1",
+      "Status": "ACTIVE",
+      "Type": "",
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}
