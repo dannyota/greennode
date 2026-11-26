@@ -62,6 +62,7 @@ macro_rules! required_id {
 
 mod server_actions;
 mod server_groups;
+mod ssh_keys;
 
 macro_rules! int_field {
     ($field:ident, $flag:ident, $name:literal) => {
@@ -188,6 +189,9 @@ pub(super) const SERVICE: Service = Service {
         server_groups::CREATE,
         server_groups::UPDATE,
         server_groups::DELETE,
+        ssh_keys::CREATE,
+        ssh_keys::IMPORT,
+        ssh_keys::DELETE,
         operation!(
             GetServerInput, || sdk::GetServerInput::new(""), get_server, "get-server", "GetServer",
             "Get server", &[SERVER_NOTE], false, [

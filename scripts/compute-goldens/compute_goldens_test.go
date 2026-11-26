@@ -273,3 +273,47 @@ func TestComputeGroupPortGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeSSHPortGoldens(t *testing.T) {
+	for _, c := range []struct {
+		name, route, wire string
+		status            int
+		flags             []string
+	}{
+		{"create-ssh-key", "/v2/proj-1/sshKeys", "ssh-key-created", 201, []string{"--name", "example"}},
+		{"import-ssh-key", "/v2/proj-1/sshKeys/import", "ssh-key-imported", 201, []string{"--name", "example", "--public-key", "ssh-rsa toy public"}},
+		{"delete-ssh-key", "/v2/proj-1/sshKeys/key-1", "", 204, []string{"--ssh-key-id", "key-1", "--yes"}},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				var body []byte
+				if c.wire != "" {
+					var err error
+					body, err = os.ReadFile(filepath.Join(os.Getenv("COMPUTE_WIRE_DIR"), c.wire+".json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				routes := map[string]func(http.ResponseWriter, *http.Request){c.route: func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(c.status)
+					_, _ = w.Write(body)
+				}}
+				root, stdout, stderr := newSvcRoot(t, newSvcFixture(routes))
+				args := append([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "compute", c.name}, c.flags...)
+				if c.name == "create-ssh-key" {
+					args = append(args, "--secret-file", filepath.Join(t.TempDir(), "toy.key"), "--query", "{SSHKey: SSHKey, PrivateKey: PrivateKey, SecretFile: contains(SecretFile, 'toy.key')}")
+				}
+				root.SetArgs(args)
+				if err := root.ExecuteContext(computeDiscoveryCLIContext()); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.Len() != 0 || strings.Contains(stdout.String(), "toy-private-key") {
+					t.Fatal("unexpected output")
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("COMPUTE_GOLDEN_DIR"), fmt.Sprintf("%s.%s.golden", c.name, format)), stdout.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}

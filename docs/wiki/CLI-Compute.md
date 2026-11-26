@@ -55,6 +55,22 @@ unconfirmed create.
 greennode compute create-server-group --name <name> --policy-id <policy-id>
 ```
 
+## create-ssh-key
+
+Kind: Write.
+
+Saves the issued private key to a new file with mode 0600. If saving fails,
+attempts to delete the new key.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--secret-file` | `string` | yes      |
+
+```sh
+greennode compute create-ssh-key --name <name> --secret-file <secret-file>
+```
+
 ## delete-server
 
 Kind: Write, destructive.
@@ -84,6 +100,20 @@ Checks group membership before requesting deletion.
 
 ```sh
 greennode compute delete-server-group --server-group-id <server-group-id> --yes
+```
+
+## delete-ssh-key
+
+Kind: Write, destructive.
+
+Deletes the specified SSH key. An already deleted key returns `NotFound`.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--ssh-key-id` | `string` | yes      |
+
+```sh
+greennode compute delete-ssh-key --ssh-key-id <ssh-key-id> --yes
 ```
 
 ## get-server
@@ -139,6 +169,22 @@ Kind: Read.
 
 ```sh
 greennode compute get-ssh-key --ssh-key-id <ssh-key-id>
+```
+
+## import-ssh-key
+
+Kind: Write.
+
+Uploads one line of SSH public key material. The private key stays with the
+caller.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--name`       | `string` | yes      |
+| `--public-key` | `string` | yes      |
+
+```sh
+greennode compute import-ssh-key --name <name> --public-key <public-key>
 ```
 
 ## list-flavor-prices
