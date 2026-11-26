@@ -3,6 +3,7 @@
 mod functions;
 mod functions_expr;
 mod interpreter;
+mod json_size;
 mod lexer;
 mod literal;
 mod parser;
@@ -25,6 +26,40 @@ pub(super) fn compile(expression: &str) -> Result<CompiledQuery, SyntaxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn differential_oracle() {
+        let data: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/query/differential.json"
+        )))
+        .unwrap();
+        for case in data.as_array().unwrap() {
+            if case.get("excluded").is_some() {
+                continue;
+            }
+            let expression = case["expression"].as_str().unwrap();
+            let compiled = compile(expression);
+            if case["stage"] == "compile" {
+                assert!(compiled.is_err(), "{expression}");
+                continue;
+            }
+            let input = crate::cli::render::project(&case["input"])
+                .unwrap()
+                .for_query()
+                .unwrap();
+            let actual = evaluate(&compiled.unwrap(), &input);
+            if case["stage"] == "success" {
+                let expected = crate::cli::render::project(&case["result"])
+                    .unwrap()
+                    .for_query()
+                    .unwrap();
+                assert_eq!(actual, Ok(expected), "{expression}");
+            } else {
+                assert!(actual.is_err(), "{expression}");
+            }
+        }
+    }
 
     #[test]
     fn compliance_syntax() {

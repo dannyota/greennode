@@ -19,6 +19,7 @@ pub(super) fn call(
 ) -> Result<Value, EvaluationError> {
     let mut arguments = Vec::new();
     for node in nodes {
+        budget.reserve(&mut arguments)?;
         if node.kind == NodeKind::ExpRef {
             budget.charge(1)?;
             arguments.push(Argument::Reference(
@@ -61,7 +62,7 @@ pub(super) fn call(
             }) {
                 Ok(item) => {
                     budget.charge(1)?;
-                    result.push(item);
+                    budget.push(&mut result, item)?;
                 }
                 Err(error) => record_error(error, &mut ordinary)?,
             }
@@ -77,6 +78,7 @@ pub(super) fn call(
         }
         return if name == "sort_by" {
             budget.charge(1)?;
+            budget.allocate(values.len() * std::mem::size_of::<Value>())?;
             Ok(Value::Array(values.clone()))
         } else {
             Ok(values.first().cloned().unwrap_or(Value::Null))
@@ -111,7 +113,7 @@ pub(super) fn call(
                     };
                     record_error(error, &mut ordinary)?;
                 }
-                keys.push(key);
+                budget.push(&mut keys, key)?;
             }
             Err(error) => {
                 let error = if name == "sort_by" && index > 0 {
@@ -144,6 +146,11 @@ pub(super) fn call(
         return Ok(values[best].clone());
     }
     budget.charge(u64::try_from(keys.len()).map_err(|_| EvaluationError::WorkBudget)?)?;
+    budget.allocate(
+        keys.len()
+            .checked_mul(std::mem::size_of::<(Value, &Value)>())
+            .ok_or(EvaluationError::ResultSize)?,
+    )?;
     if numeric {
         let indexed = keys
             .into_iter()
@@ -163,6 +170,7 @@ pub(super) fn call(
         for index in order {
             let value = indexed[index].1;
             budget.charge_value(value)?;
+            budget.reserve(&mut output)?;
             output.push(value.clone());
         }
         Ok(Value::Array(output))
@@ -184,6 +192,7 @@ pub(super) fn call(
         for index in order {
             let value = indexed[index].1;
             budget.charge_value(value)?;
+            budget.reserve(&mut output)?;
             output.push(value.clone());
         }
         Ok(Value::Array(output))
@@ -251,6 +260,7 @@ fn call_regular(
         for argument in arguments {
             if let Argument::Value(value) = argument {
                 budget.charge_value(value)?;
+                budget.reserve(&mut values)?;
                 values.push(value.clone());
             }
         }
@@ -272,6 +282,7 @@ fn call_regular(
         }
         ("to_string", [Argument::Reference(_)]) => {
             budget.charge(2)?;
+            budget.allocate(2)?;
             Ok(Value::String("{}".into()))
         }
         ("not_null", values) => {
