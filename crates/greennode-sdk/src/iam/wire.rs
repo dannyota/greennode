@@ -343,10 +343,42 @@ impl<T: Wire> Output for Body<T> {
                 != Some(false)
         {
             return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
-                crate::RecoveryAdvice::new("iam: iam.GetServiceAccount: unsafe guard response"),
+                crate::RecoveryAdvice::new(if operation.id == "iam.GetServiceAccount" {
+                    "iam: iam.GetServiceAccount: unsafe guard response"
+                } else {
+                    "IAM user response withheld"
+                }),
             )));
         }
         Ok(Self(value))
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum ObservedResponse {
+    ClientRejection,
+    NoContent,
+    Other,
+}
+
+impl ObservedResponse {
+    pub(super) fn from_status(status: http::StatusCode) -> Self {
+        if status.is_client_error() {
+            Self::ClientRejection
+        } else if status == http::StatusCode::NO_CONTENT {
+            Self::NoContent
+        } else {
+            Self::Other
+        }
+    }
+
+    pub(super) fn status(error: &Error) -> Option<http::StatusCode> {
+        error.detail::<http::StatusCode>().copied().or_else(|| {
+            error
+                .api_error()
+                .and_then(|api| api.status())
+                .and_then(|status| http::StatusCode::from_u16(status).ok())
+        })
     }
 }
 
@@ -367,10 +399,8 @@ pub(super) fn private_status_error(
     else {
         return error;
     };
-    let Some(status) = api
-        .status()
-        .and_then(|status| http::StatusCode::from_u16(status).ok())
-        .filter(|status| !operation.success.contains(status))
+    let Some(status) =
+        ObservedResponse::status(&error).filter(|status| !operation.success.contains(status))
     else {
         return error;
     };
@@ -379,9 +409,9 @@ pub(super) fn private_status_error(
         "accounts-api/v1/auth/userinfo" => Some("caller identity"),
         "policies-api/v1/actions" => Some("action list"),
         "policies-api/v1/policies/{}" => Some("policy"),
-        "policies-api/v1/user-attachments/service-accounts/{}/policies" => {
-            Some("policy attachments")
-        }
+        "policies-api/v1/user-attachments/service-accounts/{}/policies"
+        | "policies-api/v1/user-attachments/iam-users/{}/policies" => Some("policy attachments"),
+        "policies-api/v1/user-attachments/iam-users/{}/groups" => Some("attachment array"),
         _ => None,
     };
     let message = label.map_or_else(
@@ -401,11 +431,10 @@ pub(super) fn private_status_error(
         SafeText::new(&message, &[]),
         api.retryable(),
     ));
-    let private = match error.detail::<http::StatusCode>() {
-        Some(observed) => private.with_outer_detail(*observed),
-        None => private,
-    };
-    private.screen_api(&|value| response::reflects_credential_forms(value, evidence.credentials()))
+    private
+        .with_cause(error)
+        .screen_api(&|value| response::reflects_credential_forms(value, evidence.credentials()))
+        .with_outer_detail(ObservedResponse::from_status(status))
 }
 
 fn account_label(operation: &str) -> Option<&'static str> {

@@ -1,3 +1,4 @@
+use super::options::PasswordSlot;
 use super::response;
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
@@ -6,7 +7,7 @@ use std::sync::LazyLock;
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum Source {
     Redaction,
-    DatabasePassword,
+    OperationPassword,
     Credential,
 }
 
@@ -56,9 +57,9 @@ impl SentCredentials {
         }
     }
 
-    fn without_database_password(&self, password: &Secret) -> Self {
+    fn without_operation_password(&self, password: &Secret) -> Self {
         self.filtered(|value, source| {
-            source != Source::DatabasePassword || value.expose_secret() != password.expose_secret()
+            source != Source::OperationPassword || value.expose_secret() != password.expose_secret()
         })
     }
 
@@ -127,18 +128,18 @@ impl std::fmt::Debug for SentCredentials {
 pub(super) fn body_reflects(
     body: &[u8],
     credentials: &SentCredentials,
-    database_password: Option<&Secret>,
+    password_slot: Option<PasswordSlot<'_>>,
 ) -> bool {
-    if let Some(password) = database_password {
-        return check_database_body(body, credentials, password).unwrap_or(true);
+    if let Some(slot) = password_slot {
+        return check_password_body(body, credentials, slot).unwrap_or(true);
     }
     !body.is_empty() && response::reflects_credential(&String::from_utf8_lossy(body), credentials)
 }
 
-fn check_database_body(
+fn check_password_body(
     body: &[u8],
     credentials: &SentCredentials,
-    password: &Secret,
+    slot: PasswordSlot<'_>,
 ) -> Option<bool> {
     use serde_json::value::RawValue;
     use std::collections::BTreeMap;
@@ -146,17 +147,23 @@ fn check_database_body(
 
     crate::wire::strict_json::validate(body, &[], body.len()).ok()?;
     let mut fields: Fields<'_> = serde_json::from_slice(body).ok()?;
-    let mut user: Fields<'_> = serde_json::from_str(fields.remove("user")?.get()).ok()?;
-    let authorized_field = user.remove("password")?;
+    let mut user = Fields::new();
+    let (authorized_field, password, nested) = match slot {
+        PasswordSlot::DatabaseUser(password) => {
+            user = serde_json::from_str(fields.remove("user")?.get()).ok()?;
+            (user.remove("password")?, password, true)
+        }
+        PasswordSlot::IamUser(password) => (fields.remove("password")?, password, false),
+    };
     let authorized_value =
         zeroize::Zeroizing::new(serde_json::from_str::<String>(authorized_field.get()).ok()?);
     if authorized_value.as_str() != password.expose_secret() {
         return None;
     }
     let reflects = |text: &str| response::reflects_credential(text, credentials);
-    let other_credentials = credentials.without_database_password(password);
+    let other_credentials = credentials.without_operation_password(password);
     Some(
-        reflects("user")
+        (nested && reflects("user"))
             || reflects("password")
             || response::reflects_credential(authorized_field.get(), &other_credentials)
             || fields
@@ -186,9 +193,9 @@ impl Evidence {
         self.credentials.record_from(value, Source::Redaction);
     }
 
-    pub(crate) fn add_database_password(&mut self, value: &Secret) {
+    pub(crate) fn add_operation_password(&mut self, value: &Secret) {
         self.credentials
-            .record_from(value, Source::DatabasePassword);
+            .record_from(value, Source::OperationPassword);
     }
 
     pub(crate) fn absorb(&mut self, credentials: &SentCredentials) {
@@ -198,6 +205,14 @@ impl Evidence {
     pub(crate) fn transport_only(&self) -> Self {
         Self {
             credentials: self.credentials.transport_only(),
+        }
+    }
+
+    pub(crate) fn without_operation_passwords(&self) -> Self {
+        Self {
+            credentials: self
+                .credentials
+                .filtered(|_, source| source != Source::OperationPassword),
         }
     }
 

@@ -2,16 +2,16 @@ use bytes::Bytes;
 use http::{Method, StatusCode};
 use serde_json::Value;
 
-use super::wire::{Body, Wire};
+use super::wire::{Body, ObservedResponse, Wire};
 use super::{Api, Client, DEFAULT_CAP, OBJECT_CAP, read_operation, require_identity, screen_error};
 use crate::error::RecoveryAdvice;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation},
-    options::Options,
+    options::{Options, PasswordSlot},
     redirect::{Classification, Retry},
 };
-use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
 /// IAM-specific write outcome, available through [`Error::detail`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,6 +25,12 @@ pub enum WriteError {
     CreateUnconfirmed,
     /// The service acknowledged a write without returning its one-time credential.
     NoSecret,
+    /// The requested user could not be verified as an IAM user.
+    OriginNotIam,
+    /// A user creation may have reached the service without proving ownership.
+    UserCreateUncertain,
+    /// A user administration write may have reached the service.
+    UserWriteUncertain,
     /// A resource still has an attachment that prevents deletion.
     ResourceInUse,
 }
@@ -65,13 +71,6 @@ impl Client {
         body: Option<Value>,
         evidence: &mut Evidence,
     ) -> Result<T, Failure<O>> {
-        let session = &self.session;
-        let endpoints = session.endpoints();
-        let base = match api {
-            Api::Accounts => endpoints.dashboard.as_ref(),
-            Api::Policies => endpoints.iam.as_ref(),
-        }
-        .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
         let body = match body {
             Some(body) => {
                 if evidence.reflected_in(&body) {
@@ -83,6 +82,70 @@ impl Client {
             }
             None => Bytes::new(),
         };
+        self.send_write(
+            ctx,
+            api,
+            operation,
+            path,
+            (body, Options::DEFAULT),
+            evidence,
+        )
+        .await
+    }
+
+    pub(super) async fn write_user_password<T: Wire, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
+        (username, password): (Option<&str>, &Secret),
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
+        #[derive(serde::Serialize)]
+        struct UserPassword<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            username: Option<&'a str>,
+            password: &'a str,
+        }
+
+        let body = serde_json::to_vec(&UserPassword {
+            username,
+            password: password.expose_secret(),
+        })
+        .map(Bytes::from)
+        .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
+        evidence.add_operation_password(password);
+        let options = Options {
+            password_slot: Some(PasswordSlot::IamUser(password)),
+            ..Options::DEFAULT
+        };
+        self.send_write(
+            ctx,
+            Api::Accounts,
+            operation,
+            path,
+            (body, options),
+            evidence,
+        )
+        .await
+    }
+
+    async fn send_write<T: Wire, O>(
+        &self,
+        ctx: &RequestContext,
+        api: Api,
+        operation: &Operation,
+        path: &[&str],
+        (body, options): (Bytes, Options<'_>),
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
+        let session = &self.session;
+        let endpoints = session.endpoints();
+        let base = match api {
+            Api::Accounts => endpoints.dashboard.as_ref(),
+            Api::Policies => endpoints.iam.as_ref(),
+        }
+        .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
         let mut jitter = || session.retry_jitter();
         let runtime = session
             .runtime(ctx, &mut jitter)
@@ -91,7 +154,7 @@ impl Client {
             runtime,
             base,
             operation,
-            &Options::DEFAULT,
+            &options,
             path,
             &[],
             session.bearer_source(),
@@ -102,8 +165,14 @@ impl Client {
         .map(|(_, Body(value))| value)
         .map_err(|failed| {
             let (error, _, dispatch) = failed.into_parts();
+            let observed = ObservedResponse::status(&error).map(ObservedResponse::from_status);
             let error = super::wire::private_status_error(operation, error, evidence);
-            Failure::new(screen_error(error, evidence), None, dispatch)
+            let error = screen_error(error, evidence);
+            let error = match observed {
+                Some(outcome) => error.with_outer_detail(outcome),
+                None => error,
+            };
+            Failure::new(error, None, dispatch)
         })
     }
 
@@ -123,6 +192,10 @@ impl Client {
                         "iam.UpdateServiceAccount"
                             | "iam.DeleteServiceAccount"
                             | "iam.ResetServiceAccountSecret"
+                            | "iam.DeleteUser"
+                            | "iam.ResetUserPassword"
+                            | "iam.EnableUserMFA"
+                            | "iam.DisableUserMFA"
                     ),
                     ..read_operation(
                         "iam.GetCallerIdentity",
@@ -137,9 +210,10 @@ impl Client {
             )
             .await
             .map_err(guard_failed)?;
-        if [&caller.user_id, &caller.user_type, &caller.username]
-            .into_iter()
-            .any(|v| evidence.text_reflects(v))
+        if evidence.id_reflects(&caller.user_id)
+            || [&caller.user_type, &caller.username]
+                .into_iter()
+                .any(|v| evidence.text_reflects(v))
             || evidence.reflected_in(&Value::from(caller.account_id))
         {
             return Err(guard_refusal(

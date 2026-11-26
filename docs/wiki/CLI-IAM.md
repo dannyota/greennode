@@ -36,6 +36,26 @@ is uncertain.
 greennode iam create-service-account --name <name> --secret-file <secret-file>
 ```
 
+## create-user
+
+Kind: Write.
+
+Choose `--password-file <path>` (or `-` for stdin) or `--secret-file <new-path>`
+for a generated password. The generated length is 8 to 50 characters,
+default 32. A private destination is required for generation. For an uncertain
+result, reconcile ownership with `list-users --name` before further writes.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--username`        | `string` | yes      |
+| `--password-length` | `int`    |          |
+| `--password-file`   | `string` |          |
+| `--secret-file`     | `string` |          |
+
+```sh
+greennode iam create-user --username <username> --secret-file <private-directory>/password
+```
+
 ## delete-group
 
 Kind: Write, destructive.
@@ -63,6 +83,54 @@ Refuses service-account callers and accounts with an attached IAM write policy.
 
 ```sh
 greennode iam delete-service-account --service-account-id <service-account-id> --yes
+```
+
+## delete-user
+
+Kind: Write, destructive.
+
+Refuses self-deletion and requires a verified IAM-origin user.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--user-id` | `string` | yes      |
+
+```sh
+greennode iam delete-user --user-id <user-id> --yes
+```
+
+## disable-user-mfa
+
+Kind: Write, destructive.
+
+Changes an existing Google authenticator factor and confirms the resulting
+state. Requires `--method google`. If the factor is already in the requested
+state, the command returns without sending a write.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--user-id` | `string` | yes      |
+| `--method`  | `string` | yes      |
+
+```sh
+greennode iam disable-user-mfa --user-id <user-id> --method google --yes
+```
+
+## enable-user-mfa
+
+Kind: Write, destructive.
+
+Changes an existing Google authenticator factor and confirms the resulting
+state. Requires `--method google`. If the factor is already in the requested
+state, the command returns without sending a write.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--user-id` | `string` | yes      |
+| `--method`  | `string` | yes      |
+
+```sh
+greennode iam enable-user-mfa --user-id <user-id> --method google --yes
 ```
 
 ## get-caller-identity
@@ -301,6 +369,26 @@ secret as revoked after an uncertain result.
 
 ```sh
 greennode iam reset-service-account-secret --service-account-id <service-account-id> --secret-file <secret-file> --yes
+```
+
+## reset-user-password
+
+Kind: Write, destructive.
+
+Choose `--password-file <path>` (or `-` for stdin) or `--secret-file <new-path>`
+for a generated password. Refuses self-changes and protected users. A reset is
+sent once. Coordinate recovery with the user and other administrators if the
+result is uncertain.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--user-id`         | `string` | yes      |
+| `--password-length` | `int`    |          |
+| `--password-file`   | `string` |          |
+| `--secret-file`     | `string` |          |
+
+```sh
+greennode iam reset-user-password --user-id <user-id> --secret-file <private-directory>/password --yes
 ```
 
 ## update-group

@@ -316,7 +316,7 @@ async fn save_created(
     Err(secret_file::failure(message))
 }
 
-fn local_failure(code: &'static str, message: String) -> LocalError {
+pub(super) fn local_failure(code: &'static str, message: String) -> LocalError {
     LocalError {
         code,
         message: message.into(),
@@ -324,7 +324,7 @@ fn local_failure(code: &'static str, message: String) -> LocalError {
     }
 }
 
-fn operation_failure<T>(failure: Failure<T>) -> ExecutionFailure {
+pub(super) fn operation_failure<T>(failure: Failure<T>) -> ExecutionFailure {
     let (error, _, dispatch) = failure.into_parts();
     OperationFailure {
         error,

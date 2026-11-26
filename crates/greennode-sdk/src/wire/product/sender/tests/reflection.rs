@@ -306,7 +306,7 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
     use crate::wire::product::evidence::Evidence;
     use crate::{Config, ConfigOptions, IamUserAuth};
 
-    let password = Secret::new("ToyDatabasePassword9");
+    let password = Secret::new("ToyOperationPassword9");
     let config = Config::new(
         ConfigOptions::default()
             .with_region("hcm-3".into())
@@ -348,7 +348,7 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
         if order == Some(true) {
             evidence.absorb(configured);
         }
-        evidence.add_database_password(&password);
+        evidence.add_operation_password(&password);
         if order == Some(false) {
             evidence.absorb(configured);
         }
@@ -367,7 +367,9 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
             Auth::Bearer(&PublicSource(&source)),
             &request,
             RouteInputs {
-                database_password: Some(&password),
+                password_slot: Some(crate::wire::product::options::PasswordSlot::DatabaseUser(
+                    &password,
+                )),
                 ..RouteInputs::default()
             },
         )

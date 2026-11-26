@@ -140,6 +140,7 @@ macro_rules! operation {
 }
 
 mod service_account_writes;
+mod user_writes;
 
 const PAGE_NOTE: &str =
     "Returns one zero-based page. The default size is 10000. Unknown page metadata is null.";
@@ -167,11 +168,37 @@ macro_rules! write_rule {
 pub(super) const SERVICE: Service = Service {
     name: "iam",
     error_rules: &[
+        Rule {
+            identity: "IamUserWriteUncertain",
+            matches: |error| {
+                matches!(
+                    error.detail::<sdk::WriteError>(),
+                    Some(
+                        sdk::WriteError::UserWriteUncertain
+                            | sdk::WriteError::UserCreateUncertain
+                            | sdk::WriteError::OriginNotIam
+                    )
+                )
+            },
+            name: Some(RuleName {
+                rank: 19,
+                code: "RequestFailed",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
         write_rule!(SelfChange, 41),
         write_rule!(PrivilegedChange, 42),
         write_rule!(ResourceInUse, 44),
     ],
     operations: &[
+        user_writes::CREATE,
+        user_writes::DELETE,
+        user_writes::RESET,
+        user_writes::ENABLE_MFA,
+        user_writes::DISABLE_MFA,
         service_account_writes::CREATE,
         service_account_writes::RESET,
         operation!(

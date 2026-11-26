@@ -1,0 +1,21 @@
+{
+  "User": {
+    "ID": "user-1",
+    "Username": "worker",
+    "CreatedAt": 0,
+    "Enabled": false,
+    "From": "iam",
+    "LastUse": 0,
+    "MFA": {
+      "Email": null,
+      "GoogleAuthenticator": {
+        "Verified": true,
+        "Enabled": false
+      }
+    }
+  },
+  "Password": "[redacted]",
+  "CreatedID": "user-1",
+  "CandidateID": "",
+  "SecretFile": "$SECRET"
+}
