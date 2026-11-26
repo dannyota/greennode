@@ -49,8 +49,8 @@ greennode dns list-hosted-zones
 Kind: Read.
 
 Returns page metadata. If the service reports additional pages or rows, the
-command prints the partial page, ignores `--query`, and exits 1. Record
-continuation parameters remain unverified.
+command exits 1 with `RequestFailed` and no stdout. Record continuation
+parameters remain unverified.
 
 | Flag               | Type     | Required |
 | ------------------ | -------- | -------- |

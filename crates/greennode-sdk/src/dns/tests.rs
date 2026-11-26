@@ -118,8 +118,8 @@ async fn incomplete_record_list_keeps_redacted_sdk_partial_without_following_pag
         assert_eq!(failure.write_dispatch(), WriteDispatch::NotAWrite);
         let partial = failure.partial().unwrap();
         let output = serde_json::to_value(partial).unwrap();
-        assert_eq!(output["Items"][0]["recordId"], "record-1");
-        assert_eq!(output["Items"][0]["value"][0]["value"], "<redacted>");
+        assert_eq!(output["Items"][0]["ID"], "record-1");
+        assert_eq!(output["Items"][0]["Value"][0]["Value"], "<redacted>");
         assert_eq!(output["Page"], "<redacted>");
         assert!(!output.to_string().contains(bearer));
         assert_eq!(server.requests(), 1);
@@ -156,9 +156,9 @@ async fn nested_and_offset_times_keep_go_representation() {
         .unwrap();
     let value = serde_json::to_value(output).unwrap();
     assert_eq!(
-        value["HostedZone"]["createdAt"],
+        value["HostedZone"]["CreatedAt"],
         "2026-01-01T10:00:03.45+07:00"
     );
-    assert!(value["HostedZone"]["deletedAt"].is_null());
-    assert_eq!(value["HostedZone"]["updatedAt"], "2026-01-01T03:00:03Z");
+    assert!(value["HostedZone"]["DeletedAt"].is_null());
+    assert_eq!(value["HostedZone"]["UpdatedAt"], "2026-01-01T03:00:03Z");
 }

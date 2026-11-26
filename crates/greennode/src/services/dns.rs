@@ -326,7 +326,7 @@ pub(super) const SERVICE: Service = Service {
             json_fields: &[],
             extra_flags: &[],
             notes: &[
-                "Returns page metadata. If the service reports additional pages or rows, the\ncommand prints the partial page, ignores `--query`, and exits 1. Record\ncontinuation parameters remain unverified.",
+                "Returns page metadata. If the service reports additional pages or rows, the\ncommand exits 1 with `RequestFailed` and no stdout. Record continuation\nparameters remain unverified.",
             ],
             handler: Some(Handler::new(
                 &LIST_RECORDS_INPUT,
@@ -387,7 +387,17 @@ fn list_records<'a>(
     input: &'a ListRecordsInput,
 ) -> FutureResult<'a, ExecutionResult> {
     Box::pin(async move {
-        let result = Client::new(config).list_records(ctx, input.clone()).await;
-        dispatch::project_result(result, std::convert::identity)
+        match Client::new(config).list_records(ctx, input.clone()).await {
+            Ok(output) => Ok(Some(crate::cli::render::project(&output))),
+            Err(failure) => {
+                let (error, _, dispatch) = failure.into_parts();
+                Err(dispatch::OperationFailure {
+                    error,
+                    partial: None,
+                    dispatch,
+                    query_partial: false,
+                })
+            }
+        }
     })
 }

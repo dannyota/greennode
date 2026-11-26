@@ -83,10 +83,13 @@ mod rfc3339 {
 
 /// A VPC association returned with a hosted zone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct VpcMapRegion {
     /// Associated VPC identifier.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "VPCID"), deserialize_with = "null_default")]
     pub vpc_id: String,
     /// Region of the associated VPC.
     #[serde(deserialize_with = "null_default")]
@@ -95,10 +98,16 @@ pub struct VpcMapRegion {
 
 /// A hosted DNS zone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct HostedZone {
     /// Hosted zone identifier.
-    #[serde(rename = "hostedZoneId", deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "ID", deserialize = "hostedZoneId"),
+        deserialize_with = "null_default"
+    )]
     pub id: String,
     /// Zone domain name.
     #[serde(deserialize_with = "null_default")]
@@ -110,19 +119,28 @@ pub struct HostedZone {
     #[serde(deserialize_with = "null_default")]
     pub description: String,
     /// Zone type.
-    #[serde(rename = "type", deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "Type", deserialize = "type"),
+        deserialize_with = "null_default"
+    )]
     pub zone_type: String,
     /// Number of records in the zone.
     #[serde(deserialize_with = "null_default")]
     pub count_records: Field<i64>,
     /// Associated VPC identifiers.
-    #[serde(rename = "assocVpcIds", deserialize_with = "null_items")]
+    #[serde(
+        rename(serialize = "AssociatedVPCIDs", deserialize = "assocVpcIds"),
+        deserialize_with = "null_items"
+    )]
     pub associated_vpc_ids: Vec<String>,
     /// Associated VPC identifiers with their regions.
-    #[serde(deserialize_with = "null_items")]
+    #[serde(
+        rename(serialize = "AssocVPCMapRegion"),
+        deserialize_with = "null_items"
+    )]
     pub assoc_vpc_map_region: Vec<VpcMapRegion>,
     /// Portal account identifier.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "PortalUserID"), deserialize_with = "null_default")]
     pub portal_user_id: Field<i64>,
     /// Zone creation time.
     #[serde(deserialize_with = "null_default")]
@@ -136,37 +154,47 @@ pub struct HostedZone {
 
 /// One value in a DNS record's routing policy.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, rename_all(serialize = "PascalCase"))]
 pub struct RecordValue {
     /// The record data.
     #[serde(deserialize_with = "null_default")]
     pub value: String,
     /// Optional routing location.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
     /// Optional routing weight.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub weight: Option<Field<i64>>,
 }
 
 /// A record in a hosted DNS zone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(
+    default,
+    rename_all(serialize = "PascalCase", deserialize = "camelCase")
+)]
 pub struct Record {
     /// Record identifier.
-    #[serde(rename = "recordId", deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "ID", deserialize = "recordId"),
+        deserialize_with = "null_default"
+    )]
     pub id: String,
     /// Record name.
-    #[serde(rename = "subDomain", deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "SubDomain", deserialize = "subDomain"),
+        deserialize_with = "null_default"
+    )]
     pub sub_domain: String,
     /// Parent hosted zone identifier.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "HostedZoneID"), deserialize_with = "null_default")]
     pub hosted_zone_id: String,
     /// Record status.
     #[serde(deserialize_with = "null_default")]
     pub status: String,
     /// Record type, such as `A`, `CNAME`, or `TXT`.
-    #[serde(rename = "type", deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "Type", deserialize = "type"),
+        deserialize_with = "null_default"
+    )]
     pub record_type: String,
     /// Routing policy.
     #[serde(deserialize_with = "null_default")]
@@ -175,7 +203,7 @@ pub struct Record {
     #[serde(deserialize_with = "null_items")]
     pub value: Vec<RecordValue>,
     /// Record time to live in seconds.
-    #[serde(deserialize_with = "null_default")]
+    #[serde(rename(serialize = "TTL"), deserialize_with = "null_default")]
     pub ttl: Field<i64>,
     /// Sticky-session setting, when supplied by the service.
     pub enable_sticky_session: Option<Field<bool>>,

@@ -1,20 +1,22 @@
 {
   "Record": {
-    "recordId": "record-1",
-    "subDomain": "\u003cname\u003e",
-    "hostedZoneId": "zone-1",
-    "status": "ACTIVE",
-    "type": "A",
-    "routingPolicy": "",
-    "value": [
+    "ID": "record-1",
+    "SubDomain": "\u003cname\u003e",
+    "HostedZoneID": "zone-1",
+    "Status": "ACTIVE",
+    "Type": "A",
+    "RoutingPolicy": "",
+    "Value": [
       {
-        "value": "\u003cip\u003e"
+        "Value": "\u003cip\u003e",
+        "Location": null,
+        "Weight": null
       }
     ],
-    "ttl": 300,
-    "enableStickySession": null,
-    "createdAt": "0001-01-01T00:00:00Z",
-    "deletedAt": null,
-    "updatedAt": "0001-01-01T00:00:00Z"
+    "TTL": 300,
+    "EnableStickySession": null,
+    "CreatedAt": "0001-01-01T00:00:00Z",
+    "DeletedAt": null,
+    "UpdatedAt": "0001-01-01T00:00:00Z"
   }
 }

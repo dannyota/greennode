@@ -124,6 +124,28 @@ async fn dns_reads_match_go_goldens_with_read_only_enabled() {
 }
 
 #[tokio::test]
+async fn get_record_query_uses_the_go_id_field() {
+    let server = Server::start(vec![response("200 OK", RECORD)]);
+    let (status, stdout, stderr) = invoke(
+        &server,
+        BEARER,
+        &[
+            "get-record",
+            "--hosted-zone-id",
+            "zone-1",
+            "--record-id",
+            "record-1",
+            "--query",
+            "Record.ID",
+        ],
+    )
+    .await;
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert!(stderr.is_empty());
+    assert_eq!(stdout, b"\"record-1\"\n");
+}
+
+#[tokio::test]
 async fn query_and_renderers_keep_resource_values_and_redact_reflected_fields() {
     let bearer = "9007199254740992";
     let body = format!(
@@ -132,10 +154,7 @@ async fn query_and_renderers_keep_resource_values_and_redact_reflected_fields() 
     let server = Server::start((0..4).map(|_| response("200 OK", &body)).collect());
     for (format, query) in [
         ("json", None),
-        (
-            "json",
-            Some("Items[].{Id:recordId,Name:subDomain,Values:value}"),
-        ),
+        ("json", Some("Items[].{Id:ID,Name:SubDomain,Values:Value}")),
         ("text", None),
         ("table", None),
     ] {
@@ -182,7 +201,7 @@ async fn required_and_invalid_path_values_fail_before_request() {
 }
 
 #[tokio::test]
-async fn incomplete_inventory_prints_a_partial_page_without_applying_query() {
+async fn incomplete_inventory_exits_one_with_no_stdout() {
     let body = RECORDS.replace(r#""totalPage": 1"#, r#""totalPage": 2"#);
     let server = Server::start(vec![response("200 OK", &body)]);
     let (status, stdout, stderr) = invoke(
@@ -198,9 +217,7 @@ async fn incomplete_inventory_prints_a_partial_page_without_applying_query() {
     )
     .await;
     assert_eq!(status, ExitCode::from(1));
-    let partial: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
-    assert_eq!(partial["Items"][0]["recordId"], "record-1");
-    assert_eq!(partial["TotalPage"], 2);
+    assert!(stdout.is_empty());
     assert_eq!(stderr, b"{\"error\":{\"code\":\"RequestFailed\",\"message\":\"dns.ListRecords: incomplete record list; continuation parameters are unverified\"}}\n");
     assert_eq!(server.requests(), 1);
 }
