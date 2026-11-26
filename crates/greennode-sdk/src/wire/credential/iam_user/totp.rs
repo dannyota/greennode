@@ -49,6 +49,25 @@ pub(crate) enum Source<'a> {
     Seed(&'a Secret),
 }
 
+async fn provider_code(
+    provider: &Provider<'_>,
+    clock: &dyn crate::Clock,
+    deadline: tokio::time::Instant,
+) -> Result<Secret, ()> {
+    if clock.monotonic_now() >= deadline {
+        return Err(());
+    }
+    let mut timer = clock.sleep_until(deadline);
+    let mut future = provider();
+    std::future::poll_fn(|cx| {
+        if clock.monotonic_now() >= deadline || timer.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Err(()));
+        }
+        future.as_mut().poll(cx)
+    })
+    .await
+}
+
 fn allowed_target(target: &url::Url, origin: &url::Url) -> bool {
     target.origin() == origin.origin()
         && super::is_two_factor_path(target.path())
@@ -119,11 +138,9 @@ pub(super) async fn complete(
         .ok_or_else(|| LoginError::new("totp page", Some(page.status.as_u16()), false))?;
     let code = match source {
         Source::Seed(seed) => code(seed, login.clock.utc_now().unix_timestamp()),
-        Source::Provider(provider) => {
-            if login.clock.monotonic_now() >= login.deadline { return Err(LoginError::new("totp code", None, false)); }
-            tokio::select! { result = provider() => result, _ = login.clock.sleep_until(login.deadline) => Err(()) }
-        }
-    }.map_err(|_| LoginError::new("totp code", None, false))?;
+        Source::Provider(provider) => provider_code(provider, login.clock, login.deadline).await,
+    }
+    .map_err(|_| LoginError::new("totp code", None, false))?;
     let mut form = url::form_urlencoded::Serializer::new(String::new());
     form.append_pair("_csrf", csrf.expose_secret())
         .append_pair("token", code.expose_secret());
@@ -310,6 +327,46 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(result.err().unwrap().reason(), "totp requirement");
         assert_eq!(server.requests(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_deadline_wins_when_both_are_ready() {
+        struct ReadyClock(tokio::time::Instant);
+        impl Clock for ReadyClock {
+            fn utc_now(&self) -> time::OffsetDateTime {
+                time::OffsetDateTime::UNIX_EPOCH
+            }
+            fn monotonic_now(&self) -> tokio::time::Instant {
+                self.0
+            }
+            fn sleep_until(
+                &self,
+                _: tokio::time::Instant,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+                Box::pin(std::future::ready(()))
+            }
+        }
+        let clock = ReadyClock(tokio::time::Instant::now());
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send + '_>> {
+            Box::pin(async { calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Ok(Secret::new("toy")) })
+        };
+        assert!(
+            provider_code(&provider, &clock, clock.0 + Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let clock = crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+        assert!(
+            provider_code(
+                &provider,
+                &clock,
+                clock.monotonic_now() + Duration::from_secs(1)
+            )
+            .await
+            .is_ok()
+        );
     }
 
     #[tokio::test]
