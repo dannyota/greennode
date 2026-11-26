@@ -1,0 +1,28 @@
+{
+  "Policy": {
+    "ID": "synthetic",
+    "BackendID": "synthetic",
+    "ProjectID": "synthetic",
+    "Product": "synthetic",
+    "Name": "synthetic",
+    "IsDefault": false,
+    "BackupInstanceCount": 0,
+    "Config": {
+      "Hour": 0,
+      "Minute": 0,
+      "TimeZone": "synthetic",
+      "HourlyEnabled": false,
+      "DailyEnabled": false,
+      "WeeklyEnabled": false,
+      "MonthlyEnabled": false,
+      "IsProtectedServer": false,
+      "DailyConfig": {
+        "Retention": 0,
+        "BackupType": "synthetic",
+        "IncrementalQuantity": 0
+      }
+    },
+    "CreatedAt": "synthetic",
+    "UpdatedAt": "synthetic"
+  }
+}

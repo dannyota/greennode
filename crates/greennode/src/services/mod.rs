@@ -1,3 +1,4 @@
+mod backup;
 mod billing;
 mod project;
 
@@ -132,7 +133,7 @@ impl Registry {
 }
 
 pub fn registered() -> Result<Registry, RegistryError> {
-    Registry::new(&[billing::SERVICE, project::SERVICE])
+    Registry::new(&[backup::SERVICE, billing::SERVICE, project::SERVICE])
 }
 
 #[cfg(test)]

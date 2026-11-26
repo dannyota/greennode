@@ -1,0 +1,213 @@
+use http::StatusCode;
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::value::RawValue;
+
+use crate::error::SafeText;
+use crate::wire::product::{
+    operation::{self, Operation, Output},
+    sender::{Response, SentCredentials},
+};
+use crate::wire::strict_json::{Shape, ShapeField};
+use crate::{ApiError, Error};
+
+use super::{Backend, Policy};
+
+const WITHHELD: &str = "Backup Center response withheld";
+const INVALID_BODY: &str = "unrecognized Backup Center response; body withheld";
+
+#[derive(Default, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    bound(deserialize = "T: Deserialize<'de> + Default, P: Deserialize<'de>")
+)]
+pub(super) struct Collection<T, P> {
+    #[serde(deserialize_with = "rows")]
+    pub(super) items: Vec<T>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(super) page: P,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(super) page_size: P,
+    pub(super) total_pages: i64,
+    pub(super) total_items: i64,
+}
+
+fn rows<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    let items = Vec::<Option<T>>::deserialize(deserializer)?;
+    Ok(items.into_iter().map(Option::unwrap_or_default).collect())
+}
+
+pub(super) trait Row: DeserializeOwned + Default {
+    const SHAPE: Shape<'static>;
+
+    fn reflects(&self, credentials: &SentCredentials) -> bool;
+}
+
+impl Row for Backend {
+    const SHAPE: Shape<'static> =
+        Shape::Object(&[field("id", Shape::Any), field("name", Shape::Any)]);
+
+    fn reflects(&self, credentials: &SentCredentials) -> bool {
+        credentials.reflects(self.id.as_bytes()) || credentials.reflects(self.name.as_bytes())
+    }
+}
+
+impl Row for Policy {
+    const SHAPE: Shape<'static> = POLICY_SCHEMA;
+
+    fn reflects(&self, credentials: &SentCredentials) -> bool {
+        self.reflects(credentials)
+    }
+}
+
+impl<T: Row, P: DeserializeOwned + Default> Output for Collection<T, P> {
+    const SCHEMA: Shape<'static> = Shape::Object(&[
+        field("items", Shape::Array(&T::SHAPE)),
+        field("page", Shape::Any),
+        field("pageSize", Shape::Any),
+        field("totalPages", Shape::Any),
+        field("totalItems", Shape::Any),
+    ]);
+
+    fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        let output: Self = decode(operation, response)?;
+        if output
+            .items
+            .iter()
+            .any(|item| item.reflects(&response.credentials))
+        {
+            return Err(Box::new(reflected_credential(operation)));
+        }
+        Ok(output)
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(super) struct Detail {
+    pub(super) policy: Policy,
+    #[serde(skip)]
+    pub(super) reflected: bool,
+}
+
+impl Output for Detail {
+    const SCHEMA: Shape<'static> = POLICY_SCHEMA;
+
+    fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        #[derive(Deserialize)]
+        struct ConfigPresence<'a> {
+            #[serde(borrow)]
+            config: &'a RawValue,
+        }
+
+        let mut output: Self = decode(operation, response)?;
+        let invalid = || Box::new(invalid_body(operation));
+        let config =
+            serde_json::from_slice::<ConfigPresence<'_>>(&response.body).map_err(|_| invalid())?;
+        if output.policy.id.is_empty() || config.config.get() == "null" {
+            return Err(invalid());
+        }
+        output.reflected = output.policy.reflects(&response.credentials);
+        Ok(output)
+    }
+}
+
+fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Box<Error>> {
+    operation::decode_response(operation, response).map_err(|error| {
+        if response.status == StatusCode::OK {
+            Box::new(invalid_body(operation))
+        } else {
+            error
+        }
+    })
+}
+
+const fn field(name: &'static str, shape: Shape<'static>) -> ShapeField<'static> {
+    ShapeField { name, shape }
+}
+
+const POLICY_SCHEMA: Shape<'static> = Shape::Object(&[
+    field("id", Shape::Any),
+    field("backendId", Shape::Any),
+    field("projectId", Shape::Any),
+    field("product", Shape::Any),
+    field("name", Shape::Any),
+    field("isDefault", Shape::Any),
+    field("backupInstanceCount", Shape::Any),
+    field("createdAt", Shape::Any),
+    field("updatedAt", Shape::Any),
+    field(
+        "config",
+        Shape::Object(&[
+            field("hour", Shape::Any),
+            field("minute", Shape::Any),
+            field("timeZone", Shape::Any),
+            field("hourlyEnabled", Shape::Any),
+            field("dailyEnabled", Shape::Any),
+            field("weeklyEnabled", Shape::Any),
+            field("monthlyEnabled", Shape::Any),
+            field("isProtectedServer", Shape::Any),
+            field(
+                "dailyConfig",
+                Shape::Object(&[
+                    field("retention", Shape::Any),
+                    field("backupType", Shape::Any),
+                    field("incrementalQuantity", Shape::Any),
+                ]),
+            ),
+        ]),
+    ),
+]);
+
+pub(super) fn invalid_body(operation: &Operation) -> Error {
+    response_error(operation, StatusCode::OK.as_u16(), "", INVALID_BODY, false)
+}
+
+pub(super) fn reflected_credential(operation: &Operation) -> Error {
+    response_error(
+        operation,
+        StatusCode::OK.as_u16(),
+        "InvalidResponse",
+        WITHHELD,
+        false,
+    )
+}
+
+pub(super) fn withhold(operation: &Operation, error: Error) -> Error {
+    if error.is_body_too_large() {
+        return match error.detail::<StatusCode>() {
+            Some(status) => {
+                response_error(operation, status.as_u16(), "", WITHHELD, false).with_cause(error)
+            }
+            None => error,
+        };
+    }
+    match error.api_error() {
+        Some(api) if api.operation() == operation.id => match api.status() {
+            Some(status) if status != 200 => {
+                response_error(operation, status, "", WITHHELD, api.retryable()).with_cause(error)
+            }
+            _ => error,
+        },
+        _ => error,
+    }
+}
+
+fn response_error(
+    operation: &Operation,
+    status: u16,
+    code: &str,
+    message: &str,
+    retryable: bool,
+) -> Error {
+    Error::from_api(ApiError::new(
+        operation.id,
+        Some(status),
+        SafeText::new(code, &[]),
+        SafeText::new(message, &[]),
+        retryable,
+    ))
+}

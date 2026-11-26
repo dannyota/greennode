@@ -1,0 +1,34 @@
+{
+  "Items": [
+    {
+      "ID": "policy-1",
+      "BackendID": "backend-1",
+      "ProjectID": "project-1",
+      "Product": "SERVER",
+      "Name": "policy",
+      "IsDefault": true,
+      "BackupInstanceCount": 3,
+      "Config": {
+        "Hour": 1,
+        "Minute": 30,
+        "TimeZone": "UTC",
+        "HourlyEnabled": true,
+        "DailyEnabled": true,
+        "WeeklyEnabled": true,
+        "MonthlyEnabled": true,
+        "IsProtectedServer": true,
+        "DailyConfig": {
+          "Retention": 7,
+          "BackupType": "incremental",
+          "IncrementalQuantity": 2
+        }
+      },
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": "2026-01-02T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 200,
+  "TotalPage": 2,
+  "TotalItem": 3
+}

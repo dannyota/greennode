@@ -4,6 +4,7 @@
 
 ## Services
 
+- [Backup](CLI-Backup.md)
 - [Billing](CLI-Billing.md)
 - [Project](CLI-Project.md)
 
