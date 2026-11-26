@@ -7,6 +7,49 @@ use serde_json::value::RawValue;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Error;
 
+pub(crate) enum Shape<'a> {
+    Any,
+    Object(&'a [ShapeField<'a>]),
+    Array(&'a Shape<'a>),
+}
+pub(crate) struct ShapeField<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) shape: Shape<'a>,
+}
+pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>) -> Result<(), Error> {
+    let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
+    shape_value(raw, shape)
+}
+fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
+    if raw.get() == "null" {
+        return Ok(());
+    }
+    match shape {
+        Shape::Any => Ok(()),
+        Shape::Object(fields) => {
+            let values: std::collections::BTreeMap<String, &RawValue> =
+                serde_json::from_str(raw.get()).map_err(|_| Error)?;
+            for (name, value) in values {
+                if let Some(field) = fields
+                    .iter()
+                    .find(|field| field.name == name)
+                    .or_else(|| fields.iter().find(|field| field_matches(field.name, &name)))
+                {
+                    shape_value(value, &field.shape)?;
+                }
+            }
+            Ok(())
+        }
+        Shape::Array(item) => {
+            let values: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(|_| Error)?;
+            for value in values {
+                shape_value(value, item)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 pub(crate) struct Field<'a> {
     pub(crate) name: &'a str,
     pub(crate) children: &'a [Field<'a>],
@@ -103,6 +146,17 @@ mod tests {
             })
             .collect();
         validate(body, &fields, 64 * 1024)
+    }
+
+    #[test]
+    fn validates_nested_container_shapes() {
+        let shape = Shape::Object(&[ShapeField {
+            name: "items",
+            shape: Shape::Array(&Shape::Object(&[])),
+        }]);
+        assert!(validate_shape(br#"{"items":[{"id":1}]}"#, &shape).is_ok());
+        assert!(validate_shape(br#"{"items":[[1]]}"#, &shape).is_err());
+        assert!(validate_shape(br#"{"items":{}}"#, &shape).is_err());
     }
 
     #[test]

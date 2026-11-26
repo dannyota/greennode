@@ -33,6 +33,7 @@ pub(crate) fn classify(
             sanitized
         }
     };
+    let fallback = fallback || contains_url(&code);
     let code = safe(&code);
     let message = if sensitive
         || message.is_empty()
@@ -41,7 +42,7 @@ pub(crate) fn classify(
         safe(status_text(status))
     } else {
         let value = safe(message.trim());
-        if !secrets.is_empty() && value.as_str().is_empty() {
+        if value.as_str().is_empty() {
             safe(status_text(status))
         } else {
             value
@@ -62,7 +63,21 @@ pub(crate) fn classify(
     Err(Box::new(crate::Error::from_api(api)))
 }
 
+fn contains_url(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("://")
+        || lower.contains("www.")
+        || lower.split_whitespace().any(|token| {
+            token
+                .split_once('/')
+                .is_some_and(|(host, _)| host.contains('.'))
+        })
+}
+
 fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
+    if contains_url(text) {
+        return true;
+    }
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
@@ -478,6 +493,27 @@ mod tests {
             credentials,
         )
         .unwrap_err()
+    }
+
+    #[test]
+    fn peer_urls_are_withheld() {
+        for body in [
+            br#"{"code":"https://example.test/private","message":"www.example.test/private"}"#
+                .as_slice(),
+            br#"{"message":"visit example.test/private"}"#,
+        ] {
+            let e = error(403, body, true, false, &SentCredentials::default());
+            assert_eq!(e.api_error().unwrap().code(), "Forbidden");
+            assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+        }
+        let e = error(
+            403,
+            br#"{"code":"Denied","message":"access denied"}"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().message(), "access denied");
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub(crate) struct Operation {
     pub(crate) cap: usize,
     pub(crate) allow_recovery: bool,
     pub(crate) allow_empty: bool,
+    pub(crate) no_output: bool,
     pub(crate) keep_status: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
@@ -62,11 +63,7 @@ pub(crate) async fn execute<T: Output>(
     }
     let route = base.route(&rendered, &[]).map_err(|_| invalid())?;
     let mut url = url::Url::parse(&route).map_err(|_| invalid())?;
-    let mut pairs: Vec<_> = query
-        .iter()
-        .copied()
-        .filter(|(_, value)| !value.is_empty())
-        .collect();
+    let mut pairs: Vec<_> = query.to_vec();
     pairs.sort_by(|left, right| left.0.cmp(right.0));
     if !pairs.is_empty() {
         let mut encoded = String::new();
@@ -80,9 +77,20 @@ pub(crate) async fn execute<T: Output>(
         }
         url.set_query(Some(&encoded));
     }
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    if !body.is_empty() {
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+    }
     let request = sender::Request {
         url,
-        headers: http::HeaderMap::new(),
+        headers,
         credentials: Vec::new(),
         body,
     };
@@ -126,7 +134,7 @@ pub(crate) async fn execute<T: Output>(
             if overflow {
                 let api = crate::ApiError::without_fallback(
                     operation.id,
-                    status.map(|value| value.as_u16()),
+                    None,
                     crate::error::SafeText::new("", &[]),
                     crate::error::SafeText::new("", &[]),
                     false,
@@ -134,6 +142,10 @@ pub(crate) async fn execute<T: Output>(
                 let error = crate::Error::new(crate::ErrorClass::Api)
                     .with_cause(crate::Error::from_api(api))
                     .with_body_too_large();
+                let error = match status {
+                    Some(status) => error.with_outer_detail(status),
+                    None => error,
+                };
                 return Err(crate::Failure::new(error, None, failure.dispatch));
             }
             let class = match &failure.error {
@@ -145,13 +157,19 @@ pub(crate) async fn execute<T: Output>(
                 }
                 _ => crate::ErrorClass::Api,
             };
+            let retryable = send_retry_hint(&failure.error, operation.retry);
             let error = match failure.error {
                 sender::Error::Provider(error) => *error,
+                _ if retryable => retryable_error(operation.id),
                 _ => api_error(
                     operation.id,
                     if operation.keep_status { status } else { None },
                     class,
                 ),
+            };
+            let error = match status {
+                Some(status) => error.with_outer_detail(status),
+                None => error,
             };
             return Err(crate::Failure::new(error, None, failure.dispatch));
         }
@@ -171,9 +189,12 @@ pub(crate) async fn execute<T: Output>(
         &response.credentials,
     )
     .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    if operation.no_output {
+        return Ok((status, T::default()));
+    }
     let output = decode(&body, operation.allow_empty, operation.cap).map_err(|_| {
         crate::Failure::new(
-            api_error(operation.id, None, crate::ErrorClass::Api),
+            api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status),
             None,
             dispatch,
         )
@@ -202,6 +223,27 @@ fn encode_query(input: &str, output: &mut String) {
     }
 }
 
+fn send_retry_hint(error: &sender::Error, policy: redirect::Retry) -> bool {
+    matches!(
+        error,
+        sender::Error::Send(send::Error::Transport(retry::SendFailure::FailedDial))
+    ) || (matches!(policy, redirect::Retry::Repeatable)
+        && matches!(
+            error,
+            sender::Error::Send(send::Error::Transport(retry::SendFailure::PossiblySent))
+        ))
+}
+
+fn retryable_error(operation: &'static str) -> crate::Error {
+    crate::Error::from_api(crate::ApiError::without_fallback(
+        operation,
+        None,
+        crate::error::SafeText::new("", &[]),
+        crate::error::SafeText::new("", &[]),
+        true,
+    ))
+}
+
 fn api_error(
     operation: &'static str,
     status: Option<StatusCode>,
@@ -224,6 +266,8 @@ fn api_error(
 #[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const FIELDS: &'static [Field<'static>];
+    const SHAPE: crate::wire::strict_json::Shape<'static> =
+        crate::wire::strict_json::Shape::Object(&[]);
 }
 
 #[allow(dead_code)]
@@ -232,6 +276,7 @@ fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()
         return Ok(T::default());
     }
     crate::wire::strict_json::validate(body, T::FIELDS, cap).map_err(|_| ())?;
+    crate::wire::strict_json::validate_shape(body, &T::SHAPE).map_err(|_| ())?;
     serde_json::from_slice(body).map_err(|_| ())
 }
 
@@ -245,7 +290,7 @@ mod tests {
     use crate::{Clock, TestClock};
     use std::{future::Future, pin::Pin, time::Duration};
 
-    struct Source;
+    struct Source(bool);
     impl sender::BearerSource for Source {
         fn token<'a>(
             &'a self,
@@ -265,7 +310,13 @@ mod tests {
             _: &'a crate::Secret,
             _: bool,
         ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
-            Box::pin(async { Ok(()) })
+            Box::pin(async move {
+                if self.0 {
+                    Err(crate::Error::provider_failed())
+                } else {
+                    Ok(())
+                }
+            })
         }
     }
     struct Immediate;
@@ -285,6 +336,7 @@ mod tests {
             cap: 100,
             allow_recovery: false,
             allow_empty: false,
+            no_output: false,
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: false,
@@ -314,6 +366,27 @@ mod tests {
         path: &[&str],
         query: &[(&str, &str)],
     ) -> Result<(StatusCode, Example), crate::Failure<Example>> {
+        call_with_body(server, op, path, query, bytes::Bytes::new()).await
+    }
+    #[allow(clippy::result_large_err)]
+    async fn call_with_body(
+        server: &Server,
+        op: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+        body: bytes::Bytes,
+    ) -> Result<(StatusCode, Example), crate::Failure<Example>> {
+        call_with_source(server, op, path, query, body, &Source(false)).await
+    }
+    #[allow(clippy::result_large_err)]
+    async fn call_with_source(
+        server: &Server,
+        op: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+        body: bytes::Bytes,
+        source: &dyn sender::BearerSource,
+    ) -> Result<(StatusCode, Example), crate::Failure<Example>> {
         let clients = sender::Clients {
             pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone()))
                 .unwrap(),
@@ -337,10 +410,37 @@ mod tests {
             op,
             path,
             query,
-            &Source,
-            bytes::Bytes::new(),
+            source,
+            body,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn json_headers_match_body_presence() {
+        let server = Server::start(vec![
+            response("200 OK", br#"{"id":"one"}"#),
+            response("200 OK", br#"{"id":"one"}"#),
+        ]);
+        assert!(call(&server, &declaration(), &["one"]).await.is_ok());
+        assert!(
+            call_with_body(
+                &server,
+                &declaration(),
+                &["one"],
+                &[],
+                bytes::Bytes::from_static(b"{}")
+            )
+            .await
+            .is_ok()
+        );
+        let heads = server.heads();
+        let first = String::from_utf8_lossy(&heads[0]).to_ascii_lowercase();
+        let second = String::from_utf8_lossy(&heads[1]).to_ascii_lowercase();
+        assert!(first.contains("accept: application/json"));
+        assert!(!first.contains("content-type:"));
+        assert!(second.contains("accept: application/json"));
+        assert!(second.contains("content-type: application/json"));
     }
 
     #[tokio::test]
@@ -382,7 +482,10 @@ mod tests {
             .await
             .is_ok()
         );
-        assert!(server.heads()[0].starts_with(b"GET /items/one?filter=a+b~%2A&page=2&size=20 "));
+        assert!(
+            server.heads()[0]
+                .starts_with(b"GET /items/one?filter=a+b~%2A&ignored=&page=2&size=20 ")
+        );
     }
 
     #[tokio::test]
@@ -407,6 +510,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_output_discards_bounded_success_body() {
+        let server = Server::start(vec![response("200 OK", b"not json")]);
+        let mut op = declaration();
+        op.no_output = true;
+        assert_eq!(
+            call(&server, &op, &["one"]).await.unwrap().1,
+            Example::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_success_keeps_observed_status() {
+        let server = Server::start(vec![response("200 OK", b"{")]);
+        let error = call(&server, &declaration(), &["one"]).await.unwrap_err();
+        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
+        assert_eq!(error.error().class(), crate::ErrorClass::Api);
+    }
+
+    #[tokio::test]
+    async fn failed_invalidation_keeps_unauthorized_status() {
+        let server = Server::start(vec![response("401 Unauthorized", b"{}")]);
+        let error = call_with_source(
+            &server,
+            &declaration(),
+            &["one"],
+            &[],
+            bytes::Bytes::new(),
+            &Source(true),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.error().detail::<StatusCode>(),
+            Some(&StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(error.error().class(), crate::ErrorClass::Auth);
+    }
+
+    #[tokio::test]
     async fn oversized_success_retains_identity_and_status() {
         let server = Server::start(vec![response("200 OK", b"0123456789")]);
         let mut op = declaration();
@@ -414,7 +556,7 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(error.error().api_error().unwrap().status(), Some(200));
+        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
     }
 
     #[tokio::test]
@@ -426,7 +568,11 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(error.error().api_error().unwrap().status(), Some(404));
+        assert_eq!(
+            error.error().detail::<StatusCode>(),
+            Some(&StatusCode::NOT_FOUND)
+        );
+        assert!(!error.error().has_class(crate::ErrorClass::NotFound));
     }
 
     #[tokio::test]
@@ -496,6 +642,21 @@ mod tests {
             crate::WriteDispatch::MayHaveBeenSent
         );
         assert_eq!(server.requests(), 1);
+    }
+
+    #[test]
+    fn failed_dial_keeps_retry_hint() {
+        let failed = sender::Error::Send(send::Error::Transport(retry::SendFailure::FailedDial));
+        let body = sender::Error::Send(send::Error::Body);
+        assert!(send_retry_hint(&failed, redirect::Retry::Once));
+        assert!(retryable_error("test").api_error().unwrap().retryable());
+        assert!(!send_retry_hint(&body, redirect::Retry::Once));
+    }
+
+    #[test]
+    fn struct_output_rejects_sequence_form() {
+        assert!(decode::<Example>(br#"["one"]"#, false, 64).is_err());
+        assert!(decode::<Example>(br#"{"id":"one"}"#, false, 64).is_ok());
     }
 
     #[test]
