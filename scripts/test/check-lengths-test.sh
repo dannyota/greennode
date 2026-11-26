@@ -79,6 +79,22 @@ printf '401 docs/wiki/service.md\n' >"$REPO/scripts/lengths-baseline.txt"
 expect 'wiki baseline exempt from growth and stale checks' 0 '' --base-ref HEAD
 
 fresh_repo
+lines_file docs/page.md 401
+mkdir -p "$REPO/docs/wiki"
+ln -s ../page.md "$REPO/docs/wiki/link.md"
+git -C "$REPO" add docs/wiki/link.md
+expect 'wiki symlink outside is counted' 1 $'docs/page.md: 401 lines (limit 400)\ndocs/wiki/link.md: 401 lines (limit 400)'
+
+fresh_repo
+lines_file docs/wiki/service.md 401
+git -C "$REPO" add scripts/lengths-baseline.txt
+git -C "$REPO" -c user.name=Test -c user.email=test@example.invalid -c commit.gpgsign=false commit -qm baseline
+printf '401 docs/wiki/../page.md\n' >"$REPO/scripts/lengths-baseline.txt"
+expect 'wiki traversal is not exempt' 1 $'docs/wiki/../page.md: baseline entry absent from base ref\ndocs/wiki/../page.md: 0 lines (cap 401), stale baseline path (missing or not scanned)' --base-ref HEAD
+printf '401 \tdocs/wiki/service.md\n' >"$REPO/scripts/lengths-baseline.txt"
+expect 'wiki baseline leading tab is not exempt' 1 $'\tdocs/wiki/service.md: baseline entry absent from base ref\n\tdocs/wiki/service.md: 0 lines (cap 401), stale baseline path (missing or not scanned)' --base-ref HEAD
+
+fresh_repo
 lines_file src/main.rs 700
 printf '#[cfg(test)]\nmod checks {\n    fn t() {}\n    fn u() {}\n}\n' >>"$REPO/src/main.rs"
 expect 'test module excluded' 0
