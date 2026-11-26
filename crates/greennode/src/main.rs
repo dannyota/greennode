@@ -3,9 +3,27 @@ use std::ffi::{OsStr, OsString};
 #[cfg(not(windows))]
 use std::io::Read;
 use std::io::{self, IsTerminal};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
 use greennode_sdk::{ConfigSource, RequestContext, SystemClock};
+#[cfg(unix)]
+use rustix::io::retry_on_intr;
+#[cfg(unix)]
+use rustix::termios::{
+    LocalModes, OptionalActions, QueueSelector, Termios, tcflush, tcgetattr, tcsetattr,
+};
+
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+
+#[cfg(unix)]
+const CANCELLATION_SIGNALS: [SignalKind; 3] = [
+    SignalKind::interrupt(),
+    SignalKind::terminate(),
+    SignalKind::quit(),
+];
 
 struct Environment(HashMap<OsString, OsString>);
 
@@ -18,7 +36,9 @@ impl ConfigSource for Environment {
 #[cfg(not(windows))]
 struct Input<'a> {
     context: &'a RequestContext,
-    stdin: io::Stdin,
+    stdin: &'a io::Stdin,
+    #[cfg(unix)]
+    cancellation: UnixStream,
 }
 
 #[cfg(not(windows))]
@@ -34,19 +54,55 @@ impl Input<'_> {
 #[cfg(unix)]
 impl Read for Input<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        use rustix::event::{PollFd, PollFlags, Timespec, poll};
-        let mut fds = [PollFd::new(&self.stdin, PollFlags::IN)];
-        let wait = Timespec {
-            tv_sec: 0,
-            tv_nsec: 25_000_000,
-        };
+        use rustix::event::{PollFd, PollFlags, poll};
+        let mut fds = [
+            PollFd::new(self.stdin, PollFlags::IN),
+            PollFd::new(&self.cancellation, PollFlags::IN),
+        ];
         loop {
             self.check()?;
-            if poll(&mut fds, Some(&wait))? != 0 {
-                self.check()?;
-                return Ok(rustix::io::read(&self.stdin, bytes)?);
+            match poll(&mut fds, None) {
+                Ok(_) => {
+                    self.check()?;
+                    return Ok(rustix::io::read(self.stdin, bytes)?);
+                }
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
             }
         }
+    }
+}
+
+#[cfg(unix)]
+struct StdinTerminal<'a> {
+    stdin: &'a io::Stdin,
+    original: Option<Termios>,
+}
+
+#[cfg(unix)]
+impl greennode::cli::Terminal for StdinTerminal<'_> {
+    fn disable_echo(&mut self) -> io::Result<()> {
+        let original = retry_on_intr(|| tcgetattr(self.stdin))?;
+        let mut mode = original.clone();
+        mode.local_modes
+            .remove(LocalModes::ECHO | LocalModes::ECHONL);
+        self.original = Some(original);
+        retry_on_intr(|| tcsetattr(self.stdin, OptionalActions::Now, &mode))?;
+        Ok(())
+    }
+
+    fn restore_echo(&mut self, discard_input: bool) -> io::Result<()> {
+        if let Some(original) = &self.original {
+            let discard = if discard_input {
+                retry_on_intr(|| tcflush(self.stdin, QueueSelector::IFlush))
+            } else {
+                Ok(())
+            };
+            retry_on_intr(|| tcsetattr(self.stdin, OptionalActions::Now, original))?;
+            self.original = None;
+            discard?;
+        }
+        Ok(())
     }
 }
 
@@ -70,21 +126,13 @@ fn main() -> ExitCode {
     runtime.block_on(async {
         let (context, cancel) = RequestContext::new();
         #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let (Ok(mut interrupt), Ok(mut terminate)) = (
-                signal(SignalKind::interrupt()),
-                signal(SignalKind::terminate()),
-            ) else {
+        for kind in CANCELLATION_SIGNALS {
+            let Ok(mut signal) = signal(kind) else {
                 return ExitCode::FAILURE;
             };
-            let interrupt_cancel = cancel.clone();
+            let cancel = cancel.clone();
             tokio::spawn(async move {
-                interrupt.recv().await;
-                interrupt_cancel.cancel();
-            });
-            tokio::spawn(async move {
-                terminate.recv().await;
+                signal.recv().await;
                 cancel.cancel();
             });
         }
@@ -117,19 +165,31 @@ fn main() -> ExitCode {
         let mut stderr = std::io::stderr();
         let stdin_terminal = stdin.is_terminal();
         #[cfg(not(windows))]
-        let mut stdin = Input {
+        let mut input = Input {
             context: &context,
-            stdin,
+            stdin: &stdin,
+            #[cfg(unix)]
+            cancellation: {
+                let Ok((reader, writer)) = UnixStream::pair() else {
+                    return ExitCode::FAILURE;
+                };
+                let context = context.clone();
+                tokio::spawn(async move {
+                    context.wait(&SystemClock).await;
+                    drop(writer);
+                });
+                reader
+            },
         };
         #[cfg(windows)]
-        let mut stdin = stdin;
+        let mut input = stdin;
         let stdout_terminal = stdout.is_terminal();
         let stderr_terminal = stderr.is_terminal();
-        greennode::cli::run_invocation(greennode::cli::Invocation {
+        let invocation = greennode::cli::Invocation {
             args: std::env::args_os().collect(),
             source: &source,
             config_options: greennode_sdk::ConfigOptions::default(),
-            stdin: &mut stdin,
+            stdin: &mut input,
             stdout: &mut stdout,
             stderr: &mut stderr,
             stdin_terminal,
@@ -137,7 +197,28 @@ fn main() -> ExitCode {
             stderr_terminal,
             clock: &SystemClock,
             context: &context,
-        })
-        .await
+        };
+        #[cfg(unix)]
+        {
+            let mut terminal = StdinTerminal {
+                stdin: &stdin,
+                original: None,
+            };
+            greennode::cli::run_invocation_with_terminal(invocation, &mut terminal).await
+        }
+        #[cfg(not(unix))]
+        greennode::cli::run_invocation(invocation).await
     })
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn terminal_cleanup_receives_interrupt_terminate_and_quit() {
+    for kind in [
+        SignalKind::interrupt(),
+        SignalKind::terminate(),
+        SignalKind::quit(),
+    ] {
+        assert!(CANCELLATION_SIGNALS.contains(&kind), "{kind:?}");
+    }
 }

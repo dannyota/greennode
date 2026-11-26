@@ -23,7 +23,7 @@ same-file = "1.0.6"
 zeroize = "1.9.2"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.6", features = ["event", "fs", "process"] }
+rustix = { version = "1.1.6", features = ["event", "fs", "process", "termios"] }
 
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1.11"

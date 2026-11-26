@@ -57,6 +57,19 @@ impl Drop for Home {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn interactive_configure_requires_terminal_stdin() {
+    let home = Home::new();
+    let output = home.run(&["configure"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("InvalidUsage"));
+    assert!(error.contains("configure set <key> -"));
+    assert!(!home.0.join(".greennode").exists());
+}
+
 #[cfg(not(windows))]
 #[test]
 fn legacy_write_refuses_without_creating_files() {
@@ -759,4 +772,278 @@ fn sigterm_cancels_set_while_stdin_is_waiting_for_eof() {
     assert!(output.stdout.is_empty());
     assert!(!home.0.join(".greennode").exists());
     drop(writer);
+}
+
+#[cfg(unix)]
+mod interactive {
+    use super::*;
+    use greennode::cli::{Invocation, Terminal, run_invocation_with_terminal};
+    use greennode_sdk::{RequestContext, SystemClock};
+    use std::cell::Cell;
+    use std::io::{self, Read};
+    use std::os::unix::fs::PermissionsExt;
+
+    struct Echo<'a> {
+        enabled: &'a Cell<bool>,
+        changes: Vec<bool>,
+    }
+
+    impl Terminal for Echo<'_> {
+        fn disable_echo(&mut self) -> io::Result<()> {
+            self.enabled.set(false);
+            self.changes.push(false);
+            Ok(())
+        }
+
+        fn restore_echo(&mut self, _: bool) -> io::Result<()> {
+            self.enabled.set(true);
+            self.changes.push(true);
+            Ok(())
+        }
+    }
+
+    struct Script<'a, F> {
+        echo: &'a Cell<bool>,
+        answers: &'a [&'a [u8]],
+        on_read: F,
+        step: usize,
+        line: &'a [u8],
+    }
+
+    impl<F: FnMut(usize)> Read for Script<'_, F> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if self.line.is_empty() {
+                assert_eq!(self.echo.get(), self.step < 6);
+                (self.on_read)(self.step);
+                self.line = self.answers[self.step];
+                self.step += 1;
+            }
+            self.line.read(output)
+        }
+    }
+
+    fn run(
+        source: &dyn greennode_sdk::ConfigSource,
+        context: &RequestContext,
+        answers: &[&[u8]],
+        on_read: impl FnMut(usize),
+    ) -> (ExitCode, Vec<u8>, Vec<u8>, Vec<bool>) {
+        let echo = Cell::new(true);
+        let mut terminal = Echo {
+            enabled: &echo,
+            changes: Vec::new(),
+        };
+        let mut input = Script {
+            echo: &echo,
+            answers,
+            on_read,
+            step: 0,
+            line: &[],
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let invocation = Invocation {
+            args: ["greennode", "configure"].map(Into::into).to_vec(),
+            source,
+            config_options: greennode_sdk::ConfigOptions::default(),
+            stdin: &mut input,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_terminal: true,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &SystemClock,
+            context,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let exit = runtime.block_on(run_invocation_with_terminal(invocation, &mut terminal));
+        (exit, stdout, stderr, terminal.changes)
+    }
+
+    #[test]
+    fn prompts_in_baseline_order_and_publishes_only_nonblank_values() {
+        let home = Home::new();
+        let directory = home.0.join(".greennode");
+        std::fs::create_dir(&directory).unwrap();
+        let config = directory.join("config");
+        let credentials = directory.join("credentials");
+        std::fs::write(
+            &config,
+            b"[default]\nregion = han-1\nproject_id = toy-project\noutput = text\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &credentials,
+            b"[default]\nusername = toy-user\npassword = toy-old-password\ntotp_secret = toy-old-totp\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let (context, _) = RequestContext::new();
+        let (exit, stdout, stderr, changes) = run(
+            &home,
+            &context,
+            &[
+                b"han-2\r\n",
+                b"\n",
+                b"json\n",
+                b"true\n",
+                b"toy@example.invalid\n",
+                b"\n",
+                b"\n",
+                b"toy-new-totp\n",
+            ],
+            |_| {},
+        );
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        for secret in ["toy-old-password", "toy-old-totp", "toy-new-totp"] {
+            assert!(!String::from_utf8_lossy(&stdout).contains(secret));
+            assert!(!String::from_utf8_lossy(&stderr).contains(secret));
+        }
+        assert_eq!(
+            stdout,
+            b"Region [han-1]: Project ID [toy-project]: Output format [text]: Read only []: Root email []: Username [toy-user]: Password [****]: \nTOTP secret [****]: \n"
+        );
+        assert!(stderr.is_empty());
+        assert_eq!(changes, [false, true, false, true]);
+        assert_eq!(
+            std::fs::read(config).unwrap(),
+            b"[default]\nregion = han-2\nproject_id = toy-project\noutput = json\nread_only = true\n"
+        );
+        assert!(
+            std::fs::read(credentials).unwrap()
+                == b"[default]\nusername = toy-user\npassword = toy-old-password\ntotp_secret = toy-new-totp\nroot_email = toy@example.invalid\n"
+        );
+    }
+
+    #[test]
+    fn legacy_mode_refuses_before_the_first_prompt() {
+        let home = Home::new();
+        let legacy = home.0.join(".vngcloud");
+        std::fs::create_dir(&legacy).unwrap();
+        std::fs::write(legacy.join("config"), b"[default]\nregion = han-1\n").unwrap();
+        let (context, _) = RequestContext::new();
+        let (exit, stdout, stderr, changes) = run(&home, &context, &[], |_| {});
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(String::from_utf8_lossy(&stderr).contains("legacy configuration is read-only"));
+        assert!(stdout.is_empty() && changes.is_empty());
+        assert_eq!(std::fs::read_dir(legacy).unwrap().count(), 1);
+        assert!(!home.0.join(".greennode").exists());
+    }
+
+    #[test]
+    fn profile_latch_refuses_before_the_first_prompt() {
+        let home = Home::new();
+        let directory = home.0.join(".greennode");
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(directory.join("config"), b"[default]\nread_only = true\n").unwrap();
+        let (context, _) = RequestContext::new();
+        let (exit, stdout, stderr, changes) = run(&home, &context, &[], |_| {});
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+        assert!(stdout.is_empty() && changes.is_empty());
+        assert_eq!(std::fs::read_dir(directory).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn latch_change_during_a_prompt_refuses_both_edits_under_lock() {
+        use std::fs::{File, TryLockError};
+        use std::sync::atomic::AtomicBool;
+
+        struct Source<'a> {
+            home: &'a Home,
+            changed: AtomicBool,
+        }
+
+        impl greennode_sdk::ConfigSource for Source<'_> {
+            fn var_os(&self, _: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+                None
+            }
+
+            fn home_dir(&self) -> Option<PathBuf> {
+                if self.changed.load(Ordering::Relaxed) {
+                    for name in ["config.lock", "credentials.lock"] {
+                        let file = File::open(self.home.0.join(".greennode").join(name)).unwrap();
+                        assert!(matches!(file.try_lock(), Err(TryLockError::WouldBlock)));
+                    }
+                }
+                Some(self.home.0.clone())
+            }
+        }
+
+        let home = Home::new();
+        let source = Source {
+            home: &home,
+            changed: AtomicBool::new(false),
+        };
+        let directory = home.0.join(".greennode");
+        std::fs::create_dir(&directory).unwrap();
+        let config = directory.join("config");
+        std::fs::write(&config, b"[default]\nread_only = false\n").unwrap();
+        let (context, _) = RequestContext::new();
+        let (exit, _, stderr, _) = run(
+            &source,
+            &context,
+            &[
+                b"han-2\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"toy-secret\n",
+                b"\n",
+            ],
+            |step| {
+                if step == 6 {
+                    assert!(!directory.join("config.lock").exists());
+                    std::fs::write(&config, b"[default]\nread_only = true\n").unwrap();
+                    source.changed.store(true, Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+        assert!(!String::from_utf8_lossy(&stderr).contains("toy-secret"));
+        assert!(directory.join("config.lock").is_file());
+        assert!(directory.join("credentials.lock").is_file());
+        assert!(!directory.join("credentials").exists());
+        assert_eq!(
+            std::fs::read(config).unwrap(),
+            b"[default]\nread_only = true\n"
+        );
+    }
+
+    #[test]
+    fn cancellation_during_a_secret_prompt_restores_echo() {
+        let home = Home::new();
+        let (context, cancel) = RequestContext::new();
+        let (exit, stdout, stderr, changes) = run(
+            &home,
+            &context,
+            &[
+                b"han-2\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"\n",
+                b"toy-cancelled\n",
+            ],
+            |step| {
+                if step == 6 {
+                    cancel.cancel();
+                }
+            },
+        );
+        assert_eq!(exit, ExitCode::from(1));
+        assert_eq!(changes, [false, true]);
+        assert!(!String::from_utf8_lossy(&stdout).contains("toy-cancelled"));
+        assert!(!String::from_utf8_lossy(&stderr).contains("toy-cancelled"));
+        assert!(!home.0.join(".greennode").exists());
+    }
 }

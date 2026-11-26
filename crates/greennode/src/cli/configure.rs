@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use greennode_sdk::{FileSlot, ProfileFile, Selection, read_slot, select};
 
-use super::{Invocation, InvocationHandler, dispatch};
+use super::{Invocation, InvocationHandler, Terminal, dispatch};
 
 const KEYS: [(&str, bool, bool); 11] = [
     ("region", false, false),
@@ -21,9 +21,9 @@ const KEYS: [(&str, bool, bool); 11] = [
     ("client_secret", true, true),
 ];
 
-pub(super) struct Handler;
+pub(super) struct Handler<'a>(pub(super) Option<&'a mut dyn Terminal>);
 
-impl InvocationHandler for Handler {
+impl InvocationHandler for Handler<'_> {
     fn accepts(&self, args: &[OsString]) -> bool {
         let Ok(registry) = crate::services::registered() else {
             return false;
@@ -35,16 +35,19 @@ impl InvocationHandler for Handler {
         if matches.get_count("help-flag") > 0 {
             return false;
         }
-        matches
-            .subcommand_matches("configure")
-            .is_some_and(|m| matches!(m.subcommand_name(), Some("get" | "list" | "set")))
+        matches.subcommand_matches("configure").is_some_and(|m| {
+            matches!(m.subcommand_name(), Some("get" | "list" | "set"))
+                || (cfg!(unix)
+                    && m.subcommand_name().is_none()
+                    && !matches.get_flag("version-flag"))
+        })
     }
 
     fn run<'a>(
         &'a mut self,
         invocation: &'a mut Invocation<'_>,
     ) -> dispatch::FutureResult<'a, ExitCode> {
-        Box::pin(async move { run(invocation).await })
+        Box::pin(async move { run(invocation, self.0.take()).await })
     }
 }
 
@@ -89,7 +92,7 @@ fn value<'a>(file: &'a ProfileFile, section: &str, key: &str) -> &'a str {
         .map_or("", |v| v.expose_secret())
 }
 
-async fn run(invocation: &mut Invocation<'_>) -> ExitCode {
+async fn run(invocation: &mut Invocation<'_>, _terminal: Option<&mut dyn Terminal>) -> ExitCode {
     let Ok(registry) = crate::services::registered() else {
         return ExitCode::FAILURE;
     };
@@ -137,6 +140,14 @@ async fn run(invocation: &mut Invocation<'_>) -> ExitCode {
         );
     }
     let cwd = std::env::current_dir().ok();
+    let read_only = matches
+        .get_one::<bool>("read-only")
+        .copied()
+        .unwrap_or(false);
+    #[cfg(unix)]
+    if command.subcommand_name().is_none() {
+        return set::prompt(invocation, &profile, cwd.as_deref(), read_only, _terminal).await;
+    }
     if let Some((set_command, &(name, credentials, secret))) = set_command.zip(selected_key) {
         let Some(argument) = set_command.get_one::<OsString>("value") else {
             return ExitCode::FAILURE;
@@ -145,10 +156,7 @@ async fn run(invocation: &mut Invocation<'_>) -> ExitCode {
             invocation,
             &profile,
             cwd.as_deref(),
-            matches
-                .get_one::<bool>("read-only")
-                .copied()
-                .unwrap_or(false),
+            read_only,
             (name, credentials, secret),
             argument,
         )
@@ -327,7 +335,10 @@ mod tests {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        assert_eq!(runtime.block_on(run(&mut invocation)), ExitCode::FAILURE);
+        assert_eq!(
+            runtime.block_on(run(&mut invocation, None)),
+            ExitCode::FAILURE
+        );
         std::fs::remove_dir(home).unwrap();
     }
 }
