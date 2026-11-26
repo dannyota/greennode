@@ -1,12 +1,15 @@
 #!/usr/bin/env -S python3 -I
 # Usage: python3 -I scripts/test/check-comments-test.py
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parent.parent / "check-comments.py"
 sys.dont_write_bytecode = True
@@ -123,6 +126,16 @@ class Gate(unittest.TestCase):
             'crates/greennode-sdk/src/lib.rs:3: #[doc = "no"]',
             "crates/greennode/src/lib.rs:1: /// no",
         ])))
+
+    def test_untracked_comment_fails(self):
+        path = self.repo / "new.rs"
+        path.write_text("// untracked\n")
+        self.assertEqual(self.run_gate(), (1, "new.rs:1: // untracked"))
+
+    def test_non_utf8_filename_is_scanned(self):
+        name = b"invalid-\xff.rs"
+        with patch.object(check_comments.subprocess, "run", return_value=SimpleNamespace(stdout=name + b"\0")):
+            self.assertEqual([os.fsencode(path) for path in check_comments.rust_files()], [name])
 
     def test_comment_fails(self):
         self.track("src/lib.rs", "fn a() {}\n// why\n")
