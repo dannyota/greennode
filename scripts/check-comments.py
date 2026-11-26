@@ -1,5 +1,6 @@
 #!/usr/bin/env -S python3 -I
 # Usage: python3 -I scripts/check-comments.py
+import os
 import re
 import subprocess
 import sys
@@ -121,8 +122,8 @@ def rust_files():
     listed = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.rs", "*.inc"],
         cwd=ROOT, check=True, capture_output=True,
-    ).stdout.decode()
-    return sorted({name for name in listed.split("\0") if name})
+    ).stdout
+    return sorted({os.fsdecode(name) for name in listed.split(b"\0") if name})
 
 
 def load_allowlist():

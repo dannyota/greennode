@@ -62,15 +62,24 @@ fi
 
 files() {
   git ls-files -z --cached --others --exclude-standard -- "$@" |
-    python3 -c 'import sys; sys.stdout.buffer.write(b"\0".join(sorted(set(sys.stdin.buffer.read().split(b"\0")) - {b""})) + b"\0")'
+    python3 -I -c 'import sys; sys.stdout.buffer.write(b"\0".join(sorted(set(sys.stdin.buffer.read().split(b"\0")) - {b""})) + b"\0")'
 }
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/greennode-check-lengths-files.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+if ! files '*rustfmt.toml' >"$work/configs" ||
+  ! files '*.rs' '*.inc' '*.md' '*.markdown' >"$work/files"; then
+  printf 'check-lengths: file enumeration failed\n' >&2
+  exit 1
+fi
+: >"$work/scanned"
 
 exclude_tests=1
 while IFS= read -r -d '' config; do
   if [[ -f "$config" ]] && grep -Eq -e '^[[:space:]]*(ignore|disable_all_formatting|skip_children)[[:space:]]*=' -- "$config"; then
     exclude_tests=0
   fi
-done < <(files '*rustfmt.toml')
+done <"$work/configs"
 
 count_lines() {
   if (($2)); then
@@ -101,6 +110,7 @@ while IFS= read -r -d '' file; do
     *) continue ;;
   esac
   [[ -f "$file" ]] || continue
+  printf '%s\0' "$file" >>"$work/scanned"
   lines=$(count_lines "$file" "$exclude")
   cap=$(cap_for "$file" <"$BASELINE")
   if [[ -n "$cap" ]]; then
@@ -118,11 +128,18 @@ while IFS= read -r -d '' file; do
     printf '%s: %s lines (limit %s)\n' "$file" "$lines" "$limit"
     violations=$((violations + 1))
   fi
-done < <(files '*.rs' '*.inc' '*.md' '*.markdown')
+done <"$work/files"
 
 while read -r cap file || [[ -n "$cap" ]]; do
-  if [[ ! -f "$file" ]]; then
-    printf '%s: 0 lines (cap %s), stale baseline path (missing)\n' "$file" "$cap"
+  scanned=0
+  while IFS= read -r -d '' path; do
+    if [[ "$path" == "$file" ]]; then
+      scanned=1
+      break
+    fi
+  done <"$work/scanned"
+  if ((!scanned)); then
+    printf '%s: 0 lines (cap %s), stale baseline path (missing or not scanned)\n' "$file" "$cap"
     violations=$((violations + 1))
   fi
 done < <(rows <"$BASELINE")

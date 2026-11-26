@@ -54,6 +54,14 @@ awk 'BEGIN { for (i = 1; i <= 701; i++) print "line " i }' >"$REPO/src/new.rs"
 expect 'untracked Rust over limit' 1 'src/new.rs: 701 lines (limit 700)'
 printf '701 src/new.rs\n' >"$REPO/scripts/lengths-baseline.txt"
 expect 'untracked capped Rust exists' 0
+printf 'src/new.rs\n' >"$REPO/.gitignore"
+expect 'ignored capped Rust is stale' 1 'src/new.rs: 0 lines (cap 701), stale baseline path (missing or not scanned)'
+
+fresh_repo
+mkdir -p "$WORK/bin"
+printf '#!/bin/sh\nexit 1\n' >"$WORK/bin/git"
+chmod +x "$WORK/bin/git"
+PATH="$WORK/bin:$PATH" expect 'file enumeration failure' 1 'check-lengths: file enumeration failed'
 
 fresh_repo
 lines_file docs/page.md 400
