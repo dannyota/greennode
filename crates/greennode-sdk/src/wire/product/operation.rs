@@ -193,6 +193,27 @@ async fn send_route<T>(
         }
         url.set_query(Some(&encoded));
     }
+    let mut key_evidence = Evidence::new();
+    if let RouteAuth::CdnKey(Some(key)) = auth {
+        key_evidence.add_secret(key);
+        if matches!(operation.class, redirect::Classification::Read) && !body.is_empty() {
+            use serde_json::{Map, Value};
+            let fields: Map<String, Value> =
+                serde_json::from_slice(&body).map_err(|_| invalid())?;
+            if fields
+                .values()
+                .any(|value| evidence.reflected_in(value) || key_evidence.reflected_in(value))
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    if matches!(auth, RouteAuth::CdnKey(Some(_)) | RouteAuth::PublicHtml)
+        && (sender::uri_reflects_credential_forms(&url, evidence.credentials())
+            || sender::uri_reflects_credential_forms(&url, key_evidence.credentials()))
+    {
+        return Err(invalid());
+    }
     let (auth, accept, credentials) = match auth {
         RouteAuth::Bearer(source) => (sender::Auth::Bearer(source), "application/json", Vec::new()),
         RouteAuth::CdnKey(Some(key)) => (

@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::wire::product::{evidence::Evidence, operation::reflects_json};
+use crate::wire::product::evidence::Evidence;
 
 const REDACTED: &str = "<redacted>";
 
@@ -76,22 +76,37 @@ impl<'de> Deserialize<'de> for Timestamp {
 }
 
 pub(super) fn redact_text(text: &mut String, evidence: &Evidence) {
-    if evidence.credentials().reflects(text.as_bytes()) {
+    if evidence.text_reflects(text) {
         *text = REDACTED.to_owned();
     }
 }
 
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
-    if reflects_json(text.get().as_bytes(), evidence.credentials(), true) == Some(false) {
-        return;
-    }
-    *raw = serde_json::from_str::<Value>(text.get())
-        .ok()
-        .and_then(|mut value| {
+    match serde_json::from_str::<Value>(text.get()) {
+        Ok(mut value) if evidence.reflected_in(&value) => {
             evidence.redact(&mut value);
-            serde_json::value::to_raw_value(&value).ok()
-        });
+            *raw = serde_json::value::to_raw_value(&value).ok();
+        }
+        Ok(_) => {}
+        Err(_) => *raw = None,
+    }
+}
+
+fn rule_from_wire<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Box<RawValue>>, D::Error> {
+    Box::<RawValue>::deserialize(deserializer).map(Some)
+}
+
+fn serialize_rule<S: Serializer>(
+    rule: &Option<Box<RawValue>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match rule {
+        Some(rule) => rule.serialize(serializer),
+        None => <[Value; 0]>::default().serialize(serializer),
+    }
 }
 
 pub(super) fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
@@ -491,10 +506,18 @@ pub struct WebAccelerator {
     )]
     pub default_rule_actions: Vec<RuleAction>,
     /// PageRules returned by the service.
-    #[serde(rename(serialize = "PageRules", deserialize = "childrenRule"))]
+    #[serde(
+        rename(serialize = "PageRules", deserialize = "childrenRule"),
+        deserialize_with = "rule_from_wire",
+        serialize_with = "serialize_rule"
+    )]
     pub page_rules: Option<Box<RawValue>>,
     /// AdvancedRule returned by the service.
-    #[serde(rename(serialize = "AdvancedRule", deserialize = "childrenAdvanceRule"))]
+    #[serde(
+        rename(serialize = "AdvancedRule", deserialize = "childrenAdvanceRule"),
+        deserialize_with = "rule_from_wire",
+        serialize_with = "serialize_rule"
+    )]
     pub advanced_rule: Option<Box<RawValue>>,
 }
 

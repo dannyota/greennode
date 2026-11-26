@@ -214,7 +214,7 @@ pub type GetCacheStatusInput = Range;
 #[serde(rename_all = "PascalCase")]
 pub struct GetCacheStatusOutput {
     /// Counts keyed by the server’s category.
-    pub counts: BTreeMap<String, Field<f64>>,
+    pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
 
 impl Client {
@@ -240,7 +240,7 @@ pub type GetHttpCodesInput = Range;
 #[serde(rename_all = "PascalCase")]
 pub struct GetHttpCodesOutput {
     /// Counts keyed by the server’s category.
-    pub counts: BTreeMap<String, Field<f64>>,
+    pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
 
 impl Client {
@@ -354,21 +354,23 @@ impl Client {
         ctx: &RequestContext,
         call: &Call,
         input: Range,
-    ) -> Result<BTreeMap<String, Field<f64>>, Failure<()>> {
+    ) -> Result<Option<BTreeMap<String, Field<f64>>>, Failure<()>> {
         let body = input.body().ok_or_else(invalid)?;
         let answer = self.call(ctx, call, &[], body.to_string().into()).await?;
         let malformed = || read_failure(call.unexpected(200));
         let text = answer.data.as_deref().ok_or_else(malformed)?.get();
         let decoded: String = serde_json::from_str(text).map_err(|_| malformed())?;
         if decoded.trim() == "[]" {
-            return Ok(BTreeMap::new());
+            return Ok(Some(BTreeMap::new()));
         }
-        let mut counts: BTreeMap<String, Field<f64>> =
+        let mut counts: Option<BTreeMap<String, Field<f64>>> =
             serde_json::from_str(&decoded).map_err(|_| malformed())?;
-        counts.retain(|key, value| {
-            value.redact(&answer.evidence);
-            !answer.evidence.credentials().reflects(key.as_bytes())
-        });
+        if let Some(counts) = &mut counts {
+            counts.retain(|key, value| {
+                value.redact(&answer.evidence);
+                !answer.evidence.text_reflects(key)
+            });
+        }
         Ok(counts)
     }
 }

@@ -5,10 +5,11 @@ use http::{Method, StatusCode, header::CONTENT_TYPE};
 use serde::Serialize;
 
 use super::models::redact_text;
-use super::wire::{api_error, convert, operation, raw, read_failure};
+use super::wire::{convert, operation, raw, read_failure};
 use super::{Client, ErrorDetail};
+use crate::error::SafeText;
 use crate::wire::product::evidence::Evidence;
-use crate::{Error, ErrorClass, Failure, RequestContext};
+use crate::{ApiError, Error, ErrorClass, Failure, RequestContext};
 
 const OP: &str = "cdn.ListIPRanges";
 const CAP: usize = 4 << 20;
@@ -82,10 +83,12 @@ impl Client {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
         if !is_html(content_type) {
-            return Err(page_format(
-                &format!("content-type {content_type:?} is not text/html"),
-                &evidence,
-            ));
+            let reason = if evidence.text_reflects(content_type) {
+                String::new()
+            } else {
+                format!("content-type {content_type:?} is not text/html")
+            };
+            return Err(page_format(&reason, &evidence));
         }
         let mut items = ranges(&String::from_utf8_lossy(&reply.body))
             .map_err(|reason| page_format(&reason, &evidence))?;
@@ -98,39 +101,32 @@ impl Client {
 }
 
 fn status_error<T>(status: StatusCode) -> Failure<T> {
-    let class = match status {
-        StatusCode::FORBIDDEN => ErrorClass::PermissionDenied,
-        StatusCode::NOT_FOUND => ErrorClass::NotFound,
-        StatusCode::TOO_MANY_REQUESTS => ErrorClass::RateLimited,
-        _ => ErrorClass::Api,
-    };
     let retryable = matches!(status.as_u16(), 429 | 502 | 503 | 504);
-    let message = match class {
-        ErrorClass::PermissionDenied => "greennode: permission denied".to_owned(),
-        ErrorClass::NotFound => "greennode: resource not found".to_owned(),
-        ErrorClass::RateLimited => "greennode: rate limited".to_owned(),
+    let message = match status {
+        StatusCode::FORBIDDEN => "greennode: permission denied".to_owned(),
+        StatusCode::NOT_FOUND => "greennode: resource not found".to_owned(),
+        StatusCode::TOO_MANY_REQUESTS => "greennode: rate limited".to_owned(),
         _ => format!("request failed with status {}", status.as_u16()),
     };
-    read_failure(api_error(
+    read_failure(Error::from_public_api(ApiError::new(
         OP,
-        status.as_u16(),
-        "",
-        &message,
-        class,
+        Some(status.as_u16()),
+        SafeText::new("", &[]),
+        SafeText::new(&message, &[]),
         retryable,
-    ))
+    )))
 }
 
 fn page_format<T>(reason: &str, evidence: &Evidence) -> Failure<T> {
-    use crate::error::SafeText;
-    let secrets: Vec<_> = evidence.credentials().values().iter().collect();
-    let reason = SafeText::new(reason, &secrets);
+    let reflected = evidence.text_reflects(reason);
+    let reason = SafeText::new(reason, &[]);
     let prefix = "cdn: IP range page format not recognized";
-    let message = if reason.as_str().is_empty() {
-        prefix.to_owned()
-    } else {
-        format!("{prefix}: {}", reason.as_str())
-    };
+    let message =
+        if reflected || reason.as_str().is_empty() || evidence.text_reflects(reason.as_str()) {
+            prefix.to_owned()
+        } else {
+            format!("{prefix}: {}", reason.as_str())
+        };
     let api = crate::ApiError::without_fallback(
         "",
         None,
@@ -154,41 +150,76 @@ fn is_html(content_type: &str) -> bool {
 
 struct Tag<'a> {
     name: &'a str,
-    start: usize,
-    end: usize,
     closing: bool,
     self_closing: bool,
 }
 
-fn tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
-    let mut pos = 0;
+enum Part<'a> {
+    Text(&'a str),
+    Tag(Tag<'a>),
+}
+
+fn page_parts(mut rest: &str) -> impl Iterator<Item = Part<'_>> {
+    let mut hidden = Vec::new();
     std::iter::from_fn(move || {
-        let start = pos + html[pos..].find('<')?;
-        let (tag, end) = parse_tag(html, start)?;
-        pos = end;
-        Some(tag)
+        while !rest.is_empty() {
+            if !rest.starts_with('<') {
+                let len = rest.find('<').unwrap_or(rest.len());
+                let (text, next) = rest.split_at(len);
+                rest = next;
+                if hidden.is_empty() {
+                    return Some(Part::Text(text));
+                }
+                continue;
+            }
+            rest = &rest[1..];
+            if let Some(comment) = rest.strip_prefix("!--") {
+                rest = comment.split_once("-->").map_or("", |(_, tail)| tail);
+                continue;
+            }
+            if let Some(name @ ("script" | "style")) = hidden.last().copied()
+                && !starts_closing_tag(rest, name)
+            {
+                continue;
+            }
+            let (tag, tail) = parse_tag(rest)?;
+            rest = tail;
+            if let Some(name) = hidden_element(tag.name) {
+                if tag.closing && hidden.last() == Some(&name) {
+                    hidden.pop();
+                } else if !tag.closing && !tag.self_closing {
+                    hidden.push(name);
+                }
+                continue;
+            }
+            if hidden.is_empty() {
+                return Some(Part::Tag(tag));
+            }
+        }
+        None
     })
 }
 
-fn parse_tag(html: &str, start: usize) -> Option<(Tag<'_>, usize)> {
-    let tail = &html[start + 1..];
-    if let Some(comment) = tail.strip_prefix("!--") {
-        let end = comment
-            .find("-->")
-            .map_or(html.len(), |end| start + end + 7);
-        return Some((
-            Tag {
-                name: "!--",
-                start,
-                end,
-                closing: false,
-                self_closing: true,
-            },
-            end,
-        ));
-    }
+fn hidden_element(name: &str) -> Option<&'static str> {
+    ["script", "style", "noscript", "template", "svg"]
+        .into_iter()
+        .find(|hidden| name.eq_ignore_ascii_case(hidden))
+}
+
+fn starts_closing_tag(rest: &str, name: &str) -> bool {
+    rest.strip_prefix('/').is_some_and(|tail| {
+        tail.get(..name.len())
+            .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
+            && tail
+                .as_bytes()
+                .get(name.len())
+                .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+    })
+}
+
+fn parse_tag(rest: &str) -> Option<(Tag<'_>, &str)> {
     let mut quote = None;
-    let end = tail.bytes().position(|byte| match (quote, byte) {
+    let end = rest.bytes().position(|byte| match (quote, byte) {
         (Some(expected), found) if expected == found => {
             quote = None;
             false
@@ -200,67 +231,19 @@ fn parse_tag(html: &str, start: usize) -> Option<(Tag<'_>, usize)> {
         (None, b'>') => true,
         _ => false,
     })?;
-    let raw = &tail[..end];
-    let closing = raw.starts_with('/');
+    let raw = &rest[..end];
     let name = raw
         .trim_start_matches('/')
         .split(|ch: char| ch.is_ascii_whitespace() || ch == '/')
         .next()?;
-    let end = start + end + 2;
     Some((
         Tag {
             name,
-            start,
-            end,
-            closing,
+            closing: raw.starts_with('/'),
             self_closing: raw.ends_with('/'),
         },
-        end,
+        &rest[end + 1..],
     ))
-}
-
-fn visible(html: &str) -> String {
-    let mut result = String::new();
-    let mut pos = 0;
-    while let Some(tag) = tags(&html[pos..]).find(|tag| {
-        !tag.closing
-            && (tag.name == "!--"
-                || ["script", "style", "noscript", "template", "svg"]
-                    .iter()
-                    .any(|name| tag.name.eq_ignore_ascii_case(name)))
-    }) {
-        result.push_str(&html[pos..pos + tag.start]);
-        pos += tag.end;
-        if !tag.self_closing {
-            let close = html[pos..].match_indices("</").find_map(|(start, _)| {
-                let text = &html[pos + start + 2..];
-                text.get(..tag.name.len())
-                    .filter(|name| name.eq_ignore_ascii_case(tag.name))?;
-                let next = *text.as_bytes().get(tag.name.len())?;
-                if !matches!(next, b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | 12) {
-                    return None;
-                }
-                parse_tag(html, pos + start).map(|(_, end)| end)
-            });
-            let Some(close) = close else { return result };
-            pos = close;
-        }
-    }
-    result.push_str(&html[pos..]);
-    result
-}
-
-fn text_of(html: &str) -> String {
-    let mut result = String::new();
-    let mut pos = 0;
-    for tag in tags(html) {
-        decode_text(&html[pos..tag.start], &mut result);
-        result.push(' ');
-        pos = tag.end;
-    }
-    let tail = &html[pos..];
-    decode_text(tail.split('<').next().unwrap_or(""), &mut result);
-    result
 }
 
 fn decode_text(mut text: &str, output: &mut String) {
@@ -316,48 +299,73 @@ fn level(name: &str) -> Option<u8> {
     }
 }
 
+fn heading_matches(text: &str) -> bool {
+    let mut decoded = String::new();
+    decode_text(text, &mut decoded);
+    decoded
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .contains("cdn ip range")
+}
+
 fn ranges(html: &str) -> Result<Vec<String>, String> {
-    let html = visible(html);
-    let mut headings = tags(&html).filter(|tag| level(tag.name).is_some());
-    let mut section = None;
-    let mut end = None;
+    let mut heading = None;
+    let mut heading_text = String::new();
+    let mut section = String::new();
+    let mut target = None;
+    let mut section_closed = false;
     let mut matches = 0;
-    while let Some(heading) = headings.next() {
-        if heading.closing {
-            continue;
-        }
-        let Some(current) = level(heading.name) else {
-            continue;
-        };
-        if let Some((_, matched)) = section
-            && current <= matched
-            && end.is_none()
-        {
-            end = Some(heading.start);
-        }
-        let close = headings.find(|tag| tag.closing && level(tag.name) == Some(current));
-        let text_end = close.as_ref().map_or(html.len(), |tag| tag.start);
-        let text = text_of(&html[heading.end..text_end]);
-        let normal = text
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_ascii_lowercase();
-        if normal.contains("cdn ip range") {
-            matches += 1;
-            if section.is_none() {
-                section = Some((close.map_or(html.len(), |tag| tag.end), current));
+    for part in page_parts(html) {
+        let text = match part {
+            Part::Text(text) => text,
+            Part::Tag(tag) => {
+                let level = level(tag.name);
+                if !tag.closing
+                    && heading.is_none()
+                    && let Some(level) = level
+                {
+                    section_closed |= target.is_some_and(|matched| level <= matched);
+                    heading = Some(level);
+                }
+                if tag.closing && level.is_some() && level == heading {
+                    if heading_matches(&heading_text) {
+                        matches += 1;
+                        if target.is_none() {
+                            target = level;
+                        }
+                    }
+                    heading = None;
+                    heading_text.clear();
+                }
+                " "
             }
+        };
+        if heading.is_some() {
+            heading_text.push_str(text);
         }
+        if target.is_some() && !section_closed {
+            section.push_str(text);
+        }
+    }
+    if heading.is_some() && heading_matches(&heading_text) {
+        matches += 1;
     }
     if matches > 1 {
         return Err(format!("heading \"CDN IP range\" matched {matches} times"));
     }
-    let (start, _) = section.ok_or("heading \"CDN IP range\" not found")?;
-    let end = end.ok_or("no heading found after the matched section")?;
+    if matches == 0 {
+        return Err("heading \"CDN IP range\" not found".into());
+    }
+    if !section_closed {
+        return Err("no heading found after the matched section".into());
+    }
+    let mut decoded = String::new();
+    decode_text(&section, &mut decoded);
     let mut result = BTreeSet::new();
-    for token in text_of(&html[start..end])
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '/')))
+    for token in
+        decoded.split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '/')))
     {
         let token = token.trim_end_matches(['.', ':']);
         let ip = token.split('/').next().unwrap_or("");

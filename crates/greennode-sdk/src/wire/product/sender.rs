@@ -191,6 +191,11 @@ fn uri_contains_credential(url: &Url, prior: &SentCredentials, pending: &[&Secre
             .query()
             .is_some_and(|query| contains_in_component(query, prior, pending))
 }
+pub(super) fn uri_reflects_credential_forms(url: &Url, credentials: &SentCredentials) -> bool {
+    let reflects = |component| super::response::reflects_credential_forms(component, credentials);
+    !credentials.values().is_empty() && (reflects(url.path()) || url.query().is_some_and(reflects))
+}
+
 fn credential_value(secret: &Secret, bearer: bool) -> Result<http::HeaderValue, Error> {
     let value = secret.expose_secret();
     if value.is_empty()
@@ -622,6 +627,9 @@ async fn run_inner(
                         .map_err(Error::Redirect)?;
                         if uri_contains_credential(&next, sent, &[])
                             || uri_contains_credential(&next, reflection, &[])
+                            || (!matches!(auth, Auth::Bearer(_))
+                                && (uri_reflects_credential_forms(&next, sent)
+                                    || uri_reflects_credential_forms(&next, reflection)))
                         {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }

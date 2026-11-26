@@ -232,3 +232,40 @@ fn public_command_requires_management_configuration_without_sending_a_bearer() {
     assert_eq!(error["error"]["code"], "NoCredentials");
     assert_eq!(server.requests(), 0);
 }
+
+#[test]
+fn cdn_http_failures_keep_the_baseline_exit_codes() {
+    let cases = [
+        (
+            "list-ip-ranges",
+            "401 Unauthorized",
+            String::new(),
+            true,
+            3,
+            401,
+            "Unauthorized",
+            "cdn.ListIPRanges",
+        ),
+        (
+            "list-web-accelerators",
+            "400 Bad Request",
+            "x".repeat((8 << 20) + 1),
+            false,
+            2,
+            400,
+            "BadRequest",
+            "cdn.ListWebAccelerators",
+        ),
+    ];
+    for (op, status, body, docs, exit, http, code, sdk_op) in cases {
+        let server = Server::start(vec![response(status, &body, "text/plain")]);
+        let (status, stdout, stderr) =
+            invoke(&["cdn", op], &server, docs, (!docs).then_some(KEY), true);
+        assert_eq!(status, ExitCode::from(exit), "{op}");
+        assert!(stdout.is_empty());
+        let envelope: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(envelope["error"]["code"], code);
+        assert_eq!(envelope["error"]["status"], http);
+        assert_eq!(envelope["error"]["operation"], sdk_op);
+    }
+}

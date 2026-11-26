@@ -220,6 +220,14 @@ impl Client {
                 {
                     return read_failure(call.unexpected(status.as_u16()));
                 }
+                if status == Some(400) && failure.error().class() == ErrorClass::Api {
+                    let (error, _, dispatch) = failure.into_parts();
+                    return Failure::new(
+                        Error::new(ErrorClass::InvalidInput).with_cause(error),
+                        None,
+                        dispatch,
+                    );
+                }
                 if failure.error().class() == ErrorClass::NoCredentials {
                     return read_failure(
                         Error::new(ErrorClass::NoCredentials)
