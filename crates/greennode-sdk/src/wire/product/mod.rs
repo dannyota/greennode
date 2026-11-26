@@ -1,3 +1,4 @@
+pub(crate) mod operation;
 pub(crate) mod redirect;
 pub(crate) mod response;
 pub(crate) mod retry;

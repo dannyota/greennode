@@ -432,11 +432,15 @@ async fn run_inner(
                 headers.insert(http::header::AUTHORIZATION, credential_value(secret, true)?);
                 pending.push(secret);
             }
-            if request.headers.values().any(|value| {
-                credentials.reflects(value.as_bytes())
-                    || pending
-                        .iter()
-                        .any(|secret| contains_secret(value.as_bytes(), secret))
+            if request.headers.iter().any(|(name, value)| {
+                let fixed_json = (name == http::header::ACCEPT
+                    || name == http::header::CONTENT_TYPE)
+                    && value.as_bytes() == b"application/json";
+                !fixed_json
+                    && (credentials.reflects(value.as_bytes())
+                        || pending
+                            .iter()
+                            .any(|secret| contains_secret(value.as_bytes(), secret)))
             }) {
                 return Err(Error::InvalidRequest);
             }

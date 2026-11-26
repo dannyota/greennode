@@ -33,6 +33,9 @@ pub(crate) fn classify(
             sanitized
         }
     };
+    let fallback = fallback
+        || contains_address_marker(&code)
+        || contains_address_marker(crate::error::SafeText::new(&code, &secrets).as_str());
     let code = safe(&code);
     let message = if sensitive
         || message.is_empty()
@@ -41,7 +44,7 @@ pub(crate) fn classify(
         safe(status_text(status))
     } else {
         let value = safe(message.trim());
-        if !secrets.is_empty() && value.as_str().is_empty() {
+        if value.as_str().is_empty() {
             safe(status_text(status))
         } else {
             value
@@ -62,7 +65,19 @@ pub(crate) fn classify(
     Err(Box::new(crate::Error::from_api(api)))
 }
 
+fn contains_address_marker(text: &str) -> bool {
+    text.contains(['/', '@', '\\'])
+        || text.to_ascii_lowercase().contains("www.")
+        || text
+            .chars()
+            .zip(text.chars().skip(1))
+            .any(|(current, next)| current == ':' && !next.is_whitespace())
+}
+
 fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
+    if contains_address_marker(text) {
+        return true;
+    }
     if !credentials.values().is_empty() && !text.is_ascii() {
         return true;
     }
@@ -478,6 +493,79 @@ mod tests {
             credentials,
         )
         .unwrap_err()
+    }
+
+    macro_rules! withheld_peer_text {
+        ($name:ident, $body:expr) => {
+            #[test]
+            fn $name() {
+                let failure = error(403, $body, false, false, &SentCredentials::default());
+                let detail = failure.api_error().unwrap();
+                assert!(detail.code() == "Forbidden");
+                assert!(detail.message() == "Forbidden");
+            }
+        };
+    }
+    withheld_peer_text!(
+        withholds_mailto,
+        br#"{"code":"mailto:ops@example.test","message":"mailto:ops@example.test"}"#
+    );
+    withheld_peer_text!(withholds_urn, br#"{"code":"urn:x","message":"urn:x"}"#);
+    withheld_peer_text!(withholds_email, br#"{"code":"a@b","message":"a@b"}"#);
+    withheld_peer_text!(
+        withholds_windows_path,
+        br#"{"code":"C:\\x","message":"C:\\x"}"#
+    );
+
+    #[test]
+    fn preserves_colon_followed_by_space() {
+        let failure = error(
+            403,
+            br#"{"code":"Denied","message":"Error: not found"}"#,
+            false,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(failure.api_error().unwrap().message(), "Error: not found");
+    }
+
+    #[test]
+    fn redacts_partial_and_casefolded_urls() {
+        for url in ["//example.test/p", "https:/example.test", "HTTPS://X"] {
+            assert!(contains_address_marker(url));
+        }
+        assert!(!contains_address_marker("access denied"));
+        for body in [
+            br#"{"code":"//example.test/p","message":"//example.test/p"}"#.as_slice(),
+            br#"{"code":"https:/example.test","message":"https:/example.test"}"#,
+            br#"{"code":"HTTPS://X","message":"HTTPS://X"}"#,
+        ] {
+            let failure = error(403, body, false, false, &SentCredentials::default());
+            let detail = failure.api_error().unwrap();
+            assert_eq!(detail.code(), "Forbidden");
+            assert_eq!(detail.message(), "Forbidden");
+        }
+    }
+
+    #[test]
+    fn peer_urls_are_withheld() {
+        for body in [
+            br#"{"code":"https://example.test/private","message":"www.example.test/private"}"#
+                .as_slice(),
+            br#"{"message":"visit example.test/private"}"#,
+        ] {
+            let e = error(403, body, true, false, &SentCredentials::default());
+            assert_eq!(e.api_error().unwrap().code(), "Forbidden");
+            assert_eq!(e.api_error().unwrap().message(), "Forbidden");
+        }
+        let e = error(
+            403,
+            br#"{"code":"Denied","message":"access denied"}"#,
+            true,
+            false,
+            &SentCredentials::default(),
+        );
+        assert_eq!(e.api_error().unwrap().message(), "access denied");
     }
 
     #[test]

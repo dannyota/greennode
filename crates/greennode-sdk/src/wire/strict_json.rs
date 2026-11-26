@@ -7,6 +7,60 @@ use serde_json::value::RawValue;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Error;
 
+pub(crate) enum Shape<'a> {
+    Any,
+    Object(&'a [ShapeField<'a>]),
+    Array(&'a Shape<'a>),
+}
+pub(crate) struct ShapeField<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) shape: Shape<'a>,
+}
+pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>, limit: usize) -> Result<(), Error> {
+    validate(body, &[], limit)?;
+    let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
+    shape_value(raw, shape)
+}
+fn shape_value(raw: &RawValue, shape: &Shape<'_>) -> Result<(), Error> {
+    if raw.get() == "null" {
+        return Ok(());
+    }
+    match shape {
+        Shape::Any => Ok(()),
+        Shape::Object(fields) => {
+            let values: std::collections::BTreeMap<String, &RawValue> =
+                serde_json::from_str(raw.get()).map_err(|_| Error)?;
+            let mut assigned = HashSet::new();
+            for (name, value) in values {
+                let index = fields
+                    .iter()
+                    .position(|field| field.name == name)
+                    .or_else(|| {
+                        fields
+                            .iter()
+                            .position(|field| field_matches(field.name, &name))
+                    });
+                if let Some(index) = index {
+                    if !assigned.insert(index) {
+                        return Err(Error);
+                    }
+                    if let Some(field) = fields.get(index) {
+                        shape_value(value, &field.shape)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Shape::Array(item) => {
+            let values: Vec<&RawValue> = serde_json::from_str(raw.get()).map_err(|_| Error)?;
+            for value in values {
+                shape_value(value, item)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 pub(crate) struct Field<'a> {
     pub(crate) name: &'a str,
     pub(crate) children: &'a [Field<'a>],
@@ -103,6 +157,17 @@ mod tests {
             })
             .collect();
         validate(body, &fields, 64 * 1024)
+    }
+
+    #[test]
+    fn validates_nested_container_shapes() {
+        let shape = Shape::Object(&[ShapeField {
+            name: "items",
+            shape: Shape::Array(&Shape::Object(&[])),
+        }]);
+        assert!(validate_shape(br#"{"items":[{"id":1}]}"#, &shape, 1024).is_ok());
+        assert!(validate_shape(br#"{"items":[[1]]}"#, &shape, 1024).is_err());
+        assert!(validate_shape(br#"{"items":{}}"#, &shape, 1024).is_err());
     }
 
     #[test]

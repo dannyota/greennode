@@ -241,6 +241,8 @@ pub struct Error {
     cause: Option<Box<Error>>,
 }
 
+struct BodyTooLarge;
+
 #[allow(dead_code)]
 impl Error {
     /// Creates an authentication failure for a custom credential provider.
@@ -315,6 +317,12 @@ impl Error {
             detail: Some(Box::new(detail)),
             cause: Some(Box::new(self)),
         }
+    }
+    pub(crate) fn is_body_too_large(&self) -> bool {
+        self.detail::<BodyTooLarge>().is_some()
+    }
+    pub(crate) fn with_body_too_large(self) -> Self {
+        self.with_outer_detail(BodyTooLarge)
     }
     pub(crate) fn with_detail<T: Any + Send + Sync>(mut self, detail: T) -> Self {
         self.detail = Some(Box::new(detail));
