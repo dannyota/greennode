@@ -2,7 +2,27 @@ use std::io::Write;
 
 use crate::cli::{query, render};
 
-use super::Format;
+use super::{Format, LocalError, OperationFailure};
+
+pub enum ExecutionFailure {
+    Sdk(OperationFailure),
+    Local(LocalError),
+}
+
+impl From<OperationFailure> for ExecutionFailure {
+    fn from(failure: OperationFailure) -> Self {
+        Self::Sdk(failure)
+    }
+}
+
+impl From<LocalError> for ExecutionFailure {
+    fn from(error: LocalError) -> Self {
+        Self::Local(error)
+    }
+}
+
+pub type ExecutionResult =
+    Result<Option<Result<render::Projected, render::Error>>, ExecutionFailure>;
 
 #[derive(Clone, Copy, Default)]
 pub struct OutputView {

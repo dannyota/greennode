@@ -13,8 +13,8 @@ use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, Failure, 
 use super::input::{self, InputDescriptor, ParsedOperationInput};
 use super::op::{Kind, SelectedOperation};
 use super::{Invocation, errors, query, render};
+pub use output::{ExecutionFailure, ExecutionResult, OutputView, RenderFailure};
 use output::{OutputError, render_output};
-pub use output::{OutputView, RenderFailure};
 
 pub type FutureResult<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -58,9 +58,6 @@ pub struct OperationFailure {
     pub dispatch: greennode_sdk::WriteDispatch,
     pub query_partial: bool,
 }
-
-pub type ExecutionResult =
-    Result<Option<Result<render::Projected, render::Error>>, OperationFailure>;
 
 pub trait Adapter<I: ParsedInput> {
     type Settings;
@@ -403,7 +400,8 @@ pub(crate) fn project_result<T, P: serde::Serialize>(
                 partial: partial.and_then(|partial| render::project(&project(partial)).ok()),
                 dispatch,
                 query_partial: false,
-            })
+            }
+            .into())
         }
     }
 }
@@ -659,7 +657,8 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             }
         },
         Ok(None) => 0,
-        Err(failure) => {
+        Err(ExecutionFailure::Local(error)) => local(stderr, error),
+        Err(ExecutionFailure::Sdk(failure)) => {
             if let Some(partial) = &failure.partial {
                 let _ = render_output(
                     stdout,

@@ -194,3 +194,244 @@ fn registry_read_is_registered() {
     }));
     assert_eq!(result, ExitCode::from(3));
 }
+
+const PERMISSIONS_ARG: &str =
+    r#"{"Permissions":[{"RepositoryID":"repo-1","Actions":["Pull Images"]}]}"#;
+const EMPTY_USERS: &str = r#"{"data":[],"totalPage":0,"totalItem":0}"#;
+const EMPTY_REPOSITORY: &str = r#"{"uuid":"repo-1","imageCount":0}"#;
+const USER_SECRET: &str = "synthetic-issued-registry-key";
+
+fn response(status: &str, body: &str) -> Response {
+    Response::Http {
+        status: status.into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+fn run_write(server: &Server, args: &[&str]) -> (ExitCode, String, String) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let (context, _) = RequestContext::new();
+    let status = runtime.block_on(run_invocation(Invocation {
+        args: ["greennode", "containerregistry"]
+            .into_iter()
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect(),
+        source: &Source,
+        config_options: with_product_loopback(
+            Product::ContainerRegistry,
+            ConfigOptions::default().with_static_token(Secret::new("synthetic-cli-registry-token")),
+            server,
+        ),
+        stdin: &mut stdin,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdin_terminal: false,
+        stdout_terminal: false,
+        stderr_terminal: false,
+        clock: &SystemClock,
+        context: &context,
+    }));
+    (
+        status,
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
+struct LocalSecret(String);
+impl LocalSecret {
+    fn new() -> Self {
+        Self(format!("sc-{:012x}", getrandom::u64().unwrap() >> 16))
+    }
+}
+impl Drop for LocalSecret {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[test]
+fn registry_writes_match_go_goldens() {
+    const REPO: &str =
+        include_str!("../../greennode-sdk/tests/fixtures/containerregistry/create_repository.json");
+    const DELETED: &str =
+        include_str!("../../greennode-sdk/tests/fixtures/containerregistry/delete_repository.json");
+    const PERMISSIONS: &str =
+        include_str!("../../greennode-sdk/tests/fixtures/containerregistry/list_permissions.json");
+    let responses = || {
+        vec![
+            response("200 OK", PERMISSIONS),
+            response("200 OK", EMPTY_USERS),
+            response("200 OK", &format!(r#"{{"secretKey":"{USER_SECRET}"}}"#)),
+            response("200 OK", EMPTY_USERS),
+        ]
+    };
+    let cases = [
+        (
+            [
+                include_str!("fixtures/containerregistry/create-repository.json.golden"),
+                include_str!("fixtures/containerregistry/create-repository.table.golden"),
+                include_str!("fixtures/containerregistry/create-repository.text.golden"),
+            ],
+            &[
+                "create-repository",
+                "--name",
+                "app-images",
+                "--quota-limit-gb",
+                "20",
+                "--no-wait",
+            ][..],
+        ),
+        (
+            [
+                include_str!("fixtures/containerregistry/delete-repository.json.golden"),
+                include_str!("fixtures/containerregistry/delete-repository.table.golden"),
+                include_str!("fixtures/containerregistry/delete-repository.text.golden"),
+            ],
+            &[
+                "delete-repository",
+                "--repository-id",
+                "repo-1",
+                "--yes",
+                "--no-wait",
+            ][..],
+        ),
+        (
+            [
+                include_str!("fixtures/containerregistry/delete-user.json.golden"),
+                include_str!("fixtures/containerregistry/delete-user.table.golden"),
+                include_str!("fixtures/containerregistry/delete-user.text.golden"),
+            ],
+            &["delete-user", "--user-id", "robot-1", "--yes"][..],
+        ),
+        (
+            [
+                include_str!("fixtures/containerregistry/create-user.json.golden"),
+                include_str!("fixtures/containerregistry/create-user.table.golden"),
+                include_str!("fixtures/containerregistry/create-user.text.golden"),
+            ],
+            &[
+                "create-user",
+                "--name",
+                "app-ci",
+                "--query",
+                "User.ID",
+                "--cli-input-json",
+                PERMISSIONS_ARG,
+            ][..],
+        ),
+    ];
+    for (goldens, args) in cases {
+        for (format, golden) in ["json", "table", "text"].into_iter().zip(goldens) {
+            let (queue, requests) = match args[0] {
+                "create-repository" => (vec![response("202 Accepted", REPO)], 1),
+                "delete-repository" => (
+                    vec![
+                        response("200 OK", EMPTY_REPOSITORY),
+                        response("202 Accepted", DELETED),
+                    ],
+                    2,
+                ),
+                "delete-user" => (vec![response("200 OK", "{}")], 1),
+                _ => (responses(), 4),
+            };
+            let server = Server::start(queue);
+            let secret_path = LocalSecret::new();
+            let mut args = args.to_vec();
+            args.extend(["--output", format]);
+            let (expected_status, expected_error) = if args[0] == "create-user" {
+                args.extend(["--secret-file", &secret_path.0]);
+                (
+                    ExitCode::from(1),
+                    include_str!("fixtures/containerregistry/create-user.stderr.golden"),
+                )
+            } else {
+                (ExitCode::SUCCESS, "")
+            };
+            let (status, stdout, stderr) = run_write(&server, &args);
+            assert_eq!(status, expected_status, "{} {format}", args[0]);
+            assert!(!stdout.contains(USER_SECRET) && !stderr.contains(USER_SECRET));
+            assert_eq!(
+                stdout,
+                golden.replace("registry-secret", &secret_path.0),
+                "{} {format}",
+                args[0]
+            );
+            assert_eq!(stderr, expected_error, "{} {format}", args[0]);
+            assert_eq!(server.requests(), requests);
+            if args[0] == "create-user" {
+                let secret = std::fs::read_to_string(&secret_path.0).unwrap();
+                assert!(secret.strip_suffix('\n') == Some(USER_SECRET));
+            }
+        }
+    }
+}
+
+#[test]
+fn guards_refuse_writes_before_any_request() {
+    let secret_path = LocalSecret::new();
+    let server = Server::start(vec![]);
+    for args in [
+        &[
+            "create-repository",
+            "--name",
+            "app-images",
+            "--quota-limit-gb",
+            "20",
+            "--read-only",
+        ][..],
+        &[
+            "delete-repository",
+            "--repository-id",
+            "repo-1",
+            "--yes",
+            "--read-only",
+        ][..],
+        &[
+            "delete-user",
+            "--user-id",
+            "robot-1",
+            "--yes",
+            "--read-only",
+        ][..],
+        &[
+            "create-user",
+            "--name",
+            "app-ci",
+            "--cli-input-json",
+            PERMISSIONS_ARG,
+            "--secret-file",
+            &secret_path.0,
+            "--read-only",
+        ][..],
+    ] {
+        let (status, stdout, stderr) = run_write(&server, args);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("ReadOnly"));
+    }
+    for args in [
+        &["delete-repository", "--repository-id", "repo-1"][..],
+        &["delete-user", "--user-id", "robot-1"][..],
+        &[
+            "create-user",
+            "--name",
+            "app-ci",
+            "--cli-input-json",
+            PERMISSIONS_ARG,
+        ][..],
+    ] {
+        let (status, stdout, stderr) = run_write(&server, args);
+        assert_eq!(status, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("InvalidUsage"));
+    }
+    assert_eq!(server.requests(), 0);
+    assert!(!std::path::Path::new(&secret_path.0).exists());
+}

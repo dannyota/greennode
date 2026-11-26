@@ -1,0 +1,419 @@
+use super::reads::{Users, complete_absence, valid_id};
+use super::*;
+use crate::Secret;
+use bytes::Bytes;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashSet};
+
+const CREATE: &str = "containerregistry.CreateUser";
+const DELETE: &str = "containerregistry.DeleteUser";
+const FIND: &str = "containerregistry.listUsersExactMatch";
+const MAX_USER_LIST_PAGES: i64 = 100;
+
+/// Selects a repository and the service-defined actions to grant on it.
+#[derive(Clone, Debug)]
+pub struct UserPermission {
+    /// Repository identifier using ASCII letters, digits, and hyphens.
+    pub repository_id: String,
+    /// Exact action names from the service's permission list.
+    pub actions: Vec<String>,
+}
+
+impl UserPermission {
+    /// Sets the repository and its requested actions.
+    pub fn new(id: impl Into<String>, actions: Vec<String>) -> Self {
+        Self {
+            repository_id: id.into(),
+            actions,
+        }
+    }
+}
+
+/// Creates a registry user with permissions for at least one repository.
+#[derive(Clone, Debug)]
+pub struct CreateUserInput {
+    /// Name that must be absent from the exact-name search.
+    pub name: String,
+    /// Optional service description.
+    pub description: String,
+    /// Positive lifetime in days when supplied.
+    pub duration_days: Option<i64>,
+    /// Repository permissions to grant.
+    pub permissions: Vec<UserPermission>,
+}
+
+impl CreateUserInput {
+    /// Sets the name and permissions without a description or expiry.
+    pub fn new(name: impl Into<String>, permissions: Vec<UserPermission>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            duration_days: None,
+            permissions,
+        }
+    }
+}
+
+/// A registry user create result carrying the issued one-time secret.
+#[derive(Debug, Serialize)]
+pub struct CreateUserOutput {
+    /// Empty when the service response cannot prove ownership of a user identity.
+    #[serde(rename = "User")]
+    pub user: User,
+    #[serde(rename = "SecretKey")]
+    secret_key: Secret,
+    #[serde(skip)]
+    evidence: Evidence,
+}
+
+impl CreateUserOutput {
+    /// Borrows the one-time secret for storage in a private destination.
+    pub fn secret_key(&self) -> &Secret {
+        &self.secret_key
+    }
+
+    /// Masks a string if it contains a credential from this operation or the issued secret.
+    pub fn redact_reflections<'a>(&self, text: &'a str) -> &'a str {
+        if self.evidence.credentials().reflects(text.as_bytes()) {
+            "<redacted>"
+        } else {
+            text
+        }
+    }
+}
+
+/// Identifies a registry user by UUID for deletion.
+#[derive(Clone, Debug)]
+pub struct DeleteUserInput {
+    /// Registry user UUID, distinct from the account's `UserID` field.
+    pub user_id: String,
+}
+
+impl DeleteUserInput {
+    /// Selects the registry user UUID.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { user_id: id.into() }
+    }
+}
+
+/// An acknowledged user deletion with no resource fields.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DeleteUserOutput {}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssuedSecret {
+    #[serde(default, deserialize_with = "null_default")]
+    secret_key: String,
+}
+
+impl Output for IssuedSecret {
+    const SCHEMA: Shape<'static> = Shape::Object(&[field("secretKey")]);
+}
+
+impl Output for DeleteUserOutput {
+    const SCHEMA: Shape<'static> = Shape::Any;
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "The public API returns Failure by value"
+)]
+impl Client {
+    /// Validates permissions and complete name-search results, then sends one create.
+    /// A secret-only response returns `UserNotFound` with the secret as partial output.
+    /// An exact-name match does not give authority to delete a user.
+    pub async fn create_user(
+        &self,
+        ctx: &RequestContext,
+        input: CreateUserInput,
+    ) -> Result<CreateUserOutput, Failure<CreateUserOutput>> {
+        validate_create(&input)?;
+        let mut evidence = Evidence::new();
+        let permissions: Permissions = self
+            .request::<_, ()>(
+                ctx,
+                &private_read(CREATE, "v1/user/permissions"),
+                &[],
+                &[],
+                Bytes::new(),
+                &mut evidence,
+            )
+            .await
+            .map_err(before_write)?;
+        let body = create_body(&input, &permissions.0)?;
+        let found = self.find_user_name(ctx, &input.name, &mut evidence).await.map_err(|failure| {
+            let (error, _, _) = failure.into_parts();
+            let Some(api) = error.api_error() else {
+                return not_sent(error);
+            };
+            let message = format!("containerregistry.CreateUser: could not prove the requested user name is absent: {}", api.message());
+            not_sent(registry_error(api.operation(), api.status(), api.code(), &message).with_cause(error))
+        })?;
+        if found {
+            return Err(invalid_input(
+                "containerregistry.CreateUser: requested name already exists; check list-users --name",
+            ));
+        }
+        let issued: IssuedSecret = self.request(
+            ctx, &Operation { allow_empty: true, sensitive: true, ..write_operation(
+                CREATE, Method::POST, "v1/user", &[StatusCode::OK],
+            ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
+        ).await.map_err(|failure| create_failure(failure, concat!(
+            "containerregistry.CreateUser: create may have already reached the server; ",
+            "check list-users --name and reconcile ownership before any cleanup",
+        )))?;
+        let secret_key = Secret::new(issued.secret_key);
+        if secret_key.expose_secret().is_empty() {
+            return Err(Failure::new(
+                registry_error(
+                    CREATE,
+                    Some(200),
+                    "",
+                    "create response had no secret key; a user may exist, check list-users --name and reconcile ownership before cleanup",
+                ),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            ));
+        }
+        evidence.add_secret(&secret_key);
+        let lookup = self.find_user_name(ctx, &input.name, &mut evidence).await;
+        let (message, cause) = match lookup {
+            Ok(_) => (
+                "containerregistry: created user not found: containerregistry.CreateUser: a name match cannot prove creation ownership; reconcile with list-users before any cleanup",
+                None,
+            ),
+            Err(failure) => (
+                "containerregistry: created user not found: containerregistry.CreateUser: candidate lookup failed; reconcile with list-users before any cleanup",
+                Some(failure.into_parts().0),
+            ),
+        };
+        let error = registry_error("", None, "", message).with_detail(ErrorDetail::UserNotFound);
+        let error = match cause {
+            Some(cause) => error.with_cause(cause),
+            None => error,
+        };
+        let (error, partial, dispatch) = evidence
+            .with_partial(
+                failure::<()>(error),
+                Value::Null,
+                WriteDispatch::MayHaveBeenSent,
+            )
+            .into_parts();
+        Err(Failure::new(
+            error,
+            partial.map(|_| CreateUserOutput {
+                user: User::default(),
+                secret_key,
+                evidence,
+            }),
+            dispatch,
+        ))
+    }
+
+    /// Deletes a user once. Confirms absence after an ambiguous server error.
+    pub async fn delete_user(
+        &self,
+        ctx: &RequestContext,
+        input: DeleteUserInput,
+    ) -> Result<DeleteUserOutput, Failure<DeleteUserOutput>> {
+        let id = &input.user_id;
+        if !valid_id(id) {
+            return Err(invalid_input(
+                "containerregistry.DeleteUser requires a valid UserID",
+            ));
+        }
+        let mut evidence = Evidence::new();
+        let result = self
+            .request(
+                ctx,
+                &Operation {
+                    allow_empty: true,
+                    no_output: true,
+                    reject_reflected_credentials: false,
+                    ..write_operation(DELETE, Method::DELETE, "v1/user/{}", &[StatusCode::OK])
+                },
+                &[id],
+                &[],
+                Bytes::new(),
+                &mut evidence,
+            )
+            .await;
+        match result {
+            Err(original) if is_server_error(original.error()) => {
+                let result: Result<Users, Failure<()>> = self
+                    .request(
+                        ctx,
+                        &Operation {
+                            cap: 4 << 20,
+                            ..read_operation(
+                                "containerregistry.userFoundAfterServerError",
+                                "v1/user",
+                            )
+                        },
+                        &[],
+                        &[("name", ""), ("size", "10000")],
+                        Bytes::new(),
+                        &mut evidence,
+                    )
+                    .await;
+                if let Some(list) = result.ok().and_then(Users::into_page)
+                    && complete_absence(&list.items, list.total_page, list.total_item, id, |item| {
+                        &item.id
+                    })
+                {
+                    return Err(Failure::new(
+                        Error::new(ErrorClass::NotFound).with_cause(registry_error(
+                            "",
+                            None,
+                            "",
+                            "containerregistry.DeleteUser: user not found",
+                        )),
+                        None,
+                        original.write_dispatch(),
+                    ));
+                }
+                Err(redact_failure(original, &evidence))
+            }
+            other => other,
+        }
+    }
+
+    async fn find_user_name(
+        &self,
+        ctx: &RequestContext,
+        name: &str,
+        evidence: &mut Evidence,
+    ) -> Result<bool, Failure<()>> {
+        if evidence.credentials().reflects(name.as_bytes()) {
+            return Err(name_evidence_error("unsafe lookup identity"));
+        }
+        let mut seen = HashSet::new();
+        let mut totals = None;
+        let mut found = false;
+        for page in 1..=MAX_USER_LIST_PAGES {
+            let value: Users = self
+                .request(
+                    ctx,
+                    &private_read(FIND, "v1/user"),
+                    &[],
+                    &[
+                        ("name", name),
+                        ("page", &page.to_string()),
+                        ("size", "10000"),
+                    ],
+                    Bytes::new(),
+                    evidence,
+                )
+                .await?;
+            let value = value
+                .into_page()
+                .ok_or_else(|| name_evidence_error("invalid list metadata"))?;
+            if *totals.get_or_insert((value.total_page, value.total_item))
+                != (value.total_page, value.total_item)
+                || (value.page != 0 && value.page != page)
+                || (page < value.total_page && value.items.is_empty())
+            {
+                return Err(name_evidence_error("unstable or nonprogressing user pages"));
+            }
+            for user in value.items {
+                if !valid_id(&user.id) || !seen.insert(user.id) {
+                    return Err(name_evidence_error("missing or repeated user identity"));
+                }
+                if user.name.trim().is_empty() || user.name.chars().any(char::is_control) {
+                    return Err(name_evidence_error("missing or invalid user name"));
+                }
+                found |= user.name == name;
+            }
+            let count = i64::try_from(seen.len()).unwrap_or(i64::MAX);
+            if count > value.total_item || (page >= value.total_page && count != value.total_item) {
+                return Err(name_evidence_error(
+                    "user list totals do not match the returned identities",
+                ));
+            }
+            if page >= value.total_page {
+                return Ok(found);
+            }
+        }
+        Err(name_evidence_error(
+            "exceeded 100 pages without reaching the reported last page",
+        ))
+    }
+}
+
+fn private_read(id: &'static str, template: &'static str) -> Operation {
+    Operation {
+        cap: 4 << 20,
+        sensitive: true,
+        ..read_operation(id, template)
+    }
+}
+
+fn name_evidence_error(message: &str) -> Failure<()> {
+    failure(registry_error(
+        "",
+        None,
+        "",
+        &format!("containerregistry: {message}"),
+    ))
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Validation returns the operation's Failure"
+)]
+fn validate_create(input: &CreateUserInput) -> Result<(), Failure<CreateUserOutput>> {
+    if input.name.is_empty() || input.permissions.is_empty() {
+        return Err(invalid_input(
+            "containerregistry.CreateUser requires Name and at least one permission",
+        ));
+    }
+    if input.duration_days.is_some_and(|days| days < 1) {
+        return Err(invalid_input(
+            "containerregistry.CreateUser requires DurationDays to be at least 1",
+        ));
+    }
+    for (index, permission) in input.permissions.iter().enumerate() {
+        if !valid_id(&permission.repository_id) || permission.actions.is_empty() {
+            return Err(invalid_input(&format!(
+                "containerregistry.CreateUser requires Permissions[{index}] to have a valid RepositoryID and at least one action"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Validation returns the operation's Failure"
+)]
+fn create_body(
+    input: &CreateUserInput,
+    permissions: &[Permission],
+) -> Result<Value, Failure<CreateUserOutput>> {
+    let policies: BTreeMap<_, _> = permissions
+        .iter()
+        .map(|policy| (&policy.action, &policy.id))
+        .collect();
+    let mut requests = Vec::new();
+    for (i, permission) in input.permissions.iter().enumerate() {
+        let ids: Option<Vec<_>> = permission
+            .actions
+            .iter()
+            .map(|action| policies.get(action))
+            .collect();
+        let ids = ids.ok_or_else(|| {
+            let known = policies.keys().map(|action| action.as_str()).collect::<Vec<_>>().join(", ");
+            invalid_input(&format!("containerregistry.CreateUser: Permissions[{i}] names an unknown action; known actions: {known}"))
+        })?;
+        requests.push(json!({"repoId": permission.repository_id, "policyIdList": ids}));
+    }
+    let mut body = json!({"name": input.name, "permissionRequestList": requests});
+    if !input.description.is_empty() {
+        body["description"] = json!(input.description);
+    }
+    if let Some(days) = input.duration_days {
+        body["duration"] = json!(days);
+    }
+    Ok(body)
+}

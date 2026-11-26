@@ -2,6 +2,81 @@
 
 # CLI: ContainerRegistry
 
+## create-repository
+
+Kind: Write.
+
+Creates a private repository and sends the write once. If the outcome is
+uncertain, use `list-repositories --name <name>` and match the exact name before
+creating again. Unless `--no-wait` is set, confirms the repository by reading it
+for up to 60 seconds. A `NotSettled` error can carry the repository returned by
+create.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--name`           | `string` | yes      |
+| `--quota-limit-gb` | `int`    | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode containerregistry create-repository --name <name> --quota-limit-gb <quota-limit-gb>
+```
+
+## create-user
+
+Kind: Write.
+
+Use action names from `list-permissions`. The SDK confirms name absence before
+sending the create once. The response supplies a secret without a proven user
+ID. The CLI saves the secret to a new file with Unix mode `0600`, prints the
+file path, and exits 1 with `UserNotFound`. Reconcile ownership with
+`list-users --name` and other administrators before any deletion or another
+create.
+
+| Flag                                        | Type                                 | Required |
+| ------------------------------------------- | ------------------------------------ | -------- |
+| `--name`                                    | `string`                             | yes      |
+| `--description`                             | `string`                             |          |
+| `--duration-days`                           | `*int`                               |          |
+| `--secret-file`                             | `string`                             | yes      |
+| `Permissions` (via `--cli-input-json` only) | `[]containerregistry.UserPermission` | yes      |
+
+```sh
+greennode containerregistry create-user --name <name> --secret-file <secret-file> --cli-input-json '{"Permissions":[{"RepositoryID":"<repository-id>","Actions":["Pull Images"]}]}'
+```
+
+## delete-repository
+
+Kind: Write, destructive.
+
+Reads the repository first and refuses the delete unless the read proves it
+contains zero images. Unless `--no-wait` is set, waits up to 60 seconds for the
+repository to become unreadable.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--repository-id` | `string` | yes      |
+| `--no-wait`       | `bool`   |          |
+
+```sh
+greennode containerregistry delete-repository --repository-id <repository-id> --yes
+```
+
+## delete-user
+
+Kind: Write, destructive.
+
+The user ID is the registry user's `ID`. A repeat delete of a removed user
+returns `NotFound` when absence is confirmed.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--user-id` | `string` | yes      |
+
+```sh
+greennode containerregistry delete-user --user-id <user-id> --yes
+```
+
 ## get-repository
 
 Kind: Read.

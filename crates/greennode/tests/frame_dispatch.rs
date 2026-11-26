@@ -100,7 +100,8 @@ impl Adapter<Input> for Stub {
                     partial: Some(value),
                     dispatch: greennode_sdk::WriteDispatch::NotAWrite,
                     query_partial: false,
-                })
+                }
+                .into())
             } else {
                 Ok(Some(Ok(value)))
             }
@@ -462,7 +463,8 @@ fn dispatched_operation_waits_for_cancellation_and_exits_one() {
                     partial: None,
                     dispatch: greennode_sdk::WriteDispatch::NotAWrite,
                     query_partial: false,
-                })
+                }
+                .into())
             })
         }
     }

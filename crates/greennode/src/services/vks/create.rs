@@ -264,7 +264,8 @@ mod tests {
                     partial: Some(projected.unwrap()),
                     dispatch: WriteDispatch::MayHaveBeenSent,
                     query_partial: false,
-                })
+                }
+                .into())
             } else {
                 Ok(Some(projected))
             }

@@ -421,7 +421,8 @@ fn list_records<'a>(
                     partial: None,
                     dispatch,
                     query_partial: false,
-                })
+                }
+                .into())
             }
         }
     })

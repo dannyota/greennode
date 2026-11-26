@@ -172,7 +172,7 @@ const USER: Shape<'static> = Shape::Object(&[
 
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-struct Users {
+pub(super) struct Users {
     data: Option<Vec<User>>,
     list_data: Option<Vec<User>>,
     #[serde(deserialize_with = "null_default")]
@@ -257,8 +257,8 @@ impl Output for Repository {
         Ok(value)
     }
 }
-fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+pub(super) fn valid_id(id: &str) -> bool {
+    Options::DEFAULT.path_ids.allows(id)
 }
 
 #[expect(
@@ -320,35 +320,9 @@ impl Client {
                 &[("name", name), ("page", &page), ("size", &size)],
             )
             .await?;
-        let (items, total_page, total_item) = match (
-            value.data,
-            value.list_data,
-            value.total_page,
-            value.total_item,
-        ) {
-            (Some(items), None, Some(pages), Some(total))
-            | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
-            _ => return Err(failure(Error::new(ErrorClass::Api))),
-        };
-        let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
-        if value.page < 0
-            || value.page_size < 0
-            || total_page < 0
-            || total_item < 0
-            || len > total_item
-            || (total_page == 0 && total_item != 0)
-            || (total_item == 0 && total_page > 1)
-            || (total_page <= 1 && len != total_item)
-        {
-            return Err(failure(Error::new(ErrorClass::Api)));
-        }
-        Ok(PagedList {
-            items,
-            page: value.page,
-            page_size: value.page_size,
-            total_page,
-            total_item,
-        })
+        value
+            .into_page()
+            .ok_or_else(|| failure(Error::new(ErrorClass::Api)))
     }
     /// Reads a repository, confirming absence after an ambiguous server error.
     pub async fn get_repository(
@@ -356,74 +330,153 @@ impl Client {
         ctx: &RequestContext,
         input: GetRepositoryInput,
     ) -> Result<GetRepositoryOutput, Failure<GetRepositoryOutput>> {
-        if !valid_id(&input.repository_id) {
+        let result = self
+            .get_repository_evidenced(ctx, &input.repository_id, &mut Evidence::new())
+            .await?;
+        Ok(GetRepositoryOutput {
+            repository: result.repository,
+        })
+    }
+
+    pub(super) async fn get_repository_evidenced<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<RepositoryRead, Failure<O>> {
+        if !valid_id(id) {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.GetRepository requires RepositoryID to match ^[A-Za-z0-9-]+$")));
         }
-        let mut get_operation =
-            read_operation("containerregistry.GetRepository", "v1/repository/{}");
-        get_operation.overflow_overrides_status = true;
-        let result: Result<Repository, Failure<GetRepositoryOutput>> = self
-            .read_path(ctx, &get_operation, &[&input.repository_id], &[])
+        let mut get = read_operation("containerregistry.GetRepository", "v1/repository/{}");
+        get.overflow_overrides_status = true;
+        let result: Result<RepositoryRead, Failure<O>> = self
+            .request(ctx, &get, &[id], &[], bytes::Bytes::new(), evidence)
             .await;
         match result {
-            Ok(repository) if repository.id == input.repository_id => {
-                Ok(GetRepositoryOutput { repository })
-            }
+            Ok(read) if read.repository.id == id => Ok(read),
             Ok(_) => Err(failure(Error::new(ErrorClass::Api).with_detail(
                 "containerregistry.GetRepository: repository identity is unproven",
             ))),
-            Err(original) => {
-                let server_error = original.error().api_error().is_some_and(|api| {
-                    !api.code().is_empty()
-                        && api
-                            .status()
-                            .is_some_and(|status| (500..600).contains(&status))
-                });
-                if !server_error || original.error().is_body_too_large() {
-                    return Err(original);
-                }
-                let mut confirmation = read_operation(
-                    "containerregistry.repositoryFoundAfterServerError",
-                    "v1/repository",
-                );
-                confirmation.cap = 4 << 20;
-                let result: Result<Repositories, Failure<GetRepositoryOutput>> = self
-                    .read(
+            Err(original)
+                if !original.error().is_body_too_large()
+                    && original.error().api_error().is_some_and(|api| {
+                        !api.code().is_empty()
+                            && api
+                                .status()
+                                .is_some_and(|status| (500..600).contains(&status))
+                    }) =>
+            {
+                let result: Result<Repositories, Failure<O>> = self
+                    .request(
                         ctx,
-                        &confirmation,
+                        &Operation {
+                            cap: 4 << 20,
+                            ..read_operation(
+                                "containerregistry.repositoryFoundAfterServerError",
+                                "v1/repository",
+                            )
+                        },
+                        &[],
                         &[("accessLevel", "ALL"), ("name", ""), ("size", "10000")],
+                        bytes::Bytes::new(),
+                        evidence,
                     )
                     .await;
-                if let Ok(list) = result {
-                    let items = match (list.data, list.list_data, list.total_page, list.total_item)
-                    {
-                        (Some(items), None, Some(pages), Some(total))
-                        | (None, Some(items), Some(pages), Some(total))
-                            if (0..=1).contains(&pages)
-                                && total >= 0
-                                && i64::try_from(items.len()).ok() == Some(total)
-                                && !(pages == 0 && total != 0)
-                                && list.page >= 0
-                                && list.page_size >= 0 =>
-                        {
-                            Some(items)
-                        }
-                        _ => None,
-                    };
-                    if let Some(items) = items {
-                        let mut ids = std::collections::HashSet::new();
-                        if items
-                            .iter()
-                            .all(|item| valid_id(&item.id) && ids.insert(item.id.as_str()))
-                            && !ids.contains(input.repository_id.as_str())
-                        {
-                            return Err(failure(Error::new(ErrorClass::NotFound).with_detail("vngcloud: resource not found: containerregistry.GetRepository: repository absent")));
-                        }
-                    }
+                if let Ok(list) = result
+                    && let (Some(items), Some(pages), Some(total)) = (
+                        list.data.or(list.list_data),
+                        list.total_page,
+                        list.total_item,
+                    )
+                    && list.page >= 0
+                    && list.page_size >= 0
+                    && complete_absence(&items, pages, total, id, |item| &item.id)
+                {
+                    return Err(failure(Error::new(ErrorClass::NotFound).with_detail(
+                        "vngcloud: resource not found: containerregistry.GetRepository: repository absent",
+                    )));
                 }
-                Err(original)
+                Err(redact_failure(original, evidence))
             }
+            Err(original) => Err(original),
         }
+    }
+}
+
+impl Users {
+    pub(super) fn into_page(self) -> Option<PagedList<User>> {
+        let (items, total_page, total_item) =
+            match (self.data, self.list_data, self.total_page, self.total_item) {
+                (Some(items), None, Some(pages), Some(total))
+                | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
+                _ => return None,
+            };
+        let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+        if self.page < 0
+            || self.page_size < 0
+            || total_page < 0
+            || total_item < 0
+            || len > total_item
+            || (total_page == 0 && total_item != 0)
+            || (total_item == 0 && total_page > 1)
+            || (total_page <= 1 && len != total_item)
+        {
+            return None;
+        }
+        Some(PagedList {
+            items,
+            page: self.page,
+            page_size: self.page_size,
+            total_page,
+            total_item,
+        })
+    }
+}
+
+pub(super) fn complete_absence<T>(
+    items: &[T],
+    pages: i64,
+    total: i64,
+    target: &str,
+    id: impl Fn(&T) -> &str,
+) -> bool {
+    let mut ids = std::collections::HashSet::new();
+    (0..=1).contains(&pages)
+        && (pages != 0 || total == 0)
+        && i64::try_from(items.len()).ok() == Some(total)
+        && items
+            .iter()
+            .map(&id)
+            .all(|id| valid_id(id) && ids.insert(id))
+        && !ids.contains(target)
+}
+
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(super) struct RepositoryRead {
+    pub(super) repository: Repository,
+    #[serde(skip)]
+    pub(super) image_count_known: bool,
+}
+
+impl Output for RepositoryRead {
+    const SCHEMA: Shape<'static> = REPOSITORY;
+    const CHECK_RENDERED_NUMBERS: bool = true;
+
+    fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ImageCount {
+            image_count: Option<i64>,
+        }
+
+        let repository = Repository::decode_response(op, response)?;
+        let count: ImageCount = serde_json::from_slice(&response.body)
+            .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
+        Ok(Self {
+            repository,
+            image_count_known: count.image_count.is_some(),
+        })
     }
 }
 
