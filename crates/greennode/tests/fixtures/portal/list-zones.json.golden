@@ -1,0 +1,17 @@
+{
+  "Items": [
+    {
+      "ID": "zone-1",
+      "UUID": null,
+      "Name": "\u003cname\u003e",
+      "ZoneType": null,
+      "IsDefault": null,
+      "Description": null,
+      "IsEnabled": null,
+      "VolumeCount": null,
+      "ServerCount": null,
+      "OpenStackZone": null,
+      "IPRanges": null
+    }
+  ]
+}

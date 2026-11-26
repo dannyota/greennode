@@ -76,6 +76,21 @@ impl SafeText {
     }
 }
 
+/// Fixed diagnostic for a failure without a service response.
+pub enum Diagnostic {
+    /// No project quota matched the requested name.
+    QuotaNotFound,
+}
+
+impl Diagnostic {
+    /// Returns the fixed diagnostic.
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::QuotaNotFound => "greennode: not found: quota",
+        }
+    }
+}
+
 /// Sanitized details of a failed service request.
 pub struct ApiError {
     operation: &'static str,

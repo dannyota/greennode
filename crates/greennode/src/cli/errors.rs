@@ -147,6 +147,11 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
                 .map(|login| login.reason())
         })
         .or_else(|| error.login_error().map(|login| login.reason()))
+        .or_else(|| {
+            error
+                .detail::<greennode_sdk::Diagnostic>()
+                .map(|detail| detail.message())
+        })
         .unwrap_or("request failed");
     let (status, operation) = match name {
         Some(name) => (
