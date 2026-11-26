@@ -1,0 +1,37 @@
+{
+  "data": [
+    {
+      "uuid": "ra-1",
+      "name": "app-ci",
+      "backendName": "app-ci",
+      "description": "CI pull user",
+      "disable": false,
+      "expiredAt": "2026-06-01T00:00:00Z",
+      "createdAt": "2026-01-01T00:00:00Z",
+      "numberOfRepo": 2,
+      "userId": 1000001,
+      "repoPermissionList": [
+        {
+          "repoId": "repo-1",
+          "repoName": "app",
+          "backendRepoName": "app",
+          "policyDtoList": [
+            {"uuid": "policy-1", "action": "Pull Images"}
+          ]
+        },
+        {
+          "repoId": "repo-2",
+          "repoName": "web",
+          "backendRepoName": "web",
+          "policyDtoList": [
+            {"uuid": "policy-2", "action": "Push Images"}
+          ]
+        }
+      ]
+    }
+  ],
+  "page": 2,
+  "pageSize": 10,
+  "totalPage": 3,
+  "totalItem": 21
+}

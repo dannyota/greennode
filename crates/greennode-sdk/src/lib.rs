@@ -7,6 +7,7 @@ pub mod billing;
 mod cache;
 mod clock;
 mod config;
+pub mod containerregistry;
 mod context;
 pub mod database;
 mod discovery;
