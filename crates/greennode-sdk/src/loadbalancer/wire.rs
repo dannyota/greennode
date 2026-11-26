@@ -137,10 +137,11 @@ pub(super) struct Envelope<'a>(BTreeMap<String, &'a RawValue>);
 
 impl Envelope<'_> {
     fn raw(&self, read: &Read, evidence: &Evidence, name: &str) -> Result<&str, Box<Error>> {
-        if self
-            .0
-            .keys()
-            .any(|key| key != name && field_matches(name, key))
+        if self.0.contains_key(name)
+            && self
+                .0
+                .keys()
+                .any(|key| key != name && field_matches(name, key))
         {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }

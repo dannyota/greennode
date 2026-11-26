@@ -173,6 +173,19 @@ impl Client {
     }
 }
 
+fn redact_marker(value: String) -> String {
+    let normalized: String = value
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if normalized.contains("clientsecret") {
+        "[redacted]".into()
+    } else {
+        value
+    }
+}
+
 fn project(raw: &Value, action: &str, require_totals: bool) -> Result<GetQuoteOutput, Box<Error>> {
     let obj = decode::quote_object(OP, raw)?;
     let amount = |name| match decode::numeric(OP, obj, name)? {
@@ -192,8 +205,8 @@ fn project(raw: &Value, action: &str, require_totals: bool) -> Result<GetQuoteOu
             let line = decode::line(OP, row)?;
             let amount = |name| decode::numeric(OP, line, name).map(Option::unwrap_or_default);
             Ok(PriceProperty {
-                name: decode::string(OP, line, "name")?,
-                description: decode::string(OP, line, "description")?,
+                name: redact_marker(decode::string(OP, line, "name")?),
+                description: redact_marker(decode::string(OP, line, "description")?),
                 optimum_price: amount("optimumPrice")?,
                 monthly_price: amount("monthlyPrice")?,
                 current_price: decode::numeric(OP, line, "currentPrice")?,

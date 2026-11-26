@@ -5,6 +5,7 @@ use crate::model::wire::{Field, WireField, model};
 use crate::wire::product::evidence::Evidence;
 
 model! {
+    @ true;
     /// A regional load balancer and its nodes.
     pub struct LoadBalancer {
         /// Resource identifier.
@@ -59,6 +60,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A node belonging to a regional load balancer.
     pub struct Node {
         /// Status.
@@ -73,6 +75,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A regional load balancer sizing package.
     pub struct Package {
         /// Resource identifier.
@@ -95,6 +98,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// Certificate metadata returned by the regional API.
     pub struct Certificate {
         /// Resource identifier.
@@ -131,6 +135,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A tag assigned to a regional load balancer.
     pub struct Tag {
         /// Key.
@@ -145,6 +150,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A header added by a listener.
     pub struct ListenerInsertHeader {
         /// Header name.
@@ -155,6 +161,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A listener attached to a regional load balancer.
     pub struct Listener {
         /// Resource identifier.
@@ -201,6 +208,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A regional load balancer pool and its configuration.
     pub struct Pool {
         /// Resource identifier.
@@ -229,6 +237,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A backend member of a regional pool.
     pub struct PoolMember {
         /// Resource identifier.
@@ -265,6 +274,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// The health monitor configured for a regional pool.
     pub struct HealthMonitor {
         /// Timeout.
@@ -299,6 +309,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A layer 7 policy attached to a listener.
     pub struct Policy {
         /// Resource identifier.
@@ -335,6 +346,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A match rule belonging to a layer 7 policy.
     pub struct L7Rule {
         /// Resource identifier.
@@ -353,12 +365,14 @@ model! {
 }
 
 model! {
+    @ true;
     struct LoadBalancerZone {
         zone: ZoneRef => "zone", "Zone";
     }
 }
 
 model! {
+    @ true;
     struct ZoneRef {
         uuid: String => "uuid", "UUID";
     }

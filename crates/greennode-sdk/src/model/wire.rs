@@ -272,7 +272,7 @@ fn go_utf8(bytes: &[u8]) -> Cow<'_, str> {
 }
 
 macro_rules! model {
-    ($(#[$model_meta:meta])* $vis:vis struct $model:ident {
+    ($(@ $ignore:literal;)? $(#[$model_meta:meta])* $vis:vis struct $model:ident {
         $($(#[$field_meta:meta])* $field:ident: $type:ty => $wire:literal, $go:literal;)*
     } $(derive {
         $(#[$derived_meta:meta])* $derived:ident: $derived_type:ty => $derived_go:literal, $derive:expr;
@@ -306,14 +306,23 @@ macro_rules! model {
                     fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<$model, M::Error> {
                         let mut result = $model::default();
                         let mut seen = std::collections::HashSet::new();
+                        let mut matched = std::collections::HashSet::new();
+                        let ignore_case_variants = false $(|| $ignore)?;
                         while let Some(key) = map.next_key::<String>()? {
                             if !seen.insert(key.clone()) {
                                 return Err(serde::de::Error::custom("duplicate response field"));
                             }
                             $(
                                 if $crate::wire::strict_json::field_matches($wire, &key) {
+                                    if !matched.insert($wire) {
+                                        return Err(serde::de::Error::custom("duplicate response field"));
+                                    }
                                     if key != $wire {
-                                        return Err(serde::de::Error::custom("incorrect response field case"));
+                                        if !ignore_case_variants {
+                                            return Err(serde::de::Error::custom("incorrect response field case"));
+                                        }
+                                        map.next_value::<serde::de::IgnoredAny>()?;
+                                        continue;
                                     }
                                     result.$field = map.next_value::<$crate::model::wire::Field<$type>>()?.0;
                                     continue;

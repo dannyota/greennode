@@ -128,6 +128,34 @@ async fn credentials_are_screened_in_inputs_and_projected_output() {
 }
 
 #[tokio::test]
+async fn lone_case_variants_are_ignored_and_collisions_rejected() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"Page":7,"listData":[{"Name":"ignored"}]}"#),
+        response("200 OK", r#"{"page":1,"Page":2,"listData":[]}"#),
+        response(
+            "200 OK",
+            r#"{"page":1,"listData":[{"name":"ok","Name":"bad"}]}"#,
+        ),
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let result = client
+        .list_load_balancers(&ctx, ListLoadBalancersInput::default())
+        .await
+        .unwrap();
+    assert_eq!(result.page, 0);
+    assert_eq!(result.items[0].name, "");
+    for _ in 0..2 {
+        assert!(
+            client
+                .list_load_balancers(&ctx, ListLoadBalancersInput::default())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn models_handle_go_strings_and_block_number_pseudo_objects() {
     let server = Server::start(vec![
         response(
