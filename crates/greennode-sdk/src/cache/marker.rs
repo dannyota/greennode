@@ -16,6 +16,28 @@ pub(crate) fn read(store: &Store, name: &str, current: i64) -> Option<i64> {
 }
 
 #[allow(dead_code)]
+pub(crate) fn write_hook(
+    store: &Store,
+    name: &str,
+    step: i64,
+    context: &crate::RequestContext,
+    clock: &dyn crate::Clock,
+    live: &std::sync::atomic::AtomicBool,
+) -> Result<(), Box<crate::Error>> {
+    store.write_guarded_hook(
+        name,
+        &crate::Secret::new(step.to_string()),
+        || {
+            context
+                .check(clock)
+                .map_or(Ok(()), |end| Err(Box::new(end.into())))
+        },
+        None,
+        Some(live),
+    )
+}
+
+#[allow(dead_code)]
 pub(crate) fn write(
     store: &Store,
     name: &str,

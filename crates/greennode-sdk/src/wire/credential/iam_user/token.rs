@@ -55,6 +55,13 @@ fn decode(
     Ok(Token::new(access, Some(end)))
 }
 
+#[derive(Debug)]
+pub(crate) struct TimedToken {
+    pub(crate) token: Token,
+    pub(crate) started_wall: time::OffsetDateTime,
+    pub(crate) started_monotonic: tokio::time::Instant,
+}
+
 pub(super) struct Exchange<'a> {
     pub(super) client: &'a crate::wire::connection::OneSendClient,
     pub(super) token_url: &'a url::Url,
@@ -65,7 +72,7 @@ pub(super) struct Exchange<'a> {
     pub(super) deadline: tokio::time::Instant,
 }
 
-pub(super) async fn exchange(input: Exchange<'_>) -> Result<Token, LoginError> {
+pub(super) async fn exchange(input: Exchange<'_>) -> Result<TimedToken, LoginError> {
     use crate::wire::send::{self, Encoding};
     use bytes::Bytes;
     use data_encoding::BASE64;
@@ -143,6 +150,11 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<Token, LoginError> {
             .monotonic_now()
             .saturating_duration_since(started_monotonic),
     )
+    .map(|token| TimedToken {
+        token,
+        started_wall: started,
+        started_monotonic,
+    })
     .map_err(|_| LoginError::new("token exchange", status, false))
 }
 
@@ -185,6 +197,7 @@ mod tests {
             deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
         })
         .await
+        .map(|timed| timed.token)
     }
 
     #[tokio::test]
