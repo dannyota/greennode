@@ -146,7 +146,7 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
         );
     }
     let config = if need_config {
-        match read_slot(&selection, FileSlot::Config) {
+        match read_slot(&selection, FileSlot::Config, &profile) {
             Ok(file) => file,
             Err(error) => return sdk_error(invocation, &error),
         }
@@ -154,7 +154,7 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
         ProfileFile::default()
     };
     let credentials = if need_credentials {
-        match read_slot(&selection, FileSlot::Credentials) {
+        match read_slot(&selection, FileSlot::Credentials, &profile) {
             Ok(file) => file,
             Err(error) => return sdk_error(invocation, &error),
         }
