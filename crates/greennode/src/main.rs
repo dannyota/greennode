@@ -15,6 +15,16 @@ use rustix::termios::{
     LocalModes, OptionalActions, QueueSelector, Termios, tcflush, tcgetattr, tcsetattr,
 };
 
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+
+#[cfg(unix)]
+const CANCELLATION_SIGNALS: [SignalKind; 3] = [
+    SignalKind::interrupt(),
+    SignalKind::terminate(),
+    SignalKind::quit(),
+];
+
 struct Environment(HashMap<OsString, OsString>);
 
 impl ConfigSource for Environment {
@@ -116,21 +126,13 @@ fn main() -> ExitCode {
     runtime.block_on(async {
         let (context, cancel) = RequestContext::new();
         #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let (Ok(mut interrupt), Ok(mut terminate)) = (
-                signal(SignalKind::interrupt()),
-                signal(SignalKind::terminate()),
-            ) else {
+        for kind in CANCELLATION_SIGNALS {
+            let Ok(mut signal) = signal(kind) else {
                 return ExitCode::FAILURE;
             };
-            let interrupt_cancel = cancel.clone();
+            let cancel = cancel.clone();
             tokio::spawn(async move {
-                interrupt.recv().await;
-                interrupt_cancel.cancel();
-            });
-            tokio::spawn(async move {
-                terminate.recv().await;
+                signal.recv().await;
                 cancel.cancel();
             });
         }
@@ -207,4 +209,16 @@ fn main() -> ExitCode {
         #[cfg(not(unix))]
         greennode::cli::run_invocation(invocation).await
     })
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn terminal_cleanup_receives_interrupt_terminate_and_quit() {
+    for kind in [
+        SignalKind::interrupt(),
+        SignalKind::terminate(),
+        SignalKind::quit(),
+    ] {
+        assert!(CANCELLATION_SIGNALS.contains(&kind), "{kind:?}");
+    }
 }
