@@ -390,6 +390,32 @@ fn threshold_update_merges_json_and_flags_and_keeps_false() {
 }
 
 #[test]
+fn invalid_threshold_uuid_names_the_flag_without_echoing_its_value() {
+    let server = Server::start(vec![]);
+    let value = "invalid_uuid-canary";
+    let args = [
+        "billing",
+        "update-budget-threshold",
+        "--budget-uuid",
+        "budget-1",
+        "--threshold-uuid",
+        value,
+        "--enabled=false",
+    ];
+    let (status, stdout, stderr) = invoke_write(&args, &server);
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains(value));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert_eq!(
+        error["error"]["message"],
+        "--threshold-uuid must contain only ASCII letters, digits, and hyphens"
+    );
+    assert_eq!(server.connections(), 0);
+}
+
+#[test]
 fn threshold_update_without_changes_reports_the_reason() {
     let server = Server::start(vec![]);
     let (status, stdout, stderr) = invoke_write(UPDATE_THRESHOLD, &server);
@@ -399,7 +425,7 @@ fn threshold_update_without_changes_reports_the_reason() {
     assert_eq!(error["error"]["code"], "InvalidUsage");
     assert_eq!(
         error["error"]["message"],
-        "vngcloud: invalid input: billing.UpdateBudgetThreshold requires at least one field to change"
+        "greennode: invalid input: billing.UpdateBudgetThreshold requires at least one field to change"
     );
     assert_eq!(server.connections(), 0);
 }

@@ -181,7 +181,7 @@ impl Client {
         .collect();
         if body.is_empty() {
             return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
-                "vngcloud: invalid input: billing.UpdateBudgetThreshold requires at least one field to change",
+                "greennode: invalid input: billing.UpdateBudgetThreshold requires at least one field to change",
             )));
         }
         self.write::<(), _>(

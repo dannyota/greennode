@@ -1,6 +1,6 @@
 use super::{BUDGET_UUID, check_input_source, json_string};
 use crate::cli::dispatch::{self, ExecutionResult, FutureResult};
-use crate::cli::input::{InputDescriptor, InputField, Requirement};
+use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation};
 use greennode_sdk::billing::{
     Client, CreateBudgetThresholdInput, DeleteBudgetThresholdInput, UpdateBudgetThresholdInput,
@@ -148,6 +148,17 @@ const CREATE_INPUT: InputDescriptor<ThresholdInput> = InputDescriptor {
     guard: None,
 };
 
+fn check_threshold_uuid(input: &ThresholdInput, _: &clap::ArgMatches) -> Result<(), InputError> {
+    if input.threshold_uuid.as_ref().is_some_and(|id| {
+        !id.is_empty() && !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    }) {
+        return Err(InputError(
+            "--threshold-uuid must contain only ASCII letters, digits, and hyphens",
+        ));
+    }
+    Ok(())
+}
+
 const UPDATE_INPUT: InputDescriptor<ThresholdInput> = InputDescriptor {
     fields: &[
         BUDGET_ID,
@@ -176,11 +187,13 @@ const UPDATE_INPUT: InputDescriptor<ThresholdInput> = InputDescriptor {
             reminder_interval_hours
         ),
     ],
+    guard: Some(check_threshold_uuid),
     ..CREATE_INPUT
 };
 
 const DELETE_INPUT: InputDescriptor<ThresholdInput> = InputDescriptor {
     fields: &[BUDGET_ID, THRESHOLD_ID],
+    guard: Some(check_threshold_uuid),
     ..CREATE_INPUT
 };
 
