@@ -6,7 +6,8 @@
 
 Kind: Write, destructive.
 
-Deletes the cluster named by exact ID, public or private. A 404 after a successful preflight read confirms deletion. Deletion does not promise a refund.
+Deletes the cluster named by exact ID, public or private. A 404 after a
+successful preflight read confirms deletion. Deletion does not promise a refund.
 
 | Flag           | Type     | Required |
 | -------------- | -------- | -------- |

@@ -6,7 +6,9 @@
 
 Kind: Read.
 
-Returns every tag on the resource, system tags included: vng.zone, vng.region, and vng.createdBy are confirmed live on a virtual IP address. Tag.SystemTag marks one of them.
+Returns every tag on the resource, system tags included: vng.zone, vng.region,
+and vng.createdBy are confirmed live on a virtual IP address. Tag.SystemTag
+marks one of them.
 
 | Flag            | Type     | Required |
 | --------------- | -------- | -------- |
