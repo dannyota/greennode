@@ -8,3 +8,7 @@ with GOPROXY=off and GOTOOLCHAIN=local. Run `go test ./internal/cli -run
 '^TestMonitorReadGoldens$' -count=1` from the archived module. Copy the nine
 files into crates/greennode/tests/fixtures/monitor/. The test drives the Go
 CLI in read-only mode against loopback responses.
+
+Run `go test ./internal/cli -run '^TestMonitorQuotaGoldens$' -count=1` with
+the same settings to generate twelve catalog, snapshot, and partial snapshot
+files. The time normalization replaces only the live AsOf field or header.

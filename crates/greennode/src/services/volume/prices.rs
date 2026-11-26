@@ -50,6 +50,8 @@ pub(super) const VIEW: OutputView = OutputView {
     withhold: None,
     custom: Some(render),
     raw_text: None,
+    transform_query_cells: None,
+    use_for_partial: false,
 };
 
 pub(super) fn guard(matches: &ArgMatches, json: Option<&str>) -> Result<(), InputError> {

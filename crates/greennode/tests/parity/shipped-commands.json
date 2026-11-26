@@ -200,6 +200,8 @@
   "greennode monitor get-dashboard",
   "greennode monitor list-check-response-times",
   "greennode monitor list-dashboards",
+  "greennode monitor list-synthetic-packages",
+  "greennode monitor quota-status",
   "greennode portal",
   "greennode portal get-quota",
   "greennode portal get-tag-quota",

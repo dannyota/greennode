@@ -1,0 +1,21 @@
+Class options (class packageId)
+Settings periods: [1 3]; free maximum: 1; payment: PRE-PAID
++-------------------+-------+---------+--------------+----------+---------+---------+--------------+-----------+----------+------------------------+---------+
+| AutoRenewEligible | Class | ClassID | Description  | Location | MaxAPI  | MinAPI  | MonthPeriods | PackageID | PriceVND | Status                 | Step    |
++-------------------+-------+---------+--------------+----------+---------+---------+--------------+-----------+----------+------------------------+---------+
+| unknown           | Basic | class-1 | Free class   | 1        | 20      | 10      | [1]          | unit_1    | unknown  | ACTIVE                 | 1       |
+| unknown           | Pro   | class-2 | Coming soon. | unknown  | unknown | unknown | []           | unknown   | unknown  | DISABLED (unavailable) | unknown |
++-------------------+-------+---------+--------------+----------+---------+---------+--------------+-----------+----------+------------------------+---------+
+Class unit packages (monthly VND per unit)
++-----+-------+---------+--------+----------+-------------------+--------+--------+-----------+--------------+
+| API | Class | ClassID | ID     | Location | Name              | Status | TierID | TierName  | UnitPriceVND |
++-----+-------+---------+--------+----------+-------------------+--------+--------+-----------+--------------+
+| 1   | Basic | class-1 | unit_1 | 1        | unit-package-free | ACTIVE | 1001   | Free Tier | 0            |
++-----+-------+---------+--------+----------+-------------------+--------+--------+-----------+--------------+
+V1 packages (v1 id; no evidenced relationship to class packageId)
++-----+-------------------+------+----------+--------------+--------+----------+--------+
+| API | AutoRenewEligible | ID   | Location | MonthPeriods | Name   | PriceVND | TierID |
++-----+-------------------+------+----------+--------------+--------+----------+--------+
+| 10  | unknown           | v1_1 | 1        | [1]          | free10 | 0        | 24     |
+| 20  | unknown           | v1_2 | 2        | []           | plus   | unknown  | 25     |
++-----+-------------------+------+----------+--------------+--------+----------+--------+

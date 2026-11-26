@@ -20,6 +20,7 @@ use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch}
 pub(super) enum Family {
     Dashboard,
     CheckAlarm,
+    Quota,
 }
 
 pub(super) struct Read {
@@ -33,6 +34,7 @@ impl Read {
     pub(super) fn invalid(&self, evidence: &Evidence) -> Error {
         let message = match self.family {
             Family::Dashboard => "vMonitor response withheld",
+            Family::Quota => "quota response had invalid structure",
             Family::CheckAlarm => "check alarm response rejected; body withheld",
         };
         self.error(Some(200), "InvalidResponse", message, false, evidence)
@@ -65,6 +67,9 @@ impl Read {
         if error.is_body_too_large() {
             return self.overflow(status, evidence);
         }
+        if matches!(self.family, Family::Quota) && status.is_some() && api.is_some() {
+            return self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
+        }
         if error.class() != ErrorClass::Api || api.is_none() {
             return error.screen_api(&|text| evidence.text_reflects(text));
         }
@@ -74,6 +79,7 @@ impl Read {
     fn overflow(&self, status: Option<u16>, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
             Family::Dashboard => ("", "vMonitor response withheld"),
+            Family::Quota => ("ResponseTooLarge", "quota response exceeded size limit"),
             Family::CheckAlarm => (
                 "ResponseLimitExceeded",
                 "check alarm response exceeds safety limit",
@@ -86,13 +92,16 @@ impl Read {
     fn request_failed(&self, status: Option<u16>, retryable: bool, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
             Family::Dashboard => ("", "vMonitor response withheld"),
-            Family::CheckAlarm => (
+            Family::CheckAlarm | Family::Quota => (
                 if status.is_some_and(|status| status >= 400) {
                     ""
                 } else {
                     "InvalidResponse"
                 },
-                "check alarm request failed; response withheld",
+                match self.family {
+                    Family::Quota => "quota response withheld",
+                    _ => "check alarm request failed; response withheld",
+                },
             ),
         };
         self.error(status, code, message, retryable, evidence)
@@ -140,7 +149,7 @@ impl Client {
             overflow_overrides_status: false,
             sensitive: true,
             reject_reflected_credentials: false,
-            no_redirect: matches!(read.family, Family::Dashboard),
+            no_redirect: !matches!(read.family, Family::CheckAlarm),
             retry_config: retry::Config::default(),
         };
         let reply = match execute_raw(
@@ -174,7 +183,7 @@ impl Client {
         let text = go_json(&reply.body);
         serde_json::from_str(&text).map_err(|_| match read.family {
             Family::Dashboard => read.invalid(evidence),
-            Family::CheckAlarm => read.request_failed(Some(200), false, evidence),
+            Family::CheckAlarm | Family::Quota => read.request_failed(Some(200), false, evidence),
         })
     }
 }

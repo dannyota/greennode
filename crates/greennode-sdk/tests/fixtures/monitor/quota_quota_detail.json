@@ -1,0 +1,16 @@
+{
+  "resourceId": "quota-1",
+  "classId": "class-1",
+  "packageId": "unit_1",
+  "className": "Basic",
+  "tierName": null,
+  "price": 0,
+  "api": 10,
+  "location": 1,
+  "email": 0,
+  "sms": 0,
+  "slack": null,
+  "webhook": null,
+  "telegram": null,
+  "teams": null
+}

@@ -6,6 +6,7 @@
 )]
 
 mod dashboards;
+mod quota;
 mod response_times;
 mod wire;
 
@@ -19,6 +20,7 @@ use crate::model::wire::{Field, WireField};
 use crate::wire::product::evidence::Evidence;
 
 pub use dashboards::*;
+pub use quota::*;
 pub use response_times::*;
 
 /// Monitor client with authentication shared by the configuration.

@@ -1,3 +1,6 @@
+#[path = "monitor/quota.rs"]
+mod quota;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -72,8 +75,12 @@ macro_rules! case {
 }
 
 fn response(body: &str) -> Response {
+    response_with_status("200 OK", body)
+}
+
+fn response_with_status(status: &str, body: &str) -> Response {
     Response::Http {
-        status: "200 OK".into(),
+        status: status.into(),
         headers: vec![("Content-Length".into(), body.len().to_string())],
         body: body.as_bytes().to_vec(),
     }
