@@ -56,9 +56,9 @@ jobs:
       - name: Markdown checks
         run: make docs
 
-  rust:
+  lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,8 +72,24 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/master' }}
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: make fmt lint
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: |
+          version="$(tr -d '\r' < rust-toolchain.toml | sed -n 's/^channel = "\(.*\)"$/\1/p')"
+          test -n "$version"
+          rustup toolchain install "$version" --profile minimal
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$version"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Read the cargo-nextest pin
         run: echo "CARGO_NEXTEST=$(tr -d '\r' < .tool-versions | awk '$1 == "cargo-nextest" { print $2 }')" >> "$GITHUB_ENV"
       - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
@@ -159,7 +175,7 @@ jobs:
 
   ci:
     if: ${{ always() }}
-    needs: [gates, rust, deny, gitleaks, crate-age]
+    needs: [gates, lint, test, deny, gitleaks, crate-age]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -174,7 +190,7 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS"])
-          expected = {"gates", "rust", "deny", "gitleaks", "crate-age"}
+          expected = {"gates", "lint", "test", "deny", "gitleaks", "crate-age"}
           if set(needs) != expected:
               sys.exit(f"needed jobs {sorted(needs)} differ from {sorted(expected)}")
           failed = []
