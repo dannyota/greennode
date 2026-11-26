@@ -308,13 +308,14 @@ checked directory. If separation cannot be established safely, refuse cache use.
 Open the checked directory once without following its final component, require
 it owned by the user and not group- or world-writable, and do every later step
 relative to that handle. An ancestor changed between the check and that open is
-an accepted limit: it needs write access to the owner's own directories. On
-Windows the standard library offers no handle-relative create or rename, so the
-disk cache is off there for now and tokens stay in memory for the process. A
-cache entry whose token needs a JSON escape, or that is not valid UTF-8, is a
-miss, so token bytes stay in zeroizing storage; Go would accept both. This
-supplements, not replaces, the baseline's checks on the cache directory and
-entries.
+an accepted limit: it needs write access to the owner's own directories.
+Ancestors are compared with the legacy root by device and inode; a bind mount of
+a strict descendant of the legacy root is not detected. On Windows the standard
+library offers no handle-relative create or rename, so the disk cache is off
+there for now and tokens stay in memory for the process. A cache entry whose
+token needs a JSON escape, or that is not valid UTF-8, is a miss, so token bytes
+stay in zeroizing storage; Go would accept both. This supplements, not replaces,
+the baseline's checks on the cache directory and entries.
 
 Without a home, the tool has no default disk cache. `Config::load` with no home
 and `Config::new` have no legacy path to compare with; they use an explicit
