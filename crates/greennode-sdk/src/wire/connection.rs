@@ -50,6 +50,10 @@ impl Service<http::Uri> for DialConnector {
     }
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
+        #[cfg(any(test, feature = "test-support"))]
+        if !uri.host().is_some_and(test_host_allowed) {
+            return Box::pin(async { Err(test_dial_failure()) });
+        }
         #[cfg(feature = "test-support")]
         let uri = if let Some(address) = self.1 {
             if !uri
@@ -69,9 +73,59 @@ impl Service<http::Uri> for DialConnector {
         } else {
             uri
         };
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            if uri
+                .host()
+                .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
+            {
+                let port = uri.port_u16().unwrap_or(443);
+                let mut connector = self.0.clone();
+                return Box::pin(async move {
+                    let addresses = tokio::net::lookup_host(("localhost", port))
+                        .await
+                        .map_err(|_| test_dial_failure())?
+                        .collect::<Vec<_>>();
+                    if addresses.is_empty() || addresses.iter().any(|addr| !addr.ip().is_loopback())
+                    {
+                        return Err(test_dial_failure());
+                    }
+                    let mut last = None;
+                    for address in addresses {
+                        let pinned = format!("https://{address}")
+                            .parse()
+                            .map_err(|_| test_dial_failure())?;
+                        match connector.call(pinned).await {
+                            Ok(connection) => return Ok(connection),
+                            Err(error) => last = Some(error),
+                        }
+                    }
+                    Err(last.map_or_else(test_dial_failure, |error| DialFailure(Box::new(error))))
+                });
+            }
+        }
         let future = self.0.call(uri);
         Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
     }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn test_host_allowed(host: &str) -> bool {
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn test_dial_failure() -> DialFailure {
+    DialFailure(Box::new(std::io::Error::other(
+        "test connections require loopback",
+    )))
 }
 
 pub(crate) type Client = HyperClient<HttpsConnector<DialConnector>, Full<Bytes>>;
@@ -223,6 +277,56 @@ pub(crate) fn client(
 #[cfg(test)]
 mod tests {
     use super::Trust;
+
+    #[tokio::test]
+    async fn requests_to_non_loopback_hosts_fail_before_connecting() {
+        use std::error::Error;
+        use tower_service::Service;
+
+        let mut connector = super::DialConnector(
+            hyper_util::client::legacy::connect::HttpConnector::new(),
+            #[cfg(feature = "test-support")]
+            None,
+        );
+        for uri in ["https://signin.greennode.ai", "https://192.0.2.1"] {
+            let error = match connector.call(uri.parse().unwrap()).await {
+                Ok(_) => panic!("non-loopback connection succeeded"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.source().unwrap().to_string(),
+                "test connections require loopback"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn signin_request_is_blocked_by_the_client() {
+        use std::error::Error;
+
+        let client = super::client(false, super::HeadLimit::Api, Trust::webpki()).unwrap();
+        let error = client
+            .get("https://signin.greennode.ai/".parse().unwrap())
+            .await
+            .unwrap_err();
+        let mut source: Option<&(dyn Error + 'static)> = Some(&error);
+        let mut found = false;
+        while let Some(error) = source {
+            found |= error.to_string() == "test connections require loopback";
+            source = error.source();
+        }
+        assert!(found);
+    }
+
+    #[test]
+    fn test_host_guard_rejects_non_loopback_destinations() {
+        for host in ["signin.greennode.ai", "192.0.2.1", "[::ffff:127.0.0.1]"] {
+            assert!(!super::test_host_allowed(host));
+        }
+        for host in ["localhost", "127.0.0.2", "[::1]"] {
+            assert!(super::test_host_allowed(host));
+        }
+    }
 
     #[test]
     fn webpki_trust_uses_bundled_roots() {
