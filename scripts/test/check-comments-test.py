@@ -124,6 +124,11 @@ class Gate(unittest.TestCase):
             "crates/greennode/src/lib.rs:1: /// no",
         ])))
 
+    def test_untracked_comment_fails(self):
+        path = self.repo / "new.rs"
+        path.write_text("// untracked\n")
+        self.assertEqual(self.run_gate(), (1, "new.rs:1: // untracked"))
+
     def test_comment_fails(self):
         self.track("src/lib.rs", "fn a() {}\n// why\n")
         self.assertEqual(self.run_gate(), (1, "src/lib.rs:2: // why"))

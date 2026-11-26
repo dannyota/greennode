@@ -117,12 +117,12 @@ def findings(path, text):
         yield f"{path}:{line}: {fragment}"
 
 
-def tracked_rust_files():
+def rust_files():
     listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.rs", "*.inc"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.rs", "*.inc"],
         cwd=ROOT, check=True, capture_output=True,
     ).stdout.decode()
-    return [name for name in listed.split("\0") if name]
+    return sorted({name for name in listed.split("\0") if name})
 
 
 def load_allowlist():
@@ -134,7 +134,7 @@ def main():
     allowed = load_allowlist()
     found = set()
     violations = []
-    for name in tracked_rust_files():
+    for name in rust_files():
         path = ROOT / name
         if not path.is_file():
             continue

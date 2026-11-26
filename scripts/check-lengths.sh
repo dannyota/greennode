@@ -60,12 +60,17 @@ if [[ -n "$base_ref" ]]; then
   done < <(rows <"$BASELINE")
 fi
 
+files() {
+  git ls-files -z --cached --others --exclude-standard -- "$@" |
+    python3 -c 'import sys; sys.stdout.buffer.write(b"\0".join(sorted(set(sys.stdin.buffer.read().split(b"\0")) - {b""})) + b"\0")'
+}
+
 exclude_tests=1
 while IFS= read -r -d '' config; do
-  if grep -Eq -e '^[[:space:]]*(ignore|disable_all_formatting|skip_children)[[:space:]]*=' -- "$config"; then
+  if [[ -f "$config" ]] && grep -Eq -e '^[[:space:]]*(ignore|disable_all_formatting|skip_children)[[:space:]]*=' -- "$config"; then
     exclude_tests=0
   fi
-done < <(git ls-files -z -- '*rustfmt.toml')
+done < <(files '*rustfmt.toml')
 
 count_lines() {
   if (($2)); then
@@ -113,11 +118,11 @@ while IFS= read -r -d '' file; do
     printf '%s: %s lines (limit %s)\n' "$file" "$lines" "$limit"
     violations=$((violations + 1))
   fi
-done < <(git ls-files -z -- '*.rs' '*.inc' '*.md' '*.markdown')
+done < <(files '*.rs' '*.inc' '*.md' '*.markdown')
 
 while read -r cap file || [[ -n "$cap" ]]; do
-  if [[ ! -f "$file" ]] || ! git --literal-pathspecs ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
-    printf '%s: 0 lines (cap %s), stale baseline path (missing or untracked)\n' "$file" "$cap"
+  if [[ ! -f "$file" ]]; then
+    printf '%s: 0 lines (cap %s), stale baseline path (missing)\n' "$file" "$cap"
     violations=$((violations + 1))
   fi
 done < <(rows <"$BASELINE")
