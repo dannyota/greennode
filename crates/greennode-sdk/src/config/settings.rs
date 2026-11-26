@@ -364,6 +364,7 @@ mod tests {
                 },
                 config_present: true,
                 credentials_present: false,
+                lookup_failed: [false; 2],
                 config_source: Some("~/.greennode"),
                 credentials_source: Some("~/.greennode"),
             }

@@ -45,6 +45,7 @@ pub struct Selection {
     pub(super) paths: Paths,
     pub(super) config_present: bool,
     pub(super) credentials_present: bool,
+    pub(super) lookup_failed: [bool; 2],
     pub(super) config_source: Option<&'static str>,
     pub(super) credentials_source: Option<&'static str>,
 }
@@ -351,14 +352,14 @@ fn select_inner(
         };
         cached.map_or_else(|| presence(&chosen[i]), |states| states[i])
     });
-    if states[0] == Presence::Ambiguous {
+    if states[0] == Presence::Ambiguous && !(defer_legacy_missing && mode == Mode::Legacy) {
         return Err(selected_error(
             crate::FileSlot::Config,
             labels[0],
             "lookup failed",
         ));
     }
-    if states[1] == Presence::Ambiguous {
+    if states[1] == Presence::Ambiguous && !(defer_legacy_missing && mode == Mode::Legacy) {
         return Err(if named[1] {
             credentials_error(labels[1], "lookup failed")
         } else {
@@ -390,6 +391,7 @@ fn select_inner(
         },
         config_present: states[0] == Presence::Present,
         credentials_present: states[1] == Presence::Present,
+        lookup_failed: states.map(|state| state == Presence::Ambiguous),
         config_source: labels[0],
         credentials_source: labels[1],
     })
