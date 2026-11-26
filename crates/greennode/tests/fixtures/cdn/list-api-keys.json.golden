@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "ID": 1,
+      "ExpiresAt": "2026-12-01T03:04:05.678Z",
+      "CreateTime": "2026-10-01T00:00:00.123Z",
+      "UpdateTime": "2026-10-02T01:02:03Z",
+      "AllowOriginHeader": "https://\u003chostname\u003e",
+      "Current": true
+    },
+    {
+      "ID": 2,
+      "ExpiresAt": "2027-01-01T00:00:00Z",
+      "CreateTime": "2026-10-03T00:00:00Z",
+      "UpdateTime": "2026-10-03T00:00:00Z",
+      "AllowOriginHeader": "",
+      "Current": false
+    }
+  ]
+}

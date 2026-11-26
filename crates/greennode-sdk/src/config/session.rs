@@ -27,7 +27,7 @@ pub(crate) struct Session {
     _profile: String,
     region: String,
     discovery: Discovery,
-    _cdn_key: Option<Secret>,
+    cdn_key: Option<Secret>,
 }
 
 #[allow(dead_code, reason = "Shared query for service ports")]
@@ -202,6 +202,10 @@ impl Session {
 
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
+    }
+
+    pub(crate) fn cdn_key(&self) -> Option<&Secret> {
+        self.cdn_key.as_ref()
     }
 
     pub(crate) fn bearer_source(&self) -> &dyn BearerSource {
@@ -418,7 +422,7 @@ impl Session {
             _profile: profile,
             region: region.to_owned(),
             discovery: Discovery::new(project_id, region),
-            _cdn_key: selected.cdn_key,
+            cdn_key: selected.cdn_key,
         })
     }
 

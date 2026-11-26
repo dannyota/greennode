@@ -519,7 +519,10 @@ async fn run_inner(
                 let fixed_json = (name == http::header::ACCEPT
                     || name == http::header::CONTENT_TYPE)
                     && value.as_bytes() == b"application/json";
-                !fixed_json
+                let fixed_html = matches!(auth, Auth::None)
+                    && name == http::header::ACCEPT
+                    && value.as_bytes() == b"text/html";
+                !(fixed_json || fixed_html)
                     && (reflection.reflects(value.as_bytes())
                         || sent.reflects(value.as_bytes())
                         || pending

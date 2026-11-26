@@ -1,0 +1,281 @@
+use bytes::Bytes;
+use hmac::{Hmac, KeyInit, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
+
+use super::models::{flex_id, nullable};
+use super::wire::{Call, convert, list, read_failure};
+use super::{ApiKey, Certificate, Client, WebAccelerator, WebAcceleratorSummary, invalid};
+use crate::wire::{
+    product::options::PathIds,
+    strict_json::{Shape, ShapeField, validate_shape},
+};
+use crate::{Failure, List, RequestContext, Secret};
+
+const LIST_WEB: Call = Call::get("cdn.ListWebAccelerators", "v1/cdn/list");
+const GET_WEB: Call = Call {
+    not_found: Some("no such CDN"),
+    ..Call::get("cdn.GetWebAccelerator", "v1/cdn/detail/{}")
+};
+const LIST_CERTIFICATES: Call = Call {
+    sensitive: true,
+    ..Call::get("cdn.ListCertificates", "v1/certificate/list")
+};
+const GET_CERTIFICATE: Call = Call {
+    sensitive: true,
+    not_found: Some("no such certificate"),
+    ..Call::get("cdn.GetCertificate", "v1/certificate/detail/{}")
+};
+const LIST_KEYS: Call = Call {
+    sensitive: true,
+    ..Call::get("cdn.ListAPIKeys", "v1/apikey/list")
+};
+
+/// Input for listing Web Accelerators.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListWebAcceleratorsInput;
+
+/// Web Accelerators in the account.
+pub type ListWebAcceleratorsOutput = List<WebAcceleratorSummary>;
+
+/// Input for a Web Accelerator detail read.
+#[derive(Clone, Debug)]
+pub struct GetWebAcceleratorInput {
+    /// The Web Accelerator identifier.
+    pub cdn_id: String,
+}
+
+impl GetWebAcceleratorInput {
+    /// Selects the Web Accelerator to read.
+    pub fn new(cdn_id: impl Into<String>) -> Self {
+        Self {
+            cdn_id: cdn_id.into(),
+        }
+    }
+}
+
+/// The selected Web Accelerator.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GetWebAcceleratorOutput {
+    /// The configuration and status of the selected CDN.
+    #[serde(rename = "WebAccelerator")]
+    pub web_accelerator: WebAccelerator,
+}
+
+/// Input for listing certificates.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListCertificatesInput;
+
+/// Certificate metadata without PEM text.
+pub type ListCertificatesOutput = List<Certificate>;
+
+/// Input for a certificate detail read.
+#[derive(Clone, Debug)]
+pub struct GetCertificateInput {
+    /// The certificate identifier.
+    pub certificate_id: String,
+}
+
+impl GetCertificateInput {
+    /// Selects the certificate to read.
+    pub fn new(certificate_id: impl Into<String>) -> Self {
+        Self {
+            certificate_id: certificate_id.into(),
+        }
+    }
+}
+
+/// The selected certificate and public PEM chain.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GetCertificateOutput {
+    /// The certificate detail.
+    #[serde(rename = "Certificate")]
+    pub certificate: Certificate,
+}
+
+/// Input for listing API key metadata.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListApiKeysInput;
+
+/// API key metadata without key values.
+pub type ListApiKeysOutput = List<ApiKey>;
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct CertificateWire {
+    #[serde(flatten)]
+    certificate: Certificate,
+    #[serde(rename = "privateKey", deserialize_with = "nullable")]
+    private_key: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ApiKeyWire {
+    #[serde(flatten)]
+    metadata: ApiKey,
+    #[serde(deserialize_with = "nullable")]
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct State {
+    #[serde(rename = "cdnId", deserialize_with = "flex_id")]
+    id: String,
+    status: i64,
+}
+
+const STATE: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "cdnId",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "status",
+        shape: Shape::Any,
+    },
+]);
+
+impl Client {
+    /// Lists Web Accelerators in the account.
+    pub async fn list_web_accelerators(
+        &self,
+        ctx: &RequestContext,
+        _: ListWebAcceleratorsInput,
+    ) -> Result<ListWebAcceleratorsOutput, Failure<ListWebAcceleratorsOutput>> {
+        let answer = self
+            .call(ctx, &LIST_WEB, &[], Bytes::new())
+            .await
+            .map_err(convert)?;
+        let mut items = list::<WebAcceleratorSummary>(&LIST_WEB, answer.data.as_deref(), true)
+            .map_err(convert)?;
+        for item in &mut items {
+            item.redact(&answer.evidence);
+        }
+        Ok(List { items })
+    }
+
+    /// Reads the Web Accelerator with the requested identifier.
+    pub async fn get_web_accelerator(
+        &self,
+        ctx: &RequestContext,
+        input: GetWebAcceleratorInput,
+    ) -> Result<GetWebAcceleratorOutput, Failure<GetWebAcceleratorOutput>> {
+        if !PathIds::Strict.allows(&input.cdn_id) {
+            return Err(invalid());
+        }
+        let answer = self
+            .call(ctx, &GET_WEB, &[&input.cdn_id], Bytes::new())
+            .await
+            .map_err(convert)?;
+        let malformed = || read_failure(GET_WEB.unexpected(200));
+        let raw = answer.data.as_deref().ok_or_else(malformed)?.get();
+        validate_shape(raw.as_bytes(), &STATE, raw.len()).map_err(|_| malformed())?;
+        let state: State = serde_json::from_str(raw).map_err(|_| malformed())?;
+        if state.id != input.cdn_id {
+            return Err(malformed());
+        }
+        let mut web_accelerator: WebAccelerator =
+            serde_json::from_str(raw).map_err(|_| malformed())?;
+        web_accelerator.status = super::Field::Value(state.status);
+        web_accelerator.redact(&answer.evidence);
+        Ok(GetWebAcceleratorOutput { web_accelerator })
+    }
+
+    /// Lists certificate metadata without PEM text.
+    pub async fn list_certificates(
+        &self,
+        ctx: &RequestContext,
+        _: ListCertificatesInput,
+    ) -> Result<ListCertificatesOutput, Failure<ListCertificatesOutput>> {
+        let mut answer = self
+            .call(ctx, &LIST_CERTIFICATES, &[], Bytes::new())
+            .await
+            .map_err(convert)?;
+        let rows = list::<CertificateWire>(&LIST_CERTIFICATES, answer.data.as_deref(), true)
+            .map_err(convert)?;
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            answer.evidence.add_secret(&Secret::new(row.private_key));
+            let mut certificate = row.certificate;
+            certificate.certificate.clear();
+            certificate.ca_root.clear();
+            items.push(certificate);
+        }
+        for certificate in &mut items {
+            certificate.redact(&answer.evidence);
+        }
+        Ok(List { items })
+    }
+
+    /// Reads certificate metadata and its public PEM chain.
+    pub async fn get_certificate(
+        &self,
+        ctx: &RequestContext,
+        input: GetCertificateInput,
+    ) -> Result<GetCertificateOutput, Failure<GetCertificateOutput>> {
+        if !PathIds::Strict.allows(&input.certificate_id) {
+            return Err(invalid());
+        }
+        let mut answer = self
+            .call(
+                ctx,
+                &GET_CERTIFICATE,
+                &[&input.certificate_id],
+                Bytes::new(),
+            )
+            .await
+            .map_err(convert)?;
+        let row: CertificateWire = answer
+            .data
+            .as_deref()
+            .and_then(|data| serde_json::from_str(data.get()).ok())
+            .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
+        answer.evidence.add_secret(&Secret::new(row.private_key));
+        let mut certificate = row.certificate;
+        certificate.redact(&answer.evidence);
+        Ok(GetCertificateOutput { certificate })
+    }
+
+    /// Lists key metadata and marks the key used for this request.
+    pub async fn list_api_keys(
+        &self,
+        ctx: &RequestContext,
+        _: ListApiKeysInput,
+    ) -> Result<ListApiKeysOutput, Failure<ListApiKeysOutput>> {
+        let mut answer = self
+            .call(ctx, &LIST_KEYS, &[], Bytes::new())
+            .await
+            .map_err(convert)?;
+        let rows =
+            list::<ApiKeyWire>(&LIST_KEYS, answer.data.as_deref(), false).map_err(convert)?;
+        let key = self
+            .session
+            .cdn_key()
+            .ok_or_else(|| read_failure(crate::Error::new(crate::ErrorClass::NoCredentials)))?;
+        let expected = key_tag(key.expose_secret())
+            .ok_or_else(|| read_failure(LIST_KEYS.unexpected(200)))?
+            .finalize()
+            .into_bytes();
+        let mut items = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut metadata = row.metadata;
+            let token = Secret::new(row.token);
+            metadata.current = !token.expose_secret().is_empty()
+                && key_tag(token.expose_secret())
+                    .is_some_and(|tag| tag.verify_slice(&expected).is_ok());
+            answer.evidence.add_secret(&token);
+            items.push(metadata);
+        }
+        for metadata in &mut items {
+            metadata.redact(&answer.evidence);
+        }
+        Ok(List { items })
+    }
+}
+
+fn key_tag(value: &str) -> Option<Hmac<Sha256>> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"greennode-vcdn-key-comparison").ok()?;
+    mac.update(value.as_bytes());
+    Some(mac)
+}

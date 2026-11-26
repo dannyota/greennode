@@ -386,3 +386,84 @@ async fn route_inputs_cannot_reflect_prior_bearers_or_service_secrets() {
     assert!(public.is_ok());
     assert_eq!(server.requests(), 2);
 }
+
+#[tokio::test]
+async fn key_routes_send_only_the_cdn_key_and_record_reflection() {
+    let server = Server::start(vec![response("401 Unauthorized", b"{}")]);
+    let key = Secret::new("toy-cdn-key");
+    let mut evidence = Evidence::new();
+    let reply = raw_route(&server, RouteAuth::CdnKey(Some(&key)), &mut evidence)
+        .await
+        .unwrap();
+    assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+    assert!(evidence.reflected_in(&json!("toy-cdn-key")));
+    let heads = server.heads();
+    let req = String::from_utf8_lossy(&heads[0]);
+    assert!(
+        req.to_ascii_lowercase()
+            .contains("authorization: bearer toy-cdn-key")
+    );
+    assert!(!req.contains("toy-configured"));
+}
+
+#[tokio::test]
+async fn public_routes_send_no_credentials() {
+    let server = Server::start(vec![response("200 OK", b"<html></html>")]);
+    let reply = raw_route(&server, RouteAuth::PublicHtml, &mut Evidence::new())
+        .await
+        .unwrap();
+    assert_eq!(reply.body.as_slice(), b"<html></html>");
+    let heads = server.heads();
+    let req = String::from_utf8_lossy(&heads[0]).to_ascii_lowercase();
+    assert!(req.contains("accept: text/html"));
+    assert!(!req.contains("authorization:"));
+    assert!(!req.contains("toy-configured"));
+}
+
+#[tokio::test]
+async fn missing_cdn_key_refuses_before_send() {
+    let server = Server::start(vec![]);
+    let result = raw_route(&server, RouteAuth::CdnKey(None), &mut Evidence::new()).await;
+    assert_eq!(
+        result.err().unwrap().error().class(),
+        ErrorClass::NoCredentials
+    );
+}
+
+#[allow(clippy::result_large_err)]
+async fn raw_route(
+    server: &Server,
+    auth: RouteAuth<'_>,
+    evidence: &mut Evidence,
+) -> Result<sender::Response, Failure<()>> {
+    let clients = sender::Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+    };
+    let (ctx, _) = crate::RequestContext::new();
+    let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+    let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+    let configured = sender::SentCredentials::for_test(vec![Secret::new("toy-configured")]);
+    let mut op = declaration();
+    op.template = "route";
+    execute_raw(
+        sender::Runtime {
+            configured_credentials: Some(&configured),
+            client: &clients,
+            ctx: &ctx,
+            clock: &clock,
+            deadline: clock.monotonic_now() + Duration::from_secs(5),
+            sleeper: &Immediate,
+            jitter: &mut || 0,
+        },
+        &base,
+        &op,
+        &Options::DEFAULT,
+        &[],
+        &[],
+        auth,
+        bytes::Bytes::new(),
+        evidence,
+    )
+    .await
+}
