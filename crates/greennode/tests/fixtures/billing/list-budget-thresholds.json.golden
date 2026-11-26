@@ -1,0 +1,15 @@
+{
+  "Items": [
+    {
+      "UUID": "threshold-1",
+      "ThresholdType": "ACTUAL",
+      "ThresholdPercentage": 100,
+      "ComparisonOperator": "GTE",
+      "Enabled": false,
+      "MaxAlertsPerPeriod": 1,
+      "ReminderIntervalHours": 24,
+      "NotificationState": "OK",
+      "LastAlertAt": ""
+    }
+  ]
+}

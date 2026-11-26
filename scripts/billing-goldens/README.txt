@@ -7,3 +7,9 @@ Run go test ./internal/cli -run '^TestBillingTemplateGoldens$' -count=1 from
 the archived module. The test injects a loopback fixture through the baseline's
 newSvcRoot helper. Copy the six generated files to
 greennode/tests/fixtures/billing/.
+
+For get-current-period-cost, list-budget-thresholds, and list-budget-alerts,
+use '^TestBillingBudgetReadGoldens$' instead. The test reads the pinned
+baseline's testdata/billing response fixtures and writes nine stdout goldens.
+Copy them to crates/greennode/tests/fixtures/billing/. Each case expects exit
+zero and empty stderr.

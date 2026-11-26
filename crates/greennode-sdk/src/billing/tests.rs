@@ -1,3 +1,5 @@
+mod budget_reads;
+
 use super::*;
 use crate::wire::test_server::{Response, Server};
 use crate::{ConfigOptions, EndpointOverrides, ErrorClass, Secret, WriteDispatch};

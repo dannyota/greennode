@@ -1,0 +1,26 @@
+{
+  "Items": [
+    {
+      "TriggeredAt": "2026-09-10T08:00:00Z",
+      "ThresholdType": "ACTUAL",
+      "ThresholdPercentage": 80,
+      "TriggeredValue": 4200000,
+      "ActualPercentage": 84,
+      "DeliveryStatus": "SENT",
+      "Recipients": [
+        "\u003caccount\u003e"
+      ],
+      "RecipientsRaw": ""
+    },
+    {
+      "TriggeredAt": "2026-09-15T08:00:00Z",
+      "ThresholdType": "FORECASTED",
+      "ThresholdPercentage": 90,
+      "TriggeredValue": 5100000,
+      "ActualPercentage": 91,
+      "DeliveryStatus": "FAILED",
+      "Recipients": [],
+      "RecipientsRaw": "not-an-array"
+    }
+  ]
+}

@@ -14,6 +14,41 @@ Kind: Read.
 greennode billing get-budget --budget-uuid <budget-uuid> --query Budget
 ```
 
+## get-current-period-cost
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode billing get-current-period-cost --query PeriodCost
+```
+
+## list-budget-alerts
+
+Kind: Read.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--budget-uuid` | `string` | yes      |
+| `--period-key`  | `string` |          |
+
+```sh
+greennode billing list-budget-alerts --budget-uuid <budget-uuid>
+```
+
+## list-budget-thresholds
+
+Kind: Read.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--budget-uuid` | `string` | yes      |
+
+```sh
+greennode billing list-budget-thresholds --budget-uuid <budget-uuid>
+```
+
 ## list-budgets
 
 Kind: Read.

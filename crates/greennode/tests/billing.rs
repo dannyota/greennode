@@ -1,3 +1,6 @@
+#[path = "billing/budget_reads.rs"]
+mod budget_reads;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
