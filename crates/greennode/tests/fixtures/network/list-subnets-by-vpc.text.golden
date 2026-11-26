@@ -1,0 +1,1 @@
+<cidr>						<name>	vpc-1				[]	0	ACTIVE	subnet-1		0	{"Description":"","IPRanges":[],"IsDefault":false,"IsEnabled":false,"Name":"","OpenStackZone":"","ServerCount":0,"UUID":"","VolumeCount":0,"ZoneType":""}	zone-a

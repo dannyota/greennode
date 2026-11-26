@@ -1,0 +1,1 @@
+<cidr>				dns-1	ACTIVE	[]	0	<name>	rt-1	<name>	0	ACTIVE	vpc-1	0	{"Description":"\u003cdescription\u003e","IPRanges":["\u003ccidr\u003e"],"IsDefault":true,"IsEnabled":true,"Name":"\u003cname\u003e","OpenStackZone":"nova","ServerCount":0,"UUID":"zone-1","VolumeCount":0,"ZoneType":"standard"}
