@@ -1,3 +1,5 @@
+mod set;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -35,14 +37,14 @@ impl InvocationHandler for Handler {
         }
         matches
             .subcommand_matches("configure")
-            .is_some_and(|m| matches!(m.subcommand_name(), Some("get" | "list")))
+            .is_some_and(|m| matches!(m.subcommand_name(), Some("get" | "list" | "set")))
     }
 
     fn run<'a>(
         &'a mut self,
         invocation: &'a mut Invocation<'_>,
     ) -> dispatch::FutureResult<'a, ExitCode> {
-        Box::pin(async move { run(invocation) })
+        Box::pin(async move { run(invocation).await })
     }
 }
 
@@ -87,7 +89,7 @@ fn value<'a>(file: &'a ProfileFile, section: &str, key: &str) -> &'a str {
         .map_or("", |v| v.expose_secret())
 }
 
-fn run(invocation: &mut Invocation<'_>) -> ExitCode {
+async fn run(invocation: &mut Invocation<'_>) -> ExitCode {
     let Ok(registry) = crate::services::registered() else {
         return ExitCode::FAILURE;
     };
@@ -99,8 +101,9 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
     let Some(command) = matches.subcommand_matches("configure") else {
         return ExitCode::FAILURE;
     };
-    let key = command
-        .subcommand_matches("get")
+    let set_command = command.subcommand_matches("set");
+    let key = set_command
+        .or_else(|| command.subcommand_matches("get"))
         .and_then(|m| m.get_one::<String>("key"));
     let selected_key = key.and_then(|k| KEYS.iter().find(|(name, _, _)| *name == k));
     if key.is_some() && selected_key.is_none() {
@@ -134,6 +137,23 @@ fn run(invocation: &mut Invocation<'_>) -> ExitCode {
         );
     }
     let cwd = std::env::current_dir().ok();
+    if let Some((set_command, &(name, credentials, secret))) = set_command.zip(selected_key) {
+        let Some(argument) = set_command.get_one::<OsString>("value") else {
+            return ExitCode::FAILURE;
+        };
+        return set::run(
+            invocation,
+            &profile,
+            cwd.as_deref(),
+            matches
+                .get_one::<bool>("read-only")
+                .copied()
+                .unwrap_or(false),
+            (name, credentials, secret),
+            argument,
+        )
+        .await;
+    }
     let selection = match select(None, None, invocation.source, cwd.as_deref()) {
         Ok(selection) => selection,
         Err(error) => return sdk_error(invocation, &error),

@@ -7,6 +7,7 @@
   "greennode configure",
   "greennode configure get",
   "greennode configure list",
+  "greennode configure set",
   "greennode help",
   "greennode version"
 ]

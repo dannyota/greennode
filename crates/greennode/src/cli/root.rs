@@ -38,7 +38,18 @@ fn command() -> Command {
                         .disable_help_flag(true)
                         .arg(Arg::new("key").required_unless_present("help-flag")),
                 )
-                .subcommand(Command::new("list").disable_help_flag(true)),
+                .subcommand(Command::new("list").disable_help_flag(true))
+                .subcommand(
+                    Command::new("set")
+                        .disable_help_flag(true)
+                        .arg(Arg::new("key").required(true))
+                        .arg(
+                            Arg::new("value")
+                                .required(true)
+                                .allow_hyphen_values(true)
+                                .value_parser(clap::value_parser!(OsString)),
+                        ),
+                ),
         )
         .subcommand(
             Command::new("help")

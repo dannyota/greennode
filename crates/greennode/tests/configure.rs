@@ -1,8 +1,18 @@
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, ExitCode, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Home(PathBuf);
+
+impl greennode_sdk::ConfigSource for Home {
+    fn var_os(&self, _: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+        None
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        Some(self.0.clone())
+    }
+}
 
 impl Home {
     fn new() -> Self {
@@ -16,14 +26,27 @@ impl Home {
         Self(path)
     }
 
-    fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_greennode"))
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_greennode"));
+        command
             .args(args)
             .env_clear()
             .env("HOME", &self.0)
-            .env("USERPROFILE", &self.0)
-            .output()
-            .unwrap()
+            .env("USERPROFILE", &self.0);
+        command
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        self.command(args).output().unwrap()
+    }
+
+    fn with_stdin(&self, args: &[&str], value: &[u8]) -> Output {
+        let input = self.0.join("stdin");
+        std::fs::write(&input, value).unwrap();
+        let file = std::fs::File::open(&input).unwrap();
+        let result = self.command(args).stdin(file).output().unwrap();
+        std::fs::remove_file(input).unwrap();
+        result
     }
 }
 
@@ -34,7 +57,6 @@ impl Drop for Home {
 }
 
 #[test]
-#[ignore = "configure set lands in the next step"]
 fn legacy_write_refuses_without_creating_files() {
     let home = Home::new();
     let legacy = home.0.join(".vngcloud");
@@ -58,7 +80,6 @@ fn legacy_write_refuses_without_creating_files() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "configure set lands in the next step"]
 fn fresh_set_creates_private_config_and_get_returns_value() {
     use std::os::unix::fs::PermissionsExt;
     let home = Home::new();
@@ -232,4 +253,364 @@ fn malformed_config_diagnostic_includes_line() {
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("config (~/.greennode):2"));
     assert!(error.contains("line has no '='"));
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_and_read_only_refuse_before_consuming_stdin() {
+    use std::io::{Read, Write};
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+
+    for (directory, message) in [
+        (".vngcloud", "no files changed"),
+        (".greennode", "ReadOnly"),
+    ] {
+        let home = Home::new();
+        let selected = home.0.join(directory);
+        std::fs::create_dir(&selected).unwrap();
+        std::fs::write(selected.join("config"), "[default]\nread_only = true\n").unwrap();
+        let (mut input, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"toy-canary\n").unwrap();
+        drop(writer);
+        let child_input = OwnedFd::from(input.try_clone().unwrap());
+        let output = home
+            .command(&["configure", "set", "password", "-"])
+            .stdin(Stdio::from(child_input))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(message));
+        assert!(output.stdout.is_empty());
+        let mut remaining = Vec::new();
+        input.read_to_end(&mut remaining).unwrap();
+        assert!(remaining == b"toy-canary\n");
+        assert_eq!(std::fs::read_dir(&selected).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&home.0).unwrap().count(), 1);
+    }
+}
+
+#[test]
+fn latch_sources_are_validated_and_cannot_be_cleared() {
+    let home = Home::new();
+    let args = [
+        "--read-only=false",
+        "configure",
+        "set",
+        "read_only",
+        "false",
+    ];
+    let output = home
+        .command(&args)
+        .env("VNGCLOUD_READ_ONLY", " TrUe ")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("VNGCLOUD_READ_ONLY"));
+    let output = home
+        .command(&args)
+        .env("GREENNODE_READ_ONLY", "true")
+        .env("VNGCLOUD_READ_ONLY", "invalid")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("InvalidConfig"));
+    assert!(!home.0.join(".greennode").exists());
+}
+
+#[test]
+fn literal_secrets_are_refused_without_disclosure() {
+    let home = Home::new();
+    for key in ["password", "totp_secret", "vcdn_api_key", "client_secret"] {
+        let output = home.run(&["configure", "set", key, "toy-canary"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("must be set from stdin"));
+        assert!(!error.contains("toy-canary"));
+    }
+    assert!(!home.0.join(".greennode").exists());
+}
+
+#[test]
+fn stdin_strips_only_one_line_ending_and_enforces_the_byte_limit() {
+    let home = Home::new();
+    let args = ["configure", "set", "password", "-"];
+    let mut at_limit = vec![b'x'; 4094];
+    at_limit.extend_from_slice(b"\r\n");
+    let over_limit = vec![b'x'; 4097];
+    for (value, message) in [
+        (&b"\n"[..], "stdin had no value"),
+        (&b"toy-canary\n\n"[..], "newline"),
+        (&b"toy-canary\rtext"[..], "newline"),
+        (&over_limit[..], "larger than 4096 bytes"),
+    ] {
+        let output = home.with_stdin(&args, value);
+        assert_eq!(output.status.code(), Some(2));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(message));
+        assert!(!error.contains("toy-canary"));
+        assert!(output.stdout.is_empty());
+        assert!(!home.0.join(".greennode").exists());
+    }
+    let output = home.with_stdin(&args, &at_limit);
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    let contents = std::fs::read(home.0.join(".greennode/credentials")).unwrap();
+    let expected = [b"[default]\npassword = ", &at_limit[..4094], b"\n"].concat();
+    assert!(contents == expected);
+    let output = home.run(&["configure", "get", "password"]);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"****\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn credentials_and_created_directory_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = Home::new();
+    let output = home.with_stdin(&["configure", "set", "password", "-"], b"toy-canary\n");
+    assert!(output.status.success());
+    let directory = home.0.join(".greennode");
+    for (path, mode) in [
+        (directory.clone(), 0o700),
+        (directory.join("credentials"), 0o600),
+    ] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+    assert!(directory.join("config.lock").is_file());
+    assert!(directory.join("credentials.lock").is_file());
+    assert!(!directory.join("config").exists());
+}
+
+#[test]
+fn editing_last_duplicate_preserves_bom_comments_and_other_sections() {
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    let config = directory.join("config");
+    let before = "\u{feff}; top\r\n[profile team]\r\nregion = han-2\r\n# keep\r\n[default]\r\nregion = han-1\r\n[profile team]\r\n  ReGiOn = old\r\n; tail\r\n";
+    std::fs::write(&config, before).unwrap();
+    let output = home.run(&["--profile", "team", "configure", "set", "region", "hcm-3"]);
+    assert!(output.status.success());
+    assert_eq!(
+        std::fs::read_to_string(config).unwrap(),
+        before.replace("= old", "= hcm-3")
+    );
+    let output = home.run(&["--profile", "team", "configure", "get", "region"]);
+    assert_eq!(output.stdout, b"hcm-3\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_write_target_into_real_legacy_tree_is_refused() {
+    use std::os::unix::fs::symlink;
+
+    let home = Home::new();
+    let legacy = home.0.join("renamed-legacy");
+    std::fs::create_dir(&legacy).unwrap();
+    symlink(&legacy, home.0.join(".vngcloud")).unwrap();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(legacy.join("config"), "[default]\nregion = han-1\n").unwrap();
+    symlink(legacy.join("config"), directory.join("config")).unwrap();
+    std::fs::write(directory.join("credentials"), "").unwrap();
+    let output = home.run(&["configure", "set", "region", "hcm-3"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("legacy"));
+    assert_eq!(
+        std::fs::read(legacy.join("config")).unwrap(),
+        b"[default]\nregion = han-1\n"
+    );
+    assert_eq!(std::fs::read_dir(&legacy).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+}
+
+#[test]
+fn latch_change_after_snapshot_refuses_publication() {
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    let config = directory.join("config");
+    std::fs::write(&config, "[default]\nread_only = false\n").unwrap();
+    let mut input = ChangeBeforeInput(Some(|| {
+        std::fs::write(&config, "[default]\nread_only = true\n")
+    }));
+    let (exit, stdout, stderr) = invoke_set(&home, &mut input, false);
+    assert_eq!(exit, ExitCode::from(2));
+    assert!(input.0.is_none());
+    assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
+    assert!(stdout.is_empty());
+    assert!(!directory.join("credentials").exists());
+    assert!(directory.join("config.lock").is_file());
+    assert!(directory.join("credentials.lock").is_file());
+    assert_eq!(
+        std::fs::read(config).unwrap(),
+        b"[default]\nread_only = true\n"
+    );
+}
+
+struct ChangeBeforeInput<F>(Option<F>);
+
+impl<F: FnOnce() -> std::io::Result<()>> std::io::Read for ChangeBeforeInput<F> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let Some(change) = self.0.take() else {
+            return Ok(0);
+        };
+        change()?;
+        (&b"toy-canary\n"[..]).read(buffer)
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn config_alias_changed_after_snapshot_refuses_a_credentials_edit() {
+    use std::os::unix::fs::symlink;
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    let first = home.0.join("first");
+    let second = home.0.join("second");
+    for path in [&first, &second] {
+        std::fs::write(path, "[default]\n").unwrap();
+    }
+    let config = directory.join("config");
+    symlink(&first, &config).unwrap();
+    let mut input = ChangeBeforeInput(Some(|| {
+        std::fs::remove_file(&config)?;
+        symlink(&second, &config)
+    }));
+
+    let (exit, stdout, stderr) = invoke_set(&home, &mut input, false);
+    assert_eq!(exit, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("configuration paths changed"));
+    assert!(home.0.join("first.lock").is_file());
+    assert!(!home.0.join("second.lock").exists());
+    assert!(!directory.join("credentials").exists());
+}
+
+fn invoke_set(
+    home: &Home,
+    input: &mut dyn std::io::Read,
+    terminal: bool,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    use greennode::cli::{Invocation, run_invocation};
+    use greennode_sdk::{Clock, RequestContext, SystemClock};
+    use std::ffi::OsString;
+    use std::time::Duration;
+    let (context, _) = RequestContext::new();
+    let context = context.child_with_deadline(SystemClock.monotonic_now() + Duration::from_secs(5));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let exit = runtime.block_on(run_invocation(Invocation {
+        args: ["greennode", "configure", "set", "password", "-"]
+            .map(OsString::from)
+            .into(),
+        source: home,
+        stdin: input,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+        stdin_terminal: terminal,
+        stdout_terminal: false,
+        stderr_terminal: false,
+        clock: &SystemClock,
+        context: &context,
+    }));
+    (exit, stdout, stderr)
+}
+
+#[test]
+fn terminal_stdin_is_refused_before_reading() {
+    struct Unreadable;
+    impl std::io::Read for Unreadable {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            panic!("terminal stdin was read");
+        }
+    }
+
+    let home = Home::new();
+    let (exit, stdout, stderr) = invoke_set(&home, &mut Unreadable, true);
+    assert_eq!(exit, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("refuses a terminal on stdin"));
+    assert!(!home.0.join(".greennode").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn hard_linked_lock_files_are_acquired_once() {
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join("config.lock"), []).unwrap();
+    std::fs::hard_link(
+        directory.join("config.lock"),
+        directory.join("credentials.lock"),
+    )
+    .unwrap();
+
+    let (exit, stdout, stderr) = invoke_set(&home, &mut &b"toy-canary\n"[..], false);
+    assert_eq!(exit, ExitCode::SUCCESS);
+    assert!(stdout.is_empty() && stderr.is_empty());
+    assert!(directory.join("credentials").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_cancels_set_while_stdin_is_waiting_for_eof() {
+    use rustix::process::{Pid, Signal, kill_process};
+    use std::io::Write;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let home = Home::new();
+    let (input, mut writer) = UnixStream::pair().unwrap();
+    writer.write_all(b"x").unwrap();
+    let child_input = OwnedFd::from(input.try_clone().unwrap());
+    let mut child = home
+        .command(&["configure", "set", "password", "-"])
+        .stdin(Stdio::from(child_input))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while rustix::io::ioctl_fionread(&input).unwrap() != 0 {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("child did not begin reading stdin");
+        }
+        std::thread::yield_now();
+    }
+    let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
+    kill_process(pid, Signal::TERM).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("child did not cancel its stdin read");
+        }
+        std::thread::yield_now();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(!home.0.join(".greennode").exists());
+    drop(writer);
 }

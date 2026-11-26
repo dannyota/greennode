@@ -416,11 +416,17 @@ name = "greennode"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "getrandom 0.4.3",
  "greennode-sdk",
+ "rustix",
  "ryu",
+ "same-file",
  "serde",
  "serde_json",
  "tokio",
+ "winapi-util",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
