@@ -1,0 +1,8 @@
+{
+  "Quota": {
+    "MaxClusters": 1,
+    "NumClusters": 2,
+    "MaxNodeGroupsPerCluster": 3,
+    "MaxNodesPerNodeGroup": 4
+  }
+}

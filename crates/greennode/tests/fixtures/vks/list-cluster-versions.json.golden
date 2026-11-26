@@ -1,0 +1,46 @@
+{
+  "Items": [
+    {
+      "Version": "synthetic-0",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-1",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-2",
+      "Enable": true,
+      "Stage": "RAPID",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-3",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-4",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-5",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    },
+    {
+      "Version": "synthetic-6",
+      "Enable": true,
+      "Stage": "STABLE",
+      "DeprecatedAt": ""
+    }
+  ]
+}

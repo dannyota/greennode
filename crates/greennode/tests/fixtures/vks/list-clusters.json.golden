@@ -1,0 +1,21 @@
+{
+  "Items": [
+    {
+      "ID": "cls-1",
+      "Name": "\u003caccount\u003e",
+      "Description": "\u003caccount\u003e",
+      "Status": "UNKNOWN",
+      "ReleaseChannel": "STABLE",
+      "Version": "synthetic",
+      "AZStrategy": "UNKNOWN",
+      "CreatedAt": "synthetic-date",
+      "UpdatedAt": "synthetic-date",
+      "NumNodes": 3,
+      "EnablePrivateCluster": true
+    }
+  ],
+  "Page": 1,
+  "PageSize": 2,
+  "TotalPage": 3,
+  "TotalItem": 5
+}
