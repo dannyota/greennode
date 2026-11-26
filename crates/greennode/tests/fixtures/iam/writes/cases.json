@@ -1,0 +1,247 @@
+[
+  {
+    "name": "create-group",
+    "args": [
+      "create-group",
+      "--name",
+      "team",
+      "--description",
+      "note"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 201,
+        "body": {
+          "id": "group-1"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "body": {
+          "id": "group-1",
+          "name": "team",
+          "description": "note",
+          "mode": "iam",
+          "root": "123",
+          "iamUsers": [],
+          "policies": [],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "update-group",
+    "args": [
+      "update-group",
+      "--group-id",
+      "group-1",
+      "--description",
+      "note"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "body": {
+          "id": "group-1",
+          "name": "team",
+          "description": "old",
+          "mode": "iam",
+          "root": "123",
+          "iamUsers": [],
+          "policies": [],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "PATCH",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 204,
+        "body": null
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "body": {
+          "id": "group-1",
+          "name": "team",
+          "description": "note",
+          "mode": "iam",
+          "root": "123",
+          "iamUsers": [],
+          "policies": [],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "delete-group",
+    "args": [
+      "delete-group",
+      "--group-id",
+      "group-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "user-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "body": {
+          "id": "group-1",
+          "name": "team",
+          "description": "note",
+          "mode": "iam",
+          "root": "123",
+          "iamUsers": [],
+          "policies": [],
+          "createdAt": 1000
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "group-in-use",
+    "args": [
+      "delete-group",
+      "--group-id",
+      "group-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "user-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 200,
+        "body": {
+          "id": "group-1",
+          "name": "team",
+          "description": "note",
+          "mode": "iam",
+          "root": "123",
+          "iamUsers": [
+            "user-2"
+          ],
+          "policies": [],
+          "createdAt": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "group-caller-type",
+    "args": [
+      "delete-group",
+      "--group-id",
+      "group-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "user-1",
+          "userType": "root-user"
+        }
+      }
+    ]
+  },
+  {
+    "name": "create-group-unconfirmed",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 201,
+        "body": {
+          "id": "group-1"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/groups/group-1",
+        "status": 404,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "create-group-missing-id",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 201,
+        "body": {}
+      }
+    ]
+  },
+  {
+    "name": "create-group-uncertain",
+    "args": [
+      "create-group",
+      "--name",
+      "team"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/groups",
+        "status": 502,
+        "body": {}
+      }
+    ]
+  }
+]

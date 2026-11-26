@@ -295,7 +295,7 @@ impl<T: Wire> Output for Body<T> {
             (true, label.is_some(), operation.retry),
             &response.credentials,
         )?;
-        if body.is_empty() && operation.allow_empty {
+        if operation.no_output || (body.is_empty() && operation.allow_empty) {
             return Ok(Self::default());
         }
         let body = text::go_json(&body);

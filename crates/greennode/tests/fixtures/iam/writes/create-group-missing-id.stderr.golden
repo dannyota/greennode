@@ -1,0 +1,1 @@
+{"error":{"code":"RequestFailed","message":"create response had no id; a group may exist, check with list-groups","operation":"iam.CreateGroup"}}

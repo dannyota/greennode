@@ -1,0 +1,1 @@
+{"error":{"code":"ResourceInUse","message":"iam: refused: resource in use: iam.DeleteGroup: the group has a member or a policy"}}

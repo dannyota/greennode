@@ -2,6 +2,37 @@
 
 # CLI: IAM
 
+## create-group
+
+Kind: Write.
+
+Creates an IAM-mode group with no members or policies. If the outcome is
+uncertain, list groups before repeating the command.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--description` | `string` |          |
+
+```sh
+greennode iam create-group --name <name>
+```
+
+## delete-group
+
+Kind: Write, destructive.
+
+Requires a recognized caller type and a verified IAM group with no users or
+policies. An attachment returns `ResourceInUse`.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--group-id` | `string` | yes      |
+
+```sh
+greennode iam delete-group --group-id <group-id> --yes
+```
+
 ## get-caller-identity
 
 Kind: Read.
@@ -222,4 +253,21 @@ policies and memberships.
 
 ```sh
 greennode iam list-users
+```
+
+## update-group
+
+Kind: Write.
+
+Reads the current name when `--name` is omitted. Omitting `--description`
+preserves it. Reads the group again after a successful update.
+
+| Flag            | Type      | Required |
+| --------------- | --------- | -------- |
+| `--group-id`    | `string`  | yes      |
+| `--name`        | `*string` |          |
+| `--description` | `*string` |          |
+
+```sh
+greennode iam update-group --group-id <group-id> --description <description>
 ```

@@ -1,0 +1,1 @@
+{"error":{"code":"PrivilegedChange","message":"iam: refused: target is protected: iam.DeleteGroup: the caller's user type is not recognized"}}

@@ -1,0 +1,262 @@
+use bytes::Bytes;
+use http::{Method, StatusCode};
+use serde_json::Value;
+
+use super::wire::{Body, Wire};
+use super::{Api, Client, DEFAULT_CAP, OBJECT_CAP, read_operation, require_identity, screen_error};
+use crate::error::RecoveryAdvice;
+use crate::wire::product::{
+    evidence::Evidence,
+    operation::{self, Operation},
+    options::Options,
+    redirect::{Classification, Retry},
+};
+use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+
+/// IAM-specific write outcome, available through [`Error::detail`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum WriteError {
+    /// The caller type cannot be classified for the guard.
+    PrivilegedChange,
+    /// A resource still has an attachment that prevents deletion.
+    ResourceInUse,
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+impl Client {
+    pub(super) fn write_evidence<O>(
+        &self,
+        ctx: &RequestContext,
+        op: &str,
+        ids: &[(&str, &str)],
+        fields: &[&str],
+    ) -> Result<Evidence, Failure<O>> {
+        super::validate_ids::<O>(op, ids).map_err(guard_failed)?;
+        let mut jitter = || self.session.retry_jitter();
+        let runtime = self
+            .session
+            .runtime(ctx, &mut jitter)
+            .map_err(|e| not_sent(*e))?;
+        let mut evidence = Evidence::new();
+        if let Some(configured) = runtime.configured_credentials {
+            evidence.absorb(configured);
+        }
+        if ids
+            .iter()
+            .map(|(_, id)| *id)
+            .chain(fields.iter().copied())
+            .any(|field| evidence.text_reflects(field))
+        {
+            return Err(withheld_operand());
+        }
+        Ok(evidence)
+    }
+
+    pub(super) async fn write<T: Wire, O>(
+        &self,
+        ctx: &RequestContext,
+        api: Api,
+        operation: &Operation,
+        path: &[&str],
+        body: Option<Value>,
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
+        let session = &self.session;
+        let endpoints = session.endpoints();
+        let base = match api {
+            Api::Accounts => endpoints.dashboard.as_ref(),
+            Api::Policies => endpoints.iam.as_ref(),
+        }
+        .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
+        let body = match body {
+            Some(body) => {
+                if evidence.reflected_in(&body) {
+                    return Err(withheld_operand());
+                }
+                serde_json::to_vec(&body)
+                    .map(Bytes::from)
+                    .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?
+            }
+            None => Bytes::new(),
+        };
+        let mut jitter = || session.retry_jitter();
+        let runtime = session
+            .runtime(ctx, &mut jitter)
+            .map_err(|e| not_sent(*e))?;
+        operation::execute_with_evidence::<Body<T>>(
+            runtime,
+            base,
+            operation,
+            &Options::DEFAULT,
+            path,
+            &[],
+            session.bearer_source(),
+            body,
+            evidence,
+        )
+        .await
+        .map(|(_, Body(value))| value)
+        .map_err(|failed| {
+            let (error, _, dispatch) = failed.into_parts();
+            Failure::new(screen_error(error, evidence), None, dispatch)
+        })
+    }
+
+    pub(super) async fn require_classified_caller<O>(
+        &self,
+        ctx: &RequestContext,
+        op: &str,
+        evidence: &mut Evidence,
+    ) -> Result<(), Failure<O>> {
+        let caller: super::GetCallerIdentityOutput = self
+            .fetch::<_, O>(
+                ctx,
+                Api::Accounts,
+                &read_operation(
+                    "iam.GetCallerIdentity",
+                    "accounts-api/v1/auth/userinfo",
+                    OBJECT_CAP,
+                    false,
+                ),
+                &[],
+                &[],
+                evidence,
+            )
+            .await
+            .map_err(guard_failed)?;
+        if [&caller.user_id, &caller.user_type, &caller.username]
+            .into_iter()
+            .any(|v| evidence.text_reflects(v))
+            || evidence.reflected_in(&Value::from(caller.account_id))
+        {
+            return Err(guard_refusal(
+                "iam: iam.GetCallerIdentity: unsafe caller identity",
+                None,
+            ));
+        }
+        if !matches!(
+            caller.user_type.as_str(),
+            "iam-user" | "user-sa" | "service-sa"
+        ) {
+            return Err(guard_refusal(
+                &format!(
+                    "iam: refused: target is protected: {op}: the caller's user type is not recognized"
+                ),
+                Some(WriteError::PrivilegedChange),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn write_operation(
+    id: &'static str,
+    method: Method,
+    template: &'static str,
+    retry: Retry,
+    success: &'static [StatusCode],
+) -> Operation {
+    Operation {
+        method,
+        class: Classification::Write,
+        retry,
+        success,
+        allow_recovery: !matches!(retry, Retry::Once),
+        no_output: success == [StatusCode::NO_CONTENT],
+        no_redirect: true,
+        ..read_operation(id, template, DEFAULT_CAP, true)
+    }
+}
+
+pub(super) fn guard_failed<O>(failed: Failure<O>) -> Failure<O> {
+    not_sent(failed.into_parts().0)
+}
+
+pub(super) fn not_sent<O>(error: Error) -> Failure<O> {
+    Failure::new(error, None, WriteDispatch::NotSent)
+}
+
+fn withheld_operand<O>() -> Failure<O> {
+    not_sent(
+        super::invalid_input::<O>("IAM request operand withheld".into())
+            .into_parts()
+            .0,
+    )
+}
+
+pub(super) fn guard_refusal<O>(message: &str, detail: Option<WriteError>) -> Failure<O> {
+    let error = Error::new(ErrorClass::Api).with_outer_detail(RecoveryAdvice::new(message));
+    not_sent(match detail {
+        Some(detail) => error.with_outer_detail(detail),
+        None => error,
+    })
+}
+
+pub(super) fn settle<O>(
+    failed: Failure<O>,
+    partial: O,
+    message: &str,
+    evidence: &Evidence,
+) -> Failure<O> {
+    let cause = failed.into_parts().0;
+    let reason = error_reason(&cause);
+    let message = format!("{message}: vngcloud: write outcome not confirmed: {reason}");
+    let message = if evidence.text_reflects(&message) {
+        "vngcloud: write outcome not confirmed"
+    } else {
+        &message
+    };
+    let error = Error::new(ErrorClass::NotSettled)
+        .with_cause(cause)
+        .with_outer_detail(RecoveryAdvice::new(message));
+    Failure::new(
+        error,
+        evidence.can_retain_partial().then_some(partial),
+        WriteDispatch::MayHaveBeenSent,
+    )
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+pub(super) fn confirmed_identity<O>(
+    actual: &str,
+    expected: &str,
+    message: &'static str,
+    evidence: &Evidence,
+) -> Result<(), Failure<O>> {
+    if evidence.text_reflects(actual) || evidence.text_reflects(expected) {
+        return Err(guard_refusal(message, None));
+    }
+    require_identity(actual, expected, message)
+}
+
+pub(super) fn error_reason(error: &Error) -> String {
+    if let Some(advice) = error.detail::<RecoveryAdvice>() {
+        return advice.message().to_owned();
+    }
+    let Some(api) = error.api_error() else {
+        return if error.has_identity(ErrorClass::Cancelled) {
+            "context canceled"
+        } else if error.has_identity(ErrorClass::DeadlineExceeded) {
+            "context deadline exceeded"
+        } else {
+            "request failed"
+        }
+        .to_owned();
+    };
+    let mut reason = String::new();
+    if !api.operation().is_empty() {
+        reason.push_str(api.operation());
+        reason.push_str(": ");
+    }
+    reason.push_str(if api.message().is_empty() {
+        "request failed"
+    } else {
+        api.message()
+    });
+    if let Some(status) = api.status() {
+        use std::fmt::Write;
+        let _ = write!(reason, " (status {status})");
+    }
+    reason
+}
