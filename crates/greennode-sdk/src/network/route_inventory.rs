@@ -293,7 +293,7 @@ impl Client {
                 error.class(),
                 ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
             ) {
-                return error;
+                return error.screen_api(&|text| evidence.text_reflects(text));
             }
             if error.is_body_too_large() {
                 if read.kind != ResponseKind::Standard {
@@ -453,8 +453,7 @@ pub(super) fn ids_reflect<T: serde::Serialize>(value: &T, evidence: &Evidence) -
     fn scan(value: &serde_json::Value, evidence: &Evidence, numeric: bool) -> bool {
         match value {
             serde_json::Value::Number(number) if numeric => {
-                evidence.credentials().has_numeric_product_credential()
-                    || evidence.text_reflects(&number.to_string())
+                evidence.text_reflects(&number.to_string())
                     || number.as_f64().is_none_or(|value| {
                         [
                             crate::output_number::Style::Json,

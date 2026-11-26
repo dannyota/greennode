@@ -146,6 +146,65 @@ async fn vpn_cancellation_before_headers_preserves_class() {
 }
 
 #[tokio::test]
+async fn cancellation_screens_operation_matching_bearer() {
+    let (sent, ready) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let token = "network.ListVPNConnections";
+    let config = config(Product::Vnetwork, &server, token, Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, cancel) = RequestContext::new();
+    let cancel_when_started = async {
+        ready.await.unwrap();
+        cancel.cancel();
+    };
+    let (result, ()) = tokio::join!(
+        client.list_vpn_connections(&ctx, ListVpnConnectionsInput::default()),
+        cancel_when_started
+    );
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::Cancelled);
+    assert!(
+        !failure
+            .error()
+            .api_error()
+            .unwrap()
+            .operation()
+            .contains(token)
+    );
+    assert!(!format!("{} {:?}", failure.error(), failure.error()).contains(token));
+}
+
+#[tokio::test]
+async fn numeric_bearer_allows_nonmatching_inventory_numbers() {
+    let vpn_server = Server::start(vec![response(
+        "200 OK",
+        r#"{"success":true,"data":[{"uuid":"vpn-1"}],"page":1,"size":10,"totalPage":1,"total":1}"#,
+    )]);
+    let vpn_config = config(Product::Vnetwork, &vpn_server, "937", Some("proj-1"));
+    let client = Client::new(&vpn_config);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client
+            .list_vpn_connections(&ctx, ListVpnConnectionsInput::default())
+            .await
+            .is_ok()
+    );
+
+    let link_server = Server::start(vec![response(
+        "200 OK",
+        r#"{"listData":[{"uuid":"link-1","circuitId":12}],"page":1,"pageSize":10,"totalPage":1,"totalItem":1}"#,
+    )]);
+    let config = config(Product::Vserver, &link_server, "937", Some("proj-1"));
+    let client = Client::new(&config);
+    assert!(
+        client
+            .list_interconnects(&ctx, ListInterconnectsInput::default())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn route_table_redirect_preserves_status_and_withholds_message() {
     let server = Server::start(vec![Response::Http {
         status: "302 Found".into(),
