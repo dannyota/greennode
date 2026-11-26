@@ -137,12 +137,80 @@ impl<'a> Reads<'a> {
         error.screen_api(&|text| self.evidence.text_reflects(text))
     }
 
-    pub(super) fn sanitize<T: WireField>(&self, read: Read, mut output: T) -> Result<T, Error> {
+    pub(super) fn sanitize<T: WireField + serde::Serialize>(
+        &self,
+        read: Read,
+        mut output: T,
+    ) -> Result<T, Error> {
+        let value = serde_json::to_value(&output).map_err(|_| self.invalid(read))?;
+        if self.unsafe_output(&value, false) {
+            return Err(self.invalid(read));
+        }
         if output.redact(&self.evidence) {
             Ok(output)
         } else {
             Err(self.invalid(read))
         }
+    }
+
+    fn unsafe_output(&self, value: &serde_json::Value, identity: bool) -> bool {
+        match value {
+            serde_json::Value::String(text) if identity => self.evidence.id_reflects(text),
+            serde_json::Value::Number(number) => {
+                self.evidence.credentials().has_numeric_product_credential()
+                    || self.evidence.text_reflects(&number.to_string())
+            }
+            serde_json::Value::Array(items) => {
+                items.iter().any(|item| self.unsafe_output(item, identity))
+            }
+            serde_json::Value::Object(fields) => fields.iter().any(|(key, item)| {
+                self.unsafe_output(
+                    item,
+                    key.ends_with("ID") || key.ends_with("IDs") || key.ends_with("UUID"),
+                )
+            }),
+            _ => false,
+        }
+    }
+
+    pub(super) fn protected_output<T: serde::Serialize>(
+        &self,
+        read: Read,
+        output: &T,
+    ) -> Result<(), Error> {
+        let value =
+            serde_json::to_value(output).map_err(|_| self.screen(read.protected_invalid()))?;
+        let text =
+            serde_json::to_string(&value).map_err(|_| self.screen(read.protected_invalid()))?;
+        if self.evidence.text_reflects(&text)
+            || self.evidence.reflected_in(&value)
+            || self.unsafe_output(&value, false)
+        {
+            return Err(self.screen(read.protected_invalid()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn append_bounded<T: serde::Serialize>(
+        &self,
+        read: Read,
+        retained: &mut usize,
+        items: &mut Vec<T>,
+        rows: Vec<T>,
+    ) -> Result<(), Error> {
+        for row in rows {
+            let length = serde_json::to_vec(&row)
+                .map_err(|_| self.invalid(read))?
+                .len();
+            *retained = retained
+                .checked_add(length + 1)
+                .ok_or_else(|| self.invalid(read))?;
+            if *retained > CAP {
+                return Err(self.invalid(read));
+            }
+            items.push(row);
+        }
+        Ok(())
     }
 
     pub(super) fn invalid(&self, read: Read) -> Error {
@@ -279,6 +347,9 @@ impl<'a> Reads<'a> {
                 read.invalid()
             })
         })?;
+        if protected && self.evidence.text_reflects(&text) {
+            return Err(self.invalid(read));
+        }
         Ok(text.into_owned())
     }
 
@@ -340,6 +411,7 @@ impl<'a> Reads<'a> {
                 || !(0..=MAX_PAGES).contains(&out.total_page)
                 || !(0..=MAX_ROWS).contains(&out.total_item)
                 || count > out.page_size
+                || count > DEFAULT_PAGE_SIZE
                 || (out.total_item > 0 && (out.total_page == 0 || count == 0))
                 || *metadata.get_or_insert(current) != current
             {
@@ -368,13 +440,16 @@ impl<'a> Reads<'a> {
         Err(self.invalid(invalid_read))
     }
 
-    pub(super) fn sanitize_page<T: WireField>(
+    pub(super) fn sanitize_page<T: WireField + serde::Serialize>(
         &self,
         read: Read,
         page: PagedList<T>,
     ) -> Result<PagedList<T>, Error> {
         let mut metadata = [page.page, page.page_size, page.total_page, page.total_item];
-        if !metadata
+        if metadata.iter().any(|value| {
+            self.evidence.credentials().has_numeric_product_credential()
+                || self.evidence.text_reflects(&value.to_string())
+        }) || !metadata
             .iter_mut()
             .all(|value| value.redact(&self.evidence))
         {

@@ -75,12 +75,9 @@ impl Client {
                     .is_some_and(|status| (500..600).contains(&status))
                 {
                     let result = reads
-                        .complete::<NetworkAcl>(
-                            LIST_ACLS,
-                            LIST_ACLS,
-                            PathIds::WithUnderscore,
-                            |acl| &acl.uuid,
-                        )
+                        .complete::<NetworkAcl>(LIST_ACLS, LIST_ACLS, PathIds::Strict, |acl| {
+                            &acl.uuid
+                        })
                         .await;
                     if result
                         .is_ok_and(|acls| acls.iter().all(|acl| acl.uuid != *id && acl.id != *id))
@@ -165,12 +162,16 @@ impl Client {
         ctx: &RequestContext,
         _: ListAllSecurityGroupRulesInput,
     ) -> Result<ListAllSecurityGroupRulesOutput, Failure<ListAllSecurityGroupRulesOutput>> {
-        let mut reads = Reads::new(self, ctx).map_err(failure)?;
+        let ctx = ctx.child_with_deadline(
+            self.session.clock().monotonic_now() + std::time::Duration::from_secs(30),
+        );
+        let mut reads = Reads::new(self, &ctx).map_err(failure)?;
         let groups = reads
             .complete::<SecurityGroup>(LIST_GROUPS, ALL_RULES, PathIds::Strict, |group| &group.id)
             .await
             .map_err(failure)?;
         let mut items = Vec::new();
+        let mut retained = 0;
         for group in groups {
             if !reads.safe_identity(&group.id, PathIds::Strict) {
                 return Err(failure(reads.invalid(ALL_RULES)));
@@ -179,8 +180,11 @@ impl Client {
             let rows = rows
                 .filter(|rows| unique_type_ids(rows.iter().map(|rule| rule.id.as_str())))
                 .ok_or_else(|| failure(reads.invalid(ALL_RULES)))?;
-            items.extend(rows);
+            reads
+                .append_bounded(ALL_RULES, &mut retained, &mut items, rows)
+                .map_err(failure)?;
         }
+        reads.protected_output(ALL_RULES, &items).map_err(failure)?;
         let items = reads.sanitize(ALL_RULES, items).map_err(failure)?;
         Ok(List { items })
     }
@@ -206,7 +210,9 @@ async fn read_rules(
 
 fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
     let envelope = objects(raw)?;
-    let acl: NetworkAcl = field(&envelope, "data")?;
+    let Ok(acl): Result<NetworkAcl, ()> = field(&envelope, "data") else {
+        return Ok(None);
+    };
     let Some(data) = envelope.get("data") else {
         return Ok(None);
     };
@@ -234,5 +240,5 @@ fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
 
 fn unique_type_ids<'a>(mut ids: impl Iterator<Item = &'a str>) -> bool {
     let mut seen = HashSet::new();
-    ids.all(|id| PathIds::WithUnderscore.allows(id) && seen.insert(id))
+    ids.all(|id| PathIds::Strict.allows(id) && seen.insert(id))
 }
