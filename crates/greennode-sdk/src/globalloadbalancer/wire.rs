@@ -235,7 +235,7 @@ impl<T: WireField> Output for Field<T> {
     }
 }
 
-fn go_json(bytes: &[u8]) -> Cow<'_, str> {
+pub(super) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     let text = go_utf8(bytes);
     let bytes = text.as_bytes();
     let mut normalized = String::new();

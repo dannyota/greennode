@@ -39,10 +39,11 @@ impl Client {
         let trusted = self.session.auth_kind() == AuthKind::IamUser
             && self.session.uses_default_auth_endpoints()
             && same_base(&current.database, &default.database);
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         let trusted = trusted
-            || (self.session.is_database_write_fixture()
-                && self.session.auth_kind() == AuthKind::Static);
+            || self
+                .session
+                .is_write_fixture(crate::testing::Product::Database);
         if self.supported_region && trusted && same_base(&current.vserver, &default.vserver) {
             return Ok(());
         }

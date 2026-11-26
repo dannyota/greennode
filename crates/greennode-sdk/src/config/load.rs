@@ -183,12 +183,10 @@ fn load_local(
     if let Some(end) = check() {
         return Err(end.into());
     }
-    #[cfg(feature = "test-support")]
-    if let Some(fixture) = options.billing_fixture {
-        session
-            .set_billing_fixture(&fixture)
-            .map_err(|error| *error)?;
-    }
+    #[cfg(any(test, feature = "test-support"))]
+    session
+        .set_product_fixtures(&options.product_fixtures)
+        .map_err(|error| *error)?;
     Ok(Config {
         region: region.clone(),
         settings: resolved.profile_settings,

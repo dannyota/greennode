@@ -32,7 +32,7 @@ mod secret;
 mod session;
 mod source;
 pub mod tagging;
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod testing;

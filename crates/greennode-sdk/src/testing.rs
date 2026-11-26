@@ -26,7 +26,7 @@ pub use crate::wire::test_server::{Response, Server};
 
 macro_rules! products {
     ($( $variant:ident => $field:ident ),+ $(,)?) => {
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, PartialEq, Eq)]
         pub enum Product { $( $variant ),+ }
         impl Product {
             pub(crate) fn override_slot(self, options: &mut crate::EndpointOverrides) -> &mut Option<String> {
@@ -44,7 +44,6 @@ products! {
     ContainerRegistry => container_registry, Portal => portal, Billing => billing,
     Monitor => monitor, Iam => iam, Storage => storage, Cdn => cdn, CdnDocs => cdn_docs, Vks => vks,
     VserverBackup => vserver_backup, BackupCenter => backup_center, Database => database,
-    DatabaseWrite => database,
 }
 
 pub fn with_product_loopback(
@@ -52,7 +51,22 @@ pub fn with_product_loopback(
     options: crate::ConfigOptions,
     server: &Server,
 ) -> crate::ConfigOptions {
-    options.with_product_loopback(product, server)
+    options.with_product_loopback(product, server, false)
+}
+
+pub fn with_write_loopback(
+    product: Product,
+    options: crate::ConfigOptions,
+    server: &Server,
+) -> crate::ConfigOptions {
+    options.with_product_loopback(product, server, true)
+}
+
+#[derive(Clone)]
+pub(crate) struct ProductFixture {
+    pub(crate) product: Product,
+    pub(crate) trust: crate::wire::connection::FixtureTrust,
+    pub(crate) write: bool,
 }
 
 pub fn with_billing_loopback(

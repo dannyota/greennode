@@ -20,7 +20,7 @@ use tower_service::Service;
 #[derive(Clone)]
 pub(crate) struct DialConnector<C = HttpConnector>(
     C,
-    #[cfg(feature = "test-support")] Option<std::net::SocketAddr>,
+    #[cfg(any(test, feature = "test-support"))] Option<Arc<[std::net::SocketAddr]>>,
 );
 
 pub(crate) struct DialFailure(Box<dyn Error + Send + Sync>);
@@ -60,27 +60,22 @@ where
         let Some(host) = uri.host().and_then(test_host) else {
             return Box::pin(async { Err(test_dial_failure()) });
         };
-        #[cfg(feature = "test-support")]
-        let uri = if let Some(address) = self.1 {
-            if !uri
-                .host()
-                .is_some_and(|host| fixture_host(address, host, uri.port_u16().unwrap_or(443)))
-            {
+        #[cfg(any(test, feature = "test-support"))]
+        let host = if let Some(addresses) = &self.1 {
+            let Some(address) = addresses.iter().find(|&&address| {
+                uri.host()
+                    .is_some_and(|host| fixture_host(address, host, uri.port_u16().unwrap_or(443)))
+            }) else {
                 return Box::pin(async {
                     Err(DialFailure(Box::new(std::io::Error::other(
                         "endpoint outside the test fixture",
                     ))))
                 });
-            }
-            match format!("https://{address}").parse() {
-                Ok(pinned) => pinned,
-                Err(error) => return Box::pin(async move { Err(DialFailure(Box::new(error))) }),
-            }
+            };
+            TestHost::Ip(address.ip())
         } else {
-            uri
+            host
         };
-        #[cfg(feature = "test-support")]
-        let host = self.1.map_or(host, |address| TestHost::Ip(address.ip()));
         #[cfg(any(test, feature = "test-support"))]
         {
             let port = uri.port_u16().unwrap_or(443);
@@ -177,10 +172,10 @@ pub(crate) enum HeadLimit {
 
 pub(crate) struct Trust(
     RootCertStore,
-    #[cfg(feature = "test-support")] Option<std::net::SocketAddr>,
+    #[cfg(any(test, feature = "test-support"))] Option<Arc<[std::net::SocketAddr]>>,
 );
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 fn fixture_host(address: std::net::SocketAddr, host: &str, port: u16) -> bool {
     let host = host
         .strip_prefix('[')
@@ -191,14 +186,14 @@ fn fixture_host(address: std::net::SocketAddr, host: &str, port: u16) -> bool {
         && (host.eq_ignore_ascii_case("localhost") || host.parse() == Ok(address.ip()))
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
 pub(crate) struct FixtureTrust {
     address: std::net::SocketAddr,
     root: rustls::pki_types::CertificateDer<'static>,
 }
 
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 impl FixtureTrust {
     pub(crate) fn new(server: &crate::wire::test_server::Server) -> Self {
         let (address, root) = server.fixture();
@@ -217,10 +212,16 @@ impl FixtureTrust {
         })
     }
 
-    pub(crate) fn trust(&self) -> Result<Trust, rustls::Error> {
+    pub(crate) fn trust<'a>(
+        fixtures: impl Iterator<Item = &'a Self>,
+    ) -> Result<Trust, rustls::Error> {
         let mut roots = RootCertStore::empty();
-        roots.add(self.root.clone())?;
-        Ok(Trust(roots, Some(self.address)))
+        let mut addresses = Vec::new();
+        for fixture in fixtures {
+            roots.add(fixture.root.clone())?;
+            addresses.push(fixture.address);
+        }
+        Ok(Trust(roots, Some(addresses.into())))
     }
 }
 
@@ -228,7 +229,7 @@ impl Trust {
     fn roots(roots: RootCertStore) -> Self {
         Self(
             roots,
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             None,
         )
     }
@@ -277,7 +278,7 @@ pub(crate) fn client(
         .enable_http1()
         .wrap_connector(DialConnector(
             http,
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             trust.1,
         ));
     let mut builder = HyperClient::builder(TokioExecutor::new());
@@ -326,7 +327,7 @@ mod tests {
         let recording = RecordingConnector::default();
         let mut connector = super::DialConnector(
             recording.clone(),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             None,
         );
         for uri in ["https://signin.greennode.ai", "https://192.0.2.1"] {
@@ -346,7 +347,7 @@ mod tests {
         let recording = RecordingConnector::default();
         let mut connector = super::DialConnector(
             recording.clone(),
-            #[cfg(feature = "test-support")]
+            #[cfg(any(test, feature = "test-support"))]
             None,
         );
         let _ = connector

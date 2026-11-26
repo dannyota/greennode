@@ -1,5 +1,7 @@
 use greennode::cli::{Invocation, Stdin, run_invocation};
-use greennode_sdk::testing::{Product, Response, Server, with_product_loopback};
+use greennode_sdk::testing::{
+    Product, Response, Server, with_product_loopback, with_write_loopback,
+};
 use greennode_sdk::{ConfigOptions, ConfigSource, RequestContext, Secret, SystemClock};
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
@@ -20,19 +22,24 @@ struct Case {
     goldens: [&'static [u8]; 3],
 }
 fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
-    invoke_using(args, server, Product::Database, &mut std::io::empty())
+    invoke_using(args, server, false, &mut std::io::empty())
 }
 
 fn invoke_using(
     args: &[&str],
     server: &Server,
-    product: Product,
+    write: bool,
     stdin: &mut dyn Stdin,
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-    let config_options = with_product_loopback(
-        product,
+    let configure = if write {
+        with_write_loopback
+    } else {
+        with_product_loopback
+    };
+    let config_options = configure(
+        Product::Database,
         ConfigOptions::default()
             .with_project_id("project-1".into())
             .with_static_token(Secret::new("toy-cli-bearer")),
@@ -301,7 +308,7 @@ fn database_write_success_matches_all_go_renderers() {
         let (status, stdout, stderr) = invoke_using(
             &create_args(password_path, format),
             &server,
-            Product::DatabaseWrite,
+            true,
             &mut line.as_bytes(),
         );
         assert_eq!(status, ExitCode::SUCCESS);
@@ -330,7 +337,7 @@ fn database_write_success_matches_all_go_renderers() {
                 format,
             ],
             &server,
-            Product::DatabaseWrite,
+            true,
             &mut std::io::empty(),
         );
         assert_eq!(status, ExitCode::SUCCESS);
@@ -355,12 +362,7 @@ fn database_partial_outputs_match_go_without_querying_unconfirmed_data() {
     let server = Server::start(create_replies(failed.as_bytes()));
     let mut args = create_args("-", "json").to_vec();
     args.extend(["--query", "Instance.Name"]);
-    let (status, stdout, stderr) = invoke_using(
-        &args,
-        &server,
-        Product::DatabaseWrite,
-        &mut PASSWORD.as_bytes(),
-    );
+    let (status, stdout, stderr) = invoke_using(&args, &server, true, &mut PASSWORD.as_bytes());
     assert_eq!(status, ExitCode::FAILURE);
     assert_eq!(
         stdout,
@@ -379,7 +381,7 @@ fn database_partial_outputs_match_go_without_querying_unconfirmed_data() {
             "--yes",
         ],
         &server,
-        Product::DatabaseWrite,
+        true,
         &mut std::io::empty(),
     );
     assert_eq!(status, ExitCode::FAILURE);
@@ -405,12 +407,7 @@ fn database_password_input_refuses_unsafe_sources_before_requests() {
     ] {
         let mut args = create_args("-", "json");
         args[4] = json;
-        let (status, stdout, stderr) = invoke_using(
-            &args,
-            &server,
-            Product::DatabaseWrite,
-            &mut input.as_bytes(),
-        );
+        let (status, stdout, stderr) = invoke_using(&args, &server, true, &mut input.as_bytes());
         assert_eq!(status, ExitCode::from(2));
         assert!(stdout.is_empty());
         let stderr = String::from_utf8_lossy(&stderr);

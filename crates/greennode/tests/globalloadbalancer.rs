@@ -1,3 +1,6 @@
+#[path = "globalloadbalancer/writes.rs"]
+mod writes;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
@@ -25,6 +28,28 @@ fn response(status: &str, body: &str) -> Response {
 }
 
 async fn invoke(server: &Server, bearer: &str, args: &[&str]) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_options(
+        with_billing_loopback(options(server, bearer), server),
+        bearer,
+        args,
+    )
+    .await
+}
+
+fn options(server: &Server, bearer: &str) -> ConfigOptions {
+    ConfigOptions::default()
+        .with_static_token(Secret::new(bearer))
+        .with_endpoint_overrides(EndpointOverrides {
+            global_load_balancer: Some(format!("{}/glb-controller/", server.origin)),
+            ..Default::default()
+        })
+}
+
+async fn invoke_with_options(
+    config_options: ConfigOptions,
+    bearer: &str,
+    args: &[&str],
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let status = run_invocation(Invocation {
@@ -34,15 +59,7 @@ async fn invoke(server: &Server, bearer: &str, args: &[&str]) -> (ExitCode, Vec<
             .map(OsString::from)
             .collect(),
         source: &Source,
-        config_options: with_billing_loopback(
-            ConfigOptions::default()
-                .with_static_token(Secret::new(bearer))
-                .with_endpoint_overrides(EndpointOverrides {
-                    global_load_balancer: Some(format!("{}/glb-controller/", server.origin)),
-                    ..Default::default()
-                }),
-            server,
-        ),
+        config_options,
         stdin: &mut stdin,
         stdout: &mut stdout,
         stderr: &mut stderr,
