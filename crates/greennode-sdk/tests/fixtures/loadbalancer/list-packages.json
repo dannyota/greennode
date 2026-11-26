@@ -1,0 +1,10 @@
+{
+  "listData": [
+    {
+      "uuid": "package_1",
+      "name": "small",
+      "connectionNumber": 40,
+      "dataTransfer": 100
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "Items": [
+    {
+      "Key": "team",
+      "Value": "demo",
+      "CreatedAt": "",
+      "SystemTag": false
+    },
+    {
+      "Key": "system",
+      "Value": "ready",
+      "CreatedAt": "",
+      "SystemTag": true
+    }
+  ]
+}

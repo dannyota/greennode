@@ -1,0 +1,9 @@
+{
+  "uuid": "cert-1",
+  "name": "demo",
+  "notAfter": 1700000000,
+  "notBefore": 1600000000,
+  "inUse": true,
+  "privateKey": "ignored",
+  "certificate": "ignored"
+}

@@ -1,0 +1,30 @@
+{
+  "Items": [
+    {
+      "UUID": "policy-1",
+      "Name": "demo",
+      "Description": "",
+      "RedirectPoolID": "",
+      "RedirectPoolName": "",
+      "Action": "",
+      "RedirectURL": "https://demo.example",
+      "RedirectHTTPCode": 302,
+      "KeepQueryString": true,
+      "Position": 1,
+      "L7Rules": [
+        {
+          "UUID": "rule_1",
+          "CompareType": "",
+          "RuleValue": "/demo",
+          "RuleType": "PATH",
+          "ProvisioningStatus": "",
+          "OperatingStatus": ""
+        }
+      ],
+      "DisplayStatus": "",
+      "CreatedAt": "",
+      "UpdatedAt": "",
+      "ProgressStatus": ""
+    }
+  ]
+}

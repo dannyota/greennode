@@ -1,0 +1,11 @@
+{
+  "optimumPrice": 12500,
+  "originPrice": 15000,
+  "propertiesPrice": [
+    {
+      "name": "demo",
+      "description": "tiny",
+      "price": 12500
+    }
+  ]
+}

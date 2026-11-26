@@ -1,0 +1,20 @@
+{
+  "data": {
+    "uuid": "lb-1",
+    "name": "demo",
+    "zoneId": "zone-flat",
+    "zone": {
+      "uuid": "zone_api"
+    },
+    "internal": true,
+    "minSize": 1,
+    "nodes": [
+      {
+        "zoneName": "demo-zone",
+        "zoneId": "zone-1",
+        "subnetId": "subnet-1",
+        "status": "READY"
+      }
+    ]
+  }
+}

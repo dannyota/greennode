@@ -1,0 +1,18 @@
+{
+  "data": {
+    "uuid": "listener-1",
+    "name": "demo",
+    "protocol": "HTTP",
+    "protocolPort": 80,
+    "connectionLimit": -1,
+    "certificateAuthorities": [],
+    "defaultCertificateAuthority": null,
+    "clientCertificateAuthentication": "",
+    "insertHeaders": [
+      {
+        "headerName": "X-Demo",
+        "headerValue": "demo-value"
+      }
+    ]
+  }
+}

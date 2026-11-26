@@ -21,6 +21,7 @@ mod event;
 mod file_diagnostic;
 pub mod globalloadbalancer;
 pub mod iam;
+pub mod loadbalancer;
 mod model;
 #[doc(hidden)]
 #[allow(missing_docs)]

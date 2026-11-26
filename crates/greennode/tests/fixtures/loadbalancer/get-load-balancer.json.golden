@@ -1,0 +1,35 @@
+{
+  "LoadBalancer": {
+    "UUID": "lb-1",
+    "Name": "demo",
+    "DisplayStatus": "",
+    "Address": "",
+    "PrivateSubnetID": "",
+    "PrivateSubnetCIDR": "",
+    "Type": "",
+    "DisplayType": "",
+    "LoadBalancerSchema": "",
+    "PackageID": "",
+    "Description": "",
+    "Location": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ProgressStatus": "",
+    "Status": "",
+    "BackendSubnetID": "",
+    "Internal": true,
+    "AutoScalable": false,
+    "ZoneID": "zone_api",
+    "MinSize": 1,
+    "MaxSize": 0,
+    "TotalNodes": 0,
+    "Nodes": [
+      {
+        "Status": "READY",
+        "ZoneID": "zone-1",
+        "ZoneName": "demo-zone",
+        "SubnetID": "subnet-1"
+      }
+    ]
+  }
+}

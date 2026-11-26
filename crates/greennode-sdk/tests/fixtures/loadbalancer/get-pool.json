@@ -1,0 +1,26 @@
+{
+  "data": {
+    "uuid": "pool-1",
+    "name": "demo",
+    "protocol": "HTTP",
+    "healthMonitor": {
+      "timeout": 5,
+      "interval": 10,
+      "healthCheckMethod": "GET",
+      "healthCheckPath": "/health",
+      "successCode": "200",
+      "domainName": null
+    },
+    "members": [
+      {
+        "uuid": "member_1",
+        "address": "192.0.2.1",
+        "protocolPort": 80,
+        "name": "demo",
+        "weight": 1,
+        "updateAt": "2020-01-02",
+        "poolId": "pool-1"
+      }
+    ]
+  }
+}
