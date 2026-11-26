@@ -8,8 +8,8 @@ use crate::wire::product::{evidence::Evidence, redirect::Retry};
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
 use super::mutation::{
-    Mutation, Settlement, decode_data, invalid_mutation_response, not_sent, safe_server,
-    settlement_error, status,
+    Mutation, Settlement, decode_data, invalid_mutation_response, not_sent, rejected, safe_server,
+    settlement_error,
 };
 use super::quotes::{path_id, required, resize_info};
 use super::server_writes::check_price;
@@ -522,9 +522,7 @@ fn ambiguous<O>(
     evidence: &Evidence,
 ) -> Failure<O> {
     let (error, _, dispatch) = error.into_parts();
-    if dispatch == WriteDispatch::NotSent
-        || status(&error).is_some_and(|status| (400..500).contains(&status))
-    {
+    if dispatch == WriteDispatch::NotSent || rejected(&error) {
         return Failure::new(error, None, dispatch);
     }
     Failure::new(

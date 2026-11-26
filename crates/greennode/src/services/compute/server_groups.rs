@@ -1,6 +1,6 @@
 use super::server_commands::{execute, server_operation};
 use super::*;
-use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
+use crate::cli::errors::{Rule, RuleName, RuleOperation};
 
 pub(super) const GROUP_IN_USE: Rule = Rule {
     identity: "compute-server-group-in-use",
@@ -11,7 +11,7 @@ pub(super) const GROUP_IN_USE: Rule = Rule {
         operation: RuleOperation::Omit,
         include_api_status: false,
     }),
-    exit: Some(RuleExit::Failure),
+    exit: None,
     message: None,
 };
 

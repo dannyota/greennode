@@ -8,7 +8,7 @@ use crate::{Error, Failure, RequestContext, WriteDispatch};
 
 use super::inventory::group_read_error;
 use super::mutation::{
-    Mutation, decode_data, invalid_mutation_response, not_sent, settlement_error, status,
+    Mutation, decode_data, invalid_mutation_response, not_sent, rejected, settlement_error,
     with_screened_advice,
 };
 use super::quotes::{path_id, required};
@@ -137,7 +137,7 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             ));
         }
-        if !PathIds::WithUnderscore.allows(&group.uuid) || evidence.text_reflects(&group.uuid) {
+        if !PathIds::WithUnderscore.allows(&group.uuid) || evidence.id_reflects(&group.uuid) {
             return Err(Failure::new(
                 api(
                     CREATE.id,
@@ -192,6 +192,7 @@ impl Client {
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
         if group.uuid != *id
+            || evidence.id_reflects(&group.uuid)
             || serde_json::to_value(&group).map_or(true, |value| evidence.reflected_in(&value))
             || !group.redact(&evidence)
         {
@@ -211,7 +212,11 @@ impl Client {
             .await?;
         let result = self.group_detail::<()>(ctx, id, &mut evidence).await;
         let error = match result {
-            Ok(mut group) if group.uuid == *id && evidence.can_retain_partial() => {
+            Ok(mut group)
+                if group.uuid == *id
+                    && !evidence.id_reflects(&group.uuid)
+                    && evidence.can_retain_partial() =>
+            {
                 if group.redact(&evidence) {
                     return Ok(UpdateServerGroupOutput {
                         server_group: group,
@@ -222,11 +227,12 @@ impl Client {
             Ok(_) => group_read_error("compute.GetServerGroup", &evidence),
             Err(error) => error.into_parts().0,
         };
-        let partial = (evidence.can_retain_partial() && fallback.redact(&evidence)).then_some(
-            UpdateServerGroupOutput {
-                server_group: fallback,
-            },
-        );
+        let partial = (evidence.can_retain_partial()
+            && !evidence.id_reflects(&fallback.uuid)
+            && fallback.redact(&evidence))
+        .then_some(UpdateServerGroupOutput {
+            server_group: fallback,
+        });
         Err(Failure::new(
             settlement_error(
                 UPDATE.id,
@@ -267,7 +273,7 @@ impl Client {
         }
         for mut group in groups.items {
             if !PathIds::WithUnderscore.allows(&group.uuid)
-                || evidence.text_reflects(&group.uuid)
+                || evidence.id_reflects(&group.uuid)
                 || !group.redact(&evidence)
             {
                 return Err(not_sent(group_read_error(
@@ -297,11 +303,8 @@ impl Client {
                         .to_ascii_lowercase()
                         .contains("server group is in use")
                 {
-                    in_use(
-                        &format!("compute: server group in use: {}", api.message()),
-                        &evidence,
-                    )
-                    .with_cause(error)
+                    let message = format!("compute: server group in use: {}", api.message());
+                    error.with_cause(in_use(&message, &evidence))
                 } else {
                     error
                 };
@@ -320,9 +323,7 @@ fn ambiguous_create(
     evidence: &Evidence,
 ) -> Failure<CreateServerGroupOutput> {
     let (error, _, dispatch) = failure.into_parts();
-    let error = if dispatch == WriteDispatch::MayHaveBeenSent
-        && !status(&error).is_some_and(|status| (400..500).contains(&status))
-    {
+    let error = if dispatch == WriteDispatch::MayHaveBeenSent && !rejected(&error) {
         let reason = error.api_error().map_or("", |api| api.message());
         let advice = format!(
             "{}: create may have already reached the server; list server groups and match the name exactly before creating it again: {reason}",

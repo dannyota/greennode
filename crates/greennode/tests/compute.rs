@@ -609,6 +609,34 @@ async fn disruptive_server_actions_require_confirmation_and_refuse_read_only() {
 }
 
 #[tokio::test]
+async fn group_delete_in_use_404_keeps_provider_status_exit() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":1,"totalItem":0}"#,
+        ),
+        response("404 Not Found", r#"{"message":"server group is in use"}"#),
+    ]);
+    let (exit, stdout, stderr) = invoke(
+        &server,
+        &[
+            "delete-server-group",
+            "--project-id",
+            "proj-1",
+            "--server-group-id",
+            "group-1",
+            "--yes",
+        ],
+        false,
+    )
+    .await;
+    assert_eq!(exit, ExitCode::from(4));
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "ServerGroupInUse");
+}
+
+#[tokio::test]
 async fn lifecycle_preflight_refusals_use_service_identities_without_http_metadata() {
     for (command, flags, body, code) in [
         (

@@ -81,6 +81,26 @@ async fn stop_refuses_unsafe_preflights_and_keeps_partial_on_ambiguous_send() {
 }
 
 #[tokio::test]
+async fn rename_rejects_array_acknowledgement() {
+    let server = TestServer::start(vec![response(r#"[{"uuid":"server-1","name":"renamed"}]"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .rename_server(
+            &ctx,
+            RenameServerInput {
+                server_id: "server-1".into(),
+                name: "renamed".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+}
+
+#[tokio::test]
 async fn rename_requires_matching_acknowledgement_and_sends_new_name() {
     let server = TestServer::start(vec![response(
         r#"{"data":{"uuid":"server-2","name":"renamed"}}"#,
@@ -108,6 +128,59 @@ async fn rename_requires_matching_acknowledgement_and_sends_new_name() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&server.bodies()[0]).unwrap(),
         serde_json::json!({"newName":"renamed"})
+    );
+}
+
+#[tokio::test]
+async fn resize_truncated_conflict_keeps_signed_quote_and_advice() {
+    let server = TestServer::start(vec![
+        response(
+            r#"{"data":{"uuid":"server-1","status":"ACTIVE","flavor":{"flavorId":"flavor-1"}}}"#,
+        ),
+        response(r#"{"optimumPrice":-20}"#),
+        Response::Http {
+            status: "409 Conflict".into(),
+            headers: vec![("Content-Length".into(), "10".into())],
+            body: Vec::new(),
+        },
+    ]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_static_token(Secret::new(CANARY))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let (ctx, _) = RequestContext::new();
+    let failure = Client::new(&config)
+        .resize_server(
+            &ctx,
+            ResizeServerInput {
+                server_id: "server-1".into(),
+                flavor_id: "flavor-2".into(),
+                no_wait: true,
+                max_price: 0.0,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.partial().unwrap().quoted_adjustment, -20.0);
+    assert!(
+        failure
+            .error()
+            .detail::<crate::RecoveryAdvice>()
+            .unwrap()
+            .message()
+            .contains("GetServer")
     );
 }
 

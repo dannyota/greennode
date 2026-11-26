@@ -291,6 +291,11 @@ pub(super) fn with_screened_advice(error: Error, message: &str, evidence: &Evide
     }
 }
 
+pub(super) fn rejected(error: &Error) -> bool {
+    error.detail::<StatusCode>().is_none()
+        && status(error).is_some_and(|status| (400..500).contains(&status))
+}
+
 pub(super) fn status(error: &Error) -> Option<u16> {
     error
         .api_error()
@@ -336,6 +341,9 @@ pub(super) fn decode_data<T: WireField>(
         8 << 20,
     )
     .map_err(|_| invalid())?;
+    if !raw.get().trim_start().starts_with('{') {
+        return Err(invalid());
+    }
     let envelope: Option<Envelope<'_>> = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
     let Some(data) = envelope.and_then(|envelope| envelope.data) else {
         return Ok(T::default());
