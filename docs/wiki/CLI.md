@@ -6,6 +6,7 @@
 
 - [Backup](CLI-Backup.md)
 - [Billing](CLI-Billing.md)
+- [Portal](CLI-Portal.md)
 - [Project](CLI-Project.md)
 - [Tagging](CLI-Tagging.md)
 - [VKS](CLI-VKS.md)

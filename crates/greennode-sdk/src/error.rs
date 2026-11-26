@@ -76,6 +76,20 @@ impl SafeText {
     }
 }
 
+/// Sanitized diagnostic for a failure without a service response.
+pub struct Diagnostic(String);
+
+impl Diagnostic {
+    pub(crate) fn new(text: &str) -> Self {
+        Self(SafeText::new(text, &[]).0)
+    }
+
+    /// Returns the sanitized diagnostic.
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Sanitized details of a failed service request.
 pub struct ApiError {
     operation: &'static str,
