@@ -572,6 +572,7 @@ fn pool_target<'a>(id: &'a str, ids: &'a [(&'static str, &'a str)]) -> ChildTarg
         read: &GET_POOL,
         ids,
         shape: &POOL,
+        guard_field: None,
         validate: |read, row, evidence| read.parse::<Pool>(row, evidence).map(|_| ()),
     }
 }

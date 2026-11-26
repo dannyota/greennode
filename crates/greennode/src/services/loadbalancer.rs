@@ -155,6 +155,8 @@ macro_rules! optional_bool {
     };
 }
 
+mod listener_writes;
+mod policy_writes;
 mod pool_writes;
 
 const NO_WAIT: Field = flag("no-wait", "bool", false);
@@ -214,6 +216,10 @@ pub(super) const SERVICE: Service = Service {
         paid::CREATE,
         paid::RESIZE,
         certificate_import::IMPORT,
+        policy_writes::CREATE_POLICY,
+        policy_writes::UPDATE_POLICY,
+        listener_writes::CREATE_LISTENER,
+        listener_writes::UPDATE_LISTENER,
         pool_writes::CREATE_POOL,
         pool_writes::UPDATE_POOL,
         operation!(

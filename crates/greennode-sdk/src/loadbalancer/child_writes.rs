@@ -42,6 +42,7 @@ pub(super) struct ChildTarget<'a> {
     pub(super) read: &'a Read,
     pub(super) ids: &'a [(&'static str, &'a str)],
     pub(super) shape: &'static Shape<'static>,
+    pub(super) guard_field: Option<&'static str>,
     pub(super) validate: Validate,
 }
 
@@ -123,6 +124,9 @@ impl<'a> ChildWriter<'a> {
                 let row = self.read_data(&wait, child.read, child.ids).await;
                 self.ready_time(ctx, &wait, Some(child))?;
                 let row = row?;
+                if let Some(field) = child.guard_field {
+                    validate_guard_string(child.read, &row, field, &self.evidence)?;
+                }
                 let row = guard::canonical_json(child.read, &row, child.shape, &self.evidence)?;
                 (child.validate)(child.read, &row, &self.evidence)?;
                 if !child_busy(&progress(child.read, &row, child.id, &self.evidence)?) {
@@ -174,7 +178,7 @@ impl<'a> ChildWriter<'a> {
             .await?;
         let ZonedLoadBalancer(parent) =
             guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, &self.evidence)?;
-        validate_parent_type(&data, &self.evidence)?;
+        validate_guard_string(&LOAD_BALANCER, &data, "type", &self.evidence)?;
         screen_input(&self.evidence, [parent.r#type.as_str()])?;
         Ok((
             progress(&LOAD_BALANCER, &data, self.lb_id, &self.evidence)?,
@@ -286,8 +290,8 @@ impl<'a> ChildWriter<'a> {
         let refusal = status.is_client_error();
         let busy = refusal
             && response::inspect_error_message(&body, |message| {
-                let safe = response::sanitize_error_text(message, self.evidence.credentials());
-                busy_message(safe.as_str())
+                !response::reflects_credential_forms(message, self.evidence.credentials())
+                    && busy_message(message)
             })
             .unwrap_or(false);
         let body = response::classify(
@@ -364,7 +368,7 @@ impl<'a> ChildWriter<'a> {
         } else {
             PathIds::Strict
         };
-        let id = (valid.allows(&id) && !self.evidence.text_reflects(&id)).then_some(id);
+        let id = (valid.allows(&id) && !self.evidence.id_reflects(&id)).then_some(id);
         id.ok_or_else(|| {
             let message = format!("create response had no id; the resource may exist, check with {list} and match the name exactly");
             let error = Error::from_api(ApiError::without_fallback(
@@ -449,11 +453,16 @@ pub(super) fn lb_busy(progress: &str) -> bool {
     progress == "CREATING-BILLING" || child_busy(progress)
 }
 
-fn validate_parent_type(body: &str, evidence: &Evidence) -> Result<(), Box<Error>> {
-    let invalid = || LOAD_BALANCER.decode_error(evidence, DecodeError::InvalidShape);
+fn validate_guard_string(
+    read: &Read,
+    body: &str,
+    field: &str,
+    evidence: &Evidence,
+) -> Result<(), Box<Error>> {
+    let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
     let fields: BTreeMap<String, &RawValue> = serde_json::from_str(body).map_err(|_| invalid())?;
     if fields.into_iter().any(|(name, value)| {
-        field_matches("type", &name) && (name != "type" || !value.get().starts_with('"'))
+        field_matches(field, &name) && (name != field || !value.get().starts_with('"'))
     }) {
         return Err(invalid());
     }

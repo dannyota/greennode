@@ -1,0 +1,28 @@
+{
+  "Policy": {
+    "UUID": "policy-1",
+    "Name": "routing",
+    "Description": "",
+    "RedirectPoolID": "pool-1",
+    "RedirectPoolName": "",
+    "Action": "REDIRECT_TO_POOL",
+    "RedirectURL": "",
+    "RedirectHTTPCode": 0,
+    "KeepQueryString": false,
+    "Position": 0,
+    "L7Rules": [
+      {
+        "UUID": "",
+        "CompareType": "STARTS_WITH",
+        "RuleValue": "/api",
+        "RuleType": "PATH",
+        "ProvisioningStatus": "",
+        "OperatingStatus": ""
+      }
+    ],
+    "DisplayStatus": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ProgressStatus": ""
+  }
+}
