@@ -113,7 +113,11 @@ impl Client {
             ))));
         }
         validate_statements(CREATE, &input.statements)?;
-        let body = policy_body(&input.name, &input.description, &input.statements);
+        let body = policy_body(
+            &input.name,
+            &input.description,
+            wire_statements(&input.statements),
+        );
         let mut evidence = self.write_evidence(ctx, CREATE, &[], &[])?;
         if evidence.reflected_in(&body) {
             return Err(withheld_operand());
@@ -133,6 +137,7 @@ impl Client {
             &[StatusCode::CREATED],
         );
         operation.keep_status = true;
+        operation.overflow_overrides_status = true;
         let CreatedId(id) = self
             .write(
                 ctx,
@@ -214,7 +219,7 @@ impl Client {
             return Err(withheld_operand());
         }
         let mut guard = Guard::new(self, ctx, UPDATE, &mut evidence).await?;
-        let current = guard.policy(id, true).await?;
+        let (current, statements) = guard.replacement_policy(id).await?;
         check_managed(UPDATE, &current)?;
         guard.load_actions().await?;
         let attachments = guard.attachments(id).await?;
@@ -242,7 +247,10 @@ impl Client {
         let body = policy_body(
             input.name.as_deref().unwrap_or(&current.name),
             input.description.as_deref().unwrap_or(&current.description),
-            input.statements.as_deref().unwrap_or(&current.statements),
+            input
+                .statements
+                .as_deref()
+                .map_or(statements, wire_statements),
         );
         let mut op = write_operation(
             UPDATE,
@@ -277,7 +285,7 @@ impl Client {
         let id = input.policy_id.as_str();
         let mut evidence = self.write_evidence(ctx, DELETE, &[("PolicyID", id)], &[])?;
         let mut guard = Guard::new(self, ctx, DELETE, &mut evidence).await?;
-        check_managed(DELETE, &guard.policy(id, false).await?)?;
+        check_managed(DELETE, &guard.policy(id).await?)?;
         if !guard.attachments(id).await?.is_empty() {
             return Err(guard_refusal(
                 "iam: refused: resource in use: iam.DeletePolicy: the policy is attached",
@@ -328,8 +336,8 @@ fn validate_statements<O>(op: &str, statements: &[Statement]) -> Result<(), Fail
     Ok(())
 }
 
-fn policy_body(name: &str, description: &str, statements: &[Statement]) -> Value {
-    json!({"name": name, "description": description, "statements": wire_statements(statements)})
+fn policy_body(name: &str, description: &str, statements: Value) -> Value {
+    json!({"name": name, "description": description, "statements": statements})
 }
 
 fn wire_statements(statements: &[Statement]) -> Value {
@@ -386,9 +394,34 @@ fn refuse_privileged<O>(op: &str, privileged: bool, reason: &str) -> Result<(), 
 }
 
 fn uncertain_create<O>(failure: Failure<O>, evidence: &Evidence) -> Failure<O> {
-    let (error, _, dispatch) = failure.into_parts();
-    if dispatch == WriteDispatch::NotSent
-        || observed_status(&error).is_some_and(|status| (400..500).contains(&status))
+    let (mut error, _, dispatch) = failure.into_parts();
+    if dispatch == WriteDispatch::NotSent {
+        return Failure::new(error, None, dispatch);
+    }
+    if error
+        .detail::<StatusCode>()
+        .is_some_and(StatusCode::is_client_error)
+    {
+        if !error.is_body_too_large() {
+            let message = if error.has_identity(crate::ErrorClass::Cancelled) {
+                "canceled"
+            } else if error.has_identity(crate::ErrorClass::DeadlineExceeded) {
+                "timed out"
+            } else {
+                "network request failed"
+            };
+            error = Error::from_api(ApiError::without_fallback(
+                CREATE,
+                None,
+                SafeText::new("", &[]),
+                SafeText::new(message, &[]),
+                false,
+            ));
+        }
+    } else if error
+        .api_error()
+        .and_then(ApiError::status)
+        .is_some_and(|status| (400..500).contains(&status))
     {
         return Failure::new(error, None, dispatch);
     }

@@ -1,5 +1,8 @@
 use super::{client, response};
-use crate::iam::{CreatePolicyInput, DeletePolicyInput, Statement, WriteError};
+use crate::iam::{
+    AttachUserPolicyInput, CreatePolicyInput, DeletePolicyInput, Statement, UpdatePolicyInput,
+    WriteError,
+};
 use crate::wire::test_server::{Response, Server};
 use crate::{ErrorClass, RequestContext, WriteDispatch};
 use serde_json::{Value, json};
@@ -200,4 +203,101 @@ async fn policy_condition_operators_require_objects_or_null() {
     assert!(failure.error().has_identity(ErrorClass::InvalidInput));
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn replacement_refuses_statements_it_cannot_preserve() {
+    for field in ["Condition", "extraRestriction"] {
+        let policy = format!(
+            r#"{{"id":"pol-1","name":"reader","description":"old","manager":"user","statements":[{{"effect":"allow","actions":["iam:ListActions"],"resources":["*"],"{field}":{{"equals":{{"x":"only"}}}}}}]}}"#
+        );
+        let server = Server::start(vec![
+            caller(),
+            response("200 OK", policy.as_bytes()),
+            catalog(),
+            response("200 OK", b"[]"),
+            response("200 OK", b"[]"),
+            response("200 OK", b"[]"),
+            response("204 No Content", b""),
+            response("200 OK", policy.as_bytes()),
+        ]);
+        let (ctx, _) = RequestContext::new();
+        let mut input = UpdatePolicyInput::new(POLICY_ID);
+        input.description = Some("new".into());
+        let failure = client(&server, BEARER)
+            .update_policy(&ctx, input)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 2);
+    }
+}
+
+#[tokio::test]
+async fn replacement_preserves_canonical_condition_numbers_and_nulls() {
+    let policy = br#"{"id":"pol-1","name":"reader","description":"old","manager":"user","statements":[{"effect":"allow","actions":["iam:ListActions"],"resources":["*"],"condition":{"equals":{"x":9007199254740993,"y":null}}}]}"#;
+    let server = Server::start(vec![
+        caller(),
+        response("200 OK", policy),
+        catalog(),
+        response("200 OK", b"[]"),
+        response("200 OK", b"[]"),
+        response("200 OK", b"[]"),
+        response("204 No Content", b""),
+        response("200 OK", policy),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdatePolicyInput::new(POLICY_ID);
+    input.description = Some("new".into());
+    client(&server, BEARER)
+        .update_policy(&ctx, input)
+        .await
+        .unwrap();
+    let request: Value = serde_json::from_slice(&server.bodies()[6]).unwrap();
+    let expected: Value = serde_json::from_slice(policy).unwrap();
+    assert!(request["statements"] == expected["statements"]);
+    assert!(request["description"] == "new");
+}
+
+#[tokio::test]
+async fn attachment_guard_refuses_noncanonical_pagination_metadata() {
+    let server = Server::start(vec![
+        caller(),
+        catalog(),
+        response("200 OK", br#"{"data":[],"totalItems":0,"TotalPages":2}"#),
+        response("200 OK", b"[]"),
+        response(
+            "200 OK",
+            br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#,
+        ),
+        response("204 No Content", b""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .attach_user_policy(&ctx, AttachUserPolicyInput::new(POLICY_ID, "usr-2"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+#[ignore = "requires hexadecimal credential screening in the shared matcher"]
+async fn hex_credential_never_becomes_a_policy_confirmation_id() {
+    let encoded = data_encoding::HEXLOWER.encode(BEARER.as_bytes());
+    let body = json!({"id": format!("pol-{encoded}")}).to_string();
+    let server = Server::start(vec![
+        caller(),
+        catalog(),
+        response("201 Created", body.as_bytes()),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .create_policy(&ctx, input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert!(!failure.error().to_string().contains(&encoded));
+    assert_eq!(server.requests(), 3);
 }

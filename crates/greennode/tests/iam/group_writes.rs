@@ -275,3 +275,78 @@ async fn policy_document_file_overrides_json_after_local_guards() {
         assert!(String::from_utf8_lossy(&stderr).contains("ReadOnly"));
     }
 }
+
+#[tokio::test]
+async fn policy_create_uses_last_top_level_json_values() {
+    let server = Server::start(vec![
+        response(200, br#"{"userId":"usr-1","userType":"iam-user"}"#.to_vec()),
+        response(
+            200,
+            br#"[{"action":"CreatePolicy","label":"Write"}]"#.to_vec(),
+        ),
+        response(201, br#"{"id":"pol-1"}"#.to_vec()),
+        response(200, br#"{"id":"pol-1"}"#.to_vec()),
+    ]);
+    let (exit, _, stderr) = invoke(&["iam", "create-policy", "--cli-input-json", r#"{"Name":3,"Name":"reader","Statements":false,"Statements":[{"Effect":"allow","Actions":["iam:ListActions"],"Resources":["*"]}]}"#], &server, BEARER).await;
+    assert_eq!(
+        exit,
+        ExitCode::SUCCESS,
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(server.requests(), 4);
+    let body: Value = serde_json::from_slice(&server.bodies()[2]).unwrap();
+    assert!(body["name"] == "reader");
+}
+
+#[tokio::test]
+async fn truncated_policy_create_rejection_is_uncertain() {
+    let server = Server::start(vec![
+        response(200, br#"{"userId":"usr-1","userType":"iam-user"}"#.to_vec()),
+        response(
+            200,
+            br#"[{"action":"CreatePolicy","label":"Write"}]"#.to_vec(),
+        ),
+        Response::Http {
+            status: "404 Not Found".into(),
+            headers: vec![("Content-Length".into(), "20".into())],
+            body: b"{}".to_vec(),
+        },
+    ]);
+    let args = [
+        "iam",
+        "create-policy",
+        "--cli-input-json",
+        r#"{"Name":"reader","Statements":[{"Effect":"allow","Actions":["iam:ListActions"],"Resources":["*"]}]}"#,
+    ];
+    let (exit, stdout, stderr) = invoke(&args, &server, BEARER).await;
+    assert_eq!(exit, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    let error: Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "RequestFailed");
+    assert!(error["error"]["status"].is_null());
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("check with list-policies --name before creating it again")
+    );
+    assert_eq!(server.requests(), 3);
+
+    let server = Server::start(vec![
+        response(200, br#"{"userId":"usr-1","userType":"iam-user"}"#.to_vec()),
+        response(
+            200,
+            br#"[{"action":"CreatePolicy","label":"Write"}]"#.to_vec(),
+        ),
+        response(404, b"{}".to_vec()),
+    ]);
+    let (exit, stdout, stderr) = invoke(&args, &server, BEARER).await;
+    assert_eq!(exit, ExitCode::from(4));
+    assert!(stdout.is_empty());
+    let error: Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "NotFound");
+    assert_eq!(error["error"]["status"], 404);
+    assert_eq!(error["error"]["message"], "Not Found");
+    assert_eq!(server.requests(), 3);
+}

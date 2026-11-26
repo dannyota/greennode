@@ -180,7 +180,7 @@ async fn require_non_privileged_policy<O>(
     op: &str,
     policy_id: &str,
 ) -> Result<(), Failure<O>> {
-    let policy = guard.policy(policy_id, false).await?;
+    let policy = guard.policy(policy_id).await?;
     if guard.privileged(&policy.statements)? {
         protection_error(
             op,

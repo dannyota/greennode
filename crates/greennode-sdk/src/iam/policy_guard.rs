@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use regex_lite::Regex;
 use serde::Serialize;
-use serde_json::value::RawValue;
+use serde_json::{Value, value::RawValue};
 
 use super::groups::GroupAttachments;
 use super::wire::{self, Screen, Wire};
@@ -109,24 +109,38 @@ impl<'a> Guard<'a> {
         self.check_response(ACTIONS, &self.actions)
     }
 
-    pub(super) async fn policy<O>(
+    pub(super) async fn policy<O>(&mut self, id: &str) -> Result<Policy, Failure<O>> {
+        Ok(self.checked_policy(id).await?.policy)
+    }
+
+    pub(super) async fn replacement_policy<O>(
         &mut self,
         id: &str,
-        replacement: bool,
-    ) -> Result<Policy, Failure<O>> {
+    ) -> Result<(Policy, Value), Failure<O>> {
+        let snapshot = self.checked_policy(id).await?;
+        let statements = snapshot
+            .statements
+            .as_deref()
+            .filter(|_| snapshot.complete)
+            .and_then(preservable_statements)
+            .ok_or_else(|| {
+                guard_refusal(
+                    "iam.GetPolicy: incomplete policy replacement snapshot",
+                    None,
+                )
+            })?;
+        self.check_response(GET_POLICY, &statements)?;
+        Ok((snapshot.policy, statements))
+    }
+
+    async fn checked_policy<O>(&mut self, id: &str) -> Result<PolicySnapshot, Failure<O>> {
         let snapshot = self
             .client
             .policy_snapshot(self.ctx, id, self.evidence)
             .await
             .map_err(guard_failed)?;
-        if replacement && !snapshot.complete {
-            return Err(guard_refusal(
-                "iam.GetPolicy: incomplete policy replacement snapshot",
-                None,
-            ));
-        }
         self.check_response(GET_POLICY, &snapshot.policy)?;
-        Ok(snapshot.policy)
+        Ok(snapshot)
     }
 
     pub(super) async fn attachments<O>(&mut self, id: &str) -> Result<Attachments, Failure<O>> {
@@ -325,7 +339,7 @@ impl<'a> Guard<'a> {
         for id in ids {
             self.check_ids([id])?;
             if !self.policies.contains_key(id) {
-                let policy = self.policy(id, false).await?;
+                let policy = self.policy(id).await?;
                 self.policies.insert(id.to_owned(), policy);
             }
             if let Some(policy) = self.policies.get(id)
@@ -422,6 +436,10 @@ struct AttachmentPage {
     total_pages: Option<i64>,
 }
 
+impl AttachmentPage {
+    const FIELDS: &[&str] = &["data", "totalItems", "totalPages", "pageNumber", "pageSize"];
+}
+
 impl Wire for AttachmentPage {
     const SHAPE: Shape<'static> = Shape::Object(&[
         ShapeField {
@@ -440,6 +458,15 @@ impl Wire for AttachmentPage {
 
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
         let fields = raw_fields(raw)?;
+        if fields.keys().any(|key| {
+            Self::FIELDS
+                .iter()
+                .any(|field| *field != key && crate::wire::strict_json::field_matches(field, key))
+        }) {
+            return Err(serde::de::Error::custom(
+                "noncanonical attachment page field",
+            ));
+        }
         Ok(Self {
             data: decode_field(&fields, "data")?,
             total_items: decode_field(&fields, "totalItems")?,
@@ -487,9 +514,10 @@ fn raw_fields(raw: &RawValue) -> Result<BTreeMap<String, &RawValue>, serde_json:
 }
 
 #[derive(Default)]
-pub(super) struct PolicySnapshot {
-    pub(super) policy: Policy,
+struct PolicySnapshot {
+    policy: Policy,
     complete: bool,
+    statements: Option<Box<RawValue>>,
 }
 
 impl Wire for PolicySnapshot {
@@ -503,8 +531,25 @@ impl Wire for PolicySnapshot {
         Ok(Self {
             policy: Policy::decode(raw)?,
             complete,
+            statements: wire::field(&fields, "statements").map(ToOwned::to_owned),
         })
     }
+}
+
+fn preservable_statements(raw: &RawValue) -> Option<Value> {
+    let statements: Vec<&RawValue> = serde_json::from_str(raw.get()).ok()?;
+    for statement in statements {
+        let fields: BTreeMap<String, &RawValue> = serde_json::from_str(statement.get()).ok()?;
+        if fields.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "effect" | "actions" | "resources" | "condition"
+            )
+        }) {
+            return None;
+        }
+    }
+    wire::exact_value(raw).ok()
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]

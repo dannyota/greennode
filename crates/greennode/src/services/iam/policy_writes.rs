@@ -387,16 +387,10 @@ impl<'a> RawFields<'a> {
 
 fn check_input_json(bytes: &[u8]) -> Result<(), InputError> {
     let invalid = InputError("--cli-input-json: invalid policy input");
-    let fields: Option<RawFields<'_>> = serde_json::from_slice(bytes).map_err(|_| invalid)?;
-    if let Some(fields) = fields {
-        let names = ["Name", "Description", "PolicyID", "Statements"];
-        let fields = fields
-            .named(&names)
-            .map_err(|_| InputError("--cli-input-json: invalid policy input"))?;
-        if let Some(raw) = fields.get("Statements") {
-            statements(raw)
-                .map_err(|_| InputError("--cli-input-json: invalid policy statements"))?;
-        }
+    let fields: Option<BTreeMap<String, &RawValue>> =
+        serde_json::from_slice(bytes).map_err(|_| invalid)?;
+    if let Some(raw) = fields.as_ref().and_then(|fields| fields.get("Statements")) {
+        statements(raw).map_err(|_| InputError("--cli-input-json: invalid policy statements"))?;
     }
     Ok(())
 }
