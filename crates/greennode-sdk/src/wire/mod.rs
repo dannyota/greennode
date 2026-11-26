@@ -9,7 +9,7 @@ mod send;
 #[cfg(test)]
 mod send_tests;
 #[allow(dead_code)]
-mod strict_json;
+pub(crate) mod strict_json;
 #[cfg(test)]
 pub(crate) mod test_server;
 #[cfg(test)]

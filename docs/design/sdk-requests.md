@@ -183,10 +183,18 @@ are not known safe; use status fallback and fixed diagnostics. Even a field that
 looks like an identifier can be a reflected credential. When any credential was
 sent, keep only `code` and `message`, and withhold a message with non-ASCII
 text, a credential field marker or a sent credential in any encoding; this is
-stricter than Go, which case-folds Unicode. Never expose raw headers, response
-bodies, unbounded peer text, URLs, or decode errors via an error source,
-capture, or debug event. Keep per-attempt credentials available only within the
-logical request for reflection checks, including across retries.
+stricter than Go, which case-folds Unicode. Withhold any peer `code` or
+`message` containing `/`, `\`, `@`, `www.` in any case, or a colon not followed
+by whitespace; this closed rule stands in for URL detection. Never expose raw
+headers, response bodies, unbounded peer text, URLs, or decode errors via an
+error source, capture, or debug event. Keep per-attempt credentials available
+only within the logical request for reflection checks, including across retries.
+
+Success bodies are checked against the operation's output schema before
+decoding: object or array shape at every node, duplicate keys, and keys that
+fold to the same field. Unlike Go, which matches keys to fields
+case-insensitively, decoding is case-sensitive, so a key that differs only in
+case is ignored.
 
 ### Signed S3
 
