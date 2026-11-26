@@ -117,7 +117,7 @@ fn decode(body: &[u8], start: OffsetDateTime, elapsed: Duration) -> Option<Token
             children: &[],
         },
     ];
-    validate(body, &fields).ok()?;
+    validate(body, &fields, 64 * 1024).ok()?;
     if body
         .iter()
         .copied()

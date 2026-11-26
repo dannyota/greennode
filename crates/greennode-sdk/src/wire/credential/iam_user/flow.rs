@@ -52,6 +52,101 @@ mod tests {
         }
     }
 
+    async fn captured_bodies() -> Vec<Vec<u8>> {
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                None,
+                "<input name=\"_csrf\" value=\"login-csrf\">",
+            ),
+            response("302 Found", Some("/ap/auth/iam/google"), ""),
+            response("200 OK", None, "<input name=\"_csrf\" value=\"totp-csrf\">"),
+            response(
+                "302 Found",
+                Some("https://dashboard.test/return?code=auth-code-canary"),
+                "",
+            ),
+            response(
+                "200 OK",
+                None,
+                r#"{"accessToken":"token-canary","expiresIn":3600}"#,
+            ),
+        ]);
+        let client =
+            OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
+        let origin = url::Url::parse(&server.origin).unwrap();
+        let token_url = origin.join("/token").unwrap();
+        let dashboard = url::Url::parse("https://dashboard.test/return").unwrap();
+        let password = Secret::new("password-canary");
+        let login = super::super::signin::Login {
+            client: &client,
+            origin: &origin,
+            dashboard: &dashboard,
+            root_email: "root@example.test",
+            username: "username-test",
+            password: &password,
+            clock: &SystemClock,
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+        };
+        let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, ()>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
+        let result = run(
+            login,
+            &token_url,
+            Some(super::super::totp::Source::Provider(&provider)),
+            super::super::from_bytes(&[2; 32]),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(server.requests(), 5);
+        server.bodies()
+    }
+
+    #[tokio::test]
+    async fn sends_password_form_on_wire() {
+        let bodies = captured_bodies().await;
+        let actual: Vec<_> = url::form_urlencoded::parse(&bodies[1]).collect();
+        assert!(actual.len() == 4);
+        for (key, expected) in [
+            ("_csrf", "login-csrf"),
+            ("rootEmail", "root@example.test"),
+            ("username", "username-test"),
+            ("password", "password-canary"),
+        ] {
+            assert!(
+                actual
+                    .iter()
+                    .any(|(name, value)| name == key && value == expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sends_totp_form_on_wire() {
+        let bodies = captured_bodies().await;
+        let actual: Vec<_> = url::form_urlencoded::parse(&bodies[3]).collect();
+        assert!(actual.len() == 2);
+        for (key, expected) in [("_csrf", "totp-csrf"), ("token", "totp-code-canary")] {
+            assert!(
+                actual
+                    .iter()
+                    .any(|(name, value)| name == key && value == expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sends_token_exchange_on_wire() {
+        let bodies = captured_bodies().await;
+        let actual: serde_json::Value = serde_json::from_slice(&bodies[4]).unwrap();
+        let verifier = super::super::from_bytes(&[2; 32]).0;
+        assert!(actual.as_object().is_some_and(|map| map.len() == 5));
+        assert!(actual["grantType"] == "authorization_code");
+        assert!(actual["code"] == "auth-code-canary");
+        assert!(actual["codeVerifier"] == verifier.expose_secret());
+        assert!(actual["redirectUri"] == "https://dashboard.test/return");
+        assert!(actual["scope"] == "openid");
+    }
+
     #[tokio::test]
     async fn full_flow_with_totp_uses_one_send_per_step() {
         let page = "<input name=\"_csrf\" value=\"csrf-token\">";

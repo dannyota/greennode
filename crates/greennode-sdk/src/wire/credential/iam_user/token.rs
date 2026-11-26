@@ -1,66 +1,7 @@
+use crate::wire::strict_json::{Field, field_matches, validate};
 use crate::{LoginError, Secret, Token};
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
-use std::{collections::HashSet, fmt};
-
-enum Node {
-    Object(Vec<(String, Node)>),
-    String(Secret),
-    Integer(i64),
-    Null,
-    Other,
-}
-
-struct NodeVisitor;
-impl<'de> Visitor<'de> for NodeVisitor {
-    type Value = Node;
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("JSON")
-    }
-    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Node, E> {
-        Ok(Node::Other)
-    }
-    fn visit_i64<E: de::Error>(self, v: i64) -> Result<Node, E> {
-        Ok(Node::Integer(v))
-    }
-    fn visit_u64<E: de::Error>(self, v: u64) -> Result<Node, E> {
-        Ok(i64::try_from(v).map_or(Node::Other, Node::Integer))
-    }
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Node, E> {
-        Ok(Node::Other)
-    }
-    fn visit_str<E: de::Error>(self, v: &str) -> Result<Node, E> {
-        Ok(Node::String(Secret::new(v)))
-    }
-    fn visit_string<E: de::Error>(self, v: String) -> Result<Node, E> {
-        Ok(Node::String(Secret::new(v)))
-    }
-    fn visit_unit<E: de::Error>(self) -> Result<Node, E> {
-        Ok(Node::Null)
-    }
-    fn visit_none<E: de::Error>(self) -> Result<Node, E> {
-        Ok(Node::Null)
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Node, A::Error> {
-        while seq.next_element::<Node>()?.is_some() {}
-        Ok(Node::Other)
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Node, A::Error> {
-        let mut seen = HashSet::new();
-        let mut entries = Vec::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if !seen.insert(key.clone()) {
-                return Err(de::Error::custom("duplicate key"));
-            }
-            entries.push((key, map.next_value::<Node>()?));
-        }
-        Ok(Node::Object(entries))
-    }
-}
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(NodeVisitor)
-    }
-}
+use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
 fn decode(
     bytes: &[u8],
@@ -68,36 +9,33 @@ fn decode(
     now: time::OffsetDateTime,
 ) -> Result<Token, LoginError> {
     let err = || LoginError::new("token exchange", None, false);
-    let Node::Object(fields) = serde_json::from_slice(bytes).map_err(|_| err())? else {
-        return Err(err());
-    };
+    let fields = [
+        Field {
+            name: "accessToken",
+            children: &[],
+        },
+        Field {
+            name: "refreshToken",
+            children: &[],
+        },
+        Field {
+            name: "expiresIn",
+            children: &[],
+        },
+    ];
+    validate(bytes, &fields, 1024 * 1024).map_err(|_| err())?;
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_slice(bytes).map_err(|_| err())?;
     let mut access = None;
     let mut expires = None;
-    let mut refresh_seen = false;
     for (name, value) in fields {
-        if name.eq_ignore_ascii_case("accessToken") {
-            if access.is_some() {
-                return Err(err());
-            }
-            access = Some(match value {
-                Node::String(value) => value,
-                Node::Null => Secret::new(""),
-                _ => return Err(err()),
-            });
-        } else if name.eq_ignore_ascii_case("expiresIn") {
-            if expires.is_some() {
-                return Err(err());
-            }
-            expires = Some(match value {
-                Node::Integer(value) => value,
-                Node::Null => 0,
-                _ => return Err(err()),
-            });
-        } else if name.eq_ignore_ascii_case("refreshToken") {
-            if refresh_seen || !matches!(value, Node::String(_) | Node::Null) {
-                return Err(err());
-            }
-            refresh_seen = true;
+        if field_matches(&name, "accessToken") {
+            let value: Option<String> = serde_json::from_str(value.get()).map_err(|_| err())?;
+            access = Some(Secret::new(value.unwrap_or_default()));
+        } else if field_matches(&name, "expiresIn") {
+            let value: Option<i64> = serde_json::from_str(value.get()).map_err(|_| err())?;
+            expires = Some(value.unwrap_or_default());
+        } else if field_matches(&name, "refreshToken") {
+            let _: Option<String> = serde_json::from_str(value.get()).map_err(|_| err())?;
         }
     }
     let access = access.ok_or_else(err)?;
@@ -277,6 +215,30 @@ mod tests {
             assert!(!format!("{error:?}").contains("auth-code-canary"));
             assert!(!format!("{error:?}").contains("verifier-canary"));
         }
+    }
+
+    #[test]
+    fn unicode_token_aliases_follow_baseline() {
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        let valid = "{\"accessToKen\":\"abc\",\"expiresIn\":3600}";
+        let duplicate = "{\"accessToken\":\"abc\",\"accessToKen\":\"other\",\"expiresIn\":3600}";
+        assert!(decode(valid.as_bytes(), now, now).is_ok());
+        assert!(decode(duplicate.as_bytes(), now, now).is_err());
+    }
+
+    #[test]
+    fn iam_token_schema_allows_one_mib() {
+        let now = time::OffsetDateTime::UNIX_EPOCH;
+        let valid = format!(
+            r#"{{"accessToken":"abc","expiresIn":3600,"extra":"{}"}}"#,
+            "a".repeat(70 * 1024)
+        );
+        let oversized = format!(
+            r#"{{"accessToken":"abc","expiresIn":3600,"extra":"{}"}}"#,
+            "a".repeat(1024 * 1024)
+        );
+        assert!(decode(valid.as_bytes(), now, now).is_ok());
+        assert!(decode(oversized.as_bytes(), now, now).is_err());
     }
 
     #[test]
