@@ -1,17 +1,28 @@
+#[cfg(not(windows))]
 mod files;
+#[cfg(not(windows))]
 mod ini;
 
 use std::ffi::OsStr;
+#[cfg(not(windows))]
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(windows))]
+use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(not(windows))]
 use std::time::Duration;
 
+#[cfg(not(windows))]
 use greennode_sdk::{ConfigSource, FileSlot, Mode, Selection, read_slot, select};
+#[cfg(not(windows))]
 use zeroize::Zeroizing;
 
-use super::{Invocation, fail, sdk_error};
+use super::Invocation;
+#[cfg(not(windows))]
+use super::{fail, sdk_error};
 
+#[cfg(not(windows))]
 const STDIN_LIMIT: usize = 4096;
 
 #[cfg(unix)]
@@ -45,6 +56,7 @@ missing overrides as errors. If only one link succeeds, keep both legacy
 sources and complete or undo the copy before running commands. Set HOME first
 if needed. Verify the copied settings and read_only with greennode configure list."#;
 
+#[cfg(not(windows))]
 enum Error {
     Sdk(Box<greennode_sdk::Error>),
     Legacy,
@@ -54,20 +66,24 @@ enum Error {
     File(TargetSlot, String),
 }
 
+#[cfg(not(windows))]
 impl From<greennode_sdk::Error> for Error {
     fn from(error: greennode_sdk::Error) -> Self {
         Self::Sdk(Box::new(error))
     }
 }
 
+#[cfg(not(windows))]
 type Result<T> = std::result::Result<T, Error>;
 
+#[cfg(not(windows))]
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct TargetSlot {
     slot: FileSlot,
     named: bool,
 }
 
+#[cfg(not(windows))]
 impl TargetSlot {
     fn error(self, reason: &str, line: Option<usize>) -> Error {
         let (slot, source) = match (self.slot, self.named) {
@@ -81,6 +97,19 @@ impl TargetSlot {
     }
 }
 
+#[cfg(windows)]
+pub(super) async fn run(
+    invocation: &mut Invocation<'_>,
+    _profile: &str,
+    _cwd: Option<&Path>,
+    _flag: bool,
+    _key: (&str, bool, bool),
+    _argument: &OsStr,
+) -> ExitCode {
+    super::super::root::refuse_configure_write(invocation.stderr)
+}
+
+#[cfg(not(windows))]
 pub(super) async fn run(
     invocation: &mut Invocation<'_>,
     profile: &str,
@@ -150,6 +179,7 @@ pub(super) async fn run(
     }
 }
 
+#[cfg(not(windows))]
 fn latch(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" | "0" | "false" => Some(false),
@@ -158,6 +188,7 @@ fn latch(value: &str) -> Option<bool> {
     }
 }
 
+#[cfg(not(windows))]
 fn environment_latch(source: &dyn ConfigSource, flag: bool) -> Result<()> {
     let mut enabled = flag.then_some("--read-only");
     for name in ["GREENNODE_READ_ONLY", "VNGCLOUD_READ_ONLY"] {
@@ -175,6 +206,7 @@ fn environment_latch(source: &dyn ConfigSource, flag: bool) -> Result<()> {
     enabled.map_or(Ok(()), |name| Err(Error::ReadOnly(name.to_owned())))
 }
 
+#[cfg(not(windows))]
 struct Snapshot {
     paths: [PathBuf; 2],
     slots: [TargetSlot; 2],
@@ -182,6 +214,7 @@ struct Snapshot {
     present: [bool; 2],
 }
 
+#[cfg(not(windows))]
 impl Snapshot {
     fn read(
         source: &dyn ConfigSource,
@@ -262,6 +295,7 @@ impl Snapshot {
     }
 }
 
+#[cfg(not(windows))]
 fn resolve_target(
     selection: &Selection,
     legacy: &files::LegacyTree,
@@ -277,6 +311,7 @@ fn resolve_target(
     Ok(real)
 }
 
+#[cfg(not(windows))]
 fn check(invocation: &Invocation<'_>) -> Result<()> {
     invocation
         .context
@@ -284,6 +319,7 @@ fn check(invocation: &Invocation<'_>) -> Result<()> {
         .map_or(Ok(()), |end| Err(greennode_sdk::Error::from(end).into()))
 }
 
+#[cfg(not(windows))]
 async fn execute(
     invocation: &mut Invocation<'_>,
     profile: &str,
@@ -377,14 +413,14 @@ async fn execute(
     let edit = ini::Edit::new(&contents.bytes, target.slot, &section, key, value)?;
     let mut pending = target.prepare(&snapshot.legacy, |file| edit.write(file))?;
     tokio::task::yield_now().await;
-    pending
-        .publish(|| {
-            guard()?;
-            target.verify_original(&contents)
-        })
-        .await
+    pending.publish(|| {
+        guard()?;
+        target.verify_original(&contents)?;
+        check(invocation)
+    })
 }
 
+#[cfg(not(windows))]
 fn read_stdin<'a>(reader: &mut dyn Read, buffer: &'a mut [u8; STDIN_LIMIT + 1]) -> Result<&'a str> {
     let mut used = 0;
     while let Some(rest) = buffer.get_mut(used..).filter(|rest| !rest.is_empty()) {
@@ -410,6 +446,7 @@ fn read_stdin<'a>(reader: &mut dyn Read, buffer: &'a mut [u8; STDIN_LIMIT + 1]) 
         .map_err(|_| Error::Usage("stdin value is not valid UTF-8".to_owned()))
 }
 
+#[cfg(not(windows))]
 fn validate(key: &str, value: &str) -> Result<()> {
     if value.contains(['\r', '\n']) {
         return Err(Error::Usage(
@@ -433,6 +470,7 @@ fn validate(key: &str, value: &str) -> Result<()> {
     failure.map_or(Ok(()), |message| Err(Error::Usage(message.to_owned())))
 }
 
+#[cfg(not(windows))]
 fn valid_region(region: &str) -> bool {
     region.len() <= 63
         && !region.starts_with('-')

@@ -230,17 +230,9 @@ impl Target {
     }
 
     pub(super) fn verify_original(&self, contents: &Contents) -> Result<()> {
-        let stable = match (
-            self.parent.open_file(&self.name, Open::Read),
-            &contents.identity,
-        ) {
-            (Ok(file), Some(original)) => {
-                Handle::from_file(file).is_ok_and(|current| current == *original)
-            }
-            (Err(error), None) => error.kind() == io::ErrorKind::NotFound,
-            _ => false,
-        };
-        if stable {
+        if self.read(contents.identity.is_some()).is_ok_and(|current| {
+            current.identity == contents.identity && *current.bytes == *contents.bytes
+        }) {
             Ok(())
         } else {
             Err(self.slot.error("file changed during the edit", None))
@@ -324,30 +316,21 @@ pub(super) struct Pending<'a> {
 }
 
 impl Pending<'_> {
-    pub(super) async fn publish(&mut self, guard: impl Fn() -> Result<()>) -> Result<()> {
-        let retries = if cfg!(windows) { 5 } else { 0 };
-        for attempt in 0..=retries {
-            guard()?;
-            if !self.target.parent.matches(&self.name, &self.identity) {
-                return Err(self.target.slot.error("temporary file changed", None));
-            }
-            match self.target.parent.rename(&self.name, &self.target.name) {
-                Ok(()) => {
-                    self.published = true;
-                    return Ok(());
-                }
-                Err(error)
-                    if attempt < retries && matches!(error.raw_os_error(), Some(32 | 33)) =>
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                }
-                Err(_) => break,
-            }
+    pub(super) fn publish(&mut self, guard: impl FnOnce() -> Result<()>) -> Result<()> {
+        guard()?;
+        if !self.target.parent.matches(&self.name, &self.identity) {
+            return Err(self.target.slot.error("temporary file changed", None));
         }
-        Err(self
-            .target
-            .slot
-            .error("cannot publish temporary file", None))
+        self.target
+            .parent
+            .rename(&self.name, &self.target.name)
+            .map_err(|_| {
+                self.target
+                    .slot
+                    .error("cannot publish temporary file", None)
+            })?;
+        self.published = true;
+        Ok(())
     }
 }
 
@@ -515,21 +498,7 @@ impl Parent {
             Open::Lock => options.read(true).write(true).create(true),
             Open::Create => options.write(true).create_new(true),
         };
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            use windows_sys::Win32::Storage::FileSystem::{
-                FILE_FLAG_OPEN_REPARSE_POINT, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
-            };
-            options
-                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-                .security_qos_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION);
-        }
         let file = options.open(self.path.join(name))?;
-        #[cfg(windows)]
-        if !matches!(kind, Open::Create) && !winapi_util::file::typ(&file)?.is_disk() {
-            return Err(io::Error::other("not a regular file"));
-        }
         if !matches!(kind, Open::Create) && !file.metadata()?.is_file() {
             return Err(io::Error::other("not a regular file"));
         }

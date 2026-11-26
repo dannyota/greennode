@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, IsTerminal, Read};
+#[cfg(not(windows))]
+use std::io::Read;
+use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 use greennode_sdk::{ConfigSource, RequestContext, SystemClock};
@@ -13,14 +15,13 @@ impl ConfigSource for Environment {
     }
 }
 
+#[cfg(not(windows))]
 struct Input<'a> {
     context: &'a RequestContext,
-    #[cfg(not(windows))]
     stdin: io::Stdin,
-    #[cfg(windows)]
-    read_complete: bool,
 }
 
+#[cfg(not(windows))]
 impl Input<'_> {
     fn check(&self) -> io::Result<()> {
         if self.context.check(&SystemClock).is_some() {
@@ -44,54 +45,6 @@ impl Read for Input<'_> {
             if poll(&mut fds, Some(&wait))? != 0 {
                 self.check()?;
                 return Ok(rustix::io::read(&self.stdin, bytes)?);
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Read for Input<'_> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        use std::sync::mpsc::{RecvTimeoutError, sync_channel};
-        use std::time::Duration;
-        use zeroize::Zeroizing;
-
-        self.check()?;
-        if self.read_complete || bytes.is_empty() {
-            return Ok(0);
-        }
-        self.read_complete = true;
-        let limit = bytes.len();
-        let (send, receive) = sync_channel(1);
-        std::thread::Builder::new().spawn(move || {
-            let read = || -> io::Result<_> {
-                let mut stdin = same_file::Handle::stdin()?;
-                let mut data = Zeroizing::new(vec![0; limit]);
-                let mut used = 0;
-                while let Some(rest) = data.get_mut(used..).filter(|rest| !rest.is_empty()) {
-                    match stdin.as_file_mut().read(rest) {
-                        Ok(0) => break,
-                        Ok(n) => used += n,
-                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                        Err(error) => return Err(error),
-                    }
-                }
-                Ok((data, used))
-            };
-            let _ = send.send(read());
-        })?;
-        loop {
-            self.check()?;
-            match receive.recv_timeout(Duration::from_millis(25)) {
-                Ok(result) => {
-                    let (data, used) = result?;
-                    bytes[..used].copy_from_slice(&data[..used]);
-                    return Ok(used);
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::other("stdin reader stopped"));
-                }
             }
         }
     }
@@ -163,13 +116,13 @@ fn main() -> ExitCode {
         let mut stdout = std::io::stdout();
         let mut stderr = std::io::stderr();
         let stdin_terminal = stdin.is_terminal();
+        #[cfg(not(windows))]
         let mut stdin = Input {
             context: &context,
-            #[cfg(not(windows))]
             stdin,
-            #[cfg(windows)]
-            read_complete: false,
         };
+        #[cfg(windows)]
+        let mut stdin = stdin;
         let stdout_terminal = stdout.is_terminal();
         let stderr_terminal = stderr.is_terminal();
         greennode::cli::run_invocation(greennode::cli::Invocation {

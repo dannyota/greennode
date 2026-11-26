@@ -42,11 +42,10 @@ fn command() -> Command {
                 .subcommand(
                     Command::new("set")
                         .disable_help_flag(true)
-                        .arg(Arg::new("key").required(true))
+                        .arg(Arg::new("key").required_unless_present("help-flag"))
                         .arg(
                             Arg::new("value")
-                                .required(true)
-                                .allow_hyphen_values(true)
+                                .required_unless_present("help-flag")
                                 .value_parser(clap::value_parser!(OsString)),
                         ),
                 ),
@@ -227,6 +226,20 @@ fn invalid_command(stderr: &mut dyn Write) -> ExitCode {
     ExitCode::from(2)
 }
 
+#[cfg(windows)]
+pub(super) fn refuse_configure_write(stderr: &mut dyn Write) -> ExitCode {
+    super::errors::write_error(
+        stderr,
+        &super::errors::Envelope {
+            code: "InvalidUsage",
+            message: "configure writes are not supported on Windows yet. Edit the files by hand.",
+            status: None,
+            operation: None,
+        },
+    );
+    ExitCode::from(2)
+}
+
 fn run_with_registry<I, T>(
     args: I,
     stdout: &mut dyn Write,
@@ -287,6 +300,13 @@ where
             }
             None => invalid_command(stderr),
         };
+    }
+    #[cfg(windows)]
+    if matches
+        .subcommand_matches("configure")
+        .is_some_and(|configure| matches!(configure.subcommand_name(), None | Some("set")))
+    {
+        return refuse_configure_write(stderr);
     }
     if matches.get_flag("version-flag") || matches.subcommand_name() == Some("version") {
         let _ = writeln!(stdout, "{}", version());

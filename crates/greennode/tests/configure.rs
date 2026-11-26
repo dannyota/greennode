@@ -40,6 +40,7 @@ impl Home {
         self.command(args).output().unwrap()
     }
 
+    #[cfg(not(windows))]
     fn with_stdin(&self, args: &[&str], value: &[u8]) -> Output {
         let input = self.0.join("stdin");
         std::fs::write(&input, value).unwrap();
@@ -56,6 +57,7 @@ impl Drop for Home {
     }
 }
 
+#[cfg(not(windows))]
 #[test]
 fn legacy_write_refuses_without_creating_files() {
     let home = Home::new();
@@ -234,6 +236,63 @@ fn get_help_does_not_require_key() {
 }
 
 #[test]
+fn set_help_does_not_require_key_or_value() {
+    let home = Home::new();
+    for flag in ["--help", "-h"] {
+        let output = home.run(&["configure", "set", flag]);
+        assert_eq!(output.status.code(), Some(0));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
+        assert!(output.stderr.is_empty());
+    }
+    assert_eq!(home.run(&["configure", "set"]).status.code(), Some(2));
+    assert_eq!(std::fs::read_dir(&home.0).unwrap().count(), 0);
+}
+
+#[test]
+fn set_rejects_unknown_flag_in_value_position() {
+    let home = Home::new();
+    let output = home.run(&["configure", "set", "project_id", "--typo"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("InvalidUsage") && error.contains("unknown argument or flag"));
+    assert_eq!(std::fs::read_dir(&home.0).unwrap().count(), 0);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn set_accepts_flag_like_value_after_separator() {
+    let home = Home::new();
+    let output = home.run(&["configure", "set", "project_id", "--", "--typo"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    let output = home.run(&["configure", "get", "project_id"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.stdout, b"--typo\n");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_configure_writes_refuse_before_reading_or_creating_files() {
+    let home = Home::new();
+    for args in [
+        &["configure"][..],
+        &["configure", "set", "region", "han-1"],
+        &["configure", "set", "password", "-"],
+        &["configure", "set", "project_id", "--", "--typo"],
+    ] {
+        let (exit, stdout, stderr) = invoke_configure(&home, args, &mut Unreadable, false);
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        let error = String::from_utf8_lossy(&stderr);
+        assert!(error.contains("InvalidUsage"));
+        assert!(error.contains("configure writes are not supported on Windows yet"));
+        assert!(error.contains("Edit the files by hand"));
+        assert_eq!(std::fs::read_dir(&home.0).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn invalid_profile_reports_usage_and_syntax() {
     let output = Home::new().run(&["--profile", "bad[name", "configure", "get", "region"]);
     assert_eq!(output.status.code(), Some(2));
@@ -291,6 +350,7 @@ fn legacy_and_read_only_refuse_before_consuming_stdin() {
     }
 }
 
+#[cfg(not(windows))]
 #[test]
 fn latch_sources_are_validated_and_cannot_be_cleared() {
     let home = Home::new();
@@ -319,6 +379,7 @@ fn latch_sources_are_validated_and_cannot_be_cleared() {
     assert!(!home.0.join(".greennode").exists());
 }
 
+#[cfg(not(windows))]
 #[test]
 fn literal_secrets_are_refused_without_disclosure() {
     let home = Home::new();
@@ -333,6 +394,7 @@ fn literal_secrets_are_refused_without_disclosure() {
     assert!(!home.0.join(".greennode").exists());
 }
 
+#[cfg(not(windows))]
 #[test]
 fn stdin_strips_only_one_line_ending_and_enforces_the_byte_limit() {
     let home = Home::new();
@@ -388,6 +450,7 @@ fn credentials_and_created_directory_are_owner_only() {
     assert!(!directory.join("config").exists());
 }
 
+#[cfg(not(windows))]
 #[test]
 fn editing_last_duplicate_preserves_bom_comments_and_other_sections() {
     let home = Home::new();
@@ -431,6 +494,7 @@ fn symlinked_write_target_into_real_legacy_tree_is_refused() {
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
 }
 
+#[cfg(not(windows))]
 #[test]
 fn latch_change_after_snapshot_refuses_publication() {
     let home = Home::new();
@@ -455,8 +519,10 @@ fn latch_change_after_snapshot_refuses_publication() {
     );
 }
 
+#[cfg(not(windows))]
 struct ChangeBeforeInput<F>(Option<F>);
 
+#[cfg(not(windows))]
 impl<F: FnOnce() -> std::io::Result<()>> std::io::Read for ChangeBeforeInput<F> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         let Some(change) = self.0.take() else {
@@ -495,8 +561,84 @@ fn config_alias_changed_after_snapshot_refuses_a_credentials_edit() {
     assert!(!directory.join("credentials").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn in_place_change_after_read_refuses_publication() {
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::atomic::AtomicBool;
+
+    struct EditBeforePublish<'a> {
+        home: &'a Home,
+        edited: AtomicBool,
+    }
+
+    impl greennode_sdk::ConfigSource for EditBeforePublish<'_> {
+        fn var_os(&self, name: &OsStr) -> Option<OsString> {
+            let directory = self.home.0.join(".greennode");
+            if name == "GREENNODE_READ_ONLY"
+                && !self.edited.load(Ordering::Relaxed)
+                && std::fs::read_dir(&directory)
+                    .unwrap()
+                    .any(|entry| entry.unwrap().path().extension() == Some(OsStr::new("tmp")))
+            {
+                std::fs::write(directory.join("config"), "[default]\nregion = han-2\n").unwrap();
+                self.edited.store(true, Ordering::Relaxed);
+            }
+            None
+        }
+
+        fn home_dir(&self) -> Option<PathBuf> {
+            Some(self.home.0.clone())
+        }
+    }
+
+    let home = Home::new();
+    let directory = home.0.join(".greennode");
+    std::fs::create_dir(&directory).unwrap();
+    let config = directory.join("config");
+    std::fs::write(&config, "[default]\nregion = han-1\n").unwrap();
+    let inode = std::fs::metadata(&config).unwrap().ino();
+    let source = EditBeforePublish {
+        home: &home,
+        edited: AtomicBool::new(false),
+    };
+    let (exit, stdout, stderr) = invoke_configure(
+        &source,
+        &["configure", "set", "region", "hcm-3"],
+        &mut Unreadable,
+        false,
+    );
+
+    assert!(source.edited.load(Ordering::Relaxed));
+    assert_eq!(exit, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("file changed during the edit"));
+    assert_eq!(
+        std::fs::read(&config).unwrap(),
+        b"[default]\nregion = han-2\n"
+    );
+    assert_eq!(std::fs::metadata(config).unwrap().ino(), inode);
+    assert_eq!(std::fs::read_dir(directory).unwrap().count(), 2);
+}
+
+#[cfg(not(windows))]
 fn invoke_set(
     home: &Home,
+    input: &mut dyn std::io::Read,
+    terminal: bool,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_configure(
+        home,
+        &["configure", "set", "password", "-"],
+        input,
+        terminal,
+    )
+}
+
+fn invoke_configure(
+    source: &dyn greennode_sdk::ConfigSource,
+    args: &[&str],
     input: &mut dyn std::io::Read,
     terminal: bool,
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
@@ -513,10 +655,11 @@ fn invoke_set(
         .build()
         .unwrap();
     let exit = runtime.block_on(run_invocation(Invocation {
-        args: ["greennode", "configure", "set", "password", "-"]
+        args: std::iter::once("greennode")
+            .chain(args.iter().copied())
             .map(OsString::from)
-            .into(),
-        source: home,
+            .collect(),
+        source,
         stdin: input,
         stdout: &mut stdout,
         stderr: &mut stderr,
@@ -529,15 +672,17 @@ fn invoke_set(
     (exit, stdout, stderr)
 }
 
+struct Unreadable;
+
+impl std::io::Read for Unreadable {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        panic!("stdin was read");
+    }
+}
+
+#[cfg(not(windows))]
 #[test]
 fn terminal_stdin_is_refused_before_reading() {
-    struct Unreadable;
-    impl std::io::Read for Unreadable {
-        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
-            panic!("terminal stdin was read");
-        }
-    }
-
     let home = Home::new();
     let (exit, stdout, stderr) = invoke_set(&home, &mut Unreadable, true);
     assert_eq!(exit, ExitCode::from(2));
