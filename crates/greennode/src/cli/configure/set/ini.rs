@@ -1,5 +1,7 @@
 use std::io::{self, Write};
 
+use zeroize::Zeroizing;
+
 use super::{Result, TargetSlot, files::FILE_LIMIT};
 
 const BOM: &str = "\u{feff}";
@@ -171,6 +173,12 @@ impl<'a> Edit<'a> {
             + self.value.len()
             + self.ending.len()
             + self.after.len()
+    }
+
+    pub(super) fn render(&self) -> io::Result<Zeroizing<Vec<u8>>> {
+        let mut bytes = Zeroizing::new(Vec::with_capacity(self.len()));
+        self.write(&mut *bytes)?;
+        Ok(bytes)
     }
 
     pub(super) fn write(&self, file: &mut impl Write) -> io::Result<()> {

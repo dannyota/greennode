@@ -2,6 +2,8 @@
 mod files;
 #[cfg(not(windows))]
 mod ini;
+#[cfg(unix)]
+mod prompt;
 
 use std::ffi::OsStr;
 #[cfg(not(windows))]
@@ -14,7 +16,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 #[cfg(not(windows))]
-use greennode_sdk::{ConfigSource, FileSlot, Mode, Selection, read_slot, select};
+use greennode_sdk::{ConfigSource, FileSlot, Mode, ProfileFile, Selection, read_slot, select};
 #[cfg(not(windows))]
 use zeroize::Zeroizing;
 
@@ -64,6 +66,8 @@ enum Error {
     ReadOnly(String),
     Usage(String),
     File(TargetSlot, String),
+    #[cfg(unix)]
+    Terminal(&'static str),
 }
 
 #[cfg(not(windows))]
@@ -118,7 +122,25 @@ pub(super) async fn run(
     key: (&str, bool, bool),
     argument: &OsStr,
 ) -> ExitCode {
-    match execute(invocation, profile, cwd, flag, key, argument).await {
+    let result = execute(invocation, profile, cwd, flag, key, argument).await;
+    report(invocation, result)
+}
+
+#[cfg(unix)]
+pub(super) async fn prompt(
+    invocation: &mut Invocation<'_>,
+    profile: &str,
+    cwd: Option<&Path>,
+    flag: bool,
+    terminal: Option<&mut dyn super::Terminal>,
+) -> ExitCode {
+    let result = prompt::execute(invocation, profile, cwd, flag, terminal).await;
+    report(invocation, result)
+}
+
+#[cfg(not(windows))]
+fn report(invocation: &mut Invocation<'_>, result: Result<()>) -> ExitCode {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(Error::Sdk(error)) => {
             if let Some(diagnostic) = error.detail::<greennode_sdk::FileDiagnostic>() {
@@ -176,6 +198,8 @@ pub(super) async fn run(
             fail(invocation, "NoCredentials", &message, 3)
         }
         Err(Error::File(_, message)) => fail(invocation, "InvalidConfig", &message, 2),
+        #[cfg(unix)]
+        Err(Error::Terminal(message)) => fail(invocation, "RequestFailed", message, 1),
     }
 }
 
@@ -211,7 +235,7 @@ struct Snapshot {
     paths: [PathBuf; 2],
     slots: [TargetSlot; 2],
     legacy: files::LegacyTree,
-    present: [bool; 2],
+    selection: Selection,
 }
 
 #[cfg(not(windows))]
@@ -221,7 +245,7 @@ impl Snapshot {
         cwd: Option<&Path>,
         profile: &str,
         flag: bool,
-    ) -> Result<Self> {
+    ) -> Result<(Self, ProfileFile)> {
         let selection = select(None, None, source, cwd)?;
         if selection.mode == Mode::Legacy {
             return Err(Error::Legacy);
@@ -230,7 +254,7 @@ impl Snapshot {
         let home = source
             .home_dir()
             .filter(|home| home.is_absolute())
-            .ok_or(Error::Config("configure set requires a home directory"))?;
+            .ok_or(Error::Config("configure requires a home directory"))?;
         let legacy = files::LegacyTree::new(&home)?;
         let slots = [
             TargetSlot {
@@ -260,15 +284,15 @@ impl Snapshot {
                 super::escape(profile)
             )));
         }
-        Ok(Self {
-            paths,
-            slots,
-            legacy,
-            present: [
-                selection.present(FileSlot::Config),
-                selection.present(FileSlot::Credentials),
-            ],
-        })
+        Ok((
+            Self {
+                paths,
+                slots,
+                legacy,
+                selection,
+            },
+            config,
+        ))
     }
 
     fn recheck(
@@ -279,15 +303,15 @@ impl Snapshot {
         flag: bool,
     ) -> Result<Self> {
         check(invocation)?;
-        let latest =
+        let (latest, _) =
             Self::read(invocation.source, cwd, profile, flag).map_err(|error| match error {
-                Error::Legacy => Error::Config("configuration mode changed during configure set"),
+                Error::Legacy => Error::Config("configuration mode changed during configure"),
                 other => other,
             })?;
         if self.paths != latest.paths || self.legacy != latest.legacy || self.slots != latest.slots
         {
             return Err(Error::Config(
-                "configuration paths changed during configure set",
+                "configuration paths changed during configure",
             ));
         }
         check(invocation)?;
@@ -329,7 +353,7 @@ async fn execute(
     argument: &OsStr,
 ) -> Result<()> {
     check(invocation)?;
-    let snapshot = Snapshot::read(invocation.source, cwd, profile, flag)?;
+    let (snapshot, _) = Snapshot::read(invocation.source, cwd, profile, flag)?;
     let mut buffer = Zeroizing::new([0; STDIN_LIMIT + 1]);
     let value = if argument == "-" {
         if invocation.stdin_terminal {
@@ -351,14 +375,31 @@ async fn execute(
             .ok_or_else(|| Error::Usage("value is not valid UTF-8".to_owned()))?
     };
     validate(key, value)?;
+    let edit = [(key, value)];
+    let changes: [&[_]; 2] = if credentials {
+        [&[], &edit]
+    } else {
+        [&edit, &[]]
+    };
+    publish(invocation, profile, cwd, flag, &snapshot, changes).await
+}
 
+#[cfg(not(windows))]
+async fn publish(
+    invocation: &Invocation<'_>,
+    profile: &str,
+    cwd: Option<&Path>,
+    flag: bool,
+    snapshot: &Snapshot,
+    [config_changes, credential_changes]: [&[(&str, &str)]; 2],
+) -> Result<()> {
     tokio::task::yield_now().await;
     check(invocation)?;
     snapshot.legacy.recheck()?;
     let [config, credential_path] = &snapshot.paths;
     let [config_slot, credential_slot] = snapshot.slots;
     let config = files::Target::open(config, config_slot, &snapshot.legacy)?;
-    let credentials = credentials
+    let credentials = (!credential_changes.is_empty())
         .then(|| files::Target::open(credential_path, credential_slot, &snapshot.legacy))
         .transpose()?;
     let mut lock_targets: Vec<_> = std::iter::once(&config)
@@ -398,26 +439,48 @@ async fn execute(
         Ok(current)
     };
     let current = guard()?;
-    let target = credentials.as_ref().unwrap_or(&config);
-    let section = if credentials.is_none() && profile != "default" {
+    let config_section = if profile != "default" {
         format!("profile {profile}")
     } else {
         profile.to_owned()
     };
-    let present = if target.slot.slot == FileSlot::Config {
-        current.present[0]
-    } else {
-        current.present[1]
-    };
-    let contents = target.read(present)?;
-    let edit = ini::Edit::new(&contents.bytes, target.slot, &section, key, value)?;
-    let mut pending = target.prepare(&snapshot.legacy, |file| edit.write(file))?;
-    tokio::task::yield_now().await;
-    pending.publish(|| {
-        guard()?;
-        target.verify_original(&contents)?;
-        check(invocation)
-    })
+    let targets = credentials
+        .iter()
+        .map(|target| (target, profile, credential_changes))
+        .chain(std::iter::once((
+            &config,
+            config_section.as_str(),
+            config_changes,
+        )));
+    let mut prepared = Vec::new();
+    for (target, section, changes) in targets {
+        let Some((&(key, value), earlier)) = changes.split_last() else {
+            continue;
+        };
+        let contents = target.read(current.selection.present(target.slot.slot))?;
+        let mut edited = None;
+        for &(key, value) in earlier {
+            let bytes = edited.as_ref().unwrap_or(&contents.bytes);
+            let edit = ini::Edit::new(bytes, target.slot, section, key, value)?;
+            edited = Some(
+                edit.render()
+                    .map_err(|_| target.slot.error("cannot prepare edit", None))?,
+            );
+        }
+        let bytes = edited.as_ref().unwrap_or(&contents.bytes);
+        let edit = ini::Edit::new(bytes, target.slot, section, key, value)?;
+        let pending = target.prepare(&snapshot.legacy, |file| edit.write(file))?;
+        prepared.push((target, contents, pending));
+    }
+    for (target, contents, mut pending) in prepared {
+        tokio::task::yield_now().await;
+        pending.publish(|| {
+            guard()?;
+            target.verify_original(&contents)?;
+            check(invocation)
+        })?;
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]

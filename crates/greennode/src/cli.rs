@@ -24,6 +24,11 @@ pub struct Invocation<'a> {
     pub context: &'a greennode_sdk::RequestContext,
 }
 
+pub trait Terminal {
+    fn disable_echo(&mut self) -> std::io::Result<()>;
+    fn restore_echo(&mut self, discard_input: bool) -> std::io::Result<()>;
+}
+
 trait InvocationHandler {
     fn accepts(&self, args: &[std::ffi::OsString]) -> bool;
     fn run<'a>(
@@ -32,10 +37,25 @@ trait InvocationHandler {
     ) -> dispatch::FutureResult<'a, std::process::ExitCode>;
 }
 
-pub async fn run_invocation(mut invocation: Invocation<'_>) -> std::process::ExitCode {
+pub async fn run_invocation(invocation: Invocation<'_>) -> std::process::ExitCode {
+    run_with_terminal(invocation, None).await
+}
+
+#[cfg(unix)]
+pub async fn run_invocation_with_terminal(
+    invocation: Invocation<'_>,
+    terminal: &mut dyn Terminal,
+) -> std::process::ExitCode {
+    run_with_terminal(invocation, Some(terminal)).await
+}
+
+async fn run_with_terminal(
+    mut invocation: Invocation<'_>,
+    terminal: Option<&mut dyn Terminal>,
+) -> std::process::ExitCode {
     use std::process::ExitCode;
 
-    let mut handler = configure::Handler;
+    let mut handler = configure::Handler(terminal);
     if handler.accepts(&invocation.args) {
         return handler.run(&mut invocation).await;
     }
