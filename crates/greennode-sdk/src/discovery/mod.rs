@@ -144,7 +144,7 @@ impl Discovery {
             limits.account(rows, bytes)?;
         }
         let selected = select(projects, region, state.as_ref())?;
-        if evidence.text_reflects(&selected.id) {
+        if evidence.id_reflects(&selected.id) {
             return Err(invalid_response(StatusCode::OK));
         }
         #[cfg(test)]

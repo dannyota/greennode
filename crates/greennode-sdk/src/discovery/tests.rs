@@ -160,7 +160,6 @@ async fn discovery_adds_bearer_to_caller_evidence() {
 }
 
 #[tokio::test]
-#[ignore = "requires strict identifier matcher from PR 88"]
 async fn short_base64url_credential_cannot_be_cached_as_project_id() {
     let server = Server::start(vec![response(
         "200 OK",
