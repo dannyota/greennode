@@ -38,6 +38,7 @@ pub mod tagging;
 pub mod testing;
 mod token;
 pub mod vks;
+pub mod volume;
 mod wire;
 
 pub use clock::*;

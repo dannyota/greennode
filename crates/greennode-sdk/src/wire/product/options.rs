@@ -1,4 +1,4 @@
-use crate::{Clock, RequestContext};
+use crate::{Clock, RequestContext, Secret};
 use std::time::Duration;
 use tokio::{sync::Mutex, time::Instant};
 
@@ -59,6 +59,7 @@ pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
     pub(crate) pacing: Option<&'a Pacing>,
     pub(crate) response_guard: Option<super::sender::ResponseGuard>,
+    pub(crate) database_password: Option<&'a Secret>,
     pub(crate) headers: &'a [(&'static str, &'a str)],
 }
 
@@ -67,6 +68,7 @@ impl Options<'_> {
         path_ids: PathIds::Strict,
         pacing: None,
         response_guard: None,
+        database_password: None,
         headers: &[],
     };
 

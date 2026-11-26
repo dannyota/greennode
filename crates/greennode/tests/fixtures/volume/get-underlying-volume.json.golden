@@ -1,0 +1,50 @@
+{
+  "Volume": {
+    "UUID": "\u003cvolume-id\u003e",
+    "ID": "",
+    "ProjectID": "\u003cproject-id\u003e",
+    "Name": "\u003cname\u003e",
+    "Description": "",
+    "Size": 20,
+    "Status": "IN-USE",
+    "StatusMessage": "",
+    "VolumeTypeID": "\u003cvolume-type-id\u003e",
+    "VolumeType": null,
+    "VolumeTypeZoneName": "\u003cname\u003e",
+    "IOPS": "3000",
+    "Throughput": null,
+    "ServerID": "\u003cserver-id\u003e",
+    "ServerNameList": [
+      "\u003chostname\u003e"
+    ],
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "UpdatedAt": "2026-01-01T00:00:00Z",
+    "Bootable": false,
+    "EncryptionType": null,
+    "EncryptionKeyID": "",
+    "BootIndex": 0,
+    "MultiAttach": false,
+    "ServerIDList": [
+      "\u003cserver-id\u003e"
+    ],
+    "Location": null,
+    "Product": "volume",
+    "PersistentVolume": false,
+    "MigrateState": "",
+    "MaxSize": 0,
+    "MinSize": 0,
+    "ZoneID": "",
+    "Zone": {
+      "UUID": "\u003czone-id\u003e",
+      "Name": "\u003cname\u003e",
+      "ZoneType": "",
+      "IsDefault": false,
+      "Description": "",
+      "IsEnabled": false,
+      "OpenStackZone": "",
+      "IPRanges": [],
+      "ServerCount": 0,
+      "VolumeCount": 0
+    }
+  }
+}

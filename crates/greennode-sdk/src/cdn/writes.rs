@@ -378,7 +378,7 @@ fn record_user_uuids(raw: &str, evidence: &mut Evidence) {
             if field_matches(&key, "userUuid")
                 && let Ok(uuid) = serde_json::from_str::<String>(item.get())
             {
-                evidence.add_secret(&Secret::new(uuid));
+                evidence.add_redaction(&Secret::new(uuid));
             }
         }
     }

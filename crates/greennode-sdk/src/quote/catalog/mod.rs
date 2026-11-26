@@ -184,7 +184,7 @@ impl<'a> Catalog<'a> {
         unique(
             ZONES,
             zones.iter().map(|zone| zone.id.as_str()),
-            PathIds::Strict,
+            PathIds::WithUnderscore,
         )?;
         if zones.iter().any(|zone| zone.enabled.is_none()) {
             return Err(request::invalid(ZONES, 200));

@@ -1,0 +1,13 @@
+{
+  "volumeTypeZones": [
+    {
+      "id": "volume-zone-1",
+      "name": "<name>",
+      "description": "<description>",
+      "zone": {
+        "uuid": "zone-a",
+        "name": "<name>"
+      }
+    }
+  ]
+}

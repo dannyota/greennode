@@ -10,6 +10,7 @@ mod pricing;
 mod project;
 mod tagging;
 mod vks;
+mod volume;
 
 use crate::cli::op::{Handler, SelectedOperation, Service};
 
@@ -167,6 +168,7 @@ pub fn registered() -> Result<Registry, RegistryError> {
         project::SERVICE,
         tagging::SERVICE,
         vks::SERVICE,
+        volume::SERVICE,
     ])
 }
 

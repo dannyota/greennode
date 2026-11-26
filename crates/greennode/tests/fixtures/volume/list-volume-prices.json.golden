@@ -1,0 +1,72 @@
+{
+  "Items": [
+    {
+      "VolumeType": {
+        "ID": "vtype-1",
+        "VolumeTypeID": "",
+        "Name": "3000",
+        "IOPS": 3000,
+        "MaxSize": 5000,
+        "MinSize": 1,
+        "Throughput": 209715200,
+        "ZoneID": "fz-82",
+        "VolumeTypeZoneID": "parent-1"
+      },
+      "ZoneID": "zone-1",
+      "ZoneName": "Disabled",
+      "EncryptionTypeID": "",
+      "ZoneEnabled": false,
+      "SizeGB": 1,
+      "PricePerGB": 3200,
+      "Price": {
+        "Status": "quoted",
+        "Basis": "monthly-total",
+        "Currency": "VND",
+        "Tax": "as-returned",
+        "Source": "pricing.GetQuote",
+        "MonthlyPrice": 3200,
+        "OriginalPrice": 3200,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      }
+    }
+  ],
+  "Metadata": {
+    "Region": "hcm-3",
+    "Complete": true,
+    "Requests": 5,
+    "QuotedAt": "1970-01-01T00:00:03Z",
+    "Failures": [],
+    "Notes": [
+      {
+        "Topic": "account-scope",
+        "Scope": "quotes",
+        "Text": "Quotes reflect the current account. Returned discounts do not establish eligibility for a program.",
+        "SourceURL": "https://docs.greennode.ai/partner-portal-user-guide/registration-of-partner-discount.md",
+        "Evidence": "published"
+      },
+      {
+        "Topic": "terms",
+        "Scope": "monthly",
+        "Text": "Tested monthly quotes showed no term discount on the observed account. This is not a universal discount policy or proof that a term was honored.",
+        "SourceURL": "",
+        "Evidence": "observed"
+      },
+      {
+        "Topic": "effective-rate",
+        "Scope": "storage",
+        "Text": "Price per GB is the effective rate at the quoted size, not a marginal tariff.",
+        "SourceURL": "https://docs.greennode.ai/vstorage/object-storage/cach-tinh-phi.md",
+        "Evidence": "published"
+      },
+      {
+        "Topic": "exclusions",
+        "Scope": "volume",
+        "Text": "Provisioned volume quotes exclude snapshots, backups, and server CES.",
+        "SourceURL": "",
+        "Evidence": "observed"
+      }
+    ],
+    "ExcludedGroups": null
+  }
+}

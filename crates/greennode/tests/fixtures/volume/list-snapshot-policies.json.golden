@@ -1,0 +1,66 @@
+{
+  "Items": [
+    {
+      "ID": "policy-1",
+      "Name": "\u003caccount\u003e",
+      "PolicyType": "DEFAULT",
+      "Config": {
+        "Hour": 0,
+        "Minute": 0,
+        "TimeZone": "UTC",
+        "HourlyEnabled": false,
+        "HourlyConfig": {
+          "Interval": null,
+          "Retention": null
+        },
+        "DailyEnabled": true,
+        "DailyConfig": {
+          "Retention": 1
+        },
+        "WeeklyEnabled": false,
+        "MonthlyEnabled": false,
+        "IsProtectedServer": true,
+        "StatusSendEmail": [
+          "ERROR"
+        ]
+      },
+      "CreatedAt": "2026-01-01T00:00:00",
+      "UpdatedAt": "2026-01-01T00:00:00",
+      "SnapshotServerCount": 0,
+      "SnapshotVolumeCount": 0
+    },
+    {
+      "ID": "policy-2",
+      "Name": "\u003caccount\u003e",
+      "PolicyType": "ENHANCED",
+      "Config": {
+        "Hour": 0,
+        "Minute": 0,
+        "TimeZone": "UTC",
+        "HourlyEnabled": true,
+        "HourlyConfig": {
+          "Interval": 1,
+          "Retention": 1
+        },
+        "DailyEnabled": false,
+        "DailyConfig": {
+          "Retention": null
+        },
+        "WeeklyEnabled": false,
+        "MonthlyEnabled": false,
+        "IsProtectedServer": true,
+        "StatusSendEmail": [
+          "ERROR"
+        ]
+      },
+      "CreatedAt": "2026-01-01T00:00:00",
+      "UpdatedAt": "2026-01-01T00:00:00",
+      "SnapshotServerCount": 0,
+      "SnapshotVolumeCount": 0
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 2
+}

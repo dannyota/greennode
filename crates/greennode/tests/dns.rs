@@ -667,10 +667,6 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
     let created_record = RECORD
         .replace("record-1", encoded)
         .replace("zone-1", "invalid/zone");
-    let settled_zone = format!(
-        r#"{{"data":{{"hostedZoneId":"zone-1","status":"ACTIVE",
-        "description":"updated","assocVpcIds":["vpc-1","{encoded}"]}}}}"#
-    );
     let mut screened = Vec::new();
     for (flags, replies, query, expected) in [
         (
@@ -701,24 +697,6 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
             "Record.[ID, HostedZoneID]",
             serde_json::json!(["<redacted>", "<redacted>"]),
         ),
-        (
-            &[
-                "update-hosted-zone",
-                "--hosted-zone-id",
-                "zone-1",
-                "--description",
-                "updated",
-                "--cli-input-json",
-                r#"{"VPCIDs":["vpc-1","%73ynthetic-dns-cli-bearer"]}"#,
-            ],
-            vec![
-                ("200 OK", settled_zone.as_str()),
-                ("204 No Content", ""),
-                ("200 OK", settled_zone.as_str()),
-            ],
-            "HostedZone.AssociatedVPCIDs",
-            serde_json::json!(["vpc-1", "<redacted>"]),
-        ),
     ] {
         for query_enabled in [false, true] {
             let server = Server::start(
@@ -744,12 +722,43 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
                         output["Record"]["ID"],
                         output["Record"]["HostedZoneID"]
                     ]),
-                    _ => output["HostedZone"]["AssociatedVPCIDs"].clone(),
+                    _ => unreachable!(),
                 }
             };
             screened.push(actual == expected);
             assert_eq!(server.requests(), replies.len());
         }
     }
-    assert_eq!(screened, [true; 6]);
+    assert_eq!(screened, [true; 4]);
+}
+
+#[tokio::test]
+async fn dns_update_refuses_an_encoded_bearer_in_the_write_body() {
+    const ENCODED: &str = "%73ynthetic-dns-cli-bearer";
+    let args = [
+        "update-hosted-zone",
+        "--hosted-zone-id",
+        "zone-1",
+        "--description",
+        "updated",
+        "--cli-input-json",
+        r#"{"VPCIDs":["vpc-1","%73ynthetic-dns-cli-bearer"]}"#,
+    ];
+    let preflight = r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"previous","assocVpcIds":["vpc-1"]}}"#;
+    let server = Server::start(vec![response("200 OK", preflight)]);
+    let (status, stdout, stderr) = invoke(&server, BEARER, &args).await;
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert!(
+        std::str::from_utf8(&stderr)
+            .is_ok_and(|text| !text.contains(ENCODED) && !text.contains(BEARER))
+    );
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "InvalidUsage");
+    assert!(
+        server
+            .heads()
+            .iter()
+            .all(|request| request.starts_with(b"GET "))
+    );
 }

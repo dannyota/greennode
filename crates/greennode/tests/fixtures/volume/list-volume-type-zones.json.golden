@@ -1,0 +1,21 @@
+{
+  "Items": [
+    {
+      "ID": "volume-zone-1",
+      "Name": "\u003cname\u003e",
+      "Description": "\u003cdescription\u003e",
+      "Zone": {
+        "UUID": "zone-a",
+        "Name": "\u003cname\u003e",
+        "ZoneType": "",
+        "IsDefault": false,
+        "Description": "",
+        "IsEnabled": false,
+        "OpenStackZone": "",
+        "IPRanges": [],
+        "ServerCount": 0,
+        "VolumeCount": 0
+      }
+    }
+  ]
+}

@@ -1,6 +1,170 @@
-use super::{response, sender::SentCredentials};
+use super::response;
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
+use std::sync::LazyLock;
+
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum Source {
+    Redaction,
+    DatabasePassword,
+    Credential,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct SentCredentials {
+    values: Vec<Secret>,
+    sources: Vec<Source>,
+    numeric_product_credential: bool,
+    incomplete_signin: bool,
+}
+impl SentCredentials {
+    #[cfg(test)]
+    pub(crate) fn for_test(values: Vec<Secret>) -> Self {
+        Self {
+            sources: vec![Source::Credential; values.len()],
+            values,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn record(&mut self, secret: &Secret) {
+        self.record_from(secret, Source::Credential);
+    }
+
+    fn record_from(&mut self, secret: &Secret, source: Source) {
+        if secret.expose_secret().is_empty() {
+            return;
+        }
+        if let Some((_, known_source)) = self
+            .values
+            .iter()
+            .zip(&mut self.sources)
+            .find(|(value, _)| value.expose_secret() == secret.expose_secret())
+        {
+            *known_source = (*known_source).max(source);
+        } else {
+            self.values.push(secret.clone());
+            self.sources.push(source);
+        }
+    }
+
+    pub(super) fn transport_only(&self) -> Self {
+        if self.sources.contains(&Source::Redaction) {
+            self.filtered(|_, source| source != Source::Redaction)
+        } else {
+            self.clone()
+        }
+    }
+
+    fn without_database_password(&self, password: &Secret) -> Self {
+        self.filtered(|value, source| {
+            source != Source::DatabasePassword || value.expose_secret() != password.expose_secret()
+        })
+    }
+
+    fn filtered(&self, keep: impl Fn(&Secret, Source) -> bool) -> Self {
+        let (values, sources) = self
+            .values
+            .iter()
+            .zip(self.sources.iter().copied())
+            .filter(|(value, source)| keep(value, *source))
+            .map(|(value, source)| (value.clone(), source))
+            .unzip();
+        Self {
+            values,
+            sources,
+            numeric_product_credential: self.numeric_product_credential,
+            incomplete_signin: self.incomplete_signin,
+        }
+    }
+
+    pub(super) fn record_product_credential(&mut self, secret: &Secret) {
+        static NUMBER: LazyLock<Result<regex_lite::Regex, regex_lite::Error>> =
+            LazyLock::new(|| {
+                regex_lite::Regex::new(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
+            });
+        self.numeric_product_credential |= NUMBER.as_ref().map_or(true, |pattern| {
+            pattern.is_match(secret.expose_secret().trim())
+        });
+        self.record(secret);
+    }
+    pub(crate) fn has_numeric_product_credential(&self) -> bool {
+        self.numeric_product_credential
+    }
+    pub(super) fn has_incomplete_signin(&self) -> bool {
+        self.incomplete_signin
+    }
+    pub(super) fn mark_incomplete_signin(&mut self) {
+        self.incomplete_signin = true;
+    }
+
+    pub(crate) fn extend(&mut self, credentials: &Self) {
+        self.incomplete_signin |= credentials.incomplete_signin;
+        self.numeric_product_credential |= credentials.numeric_product_credential;
+        for (secret, source) in credentials
+            .values
+            .iter()
+            .zip(credentials.sources.iter().copied())
+        {
+            self.record_from(secret, source);
+        }
+    }
+    pub(crate) fn values(&self) -> &[Secret] {
+        &self.values
+    }
+    pub(crate) fn reflects(&self, data: &[u8]) -> bool {
+        self.values.iter().any(|secret| {
+            let value = secret.expose_secret().as_bytes();
+            !value.is_empty() && data.windows(value.len()).any(|part| part == value)
+        })
+    }
+}
+impl std::fmt::Debug for SentCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SentCredentials([redacted])")
+    }
+}
+pub(super) fn body_reflects(
+    body: &[u8],
+    credentials: &SentCredentials,
+    database_password: Option<&Secret>,
+) -> bool {
+    if let Some(password) = database_password {
+        return check_database_body(body, credentials, password).unwrap_or(true);
+    }
+    !body.is_empty() && response::reflects_credential(&String::from_utf8_lossy(body), credentials)
+}
+
+fn check_database_body(
+    body: &[u8],
+    credentials: &SentCredentials,
+    password: &Secret,
+) -> Option<bool> {
+    use serde_json::value::RawValue;
+    use std::collections::BTreeMap;
+    type Fields<'a> = BTreeMap<String, &'a RawValue>;
+
+    crate::wire::strict_json::validate(body, &[], body.len()).ok()?;
+    let mut fields: Fields<'_> = serde_json::from_slice(body).ok()?;
+    let mut user: Fields<'_> = serde_json::from_str(fields.remove("user")?.get()).ok()?;
+    let authorized_field = user.remove("password")?;
+    let authorized_value =
+        zeroize::Zeroizing::new(serde_json::from_str::<String>(authorized_field.get()).ok()?);
+    if authorized_value.as_str() != password.expose_secret() {
+        return None;
+    }
+    let reflects = |text: &str| response::reflects_credential(text, credentials);
+    let other_credentials = credentials.without_database_password(password);
+    Some(
+        reflects("user")
+            || reflects("password")
+            || response::reflects_credential(authorized_field.get(), &other_credentials)
+            || fields
+                .into_iter()
+                .chain(user)
+                .any(|(name, value)| reflects(&name) || reflects(value.get())),
+    )
+}
 
 const REDACTED: &str = "<redacted>";
 
@@ -14,9 +178,17 @@ impl Evidence {
         Self::default()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn add_secret(&mut self, secret: &Secret) {
         self.credentials.record(secret);
+    }
+
+    pub(crate) fn add_redaction(&mut self, value: &Secret) {
+        self.credentials.record_from(value, Source::Redaction);
+    }
+
+    pub(crate) fn add_database_password(&mut self, value: &Secret) {
+        self.credentials
+            .record_from(value, Source::DatabasePassword);
     }
 
     pub(crate) fn absorb(&mut self, credentials: &SentCredentials) {

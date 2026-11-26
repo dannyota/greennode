@@ -145,7 +145,7 @@ impl Catalog<'_> {
         unique(
             TYPES,
             rows.iter().map(VolumeType::quote_id),
-            PathIds::Strict,
+            PathIds::WithUnderscore,
         )?;
         if rows.iter().any(|row| {
             row.min_size <= 0

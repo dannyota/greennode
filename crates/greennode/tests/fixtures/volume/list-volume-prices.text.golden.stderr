@@ -1,0 +1,4 @@
+account-scope: Quotes reflect the current account. Returned discounts do not establish eligibility for a program.
+terms: Tested monthly quotes showed no term discount on the observed account. This is not a universal discount policy or proof that a term was honored.
+effective-rate: Price per GB is the effective rate at the quoted size, not a marginal tariff.
+exclusions: Provisioned volume quotes exclude snapshots, backups, and server CES.

@@ -97,6 +97,20 @@ impl Diagnostic {
     }
 }
 
+/// Safe recovery guidance for a write failure.
+pub struct RecoveryAdvice(SafeText);
+
+impl RecoveryAdvice {
+    pub(crate) fn new(message: &str) -> Self {
+        Self(SafeText::new(message, &[]))
+    }
+
+    /// Returns the recovery guidance, which can include a sanitized service reason.
+    pub fn message(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 /// Sanitized details of a failed service request.
 pub struct ApiError {
     operation: &'static str,
