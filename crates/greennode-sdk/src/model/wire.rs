@@ -7,6 +7,25 @@ use serde_json::{Number, Value, value::RawValue};
 use crate::output_number;
 use crate::wire::product::evidence::Evidence;
 
+thread_local! {
+    static LENIENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+pub(crate) fn lenient_decoding() -> bool {
+    LENIENT.with(std::cell::Cell::get)
+}
+
+pub(crate) fn decode_lenient<T>(decode: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LENIENT.with(|flag| flag.set(self.0));
+        }
+    }
+    let _restore = Restore(LENIENT.with(|flag| flag.replace(true)));
+    decode()
+}
+
 pub(crate) trait WireField: Default + DeserializeOwned {
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Option::<Self>::deserialize(d).map(Option::unwrap_or_default)
@@ -307,7 +326,7 @@ macro_rules! model {
                         let mut result = $model::default();
                         let mut seen = std::collections::HashSet::new();
                         let mut matched = std::collections::HashSet::new();
-                        let ignore_case_variants = false $(|| $ignore)?;
+                        let ignore_case_variants = false $(|| $ignore)? || $crate::model::wire::lenient_decoding();
                         while let Some(key) = map.next_key::<String>()? {
                             if !seen.insert(key.clone()) {
                                 return Err(serde::de::Error::custom("duplicate response field"));
@@ -348,3 +367,56 @@ macro_rules! model {
 }
 
 pub(crate) use model;
+
+#[cfg(test)]
+mod lenient_tests {
+    use super::{decode_lenient, lenient_decoding};
+
+    model! {
+        struct Probe {
+            name: String => "name", "Name";
+        }
+    }
+
+    fn lone() -> Result<Probe, serde_json::Error> {
+        serde_json::from_str(r#"{"NAME":"x"}"#)
+    }
+
+    #[test]
+    fn strict_decoding_refuses_a_lone_variant() {
+        assert!(lone().is_err());
+    }
+
+    #[test]
+    fn lenient_decoding_ignores_it_and_still_refuses_collisions() {
+        assert!(decode_lenient(lone).is_ok());
+        assert!(
+            decode_lenient(|| serde_json::from_str::<Probe>(r#"{"name":"a","Name":"b"}"#)).is_err()
+        );
+    }
+
+    #[test]
+    fn strict_decoding_resumes_after_a_lenient_one() {
+        assert!(decode_lenient(lone).is_ok());
+        assert!(!lenient_decoding());
+        assert!(lone().is_err());
+    }
+
+    #[test]
+    fn nesting_keeps_lenient_until_the_outer_scope_ends() {
+        decode_lenient(|| {
+            decode_lenient(|| assert!(lone().is_ok()));
+            assert!(lenient_decoding());
+            assert!(lone().is_ok());
+        });
+        assert!(!lenient_decoding());
+    }
+
+    #[test]
+    fn a_panic_inside_the_scope_restores_strict_decoding() {
+        let result = std::panic::catch_unwind(|| decode_lenient(|| panic!("probe")));
+        assert!(result.is_err());
+        assert!(!lenient_decoding());
+        assert!(lone().is_err());
+    }
+}

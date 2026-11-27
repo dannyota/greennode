@@ -254,6 +254,12 @@ async fn acquire_bearer(
     })
     .await
     .and_then(|result| result.map_err(|error| Error::Provider(Box::new(error))))
+    .and_then(
+        |bearer| match bearer.token.access_token.expose_secret().is_empty() {
+            true => Err(Error::Provider(Box::new(unauthorized::no_token()))),
+            false => Ok(bearer),
+        },
+    )
     .inspect(|bearer| credentials.record(&bearer.token.access_token));
     if started && result.is_err() {
         credentials.mark_incomplete_signin();
@@ -498,7 +504,10 @@ async fn run_inner(
                     && name == http::header::ACCEPT
                     && value.as_bytes() == b"text/html";
                 !(fixed_json || fixed_html)
-                    && (reflection.reflects(value.as_bytes())
+                    && (std::str::from_utf8(value.as_bytes()).is_ok_and(|text| {
+                        super::response::reflects_credential_forms(text, reflection)
+                            || super::response::reflects_credential_forms(text, sent)
+                    }) || reflection.reflects(value.as_bytes())
                         || sent.reflects(value.as_bytes())
                         || pending
                             .iter()

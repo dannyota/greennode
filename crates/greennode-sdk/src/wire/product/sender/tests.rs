@@ -28,6 +28,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::OffsetDateTime;
+mod empty_bearer;
 mod evidence;
 mod pooling;
 mod reflection;
@@ -37,6 +38,7 @@ mod traits;
 struct Provider {
     count: AtomicUsize,
     rejected: Mutex<Vec<String>>,
+    empty: bool,
 }
 impl CredentialsProvider for Provider {
     fn token<'a>(
@@ -46,7 +48,13 @@ impl CredentialsProvider for Provider {
         Box::pin(async move {
             let n = self.count.fetch_add(1, Ordering::SeqCst);
             Ok(Token::new(
-                Secret::new(if n == 0 { "toy-first" } else { "toy-next" }),
+                Secret::new(if self.empty {
+                    ""
+                } else if n == 0 {
+                    "toy-first"
+                } else {
+                    "toy-next"
+                }),
                 None,
             ))
         })

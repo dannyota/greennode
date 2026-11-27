@@ -1,0 +1,23 @@
+{
+  "Items": [
+    {
+      "UUID": "package-1",
+      "Name": "Standard",
+      "PackageID": "standard",
+      "ResourceServiceID": "service-1",
+      "BillingSKU": "nat.s-standard",
+      "ServiceName": "nat",
+      "Description": null,
+      "CurrencyUnit": "VND",
+      "CreatedAt": "2026-01-01",
+      "IsDefault": true,
+      "MonthlyPrice": 100,
+      "Price": {
+        "OptimumPrice": 100,
+        "OriginalPrice": 100,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      }
+    }
+  ]
+}

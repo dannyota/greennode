@@ -20,15 +20,20 @@ use serde_json::value::RawValue;
 pub(crate) enum Product<'a> {
     Portal,
     Regional,
+    Vnetwork(&'a crate::endpoint::Base),
     Storage(Option<&'a str>),
 }
 
-impl Product<'_> {
-    pub(crate) fn endpoint(self, session: &Session) -> Option<&crate::endpoint::Base> {
+impl<'a> Product<'a> {
+    pub(crate) fn endpoint<'s>(self, session: &'s Session) -> Option<&'s crate::endpoint::Base>
+    where
+        'a: 's,
+    {
         let endpoints = session.endpoints();
         match self {
             Self::Portal => endpoints.portal.as_ref(),
             Self::Regional => endpoints.vserver.as_ref(),
+            Self::Vnetwork(base) => Some(base),
             Self::Storage(_) => endpoints.storage.as_ref(),
         }
     }
@@ -149,6 +154,27 @@ impl Output for Document {
     }
 }
 
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+struct VnetworkDocument(Document);
+
+impl Output for VnetworkDocument {
+    const SCHEMA: Shape<'static> = Shape::Any;
+
+    fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
+        let normalized = crate::model::wire::go_json(&response.body);
+        if response.status == StatusCode::OK {
+            strict_json::validate(normalized.as_bytes(), &[], op.cap)
+                .map_err(|_| invalid(op.id, response.status.as_u16()))?;
+            let raw = serde_json::from_str::<Box<RawValue>>(&normalized)
+                .map_err(|_| invalid(op.id, response.status.as_u16()))?;
+            return Ok(Self(Document(Some(raw))));
+        }
+        response_body(op, response)?;
+        Err(invalid(op.id, response.status.as_u16()))
+    }
+}
+
 fn guard_discovery(
     op: &'static str,
     status: StatusCode,
@@ -198,6 +224,7 @@ pub(crate) async fn exchange(
     pacing: Option<&Pacing>,
 ) -> Result<Box<RawValue>, Box<Error>> {
     let direct = pacing.is_none();
+    let vnetwork = matches!(req.product, Product::Vnetwork(_));
     let base = req
         .product
         .endpoint(session)
@@ -209,7 +236,7 @@ pub(crate) async fn exchange(
     let headers = region.map(|id| [("region", id), ("region_id", id)]);
     let options = Options {
         pacing,
-        response_guard: (!direct).then_some(guard_exchange),
+        response_guard: (!direct && !vnetwork).then_some(guard_exchange),
         headers: headers.as_ref().map_or(&[], |headers| headers.as_slice()),
         ..Options::DEFAULT
     };
@@ -224,7 +251,13 @@ pub(crate) async fn exchange(
         class: Classification::Read,
         retry: Retry::Repeatable,
         success: &[StatusCode::OK],
-        cap: if direct { 1 << 20 } else { 8 << 20 },
+        cap: if vnetwork {
+            4 << 20
+        } else if direct {
+            1 << 20
+        } else {
+            8 << 20
+        },
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
@@ -243,22 +276,25 @@ pub(crate) async fn exchange(
         .map_or_else(Bytes::new, Bytes::from);
     let mut jitter = || session.retry_jitter();
     let runtime = session.runtime(ctx, &mut jitter)?;
-    let result = operation::execute_with_evidence::<Document>(
-        runtime,
-        base,
-        &operation,
-        &options,
-        req.path,
-        req.query,
-        session.bearer_source(),
-        body,
-        evidence,
-    )
-    .await;
-    let (status, document) = result.map_err(|failure| Box::new(failure.into_parts().0))?;
+    let source = session.bearer_source();
+    let (status, document) = if vnetwork {
+        let (status, VnetworkDocument(document)) = operation::execute_with_evidence(
+            runtime, base, &operation, &options, req.path, req.query, source, body, evidence,
+        )
+        .await
+        .map_err(|failure| Box::new(failure.into_parts().0))?;
+        (status, document)
+    } else {
+        operation::execute_with_evidence::<Document>(
+            runtime, base, &operation, &options, req.path, req.query, source, body, evidence,
+        )
+        .await
+        .map_err(|failure| Box::new(failure.into_parts().0))?
+    };
     let invalid = || invalid(req.operation, status.as_u16());
     let raw = document.0.ok_or_else(invalid)?;
-    if req.body.is_some()
+    if !vnetwork
+        && req.body.is_some()
         && screen_properties(&raw, evidence, matches!(req.product, Product::Storage(_)))
     {
         return Err(invalid());

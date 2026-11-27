@@ -1,0 +1,192 @@
+{
+  "Items": [
+    {
+      "UUID": "nat-example",
+      "NATName": "nat-example",
+      "Status": "ACTIVE",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": "2026-01-02T00:00:00Z",
+      "ProjectUUID": "project-1",
+      "ZoneUUID": "zone-example",
+      "NATGatewayIP": "203.0.113.10",
+      "PublicIP": "198.51.100.10",
+      "DeletedAt": null,
+      "BillingStatus": "active",
+      "NATPackage": {
+        "ID": "package-1",
+        "UUID": "package-example",
+        "Name": "package-example",
+        "CreatedAt": "2026-01-01T00:00:00Z",
+        "PackageID": "nat-package-example",
+        "Default": true,
+        "Image": {
+          "ID": "image-1",
+          "UUID": "image-example",
+          "ImageType": "example",
+          "ImageVersion": "1",
+          "Licence": "example",
+          "FlavorZoneIDs": [
+            "zone-example"
+          ],
+          "PackageLimit": {
+            "CPU": 2,
+            "Memory": 4,
+            "DiskSize": 8
+          }
+        }
+      },
+      "VPC": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "203.0.113.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      }
+    },
+    {
+      "UUID": "nat-provisioning-example",
+      "NATName": "nat-example",
+      "Status": "PROVISIONING",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": "2026-01-02T00:00:00Z",
+      "ProjectUUID": "project-1",
+      "ZoneUUID": "zone-example",
+      "NATGatewayIP": null,
+      "PublicIP": null,
+      "DeletedAt": null,
+      "BillingStatus": "provisioning",
+      "NATPackage": {
+        "ID": "package-1",
+        "UUID": "package-example",
+        "Name": "package-example",
+        "CreatedAt": "2026-01-01T00:00:00Z",
+        "PackageID": "nat-package-example",
+        "Default": true,
+        "Image": {
+          "ID": "image-1",
+          "UUID": "image-example",
+          "ImageType": "example",
+          "ImageVersion": "1",
+          "Licence": "example",
+          "FlavorZoneIDs": [
+            "zone-example"
+          ],
+          "PackageLimit": {
+            "CPU": 2,
+            "Memory": 4,
+            "DiskSize": 8
+          }
+        }
+      },
+      "VPC": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "203.0.113.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      }
+    },
+    {
+      "UUID": "nat-error-example",
+      "NATName": "nat-example",
+      "Status": "ERROR",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": "2026-01-02T00:00:00Z",
+      "ProjectUUID": "project-1",
+      "ZoneUUID": "zone-example",
+      "NATGatewayIP": null,
+      "PublicIP": null,
+      "DeletedAt": "2026-01-03T00:00:00Z",
+      "BillingStatus": null,
+      "NATPackage": {
+        "ID": "package-1",
+        "UUID": "package-example",
+        "Name": "package-example",
+        "CreatedAt": "2026-01-01T00:00:00Z",
+        "PackageID": "nat-package-example",
+        "Default": true,
+        "Image": {
+          "ID": "image-1",
+          "UUID": "image-example",
+          "ImageType": "example",
+          "ImageVersion": "1",
+          "Licence": "example",
+          "FlavorZoneIDs": [
+            "zone-example"
+          ],
+          "PackageLimit": {
+            "CPU": 2,
+            "Memory": 4,
+            "DiskSize": 8
+          }
+        }
+      },
+      "VPC": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "203.0.113.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      }
+    },
+    {
+      "UUID": "nat-future-status-example",
+      "NATName": "nat-example",
+      "Status": "FUTURE_STATUS",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "UpdatedAt": "2026-01-02T00:00:00Z",
+      "ProjectUUID": "project-1",
+      "ZoneUUID": "zone-example",
+      "NATGatewayIP": null,
+      "PublicIP": "",
+      "DeletedAt": null,
+      "BillingStatus": null,
+      "NATPackage": {
+        "ID": "package-1",
+        "UUID": "package-example",
+        "Name": "package-example",
+        "CreatedAt": "2026-01-01T00:00:00Z",
+        "PackageID": "nat-package-example",
+        "Default": true,
+        "Image": {
+          "ID": "image-1",
+          "UUID": "image-example",
+          "ImageType": "example",
+          "ImageVersion": "1",
+          "Licence": "example",
+          "FlavorZoneIDs": [
+            "zone-example"
+          ],
+          "PackageLimit": {
+            "CPU": 2,
+            "Memory": 4,
+            "DiskSize": 8
+          }
+        }
+      },
+      "VPC": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "203.0.113.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      }
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 7,
+  "TotalItem": 63
+}

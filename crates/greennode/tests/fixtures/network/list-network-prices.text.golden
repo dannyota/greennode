@@ -1,0 +1,6 @@
+unknown	floating-ip	unknown	Floating IP	hcm-3	hcm-3	https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/floating-ip.md	unknown	unknown	unknown	IP-month
+unknown	external-interface	unknown	External Interface	hcm-3	hcm-3	https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/instance-ip-address.md	unknown	unknown	unknown	IP-month
+unknown	reservation	unknown	Floating IP reservation	hcm-3	hcm-3	https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/floating-ip.md	unknown	unknown	unknown	IP-month
+VND	public-vip	120000.00	Public Virtual IP (public)	hcm-3	hcm-3	pricing.GetQuote	quoted	as-returned	public	IP-month
+VND	public-vip	120000.00	Public Virtual IP (public-mkp)	hcm-3	hcm-3	pricing.GetQuote	quoted	as-returned	public-mkp	IP-month
+VND	public-vip	120000.00	Public Virtual IP (public-vm)	hcm-3	hcm-3	pricing.GetQuote	quoted	as-returned	public-vm	IP-month

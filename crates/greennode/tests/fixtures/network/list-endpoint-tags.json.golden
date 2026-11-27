@@ -1,0 +1,14 @@
+{
+  "Items": [
+    {
+      "UUID": "tag-1",
+      "Key": "env",
+      "Value": "\u003cvalue\u003e",
+      "ResourceUUID": "endpoint-1",
+      "ResourceType": "",
+      "SystemTag": false,
+      "CreatedAt": "",
+      "UpdatedAt": ""
+    }
+  ]
+}

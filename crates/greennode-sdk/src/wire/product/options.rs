@@ -58,8 +58,6 @@ impl PathIds {
     }
 }
 
-const ALLOWED_HEADERS: &[&str] = &["user-type", "region", "region_id"];
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
@@ -84,15 +82,15 @@ impl Options<'_> {
 
     pub(crate) fn apply_headers(&self, headers: &mut http::HeaderMap) -> Result<(), ()> {
         for (name, value) in self.headers {
-            if !ALLOWED_HEADERS.contains(name)
-                || value.len() > 128
-                || !(if *name == "user-type" {
-                    PathIds::WithUnderscore
-                } else {
-                    PathIds::Strict
-                })
-                .allows(value)
-            {
+            let valid = match *name {
+                "portal-user-id" => {
+                    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                }
+                "user-type" => PathIds::WithUnderscore.allows(value),
+                "region" | "region_id" => PathIds::Strict.allows(value),
+                _ => false,
+            };
+            if value.len() > 128 || !valid {
                 return Err(());
             }
             let name = http::HeaderName::from_bytes(name.as_bytes()).map_err(|_| ())?;
@@ -109,5 +107,29 @@ impl Options<'_> {
 impl Default for Options<'_> {
     fn default() -> Self {
         Self::DEFAULT
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn portal_user_id_requires_ascii_digits() {
+        let mut headers = http::HeaderMap::new();
+        for rejected in ["", "-7", "7a", " 7", "７"] {
+            let options = Options {
+                headers: &[("portal-user-id", rejected)],
+                ..Options::DEFAULT
+            };
+            assert!(options.apply_headers(&mut headers).is_err());
+            assert!(headers.is_empty());
+        }
+        let options = Options {
+            headers: &[("portal-user-id", "123")],
+            ..Options::DEFAULT
+        };
+        assert!(options.apply_headers(&mut headers).is_ok());
+        assert_eq!(headers["portal-user-id"], "123");
     }
 }
