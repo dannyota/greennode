@@ -244,7 +244,13 @@ async fn truncated_redirect_drops_status_and_reports_the_body_failure() {
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.status(), None);
     assert_eq!(failure.error().class(), ErrorClass::Api);
-    assert_eq!((api.code(), api.message()), ("", ""));
+    assert_eq!(
+        (api.code(), api.message()),
+        (
+            "",
+            "network.GetRouteTable: request failed: network request failed"
+        )
+    );
     assert_eq!(server.heads().len(), 1);
 }
 

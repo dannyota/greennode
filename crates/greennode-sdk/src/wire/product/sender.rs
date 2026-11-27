@@ -193,6 +193,7 @@ pub(crate) struct Failure {
     pub(crate) status: Option<http::StatusCode>,
     pub(crate) dispatch: crate::WriteDispatch,
     pub(crate) credentials: SentCredentials,
+    pub(crate) refused_body: Vec<u8>,
 }
 impl Failure {
     pub(crate) fn into_failure<T>(self, error: crate::Error) -> crate::Failure<T> {
@@ -367,6 +368,7 @@ pub(super) async fn run(
         dispatch,
         sent: SentCredentials::default(),
         reflection: runtime.configured_credentials.cloned().unwrap_or_default(),
+        refused_body: Vec::new(),
     };
     let result = run_inner(runtime, op, auth, request, route_inputs, &mut evidence).await;
     let mut credentials = evidence.reflection;
@@ -378,6 +380,7 @@ pub(super) async fn run(
             status: evidence.status,
             dispatch: evidence.dispatch,
             credentials,
+            refused_body: evidence.refused_body,
         }),
     }
 }
@@ -387,6 +390,7 @@ struct Evidence {
     dispatch: crate::WriteDispatch,
     sent: SentCredentials,
     reflection: SentCredentials,
+    refused_body: Vec<u8>,
 }
 
 async fn run_inner(
@@ -608,7 +612,7 @@ async fn run_inner(
                         && let Some(location) = reply.headers.get(http::header::LOCATION)
                     {
                         let location = location.to_str().map_err(|_| Error::InvalidRequest)?;
-                        let next = redirect::decide(
+                        let next = match redirect::decide(
                             &url,
                             redirect::Operation {
                                 class: op.class,
@@ -619,8 +623,13 @@ async fn run_inner(
                             hops,
                             &visited,
                             location,
-                        )
-                        .map_err(Error::Redirect)?;
+                        ) {
+                            Ok(next) => next,
+                            Err(refusal) => {
+                                evidence.refused_body = reply.body.clone();
+                                return Err(Error::Redirect(refusal));
+                            }
+                        };
                         credentials.extend(reflection);
                         let reflected = match auth {
                             Auth::Bearer(_) => {

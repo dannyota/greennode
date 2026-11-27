@@ -228,3 +228,18 @@ async fn confirmed_member_comparison_is_independent_of_list_order() {
     assert!(output.changed);
     assert_eq!(server.requests(), 7);
 }
+
+#[tokio::test]
+async fn member_write_reports_the_redirect_status_and_message() {
+    let replies = preflight(POOL, MEMBER)
+        .into_iter()
+        .chain([super::create_writes::redirect()]);
+    let server = Server::start(replies.collect());
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .add_pool_member(&ctx, add())
+        .await
+        .unwrap_err();
+    super::create_writes::assert_reported_redirect(&failure);
+    assert_eq!(server.requests(), 4);
+}

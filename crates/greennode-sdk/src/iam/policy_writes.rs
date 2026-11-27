@@ -408,7 +408,7 @@ fn uncertain_create<O>(failure: Failure<O>, evidence: &Evidence) -> Failure<O> {
             } else if error.has_identity(crate::ErrorClass::DeadlineExceeded) {
                 "timed out"
             } else {
-                "network request failed"
+                crate::error::NETWORK_REQUEST_FAILED
             };
             error = Error::from_api(ApiError::without_fallback(
                 CREATE,

@@ -53,6 +53,8 @@ pub enum ErrorClass {
     DeadlineExceeded,
 }
 
+pub(crate) const NETWORK_REQUEST_FAILED: &str = "network request failed";
+
 pub(crate) struct SafeText(String);
 
 impl SafeText {

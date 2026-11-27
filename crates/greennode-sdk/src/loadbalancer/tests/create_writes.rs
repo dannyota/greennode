@@ -427,4 +427,32 @@ async fn price_guard_and_quote_keep_the_screened_peer_refusal() {
     let api = quote.error().api_error().unwrap();
     assert_eq!(api.code(), "QuoteRefused");
     assert_eq!(api.message(), "package is not orderable");
+pub(super) fn redirect() -> Response {
+    let body = r#"{"message":"moved elsewhere"}"#;
+    Response::Http {
+        status: "302 Found".into(),
+        headers: vec![
+            ("Location".into(), "/other".into()),
+            ("Content-Length".into(), body.len().to_string()),
+        ],
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+pub(super) fn assert_reported_redirect(failure: &crate::Failure<impl Sized>) {
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(302));
+    assert_eq!(api.message(), "moved elsewhere");
+async fn create_reports_the_redirect_status_and_message() {
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        redirect(),
+    let failure = client(&server, CANARY)
+    assert_reported_redirect(&failure);
+    assert_eq!(server.requests(), 2);
+async fn resize_reports_the_redirect_status_and_message() {
+    let mut replies: Vec<Response> = resize_replies("").into_iter().take(3).collect();
+    replies.push(redirect());
+    let server = Server::start(replies);
+        .resize_load_balancer(&ctx, resize(true))
+    assert_eq!(server.requests(), 4);
 }
