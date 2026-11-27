@@ -210,3 +210,24 @@ fn billing_missing_credentials_exits_three() {
     let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(error["error"]["code"], "NoCredentials");
 }
+
+#[cfg(unix)]
+#[test]
+fn invalid_utf8_inline_json_exits_2_before_any_request() {
+    use std::os::unix::ffi::OsStrExt;
+    let home = std::env::temp_dir().join(format!("greennode-cli-utf8-{}", std::process::id()));
+    std::fs::create_dir_all(&home).expect("create temporary home");
+    let output = Command::new(env!("CARGO_BIN_EXE_greennode"))
+        .args(["pricing", "estimate", "--cli-input-json"])
+        .arg(std::ffi::OsStr::from_bytes(b"{\"Servers\":\"a\xff\xfeb\"}"))
+        .env_clear()
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output()
+        .expect("the greennode binary runs");
+    std::fs::remove_dir_all(home).expect("remove temporary home");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let doc: serde_json::Value = serde_json::from_slice(&output.stderr).expect("one JSON error");
+    assert_eq!(doc["error"]["code"], "InvalidUsage");
+}

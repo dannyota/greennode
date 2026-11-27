@@ -1,6 +1,7 @@
 use zeroize::Zeroizing;
 
 pub(super) const STABLE_FLOOR: usize = 7;
+const WHOLE_FLOOR: usize = 8;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Base64Alphabet {
@@ -48,7 +49,10 @@ impl EncodedNeedle {
         input.utf8_chunks().any(|chunk| {
             let text = chunk.valid();
             text.match_indices(needle).any(|(start, _)| {
-                if strict || (self.fragment && needle.len() >= STABLE_FLOOR) {
+                if strict
+                    || needle.len() >= WHOLE_FLOOR
+                    || (self.fragment && needle.len() >= STABLE_FLOOR)
+                {
                     return true;
                 }
                 let left = start

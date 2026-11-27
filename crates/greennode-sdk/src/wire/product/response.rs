@@ -1,5 +1,6 @@
 mod encoded;
 mod full_error;
+mod marker;
 
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
@@ -7,6 +8,7 @@ use encoded::{Base64Alphabet, EncodedNeedle};
 use full_error::full_error;
 pub(crate) use full_error::inspect_error_message;
 use http::StatusCode;
+pub(crate) use marker::has_credential_marker;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
@@ -151,15 +153,6 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
 
 pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
     matches_credential_forms(text, credentials, MatchContext::ErrorText)
-}
-
-pub(crate) fn has_credential_marker(text: &str) -> bool {
-    let normalized: String = text
-        .chars()
-        .flat_map(char::to_lowercase)
-        .filter(char::is_ascii_alphanumeric)
-        .collect();
-    normalized.contains("clientsecret")
 }
 
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
@@ -326,17 +319,8 @@ fn matches_forms(
                 return true;
             }
         }
-        if state.error_text {
-            let normalized = Zeroizing::new(
-                lower
-                    .iter()
-                    .copied()
-                    .filter(u8::is_ascii_alphanumeric)
-                    .collect::<Vec<_>>(),
-            );
-            if std::str::from_utf8(&normalized).is_ok_and(|text| text.contains("clientsecret")) {
-                return true;
-            }
+        if state.error_text && has_credential_marker(&String::from_utf8_lossy(input)) {
+            return true;
         }
         if !needles.is_empty() {
             if state.error_text && std::str::from_utf8(&lower).is_err() {
@@ -1180,6 +1164,34 @@ mod tests {
         assert!(reflects_credential("prefix-6A6b6C-suffix", &credentials));
         assert!(!reflects_credential("prefix6A6b6Csuffix", &credentials));
         assert!(!reflects_credential("1236A6b6C9", &credentials));
+    }
+
+    #[test]
+    fn padded_whole_value_base64_of_a_short_credential_matches_anywhere() {
+        for secret in ["abcde", "abcd"] {
+            let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+            let whole = data_encoding::BASE64.encode(secret.as_bytes());
+            let embedded = data_encoding::BASE64.encode(format!("xyz{secret}").as_bytes());
+            assert!(embedded.contains(&whole));
+            assert!(reflects_credential(
+                &format!("data {embedded} end"),
+                &credentials
+            ));
+        }
+    }
+
+    #[test]
+    fn dotted_capital_i_client_secret_marker_is_withheld_from_error_text() {
+        let credentials = SentCredentials::default();
+        assert!(reflects_credential_forms(
+            "CL\u{130}ENT_SECRET: x",
+            &credentials
+        ));
+        assert!(reflects_credential_forms(
+            "CLIE\u{b2}NT_SECRET: x",
+            &credentials
+        ));
+        assert!(!reflects_credential_forms("client id", &credentials));
     }
 
     #[test]

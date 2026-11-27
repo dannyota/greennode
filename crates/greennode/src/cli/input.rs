@@ -101,7 +101,13 @@ pub(crate) fn merge_checked<T>(
         let bytes = match checks {
             Some(checks) => {
                 let bytes = read_input(raw).map_err(checks.read_error)?;
-                let bytes = normalized(&bytes)?;
+                let bytes = match normalized(&bytes) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        (checks.validate)(&bytes)?;
+                        return Err(error);
+                    }
+                };
                 (checks.validate)(&bytes)?;
                 bytes
             }
@@ -396,6 +402,23 @@ mod tests {
         assert!(raw_value(shallow).is_ok());
     }
 
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let suffix = getrandom::u64().unwrap();
+            let path = std::env::temp_dir().join(format!("greennode-input-{suffix:016x}"));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn unpaired_surrogates_and_invalid_utf8_become_replacement_characters() {
         let args = matches(&["toy"]);
@@ -407,14 +430,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.value.name, "a\u{fffd}b\u{fffd}c");
-        let dir = std::env::temp_dir().join(format!("greennode-input-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("input.json");
+        let dir = TempDir::new();
+        let path = dir.0.join("input.json");
         std::fs::write(&path, b"{\"Name\":\"a\xffb\\ud800\"}").unwrap();
         let raw = format!("file://{}", path.display());
         let parsed = parse(&descriptor(), &args, Some(&raw), None).unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(parsed.value.name, "a\u{fffd}b\u{fffd}");
+    }
+
+    #[test]
+    fn malformed_escape_reports_the_operation_message() {
+        fn validate(bytes: &[u8]) -> Result<(), InputError> {
+            serde_json::from_slice::<Value>(bytes)
+                .map(|_| ())
+                .map_err(|_| InputError("invalid toy input"))
+        }
+        let checks = JsonChecks {
+            validate,
+            read_error: |error| error,
+        };
+        let error = merge_checked(
+            &descriptor(),
+            &matches(&["toy"]),
+            Some(r#"{"Name":"a\u12"}"#),
+            None,
+            Some(checks),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, InputError("invalid toy input"));
     }
 
     #[test]

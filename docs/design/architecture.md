@@ -96,6 +96,7 @@ For every ported command, these match the baseline:
 | Library                    | Go module `danny.vn/vngcloud`           | Rust crate `greennode-sdk`                                                                                                                                                              |
 | Install                    | `go install`                            | `cargo install greennode --locked` or a release archive                                                                                                                                 |
 | Unported commands          | Not applicable                          | Absent from help until ported                                                                                                                                                           |
+| Argument encoding          | Any bytes; JSON then sends U+FFFD       | Every argument, inline `--cli-input-json` included, must be UTF-8 or the command exits 2 before any request; `file://` documents keep Go's per-byte U+FFFD replacement                  |
 | Other intended differences |                                         | Listed in the [configuration](config.md#differences-from-the-baseline), [SDK](sdk.md#differences-from-the-baseline), and [CLI](cli.md#differences-from-the-baseline) designs            |
 
 Error and help text names `greennode` and `GREENNODE_` wherever the baseline
