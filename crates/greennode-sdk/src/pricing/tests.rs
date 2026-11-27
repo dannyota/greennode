@@ -571,7 +571,7 @@ async fn pricing_refuses_malformed_inventory_error_without_retry() {
         assert_eq!(api.status(), Some(code));
         assert_eq!(api.code(), "InvalidResponse");
         assert!(!api.retryable());
-        let ordinary = Server::start(vec![response(status, "{"), response(OK, inventory)]);
+        let ordinary = Server::start(vec![response(status, "busy"), response(OK, inventory)]);
         let config = config_with_project(&ordinary, false, Some(provider.clone()));
         let result = crate::project::Client::new(&config)
             .list_projects(&ctx, crate::project::ListProjectsInput::default())

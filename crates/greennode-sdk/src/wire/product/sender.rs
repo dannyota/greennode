@@ -1,5 +1,5 @@
 pub(crate) use super::evidence::SentCredentials;
-use super::response::Screen;
+use super::response::{ProjectDiscovery, Screen};
 use super::{redirect, retry, unauthorized};
 use crate::wire::{
     connection::{OneSendClient, PooledClient},
@@ -85,7 +85,7 @@ pub(crate) type ResponseGuard = fn(
 pub(crate) struct Operation<'a> {
     pub(crate) guard: Option<&'static str>,
     pub(crate) pacing: Option<&'a super::options::Pacing>,
-    pub(crate) project_discovery: Option<&'static str>,
+    pub(crate) project_discovery: Option<ProjectDiscovery>,
     pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
     pub(crate) attempt_check: Option<super::options::AttemptCheck<'a>>,
     pub(crate) method: Method,

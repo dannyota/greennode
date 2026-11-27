@@ -214,6 +214,9 @@ impl Client {
             .await
         {
             Ok(_) => None,
+            Err(failure) if failure.error().detail::<RefusedGuard>().is_some() => {
+                return Err(convert(failure));
+            }
             Err(failure) if rejected(&failure) => {
                 return Err(convert(
                     self.explain_401(ctx, call, cdn_id, failure, &mut evidence)

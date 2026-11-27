@@ -431,6 +431,12 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
     (envelope.code, message)
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ProjectDiscovery {
+    pub(crate) id: &'static str,
+    pub(crate) accepted: &'static [StatusCode],
+}
+
 impl sender::Operation<'_> {
     pub(super) fn screen_reply(
         &self,
@@ -444,14 +450,9 @@ impl sender::Operation<'_> {
         if self.guard.is_some() {
             evidence = evidence.transport_only();
         }
-        if opaque
-            || (self.project_discovery.is_some()
-                && !reply.status.is_success()
-                && serde_json::from_str::<&serde_json::value::RawValue>(
-                    &crate::model::wire::go_json(&reply.body),
-                )
-                .is_err())
-        {
+        if let Some(project) = self.project_discovery {
+            evidence.discovery_body_screen(&reply.body, project.accepted.contains(&reply.status))
+        } else if opaque {
             evidence.opaque_body_screen(&reply.body)
         } else {
             evidence.go_peer_body_screen(&reply.body)
@@ -465,10 +466,10 @@ impl sender::Operation<'_> {
         known: &sender::SentCredentials,
         sent: &sender::SentCredentials,
     ) -> Option<Box<crate::Error>> {
-        if let Some(id) = self.project_discovery
+        if let Some(project) = self.project_discovery
             && !screen.is_clean()
         {
-            return Some(project_discovery_error(id, reply.status));
+            return Some(project_discovery_error(project.id, reply.status));
         }
         let (id, guard) = self.response_guard?;
         guard(id, reply.status, &reply.body, known, sent)

@@ -583,6 +583,29 @@ impl Evidence {
         response::BodyMatcher::new(&self.credentials, body.len()).scan(body, false)
     }
 
+    pub(super) fn discovery_body_screen(&self, body: &[u8], accepted: bool) -> Screen {
+        if accepted {
+            return self.go_peer_body_screen(body);
+        }
+        let matcher = response::BodyMatcher::new(&self.credentials, body.len());
+        matcher.scan(body, false).then(|| {
+            let text = crate::model::wire::go_json(body);
+            let leading = body.trim_ascii_start();
+            let leading = leading
+                .strip_prefix(b"\xef\xbb\xbf")
+                .unwrap_or(leading)
+                .trim_ascii_start();
+            let looks_like_json = matches!(leading.first(), Some(b'{' | b'[' | b'"'));
+            if looks_like_json
+                || serde_json::from_str::<&serde_json::value::RawValue>(&text).is_ok()
+            {
+                peer::decoded_reflects(&matcher, text.as_bytes())
+            } else {
+                Screen::Clean
+            }
+        })
+    }
+
     pub(crate) fn peer_body_screen(&self, body: &[u8]) -> Screen {
         self.screen_peer_body(body, false)
     }

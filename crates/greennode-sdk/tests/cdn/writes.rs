@@ -593,3 +593,34 @@ async fn toggle_confirmation_never_retries_a_guard_refusal_with_an_observed_stat
     );
     assert_eq!(server.requests(), 3);
 }
+
+#[tokio::test]
+async fn toggle_never_confirms_after_a_refused_write_acknowledgement() {
+    let body = json!({"success":true,"note":CDN_KEY}).to_string();
+    for enable in [true, false] {
+        let server = Server::start(vec![
+            reply(if enable { DISABLED } else { ACTIVE }),
+            reply(&body),
+            reply(if enable { ACTIVE } else { DISABLED }),
+        ]);
+        let cdn = client(&server, Some(CDN_KEY));
+        let ctx = RequestContext::new().0;
+        let result = if enable {
+            let mut input = EnableWebAcceleratorInput::new("cdn-1");
+            input.no_wait = true;
+            cdn.enable_web_accelerator(&ctx, input)
+                .await
+                .map(|output| output.changed)
+                .map_err(|failure| (failure.write_dispatch(), failure.partial().is_some()))
+        } else {
+            let mut input = DisableWebAcceleratorInput::new("cdn-1");
+            input.no_wait = true;
+            cdn.disable_web_accelerator(&ctx, input)
+                .await
+                .map(|output| output.changed)
+                .map_err(|failure| (failure.write_dispatch(), failure.partial().is_some()))
+        };
+        assert_eq!(result, Err((WriteDispatch::MayHaveBeenSent, false)));
+        assert_eq!(server.requests(), 2);
+    }
+}

@@ -125,6 +125,54 @@ async fn call_at_source(
 }
 
 #[tokio::test]
+async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier_fields() {
+    let source = RotatingSource(std::sync::Mutex::new("jkl"));
+    for status in ["401 Unauthorized", "503 Service Unavailable"] {
+        for body in [
+            br#"  {"projectId":"ordinary-id""#.as_slice(),
+            br#"[{"projectId":"ordinary-id"}"#,
+            br#""unterminated"#,
+            b"\xef\xbb\xbf {\"projectId\":\"ordinary-id\"",
+            br#"{"projectId":"pre6A6B6Cpost"}"#,
+        ] {
+            let server = Server::start(vec![
+                response(status, body),
+                response("200 OK", br#"{"projects":[{"projectId":"one"}]}"#),
+            ]);
+            let result = call_at_source(
+                &Discovery::default(),
+                &server,
+                &RequestContext::new().0,
+                &SystemClock,
+                SystemClock.monotonic_now() + Duration::from_secs(5),
+                &source,
+            )
+            .await;
+            let Err(error) = result else {
+                panic!("discovery retried an unsafe error response");
+            };
+            assert_eq!(
+                error.api_error().map(crate::ApiError::code),
+                Some("InvalidResponse")
+            );
+            assert_eq!(server.requests(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn discovery_a_nonaccepted_201_uses_the_ordinary_status_diagnostic() {
+    let server = Server::start(vec![response("201 Created", b"unaccepted response")]);
+    let error = call(&Discovery::default(), &server, &RequestContext::new().0)
+        .await
+        .unwrap_err();
+    let api = error.api_error().unwrap();
+    assert_eq!(api.status(), Some(201));
+    assert_eq!(api.message(), "Created");
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn discovery_adds_bearer_to_caller_evidence() {
     let server = Server::start(vec![response(
         "200 OK",
