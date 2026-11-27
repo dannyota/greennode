@@ -1,8 +1,9 @@
+use crate::wire::strict_json::FieldNames;
 use std::collections::HashSet;
 
 use http::Method;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
@@ -110,7 +111,7 @@ impl Client {
                 .await
                 .map_err(not_sent)?;
             let monthly = quote.optimum_price;
-            check_price(&CREATE, monthly, input.max_price, &evidence).map_err(not_sent)?;
+            check_price(&CREATE, monthly, input.max_price, &mut evidence).map_err(not_sent)?;
             let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
             let ack = self.send_write::<CreateVolumeOutput>(ctx, &CREATE, &[&project], Some(&body), &mut evidence).await.map_err(|failure| {
                 let (error, _, dispatch) = failure.into_parts();
@@ -127,11 +128,15 @@ impl Client {
             } else {
                 PathIds::Strict
             };
-            let id: String = decode(&super::wire::Document(ack.0), |raw| {
-                let envelope = Object::parse(raw)?;
-                let data = envelope.get("data")?.ok_or(())?;
-                Object::parse(data)?.require("uuid")
-            })
+            let id: String = decode(
+                &super::wire::Document(ack.0),
+                FieldNames::Compatible,
+                |raw, names| {
+                    let envelope = Object::parse(raw, names)?;
+                    let data = envelope.get("data")?.ok_or(())?;
+                    Object::parse(data, names)?.require("uuid")
+                },
+            )
             .ok()
             .filter(|id: &String| ids.allows(id) && !evidence.text_reflects(id))
             .ok_or_else(|| {
@@ -215,7 +220,7 @@ impl Client {
                 .await
                 .map_err(not_sent)?;
             let adjustment = quote.optimum_price;
-            check_price(&RESIZE, adjustment, input.max_price, &evidence).map_err(not_sent)?;
+            check_price(&RESIZE, adjustment, input.max_price, &mut evidence).map_err(not_sent)?;
             let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
             const CHECK: &str = "call GetVolume to check its status";
             if let Err(failure) = self
@@ -355,11 +360,11 @@ fn check_price(
     operation: &Mutation,
     quoted: f64,
     cap: f64,
-    evidence: &Evidence,
+    evidence: &mut Evidence,
 ) -> Result<(), Box<Error>> {
-    if evidence.output_reflects(&Value::from(quoted)) {
-        return Err(withheld_price());
-    }
+    let (quoted, cap) = crate::wire::product::guard::Guarded::price(evidence, quoted, cap)?
+        .into_checked(evidence)
+        .map_err(|_| withheld_price())?;
     let (class, message) = if quoted <= 0.0 {
         (
             ErrorClass::Unpriced,

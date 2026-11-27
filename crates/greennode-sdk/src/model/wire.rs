@@ -26,6 +26,8 @@ pub(crate) fn decode_lenient<T>(decode: impl FnOnce() -> T) -> T {
 }
 
 pub(crate) trait WireField: Default + DeserializeOwned {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> = crate::wire::strict_json::Shape::Any;
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Option::<Self>::deserialize(d).map(Option::unwrap_or_default)
     }
@@ -50,6 +52,9 @@ impl<'de, T: WireField> Deserialize<'de> for Field<T> {
 }
 
 impl<T: WireField> WireField for Vec<T> {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> =
+        crate::wire::strict_json::Shape::Array(&T::SCHEMA);
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let rows = Option::<Vec<Field<T>>>::deserialize(d)?.unwrap_or_default();
         Ok(rows.into_iter().map(|row| row.0).collect())
@@ -69,6 +74,8 @@ impl<T: WireField> WireField for Vec<T> {
 }
 
 impl<T: WireField> WireField for Option<T> {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> = T::SCHEMA;
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Option::<Field<T>>::deserialize(d).map(|field| field.map(|field| field.0))
     }
@@ -419,6 +426,10 @@ macro_rules! model {
         }
 
         impl $crate::model::wire::WireField for $model {
+            const SCHEMA: $crate::wire::strict_json::Shape<'static> = $crate::wire::strict_json::Shape::Object(&[
+                $($crate::wire::strict_json::ShapeField { name: $wire, shape: <$type as $crate::model::wire::WireField>::SCHEMA },)*
+            ]);
+
             fn redact(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
                 $((if $crate::wire::product::identifier::declared($wire, $go) {
                     self.$field.redact_identifier(evidence)

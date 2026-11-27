@@ -1,3 +1,4 @@
+use crate::wire::strict_json::FieldNames;
 use serde::Serialize;
 
 use crate::wire::product::evidence::Evidence;
@@ -140,9 +141,9 @@ impl Client {
         } else {
             &zone[..]
         };
-        self.read(ctx, ZONES, &[&project], query, evidence, |raw| {
+        self.read(ctx, ZONES, &[&project], query, evidence, |raw, names| {
             Ok(List {
-                items: Object::parse(raw)?.value("volumeTypeZones")?,
+                items: Object::parse(raw, names)?.value("volumeTypeZones")?,
             })
         })
         .await
@@ -196,8 +197,8 @@ impl Client {
                 (TYPES_IN_ZONE, &path[..])
             };
             let rows: Vec<VolumeType> = self
-                .read(ctx, read, path, &[], &mut evidence, |raw| {
-                    Object::parse(raw)?.value("volumeTypes")
+                .read(ctx, read, path, &[], &mut evidence, |raw, names| {
+                    Object::parse(raw, names)?.value("volumeTypes")
                 })
                 .await?;
             for mut row in rows
@@ -235,7 +236,7 @@ impl Client {
                             &[&project, &input.volume_type_id],
                             &[],
                             &mut evidence,
-                            |raw| Object::parse(raw)?.value("volumeTypes"),
+                            |raw, names| Object::parse(raw, names)?.value("volumeTypes"),
                         )
                         .await?;
                     let mut volume_type = rows.into_iter().next().ok_or_else(|| {
@@ -265,8 +266,8 @@ impl Client {
                 }
                 let mut evidence = Evidence::new();
                 let project = self.project(ctx, &mut evidence).await?;
-                let mut result: GetVolumeTypeOutput = self.read_value(ctx, DEFAULT_TYPE, &[&project], &[("zoneId", &input.zone_id)], &mut evidence, |raw| {
-                    let fields = Object::parse(raw)?;
+                let mut result: GetVolumeTypeOutput = self.read_value(ctx, DEFAULT_TYPE, &[&project], &[("zoneId", &input.zone_id)], &mut evidence, |raw, names| {
+                    let fields = Object::parse(raw, names)?;
                     let id: String = fields.value("volumeTypeId")?;
                     let zone: String = fields.value("volumeTypeZoneId")?;
                     Ok(GetVolumeTypeOutput { volume_type: VolumeType {
@@ -293,22 +294,32 @@ impl Client {
                 async {
                     let mut evidence = Evidence::new();
                     let project = self.project(ctx, &mut evidence).await?;
-                    self.read(ctx, ENCRYPTION, &[&project], &[], &mut evidence, |raw| {
-                        let array = if raw.get().starts_with('{') {
-                            let object = Object::parse(raw)?;
-                            object
-                                .entry("encryptionTypes")?
-                                .or(object.entry("data")?)
-                                .or(object.entry("items")?)
-                                .filter(|value| value.get() != "null")
-                        } else if raw.get() == "null" {
-                            None
-                        } else {
-                            Some(raw)
-                        };
-                        let items = array.map_or_else(|| Ok(Vec::new()), encryption_types)?;
-                        Ok(List { items })
-                    })
+                    self.read(
+                        ctx,
+                        ENCRYPTION,
+                        &[&project],
+                        &[],
+                        &mut evidence,
+                        |raw, names| {
+                            let array = if raw.get().starts_with('{') {
+                                let object = Object::parse(raw, names)?;
+                                object
+                                    .entry("encryptionTypes")?
+                                    .or(object.entry("data")?)
+                                    .or(object.entry("items")?)
+                                    .filter(|value| value.get() != "null")
+                            } else if raw.get() == "null" {
+                                None
+                            } else {
+                                Some(raw)
+                            };
+                            let items = array.map_or_else(
+                                || Ok(Vec::new()),
+                                |raw| encryption_types(raw, names),
+                            )?;
+                            Ok(List { items })
+                        },
+                    )
                     .await
                 }
                 .await,
@@ -326,8 +337,9 @@ fn output_screen(
 
 fn encryption_types(
     raw: &serde_json::value::RawValue,
+    names: FieldNames,
 ) -> super::wire::ShapeResult<Vec<EncryptionType>> {
-    if let Ok(mut rows) = Vec::<EncryptionType>::from_wire(raw) {
+    if let Ok(mut rows) = Vec::<EncryptionType>::from_wire(raw, names) {
         for row in &mut rows {
             row.id = nonempty([&row.key, &row.id, &row.value, &row.display_key, &row.name]);
             row.name = nonempty([&row.name, &row.display_key, &row.id]);
@@ -335,7 +347,7 @@ fn encryption_types(
         }
         return Ok(rows);
     }
-    Vec::<String>::from_wire(raw).map(|items| {
+    Vec::<String>::from_wire(raw, names).map(|items| {
         items
             .into_iter()
             .map(|value| EncryptionType {

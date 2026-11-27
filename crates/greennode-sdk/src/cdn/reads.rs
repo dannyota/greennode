@@ -11,7 +11,7 @@ use super::wire::{Call, convert, list, read_failure};
 use super::{ApiKey, Certificate, Client, WebAccelerator, WebAcceleratorSummary, invalid};
 use crate::wire::{
     product::options::PathIds,
-    strict_json::{Shape, ShapeField, validate_shape},
+    strict_json::{Shape, ShapeField},
 };
 use crate::{Error, ErrorClass, Failure, List, RequestContext, Secret};
 
@@ -228,7 +228,7 @@ impl Client {
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;
-        decode_web_detail(&call, cdn_id, data)
+        decode_web_detail(&call, cdn_id, data, evidence.field_names())
     }
 
     pub(super) async fn read_guard_detail(
@@ -240,7 +240,12 @@ impl Client {
     ) -> Result<crate::wire::product::guard::Guarded<WebDetail>, Failure<()>> {
         let guard = super::wire::GuardCall(Call { id, ..GET_WEB });
         let data = self.call_guard(ctx, &guard, &[cdn_id], evidence).await?;
-        let detail = decode_web_detail(&guard.0, cdn_id, data)?;
+        let detail = decode_web_detail(
+            &guard.0,
+            cdn_id,
+            data,
+            crate::wire::strict_json::FieldNames::Canonical,
+        )?;
         crate::wire::product::guard::Guarded::latest(detail, evidence)
             .map_err(|error| read_failure(*error))
     }
@@ -358,11 +363,19 @@ fn decode_web_detail(
     call: &Call,
     cdn_id: &str,
     data: Option<Box<serde_json::value::RawValue>>,
+    names: crate::wire::strict_json::FieldNames,
 ) -> Result<WebDetail, Failure<()>> {
     let malformed = || read_failure(call.unexpected(200));
     let raw = data.ok_or_else(malformed)?;
     let text = raw.get();
-    validate_shape(text.as_bytes(), &STATE, text.len()).map_err(|_| malformed())?;
+    if names.has_case_variant(text.as_bytes(), &STATE) {
+        return Err(read_failure(
+            crate::wire::product::operation::unsafe_guard_response(call.id),
+        ));
+    }
+    names
+        .validate(text.as_bytes(), &STATE, text.len())
+        .map_err(|_| malformed())?;
     let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
     if state.id != cdn_id {
         return Err(malformed());

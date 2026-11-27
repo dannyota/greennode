@@ -253,25 +253,16 @@ pub(crate) struct Evidence {
     cached: Vec<CachedCheck>,
     guards: Vec<super::guard::Proof>,
     guard_bytes: usize,
-    preflight_reads: bool,
+    guard_scope: Option<Arc<std::sync::atomic::AtomicUsize>>,
     awaiting_write: bool,
     unproved_read: bool,
 }
 
-pub(super) struct PreflightReads<'a> {
-    evidence: &'a mut Evidence,
-    previous: bool,
-}
+pub(crate) struct GuardReads(Arc<std::sync::atomic::AtomicUsize>);
 
-impl PreflightReads<'_> {
-    pub(super) fn evidence(&mut self) -> &mut Evidence {
-        self.evidence
-    }
-}
-
-impl Drop for PreflightReads<'_> {
+impl Drop for GuardReads {
     fn drop(&mut self) {
-        self.evidence.preflight_reads = self.previous;
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -280,12 +271,10 @@ impl Evidence {
         Self::default()
     }
 
-    pub(super) fn preflight_reads(&mut self) -> PreflightReads<'_> {
-        let previous = std::mem::replace(&mut self.preflight_reads, true);
-        PreflightReads {
-            evidence: self,
-            previous,
-        }
+    pub(crate) fn guard_reads(&mut self) -> GuardReads {
+        let scope = self.guard_scope.get_or_insert_with(Arc::default);
+        scope.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        GuardReads(Arc::clone(scope))
     }
 
     pub(crate) fn for_write() -> Self {
@@ -296,7 +285,15 @@ impl Evidence {
     }
 
     pub(super) fn guards_preflight_reads(&self) -> bool {
-        self.preflight_reads || self.awaiting_write
+        self.awaiting_write
+            || self
+                .guard_scope
+                .as_ref()
+                .is_some_and(|scope| scope.load(std::sync::atomic::Ordering::Relaxed) != 0)
+    }
+
+    pub(crate) fn field_names(&self) -> crate::wire::strict_json::FieldNames {
+        crate::wire::strict_json::FieldNames::for_guard(self.guards_preflight_reads())
     }
 
     pub(super) fn note_unproved_read(&mut self) {
@@ -368,10 +365,7 @@ impl Evidence {
             return false;
         }
         self.guard_bytes = total;
-        self.guards.push(super::guard::Proof {
-            id,
-            body: bytes::Bytes::copy_from_slice(body),
-        });
+        self.guards.push(super::guard::Proof::new(id, body));
         true
     }
 
@@ -386,7 +380,7 @@ impl Evidence {
 
     pub(crate) fn discard_guards_after(&mut self, checkpoint: usize) {
         for proof in self.guards.drain(checkpoint..) {
-            self.guard_bytes -= proof.body.len();
+            self.guard_bytes -= proof.body_len();
         }
     }
 
@@ -396,6 +390,14 @@ impl Evidence {
 
     pub(super) fn last_guard(&self) -> Option<super::guard::Proof> {
         self.guards.last().cloned()
+    }
+
+    pub(super) fn price_proof(
+        &mut self,
+        price: super::guard::DecisionPrice,
+    ) -> Option<super::guard::Proof> {
+        let proof = self.guards.last_mut()?;
+        proof.attach_price(price).then(|| proof.clone())
     }
 
     pub(super) fn recheck_guards(

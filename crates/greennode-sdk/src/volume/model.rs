@@ -1,3 +1,4 @@
+use crate::wire::strict_json::FieldNames;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
 
@@ -37,8 +38,8 @@ macro_rules! row {
             }
         }
         impl FromWire for $name {
-            fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
-                let fields = Object::parse(raw)?;
+            fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
+                let fields = Object::parse(raw, names)?;
                 Ok(Self { $($field: fields.$read($wire)?,)* })
             }
         }

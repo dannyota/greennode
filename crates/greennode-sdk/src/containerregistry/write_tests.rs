@@ -450,3 +450,25 @@ async fn failed_lookup_keeps_private_delivery_outside_the_error() {
     assert!(issued_user_secret(&Failure::new(error, partial, dispatch)).is_none());
     assert_eq!(server.requests(), 3);
 }
+
+#[tokio::test]
+async fn reflected_registry_404_does_not_confirm_deletion() {
+    for (body, allowed) in [
+        ("{}", true),
+        (r#"{"note":"synthetic-registry-token"}"#, false),
+    ] {
+        let server = Server::start(vec![
+            response("200 OK", r#"{"uuid":"repo-1","imageCount":0}"#),
+            response("202 Accepted", ""),
+            response("404 Not Found", body),
+        ]);
+        let result = client(&server)
+            .delete_repository(
+                &RequestContext::new().0,
+                DeleteRepositoryInput::new("repo-1"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        assert_eq!(server.requests(), 3);
+    }
+}

@@ -252,38 +252,39 @@ fn delete_reads(backups: &[u8]) -> Vec<Response> {
     ].map(|body| response("200 OK", body)).into()
 }
 
+use std::{
+    future::{Future, ready},
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+struct Rotating(AtomicUsize, usize);
+impl crate::CredentialsProvider for Rotating {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::Token, Error>> + Send + 'a>> {
+        let token = if self.0.fetch_add(1, Ordering::Relaxed) < self.1 {
+            BEARER
+        } else {
+            "toy-delete-bearer"
+        };
+        Box::pin(ready(Ok(crate::Token::new(Secret::new(token), None))))
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(ready(Ok(())))
+    }
+}
+
 #[tokio::test]
 async fn database_delete_rechecks_all_preflight_reads_with_the_write_bearer() {
-    use std::{
-        future::{Future, ready},
-        pin::Pin,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-    };
-    struct Rotating(AtomicUsize);
-    impl crate::CredentialsProvider for Rotating {
-        fn token<'a>(
-            &'a self,
-            _: &'a RequestContext,
-        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, Error>> + Send + 'a>> {
-            let token = if self.0.fetch_add(1, Ordering::Relaxed) < 5 {
-                BEARER
-            } else {
-                "toy-delete-bearer"
-            };
-            Box::pin(ready(Ok(crate::Token::new(Secret::new(token), None))))
-        }
-
-        fn invalidate<'a>(
-            &'a self,
-            _: &'a RequestContext,
-            _: &'a Secret,
-        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
-            Box::pin(ready(Ok(())))
-        }
-    }
     for read in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
         let mut replies = delete_reads(br#"{"code":200,"data":[]}"#);
         if let Some(read) = read {
@@ -303,7 +304,7 @@ async fn database_delete_rechecks_all_preflight_reads_with_the_write_bearer() {
                 ConfigOptions::default()
                     .with_region("hcm-3".into())
                     .with_project_id("project-1".into())
-                    .with_credentials_provider(Arc::new(Rotating(0.into()))),
+                    .with_credentials_provider(Arc::new(Rotating(0.into(), 5))),
                 &server,
             ))
             .unwrap(),
@@ -461,4 +462,65 @@ async fn create_does_not_poll_a_conflicting_receipt_id() {
     assert_eq!(failure.error().class(), ErrorClass::NotSettled);
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 6);
+}
+
+#[tokio::test]
+async fn reflected_database_404_does_not_confirm_deletion() {
+    for (body, allowed) in [("{}", true), (r#"{"note":"synthetic-bearer"}"#, false)] {
+        let mut replies = delete_reads(br#"{"code":200,"data":[]}"#);
+        replies.extend([
+            response("204 No Content", b""),
+            response("404 Not Found", body.as_bytes()),
+        ]);
+        let server = Server::start(replies);
+        let result = fixture(&server)
+            .delete_database_instance(
+                &RequestContext::new().0,
+                DeleteDatabaseInstanceInput::new("db-1"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        assert_eq!(server.requests(), 7);
+    }
+}
+
+#[tokio::test]
+async fn database_early_refusal_rechecks_prior_proofs() {
+    use crate::wire::product::operation::RefusedGuard;
+    for (note, reflects) in [("safe-note", false), ("toy-delete-bearer", true)] {
+        let mut replies = delete_reads(br#"{"code":200,"data":[]}"#);
+        let mut instance: serde_json::Value = serde_json::from_slice(DETAIL).unwrap();
+        instance["note"] = note.into();
+        replies[0] = response("200 OK", instance.to_string().as_bytes());
+        replies[3] = response(
+            "200 OK",
+            br#"{"code":200,"data":[{"uuid":"other-zone","status":"ACTIVE"}]}"#,
+        );
+        let server = Server::start(replies);
+        let client = Client::new(
+            &Config::new(with_write_loopback(
+                Product::Database,
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_project_id("project-1".into())
+                    .with_credentials_provider(Arc::new(Rotating(0.into(), 3))),
+                &server,
+            ))
+            .unwrap(),
+        );
+        let result = client
+            .delete_database_instance(
+                &RequestContext::new().0,
+                DeleteDatabaseInstanceInput::new("db-1"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(result.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(result.error().detail::<RefusedGuard>().is_some(), reflects);
+        assert_eq!(
+            result.error().detail::<DeleteRefused>().is_some(),
+            !reflects
+        );
+        assert_eq!(server.requests(), 4);
+    }
 }

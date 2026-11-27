@@ -34,56 +34,12 @@ pub(crate) struct Operation {
     pub(crate) retry_config: retry::Config,
 }
 
-pub(crate) struct GuardOperation(Operation);
-
-impl GuardOperation {
-    pub(crate) fn new(mut operation: Operation) -> Self {
-        assert!(matches!(operation.class, redirect::Classification::Read));
-        operation.reflection = Reflection::Guard;
-        Self(operation)
-    }
-
-    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
-    pub(crate) async fn execute<T: Output>(
-        &self,
-        runtime: sender::Runtime<'_>,
-        base: &crate::endpoint::Base,
-        options: &Options<'_>,
-        path: &[&str],
-        query: &[(&str, &str)],
-        source: &dyn sender::BearerSource,
-        evidence: &mut Evidence,
-    ) -> Result<(StatusCode, super::guard::Guarded<T>), crate::Failure<T>> {
-        let (status, value) = execute_with_evidence(
-            runtime,
-            base,
-            self,
-            options,
-            path,
-            query,
-            source,
-            bytes::Bytes::new(),
-            evidence,
-        )
-        .await?;
-        let value = super::guard::Guarded::latest(value, evidence)
-            .map_err(|error| crate::Failure::new(*error, None, crate::WriteDispatch::NotAWrite))?;
-        Ok((status, value))
-    }
-}
-
-impl std::ops::Deref for GuardOperation {
-    type Target = Operation;
-
-    fn deref(&self) -> &Operation {
-        &self.0
-    }
-}
+pub(crate) use super::guard::GuardOperation;
 
 #[derive(Debug)]
 pub(crate) struct RefusedGuard;
 
-pub(super) fn unsafe_guard_response(id: &'static str) -> crate::Error {
+pub(crate) fn unsafe_guard_response(id: &'static str) -> crate::Error {
     crate::Error::from_api(crate::ApiError::without_fallback(
         id,
         None,
@@ -179,6 +135,21 @@ pub(crate) async fn execute_with_evidence<T: Output>(
             dispatch,
         ));
     }
+    if GuardOperation::applies(operation, evidence)
+        && operation.success.contains(&status)
+        && !matches!(T::SCHEMA, Shape::Any)
+    {
+        let body = crate::model::wire::go_json(&response.body);
+        if crate::wire::strict_json::FieldNames::Canonical
+            .has_case_variant(body.as_bytes(), &T::SCHEMA)
+        {
+            return Err(crate::Failure::new(
+                evidence.screen_error(unsafe_guard_response(operation.id)),
+                None,
+                dispatch,
+            ));
+        }
+    }
     let output = T::decode_response(operation, &response)
         .map_err(|error| crate::Failure::new(evidence.screen_error(*error), None, dispatch))?;
     Ok((status, output))
@@ -248,8 +219,7 @@ async fn send_route<T>(
     credential_error: impl Fn(&Operation, &sender::SentCredentials) -> Option<Box<crate::Error>> + Send,
 ) -> Result<sender::Response, crate::Failure<T>> {
     let guard;
-    let operation = if evidence.guards_preflight_reads()
-        && matches!(operation.class, redirect::Classification::Read)
+    let operation = if GuardOperation::applies(operation, evidence)
         && operation.reflection != Reflection::Guard
     {
         guard = GuardOperation::new(operation.clone());
@@ -918,20 +888,66 @@ mod tests {
         let server = Server::start(vec![response("200 OK", br#"{"id":"one"}"#)]);
         let (status, output) = call(&server, &declaration(), &["one"]).await.unwrap();
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(output, Example { id: "one".into() });
+        assert_eq!(
+            output,
+            Example {
+                id: "one".into(),
+                ..Example::default()
+            }
+        );
         assert_eq!(server.requests(), 1);
     }
 
     #[derive(Debug, Default, serde::Deserialize, PartialEq)]
     struct Example {
         id: String,
+        status: Option<String>,
     }
 
     impl Output for Example {
-        const SCHEMA: Shape<'static> = Shape::Object(&[crate::wire::strict_json::ShapeField {
-            name: "id",
-            shape: Shape::Any,
-        }]);
+        const SCHEMA: Shape<'static> = Shape::Object(&[
+            crate::wire::strict_json::ShapeField {
+                name: "id",
+                shape: Shape::Any,
+            },
+            crate::wire::strict_json::ShapeField {
+                name: "status",
+                shape: Shape::Any,
+            },
+        ]);
+    }
+
+    #[tokio::test]
+    async fn typed_guard_schemas_reject_case_variants_that_output_reads_ignore() {
+        let cases = [
+            (br#"{"id":"one","STATUS":"READY"}"#.as_slice(), false, true),
+            (br#"{"id":"one","STATUS":"READY"}"#, true, false),
+            (br#"{"id":"one"}"#, true, true),
+        ];
+        for (body, guarded, allowed) in cases {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let guard;
+            let ordinary = declaration();
+            let op = if guarded {
+                guard = GuardOperation::new(declaration());
+                &*guard
+            } else {
+                &ordinary
+            };
+            let result = call(&server, op, &["one"]).await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Ok((_, value)) = &result {
+                assert_eq!(value.id, "one");
+                assert!(value.status.is_none());
+            }
+            if let Err(failure) = result {
+                assert_eq!(
+                    failure.error().api_error().map(crate::ApiError::code),
+                    Some("InvalidResponse")
+                );
+            }
+            assert_eq!(server.requests(), 1);
+        }
     }
 
     #[tokio::test]
@@ -1317,7 +1333,10 @@ mod tests {
     fn decodes_typed_response() {
         assert_eq!(
             decode::<Example>(br#"{"id":"one"}"#, false, 64),
-            Ok(Example { id: "one".into() })
+            Ok(Example {
+                id: "one".into(),
+                ..Example::default()
+            })
         );
     }
 }

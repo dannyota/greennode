@@ -123,7 +123,7 @@ impl Client {
             &[&project, id],
             &[("page", &page), ("size", &size)],
             evidence,
-            |raw| paged(raw, "items", "totalPages", "totalItems"),
+            |raw, names| paged(raw, names, "items", "totalPages", "totalItems"),
         )
         .await
     }
@@ -203,9 +203,9 @@ impl Client {
                         &[],
                         &[("backend", &input.name)],
                         &mut Evidence::new(),
-                        |raw| {
+                        |raw, names| {
                             Ok(List {
-                                items: Object::parse(raw)?.require("items")?,
+                                items: Object::parse(raw, names)?.require("items")?,
                             })
                         },
                     )
@@ -236,7 +236,7 @@ impl Client {
                 let page = input.page.max(1).to_string();
                 let size = if input.size == 0 { 10 } else { input.size }.to_string();
                 self.read(ctx, POLICIES, &[], &[("backendId", &input.backend_id), ("projectId", &project), ("page", &page), ("size", &size)], &mut evidence,
-                    |raw| paged(raw, "items", "totalPages", "totalItems"),
+                    |raw, names| paged(raw, names, "items", "totalPages", "totalItems"),
                 ).await
             }.await)
         })

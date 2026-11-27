@@ -12,7 +12,7 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     response, retry,
 };
-use crate::wire::strict_json::{self, field_matches};
+use crate::wire::strict_json::{self, FieldNames, field_matches};
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, error::SafeText};
 
 use super::{Client, failure};
@@ -135,6 +135,7 @@ pub(super) fn api(
 pub(super) struct Envelope {
     fields: BTreeMap<String, Box<RawValue>>,
     original: Bytes,
+    names: FieldNames,
 }
 
 #[expect(
@@ -158,11 +159,23 @@ impl Envelope {
             .keys()
             .any(|key| key != name && field_matches(name, key))
         {
-            return Err(invalid());
+            return Err(if matches!(self.names, FieldNames::Canonical) {
+                failure(evidence.screen_error(operation::unsafe_guard_response(read.id)))
+            } else {
+                invalid()
+            });
         }
         let Some(raw) = self.fields.get(name) else {
             return Ok(T::default());
         };
+        if self
+            .names
+            .has_case_variant(raw.get().as_bytes(), &T::SCHEMA)
+        {
+            return Err(failure(
+                evidence.screen_error(operation::unsafe_guard_response(read.id)),
+            ));
+        }
         serde_json::from_str::<Field<T>>(raw.get())
             .map(|field| field.0)
             .map_err(|_| invalid())
@@ -348,6 +361,11 @@ impl Client {
         Ok(Envelope {
             fields: fields.unwrap_or_default(),
             original: body,
+            names: if guard {
+                FieldNames::Canonical
+            } else {
+                evidence.field_names()
+            },
         })
     }
 }

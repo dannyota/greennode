@@ -348,7 +348,18 @@ impl Client {
             };
             return Err(sent_failure(error));
         }
-        validate_shape(&reply.body, &ENVELOPE, RESPONSE_CAP)
+        let names = if guard {
+            crate::wire::strict_json::FieldNames::Canonical
+        } else {
+            evidence.field_names()
+        };
+        if names.has_case_variant(&reply.body, &ENVELOPE) {
+            return Err(sent_failure(
+                crate::wire::product::operation::unsafe_guard_response(call.id),
+            ));
+        }
+        names
+            .validate(&reply.body, &ENVELOPE, RESPONSE_CAP)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         let envelope: Envelope = serde_json::from_slice(&reply.body)
             .map_err(|_| sent_failure(call.unexpected(status)))?;

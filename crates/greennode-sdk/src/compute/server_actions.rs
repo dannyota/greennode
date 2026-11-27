@@ -356,7 +356,7 @@ impl Client {
                 .await
                 .map_err(|error| not_sent(*error))?;
             let quoted_adjustment = quote.optimum_price;
-            check_price(RESIZE.id, quoted_adjustment, input.max_price, &evidence)
+            check_price(RESIZE.id, quoted_adjustment, input.max_price, &mut evidence)
                 .map_err(|error| not_sent(*error))?;
             let output = |server, evidence: &Evidence| {
                 safe_server(server, evidence)

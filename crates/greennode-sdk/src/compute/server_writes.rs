@@ -138,8 +138,13 @@ impl Client {
                 .create_quote(ctx, &input, info, &mut evidence)
                 .await
                 .map_err(|error| not_sent(*error))?;
-            check_price(CREATE.id, quote.optimum_price, input.max_price, &evidence)
-                .map_err(|error| not_sent(*error))?;
+            check_price(
+                CREATE.id,
+                quote.optimum_price,
+                input.max_price,
+                &mut evidence,
+            )
+            .map_err(|error| not_sent(*error))?;
             let sensitive = input
                 .user_data
                 .as_ref()
@@ -578,20 +583,19 @@ pub(super) fn check_price(
     op: &str,
     quoted: f64,
     cap: f64,
-    evidence: &Evidence,
+    evidence: &mut Evidence,
 ) -> Result<(), Box<Error>> {
-    if evidence.output_reflects(&json!([quoted, cap]))
-        || evidence.text_reflects(&format!("{quoted:.0} {cap:.0}"))
-        || evidence.reflects_fixed_two(quoted)
-    {
-        return Err(Box::new(api(
-            "pricing.GetQuote",
-            Some(200),
-            "InvalidResponse",
-            "invalid quote response; body withheld",
-            evidence,
-        )));
-    }
+    let (quoted, cap) = crate::wire::product::guard::Guarded::price(evidence, quoted, cap)?
+        .into_checked(evidence)
+        .map_err(|_| {
+            Box::new(api(
+                "pricing.GetQuote",
+                Some(200),
+                "InvalidResponse",
+                "invalid quote response; body withheld",
+                evidence,
+            ))
+        })?;
     let (class, code, message) = if quoted == 0.0 {
         (
             ErrorClass::Unpriced,

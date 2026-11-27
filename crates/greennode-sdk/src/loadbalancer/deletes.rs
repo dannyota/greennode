@@ -323,7 +323,9 @@ impl Client {
             )
             .await?;
         let data = Envelope::parse(&text, &read, evidence)?;
-        let ZonedLoadBalancer(row) = read.parse(data.raw(&read, evidence, "data")?, evidence)?;
+        let body = data.canonical_raw(&read, evidence, "data")?;
+        let ZonedLoadBalancer(row) =
+            super::guard::parse(&read, body, &super::guard::LOAD_BALANCER, evidence)?;
         if row.uuid != id || row.progress_status.is_empty() {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
@@ -350,9 +352,10 @@ impl Client {
                 evidence,
             )
             .await?;
-        let cert: Certificate = read.parse(&text, evidence)?;
+        let cert: Certificate =
+            super::guard::parse(&read, &text, &super::guard::CERTIFICATE, evidence)?;
         let fields = Envelope::parse(&text, &read, evidence)?;
-        if cert.uuid != id || fields.raw(&read, evidence, "inUse")? == "null" {
+        if cert.uuid != id || fields.canonical_raw(&read, evidence, "inUse")? == "null" {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
         screen_input(evidence, [&*cert.uuid])?;
@@ -409,19 +412,29 @@ impl Client {
             .read_guard_text(ctx, super::wire::GuardRead(&read), &[], &query, evidence)
             .await?;
         let envelope = Envelope::parse(&text, &read, evidence)?;
-        let Some(rows) = read.parse::<Option<Vec<Certificate>>>(
-            envelope.raw(&read, evidence, "listData")?,
+        let body = envelope.canonical_raw(&read, evidence, "listData")?;
+        let Some(rows): Option<Vec<Certificate>> = super::guard::parse(
+            &read,
+            body,
+            &crate::wire::strict_json::Shape::Array(&super::guard::CERTIFICATE),
             evidence,
         )?
         else {
             return Ok(false);
         };
-        let page: i64 = envelope.field(&read, evidence, "page")?;
-        let size: i64 = envelope.field(&read, evidence, "pageSize")?;
-        let total_pages =
-            read.parse::<Option<i64>>(envelope.raw(&read, evidence, "totalPage")?, evidence)?;
-        let total_items =
-            read.parse::<Option<i64>>(envelope.raw(&read, evidence, "totalItem")?, evidence)?;
+        let page: i64 = read.parse(envelope.canonical_raw(&read, evidence, "page")?, evidence)?;
+        let size: i64 = read.parse(
+            envelope.canonical_raw(&read, evidence, "pageSize")?,
+            evidence,
+        )?;
+        let total_pages = read.parse::<Option<i64>>(
+            envelope.canonical_raw(&read, evidence, "totalPage")?,
+            evidence,
+        )?;
+        let total_items = read.parse::<Option<i64>>(
+            envelope.canonical_raw(&read, evidence, "totalItem")?,
+            evidence,
+        )?;
         let (Some(total_pages), Some(total_items)) = (total_pages, total_items) else {
             return Ok(false);
         };

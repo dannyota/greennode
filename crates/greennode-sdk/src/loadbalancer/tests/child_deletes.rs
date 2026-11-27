@@ -12,11 +12,15 @@ fn listener_input(no_wait: bool) -> DeleteListenerInput {
 }
 
 #[tokio::test]
-async fn pool_delete_ignores_lone_case_variants_and_refuses_collisions() {
+async fn pool_delete_rejects_lone_case_variants_and_collisions() {
     for (listeners, allowed) in [
         (
-            r#"{"data":[{"uuid":"listener_1","DefaultPoolId":"ignored"}]}"#,
+            r#"{"data":[{"uuid":"listener_1","defaultPoolId":"other"}]}"#,
             true,
+        ),
+        (
+            r#"{"data":[{"uuid":"listener_1","DefaultPoolId":"ignored"}]}"#,
+            false,
         ),
         (
             r#"{"data":[{"uuid":"listener_1","defaultPoolId":"other","DefaultPoolId":"ignored"}]}"#,

@@ -10,7 +10,7 @@ use crate::wire::product::{
     response,
     sender::Response,
 };
-use crate::wire::strict_json::{self, Shape};
+use crate::wire::strict_json::{self, FieldNames, Shape};
 use crate::{Error, ErrorClass, Failure, WriteDispatch};
 
 pub(super) const CAP: usize = 8 << 20;
@@ -107,14 +107,16 @@ fn normalize(bytes: &[u8]) -> String {
 
 pub(super) type ShapeResult<T> = Result<T, ()>;
 
-pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>);
+pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>, FieldNames);
 
 impl<'a> Object<'a> {
-    pub(super) fn parse(raw: &'a RawValue) -> ShapeResult<Self> {
+    pub(super) fn parse(raw: &'a RawValue, names: FieldNames) -> ShapeResult<Self> {
         if raw.get() == "null" {
-            return Ok(Self(BTreeMap::new()));
+            return Ok(Self(BTreeMap::new(), names));
         }
-        serde_json::from_str(raw.get()).map(Self).map_err(|_| ())
+        serde_json::from_str(raw.get())
+            .map(|fields| Self(fields, names))
+            .map_err(|_| ())
     }
 
     pub(super) fn get(&self, name: &str) -> ShapeResult<Option<&'a RawValue>> {
@@ -127,11 +129,14 @@ impl<'a> Object<'a> {
             .0
             .iter()
             .filter(|(key, _)| strict_json::field_matches(name, key));
-        let value = fields.next().map(|(_, value)| *value);
+        let Some((key, value)) = fields.next() else {
+            return Ok(None);
+        };
+        self.1.check(name, key).map_err(|_| ())?;
         if fields.next().is_some() {
             return Err(());
         }
-        Ok(value)
+        Ok(Some(*value))
     }
 
     pub(super) fn value<T: FromWire + Default>(&self, name: &str) -> ShapeResult<T> {
@@ -139,7 +144,9 @@ impl<'a> Object<'a> {
     }
 
     pub(super) fn optional<T: FromWire>(&self, name: &str) -> ShapeResult<Option<T>> {
-        self.get(name)?.map(T::from_wire).transpose()
+        self.get(name)?
+            .map(|raw| T::from_wire(raw, self.1))
+            .transpose()
     }
 
     pub(super) fn require<T: FromWire>(&self, name: &str) -> ShapeResult<T> {
@@ -201,7 +208,7 @@ fn integral(raw: &RawValue) -> ShapeResult<i64> {
 }
 
 pub(super) trait FromWire: Sized {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self>;
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self>;
 }
 
 pub(super) fn parse<T: DeserializeOwned>(raw: &RawValue) -> ShapeResult<T> {
@@ -211,7 +218,7 @@ pub(super) fn parse<T: DeserializeOwned>(raw: &RawValue) -> ShapeResult<T> {
 macro_rules! scalar {
     ($($ty:ty),+) => {$(
         impl FromWire for $ty {
-            fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+            fn from_wire(raw: &RawValue, _: FieldNames) -> ShapeResult<Self> {
                 parse(raw)
             }
         }
@@ -220,25 +227,25 @@ macro_rules! scalar {
 scalar!(String, bool, i64, u64);
 
 impl<T: FromWire + Default> FromWire for Vec<T> {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
         let items: Vec<Option<&RawValue>> = serde_json::from_str(raw.get()).map_err(|_| ())?;
         items
             .into_iter()
-            .map(|item| item.map_or_else(|| Ok(T::default()), T::from_wire))
+            .map(|item| item.map_or_else(|| Ok(T::default()), |raw| T::from_wire(raw, names)))
             .collect()
     }
 }
 
 impl FromWire for Value {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
         match raw.get().as_bytes().first() {
-            Some(b'{') => Object::parse(raw)?
+            Some(b'{') => Object::parse(raw, names)?
                 .0
                 .into_iter()
-                .map(|(key, value)| Ok((key, Self::from_wire(value)?)))
+                .map(|(key, value)| Ok((key, Self::from_wire(value, names)?)))
                 .collect::<ShapeResult<_>>()
                 .map(Value::Object),
-            Some(b'[') => Vec::<Self>::from_wire(raw).map(Value::Array),
+            Some(b'[') => Vec::<Self>::from_wire(raw, names).map(Value::Array),
             Some(b'0'..=b'9' | b'-') => {
                 let amount = raw.get().parse::<f64>().map_err(|_| ())?;
                 Number::from_f64(amount).map(Value::Number).ok_or(())
@@ -250,11 +257,12 @@ impl FromWire for Value {
 
 pub(super) fn decode<T>(
     document: &Document,
-    decode: impl FnOnce(&RawValue) -> ShapeResult<T>,
+    names: FieldNames,
+    decode: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
 ) -> ShapeResult<T> {
     let raw = document.0.as_deref().ok_or(())?;
     strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| ())?;
-    decode(raw)
+    decode(raw, names)
 }
 
 pub(super) trait Redact {

@@ -1,17 +1,111 @@
 use super::{evidence::Evidence, operation::unsafe_guard_response, response::BodyMatcher};
 use crate::{Error, ErrorClass};
 use bytes::Bytes;
+use http::StatusCode;
+
+use super::operation::{Operation, Output, Reflection, execute_with_evidence};
+use super::{options::Options, redirect, sender};
+
+pub(crate) struct GuardOperation(Operation);
+
+impl GuardOperation {
+    pub(crate) fn new(mut operation: Operation) -> Self {
+        assert!(matches!(operation.class, redirect::Classification::Read));
+        operation.reflection = Reflection::Guard;
+        Self(operation)
+    }
+
+    pub(super) fn applies(operation: &Operation, evidence: &Evidence) -> bool {
+        matches!(operation.class, redirect::Classification::Read)
+            && (operation.reflection == Reflection::Guard || evidence.guards_preflight_reads())
+    }
+
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    pub(crate) async fn execute<T: Output>(
+        &self,
+        runtime: sender::Runtime<'_>,
+        base: &crate::endpoint::Base,
+        options: &Options<'_>,
+        path: &[&str],
+        query: &[(&str, &str)],
+        source: &dyn sender::BearerSource,
+        evidence: &mut Evidence,
+    ) -> Result<(StatusCode, Guarded<T>), crate::Failure<T>> {
+        let (status, value) = execute_with_evidence(
+            runtime,
+            base,
+            self,
+            options,
+            path,
+            query,
+            source,
+            bytes::Bytes::new(),
+            evidence,
+        )
+        .await?;
+        let value = Guarded::latest(value, evidence)
+            .map_err(|error| crate::Failure::new(*error, None, crate::WriteDispatch::NotAWrite))?;
+        Ok((status, value))
+    }
+}
+
+impl std::ops::Deref for GuardOperation {
+    type Target = Operation;
+
+    fn deref(&self) -> &Operation {
+        &self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct DecisionPrice {
+    quoted: f64,
+    cap: f64,
+}
+
+impl DecisionPrice {
+    fn reflects(self, matcher: &BodyMatcher<'_>) -> bool {
+        let reflects = |text: &str| matcher.reflects(text.as_bytes(), false);
+        [self.quoted, self.cap].into_iter().any(|value| {
+            crate::output_number::any_spelling(value, true, reflects)
+                || reflects(&format!("{value:.0}"))
+                || reflects(&crate::output_number::fixed_two(value))
+        }) || reflects(&format!("{:.0} {:.0}", self.quoted, self.cap))
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct Proof {
-    pub(super) id: &'static str,
-    pub(super) body: Bytes,
+    id: &'static str,
+    body: Bytes,
+    price: Option<DecisionPrice>,
 }
 
 impl Proof {
+    pub(super) fn new(id: &'static str, body: &[u8]) -> Self {
+        Self {
+            id,
+            body: Bytes::copy_from_slice(body),
+            price: None,
+        }
+    }
+
+    pub(super) fn body_len(&self) -> usize {
+        self.body.len()
+    }
+
+    pub(super) fn attach_price(&mut self, price: DecisionPrice) -> bool {
+        if self.price.is_some() {
+            return false;
+        }
+        self.price = Some(price);
+        true
+    }
+
     pub(super) fn check(&self, matcher: &BodyMatcher<'_>) -> Option<Box<Error>> {
-        (!self.body.is_empty()
+        ((!self.body.is_empty()
             && Evidence::screen_peer_with(matcher, &self.body, true) != Some(false))
+            || self.price.is_some_and(|price| price.reflects(matcher)))
         .then(|| {
             Box::new(
                 Error::new(ErrorClass::InvalidInput).with_cause(unsafe_guard_response(self.id)),
@@ -32,11 +126,15 @@ impl<T> Guarded<T> {
         invalid: impl FnOnce(Box<Error>) -> E,
     ) -> Result<Self, E> {
         let checkpoint = evidence.guard_checkpoint();
-        let value = {
-            let mut scope = evidence.preflight_reads();
-            read(scope.evidence()).await?
-        };
-        Self::from_checkpoint(value, evidence, checkpoint).map_err(invalid)
+        let scope = evidence.guard_reads();
+        let result = read(evidence).await;
+        drop(scope);
+        if result.is_err()
+            && let Some(error) = evidence.recheck_guards(evidence.credentials())
+        {
+            return Err(invalid(error));
+        }
+        Self::from_checkpoint(result?, evidence, checkpoint).map_err(invalid)
     }
 
     pub(crate) fn acknowledgement(
@@ -106,8 +204,25 @@ impl<T> Guarded<T> {
     }
 }
 
+impl Guarded<(f64, f64)> {
+    pub(crate) fn price(
+        evidence: &mut Evidence,
+        quoted: f64,
+        cap: f64,
+    ) -> Result<Self, Box<Error>> {
+        let proof = evidence
+            .price_proof(DecisionPrice { quoted, cap })
+            .ok_or_else(|| Box::new(unsafe_guard_response("pricing.GetQuote")))?;
+        Ok(Self {
+            value: (quoted, cap),
+            proofs: vec![proof],
+        })
+    }
+}
+
 macro_rules! guarded_poll {
     ($evidence:expr, $body:block) => {{
+        let _guard_reads = $evidence.guard_reads();
         let checkpoint = $evidence.guard_checkpoint();
         loop {
             $evidence.discard_guards_after(checkpoint);
@@ -115,6 +230,7 @@ macro_rules! guarded_poll {
         }
     }};
     ($evidence:expr, for $index:ident in $steps:expr, $body:block) => {{
+        let _guard_reads = $evidence.guard_reads();
         let checkpoint = $evidence.guard_checkpoint();
         for $index in $steps {
             $evidence.discard_guards_after(checkpoint);
@@ -129,6 +245,119 @@ pub(crate) use guarded_poll;
 mod tests {
     use std::path::Path;
 
+    fn definition<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+        let declaration = regex_lite::Regex::new(&format!(
+            r"(?m)^([ \t]*)(?:pub(?:\([^)]*\))? )?(?:async )?fn {name}\b",
+        ))
+        .unwrap();
+        let found = declaration.captures(text)?;
+        let end = format!("\n{}}}", &found[1]);
+        text[found.get(0)?.end()..]
+            .split_once(&end)
+            .map(|(body, _)| body)
+    }
+
+    fn uses_write_evidence(
+        root: &Path,
+        links: &[(&str, &str, &str)],
+        file: &Path,
+        body: &str,
+        depth: usize,
+    ) -> bool {
+        if body.contains("Evidence::for_write()") {
+            return true;
+        }
+        depth > 0
+            && links.iter().any(|(caller, call, callee)| {
+                if file != Path::new(caller) || !body.contains(call) {
+                    return false;
+                }
+                let name = call
+                    .trim_end_matches('(')
+                    .rsplit(['.', ':'])
+                    .next()
+                    .unwrap();
+                let source = std::fs::read_to_string(root.join(callee)).unwrap();
+                let body = definition(&source, name).unwrap_or_else(|| panic!("{callee} {name}"));
+                uses_write_evidence(root, links, Path::new(callee), body, depth - 1)
+            })
+    }
+
+    #[test]
+    fn paid_price_decisions_keep_typed_proofs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (path, helper) in [
+            ("compute/server_writes.rs", "check_price"),
+            ("loadbalancer/paid.rs", "guard_price"),
+            ("volume/paid.rs", "check_price"),
+        ] {
+            let source = std::fs::read_to_string(root.join(path)).unwrap();
+            assert!(
+                definition(&source, helper).is_some_and(|body| body.contains("Guarded::price(")),
+                "{path} {helper}"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_decoders_use_canonical_field_names() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (path, decoder, policy) in [
+            (
+                "wire/product/operation.rs",
+                "execute_with_evidence",
+                "has_case_variant",
+            ),
+            ("volume/mod.rs", "read_value", "decode(&document, names,"),
+            ("volume/wire.rs", "entry", ".check(name, key)"),
+            ("volume/wire.rs", "optional", "T::from_wire(raw, self.1)"),
+            (
+                "cdn/wire.rs",
+                "call_with_policy",
+                ".validate(&reply.body, &ENVELOPE",
+            ),
+            ("cdn/reads.rs", "read_guard_detail", "FieldNames::Canonical"),
+            (
+                "cdn/reads.rs",
+                "decode_web_detail",
+                ".validate(text.as_bytes(), &STATE",
+            ),
+            (
+                "globalloadbalancer/child/mod.rs",
+                "decode_canonical",
+                "validate_canonical_shape",
+            ),
+            (
+                "globalloadbalancer/load_balancer_writes.rs",
+                "load_balancer_detail",
+                "validate_canonical_shape",
+            ),
+            (
+                "loadbalancer/guard.rs",
+                "canonical_json",
+                "validate_canonical_shape",
+            ),
+            (
+                "loadbalancer/wire.rs",
+                "canonical_raw",
+                "FieldNames::Canonical",
+            ),
+            ("loadbalancer/wire.rs", "field_raw", ".check(name, key)"),
+            ("compute/wire.rs", "field", "has_case_variant"),
+            (
+                "quote/request/decode.rs",
+                "quote_object",
+                "exact(op, obj, AMOUNTS)",
+            ),
+        ] {
+            let source = std::fs::read_to_string(root.join(path)).unwrap();
+            assert!(
+                definition(&source, decoder).is_some_and(|body| body.contains(policy)),
+                "{path} {decoder}"
+            );
+        }
+    }
+
     #[test]
     fn sdk_write_entry_points_use_guarded_preflight_evidence() {
         use regex_lite::Regex;
@@ -140,7 +369,8 @@ mod tests {
         )).unwrap();
         let owners = [
             ("cdn/writes.rs", ".write_evidence(", "cdn/writes.rs"),
-            ("cdn/writes.rs", ".toggle(", "cdn/writes.rs"),
+            ("cdn/writes.rs", ".toggle(", "cdn/writes/settle.rs"),
+            ("cdn/writes/settle.rs", ".write_evidence(", "cdn/writes.rs"),
             ("cdn/writes/update.rs", ".write_evidence(", "cdn/writes.rs"),
             (
                 "compute/server_actions.rs",
@@ -155,11 +385,16 @@ mod tests {
             (
                 "globalloadbalancer/child/create.rs",
                 ".start_child(",
-                "globalloadbalancer/write.rs",
+                "globalloadbalancer/child/mod.rs",
             ),
             (
                 "globalloadbalancer/child/delete.rs",
                 ".start_child(",
+                "globalloadbalancer/child/mod.rs",
+            ),
+            (
+                "globalloadbalancer/child/mod.rs",
+                ".start_write(",
                 "globalloadbalancer/write.rs",
             ),
             (
@@ -175,7 +410,8 @@ mod tests {
                 ".write_evidence(",
                 "iam/writes.rs",
             ),
-            ("iam/user_mfa.rs", ".change_user_mfa(", "iam/writes.rs"),
+            ("iam/user_mfa.rs", ".change_user_mfa(", "iam/user_mfa.rs"),
+            ("iam/user_mfa.rs", ".write_evidence(", "iam/writes.rs"),
             ("iam/user_writes.rs", ".write_evidence(", "iam/writes.rs"),
             (
                 "loadbalancer/certificate_import.rs",
@@ -195,6 +431,11 @@ mod tests {
             (
                 "loadbalancer/member_writes.rs",
                 ".change_members(",
+                "loadbalancer/member_writes.rs",
+            ),
+            (
+                "loadbalancer/member_writes.rs",
+                "ChildWriter::new(",
                 "loadbalancer/child_writes.rs",
             ),
             (
@@ -246,14 +487,7 @@ mod tests {
                     assert!(body.contains("let read = Read") && body.contains("self.read("));
                     continue;
                 }
-                let preflight = body.contains("Evidence::for_write()")
-                    || owners.iter().any(|(entry, call, owner)| {
-                        relative == Path::new(entry)
-                            && body.contains(call)
-                            && std::fs::read_to_string(root.join(owner))
-                                .unwrap()
-                                .contains("Evidence::for_write()")
-                    });
+                let preflight = uses_write_evidence(&root, &owners, relative, body, 8);
                 let billing_without_reads = matches!(
                     relative.to_str(),
                     Some("billing/budget_writes.rs" | "billing/threshold_writes.rs")

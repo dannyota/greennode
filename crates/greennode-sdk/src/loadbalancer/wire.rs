@@ -68,6 +68,16 @@ impl Read {
         Box::new(self.api("", &message, evidence).with_detail(detail))
     }
 
+    pub(super) fn invalid_guard(&self, evidence: &Evidence) -> Box<Error> {
+        Box::new(
+            evidence
+                .screen_error(crate::wire::product::operation::unsafe_guard_response(
+                    self.id,
+                ))
+                .with_detail(DecodeError::InvalidShape),
+        )
+    }
+
     pub(super) fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
         evidence.screen_error(Error::from_api(ApiError::without_fallback(
             self.id,
@@ -91,6 +101,12 @@ impl Read {
         text: &str,
         evidence: &Evidence,
     ) -> Result<T, Box<Error>> {
+        if evidence
+            .field_names()
+            .has_case_variant(text.as_bytes(), &T::SCHEMA)
+        {
+            return Err(self.invalid_guard(evidence));
+        }
         serde_json::from_str::<Field<T>>(text)
             .map(|row| row.0)
             .map_err(|_| self.decode_error(evidence, DecodeError::InvalidShape))
@@ -176,17 +192,7 @@ impl Envelope<'_> {
         evidence: &Evidence,
         name: &str,
     ) -> Result<&str, Box<Error>> {
-        if self
-            .0
-            .keys()
-            .filter(|key| field_matches(name, key))
-            .take(2)
-            .count()
-            > 1
-        {
-            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
-        }
-        Ok(self.0.get(name).map_or("null", |raw| raw.get()))
+        self.field_raw(read, evidence, name, evidence.field_names())
     }
 
     pub(super) fn canonical_raw(
@@ -195,14 +201,25 @@ impl Envelope<'_> {
         evidence: &Evidence,
         name: &str,
     ) -> Result<&str, Box<Error>> {
-        if self
-            .0
-            .keys()
-            .filter(|key| field_matches(name, key))
-            .nth(1)
-            .is_some()
-        {
-            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
+        self.field_raw(read, evidence, name, strict_json::FieldNames::Canonical)
+    }
+
+    fn field_raw(
+        &self,
+        read: &Read,
+        evidence: &Evidence,
+        name: &str,
+        names: strict_json::FieldNames,
+    ) -> Result<&str, Box<Error>> {
+        let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
+        let mut matched = self.0.keys().filter(|key| field_matches(name, key));
+        if let Some(key) = matched.next() {
+            names
+                .check(name, key)
+                .map_err(|_| read.invalid_guard(evidence))?;
+            if matched.next().is_some() {
+                return Err(invalid());
+            }
         }
         Ok(self.0.get(name).map_or("null", |raw| raw.get()))
     }

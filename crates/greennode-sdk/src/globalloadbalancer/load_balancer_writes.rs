@@ -401,7 +401,12 @@ impl Write<'_> {
             })?;
         match reply.status {
             StatusCode::OK => Guarded::latest(
-                decode(&operation, &reply.body, &DETAIL_SHAPE)?,
+                decode_with(
+                    &operation,
+                    &reply.body,
+                    &DETAIL_SHAPE,
+                    strict_json::validate_canonical_shape,
+                )?,
                 &self.evidence,
             ),
             status => {

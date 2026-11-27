@@ -283,16 +283,23 @@ impl Client {
         let server = Guarded::read_preflight(
             evidence,
             async |evidence| {
-                self.read(ctx, read, &[project, input.server], &[], evidence, |raw| {
-                    let envelope = Object::parse(raw)?;
-                    envelope.get("data")?.map_or_else(
-                        || Ok((String::new(), String::new())),
-                        |data| {
-                            let row = Object::parse(data)?;
-                            Ok((row.value("status")?, row.value("bootVolumeId")?))
-                        },
-                    )
-                })
+                self.read(
+                    ctx,
+                    read,
+                    &[project, input.server],
+                    &[],
+                    evidence,
+                    |raw, names| {
+                        let envelope = Object::parse(raw, names)?;
+                        envelope.get("data")?.map_or_else(
+                            || Ok((String::new(), String::new())),
+                            |data| {
+                                let row = Object::parse(data, names)?;
+                                Ok((row.value("status")?, row.value("bootVolumeId")?))
+                            },
+                        )
+                    },
+                )
                 .await
             },
             std::convert::identity,

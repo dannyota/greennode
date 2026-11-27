@@ -36,6 +36,7 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     retry,
 };
+use crate::wire::strict_json::FieldNames;
 use crate::{Config, Error, ErrorClass, Failure, RequestContext};
 use wire::{CAP, Document, ShapeResult, decode, failure, invalid, screen, shape};
 
@@ -141,7 +142,7 @@ impl Client {
             allow_empty: false,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: false,
+            overflow_overrides_status: matches!(evidence.field_names(), FieldNames::Canonical),
             sensitive: read.backup,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: false,
@@ -185,7 +186,7 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        from_wire: impl FnOnce(&RawValue) -> ShapeResult<T>,
+        from_wire: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
     ) -> Result<T, Box<Error>> {
         let value = self
             .read_value(ctx, read, path, query, evidence, from_wire)
@@ -200,10 +201,22 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        from_wire: impl FnOnce(&RawValue) -> ShapeResult<T>,
+        from_wire: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
     ) -> Result<T, Box<Error>> {
         let document = self.document(ctx, read, path, query, evidence).await?;
-        decode(&document, from_wire).map_err(|()| shape(read.id, read.shape_error))
+        let names = evidence.field_names();
+        decode(&document, names, from_wire).map_err(|()| {
+            if matches!(names, FieldNames::Canonical) {
+                Box::new(wire::api(
+                    read.id,
+                    Some(200),
+                    "InvalidResponse",
+                    read.shape_error,
+                ))
+            } else {
+                shape(read.id, read.shape_error)
+            }
+        })
     }
 }
 

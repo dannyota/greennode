@@ -364,7 +364,9 @@ impl Client {
             )
             .await?;
         let envelope = Envelope::parse(&text, &GET, evidence)?;
-        let ZonedLoadBalancer(row) = GET.parse(envelope.raw(&GET, evidence, "data")?, evidence)?;
+        let body = envelope.canonical_raw(&GET, evidence, "data")?;
+        let ZonedLoadBalancer(row) =
+            super::guard::parse(&GET, body, &super::guard::LOAD_BALANCER, evidence)?;
         let require_package = match package_requirement {
             PackageRequirement::Required => true,
             PackageRequirement::UnlessFailed => row.progress_status != "ERROR",
@@ -521,9 +523,9 @@ impl Client {
             id: op,
             route: "v1/price",
         };
-        let object = Envelope::parse(raw.get(), &read, evidence).map_err(|error| *error)?;
-        let raw = object
-            .raw(&read, evidence, "optimumPrice")
+        let result = Envelope::parse(raw.get(), &read, evidence).map_err(|error| *error)?;
+        let raw = result
+            .canonical_raw(&read, evidence, "optimumPrice")
             .map_err(|error| *error)?;
         if raw == "null" {
             return Err(api(op, None, "", "quote response had no price", evidence));
@@ -533,6 +535,9 @@ impl Client {
             .ok()
             .filter(|price| price.is_finite() && !price_reflects(*price, evidence))
             .ok_or_else(|| *read.decode_error(evidence, DecodeError::InvalidShape))?;
+        let (price, limit) = Guarded::price(evidence, price, limit)
+            .and_then(|price| price.into_checked(evidence))
+            .map_err(|error| *error)?;
         if price == 0.0 || (kind == "create" && price < 0.0) {
             return Err(outcome(
                 ErrorClass::Unpriced,
@@ -608,12 +613,7 @@ fn check_max_price(op: &str, price: f64, evidence: &Evidence) -> Result<(), Box<
 }
 
 fn price_reflects(price: f64, evidence: &Evidence) -> bool {
-    use crate::output_number::{self, Style};
-    output_number::reflects(price, evidence.credentials(), true)
-        || [Style::Json, Style::Fixed].into_iter().any(|style| {
-            output_number::f64(price, style).is_none_or(|text| evidence.text_reflects(&text))
-        })
-        || evidence.text_reflects(&format!("{price:.0}"))
+    evidence.output_number_reflects(price, true) || evidence.text_reflects(&format!("{price:.0}"))
 }
 
 fn outcome(class: ErrorClass, message: &str, evidence: &Evidence) -> Error {

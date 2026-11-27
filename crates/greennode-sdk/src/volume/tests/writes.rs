@@ -636,3 +636,94 @@ async fn unsettled_confirmation_retains_permission_denied_api_cause() {
     assert_eq!(cause.operation(), "volume.GetVolume");
     assert_eq!(server.requests(), 3);
 }
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rounded_quote_is_rechecked_with_the_volume_order_bearer() {
+        for (tokens, allowed) in [
+            (&["toy-inventory", "toy-quote", "50.00"][..], false),
+            (&["toy-inventory", "toy-quote", "50.01"][..], true),
+        ] {
+            let server = Server::start(vec![
+                response(EMPTY),
+                response(r#"{"optimumPrice":49.999}"#),
+                reply(ACCEPTED, r#"{"data":{"uuid":"volume-1"}}"#),
+            ]);
+            let result = changing_client(&server, tokens)
+                .create_volume(
+                    &RequestContext::new().0,
+                    CreateVolumeInput {
+                        no_wait: true,
+                        ..create()
+                    },
+                )
+                .await;
+            assert_eq!(
+                result.map(|_| ()).map_err(|error| error.write_dispatch()),
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(WriteDispatch::NotSent)
+                }
+            );
+            assert_eq!(server.requests(), if allowed { 3 } else { 2 });
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reflecting_volume_404_does_not_confirm_deletion() {
+        for (body, allowed) in [
+            ("{}", true),
+            (r#"{"note":"synthetic-volume-bearer"}"#, false),
+        ] {
+            let server = Server::start(vec![
+                response(AVAILABLE),
+                reply(ACCEPTED, ""),
+                reply("404 Not Found", body),
+            ]);
+            let result = client(&server, "hcm-3")
+                .delete_volume(
+                    &RequestContext::new().0,
+                    DeleteVolumeInput {
+                        volume_id: "volume-1".into(),
+                        no_wait: false,
+                    },
+                )
+                .await;
+            assert_eq!(result.is_ok(), allowed);
+            assert_eq!(server.requests(), 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn volume_mutation_guards_reject_lone_folded_operand_names() {
+        for field in ["serverId", "status"] {
+            let variant = AVAILABLE.replace(
+                &format!("\"{field}\""),
+                &format!("\"{}\"", field.to_uppercase()),
+            );
+            let server = Server::start(vec![response(&variant), reply(ACCEPTED, "")]);
+            let result = client(&server, "hcm-3")
+                .delete_volume(
+                    &RequestContext::new().0,
+                    DeleteVolumeInput {
+                        volume_id: "volume-1".into(),
+                        no_wait: true,
+                    },
+                )
+                .await;
+            let Err(error) = result else {
+                panic!("accepted a folded {field} operand");
+            };
+            assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+            assert_eq!(
+                error.error().api_error().map(crate::ApiError::code),
+                Some("InvalidResponse")
+            );
+            assert_eq!(server.requests(), 1);
+        }
+    }
+}

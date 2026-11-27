@@ -1,3 +1,4 @@
+use crate::wire::strict_json::FieldNames;
 use serde::Serialize;
 use serde_json::value::RawValue;
 
@@ -115,7 +116,7 @@ impl Client {
             &[&project],
             &[("name", &input.name), ("page", &page), ("size", &size)],
             evidence,
-            |raw| paged(raw, "listData", "totalPage", "totalItem"),
+            |raw, names| paged(raw, names, "listData", "totalPage", "totalItem"),
         )
         .await
     }
@@ -165,10 +166,10 @@ impl Client {
         path_id(VOLUME.id, "VolumeID", id)?;
         let project = self.project(ctx, evidence).await?;
         let (volume, attachment_known) = self
-            .read_value(ctx, VOLUME, &[&project, id], &[], evidence, |raw| {
-                let raw = Object::parse(raw)?.get("data")?.ok_or(())?;
-                let volume = Volume::from_wire(raw)?;
-                let fields = Object::parse(raw)?;
+            .read_value(ctx, VOLUME, &[&project, id], &[], evidence, |raw, names| {
+                let raw = Object::parse(raw, names)?.get("data")?.ok_or(())?;
+                let volume = Volume::from_wire(raw, names)?;
+                let fields = Object::parse(raw, names)?;
                 let attachment_known = fields.entry("serverId")?.is_some()
                     && volume.server_id.is_empty()
                     && volume.server_id_list.as_ref().is_some_and(Vec::is_empty)
@@ -249,31 +250,39 @@ impl Client {
     ) -> Result<ListVolumesByServerOutput, Box<Error>> {
         path_id(BY_SERVER.id, "ServerID", id)?;
         let project = self.project(ctx, evidence).await?;
-        self.read(ctx, BY_SERVER, &[&project, id], &[], evidence, |raw| {
-            let items = if raw.get().starts_with('[') {
-                Vec::from_wire(raw)?
-            } else if raw.get() == "null" {
-                Vec::new()
-            } else {
-                let values = Object::parse(raw)?;
-                let volumes = values.optional("volumes")?;
-                let data = values.optional("data")?;
-                let list_data = values.optional("listData")?;
-                volumes.or(data).or(list_data).unwrap_or_default()
-            };
-            Ok(List { items })
-        })
+        self.read(
+            ctx,
+            BY_SERVER,
+            &[&project, id],
+            &[],
+            evidence,
+            |raw, names| {
+                let items = if raw.get().starts_with('[') {
+                    Vec::from_wire(raw, names)?
+                } else if raw.get() == "null" {
+                    Vec::new()
+                } else {
+                    let values = Object::parse(raw, names)?;
+                    let volumes = values.optional("volumes")?;
+                    let data = values.optional("data")?;
+                    let list_data = values.optional("listData")?;
+                    volumes.or(data).or(list_data).unwrap_or_default()
+                };
+                Ok(List { items })
+            },
+        )
         .await
     }
 }
 
 pub(super) fn paged<T: FromWire + Default>(
     raw: &RawValue,
+    names: FieldNames,
     items: &str,
     total_page: &str,
     total_item: &str,
 ) -> ShapeResult<PagedList<T>> {
-    let fields = Object::parse(raw)?;
+    let fields = Object::parse(raw, names)?;
     Ok(PagedList {
         items: fields.require(items)?,
         page: fields.require("page")?,
