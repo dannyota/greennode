@@ -86,6 +86,7 @@ pub(crate) fn argument(field: &Field) -> clap::Arg {
             .default_missing_value("true")
             .value_parser(parse_bool),
         "[]string" => arg.action(ArgAction::Append),
+        "stringArray" => arg.action(ArgAction::Append).value_name("stringArray"),
         "int" | "int64" => arg
             .action(ArgAction::Set)
             .allow_hyphen_values(true)
@@ -172,6 +173,62 @@ fn parse_float(value: &str) -> Result<f64, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::{parse_float, parse_int};
+
+    #[test]
+    fn repeatable_string_array_preserves_occurrences_and_has_its_own_help_type() {
+        use super::{Field, argument};
+        let list = Field {
+            name: "locations",
+            go_type: "[]string",
+            required: false,
+        };
+        let array = Field {
+            name: "channel-id",
+            go_type: "stringArray",
+            required: false,
+        };
+        let mut cmd = clap::Command::new("check")
+            .arg(argument(&list))
+            .arg(argument(&array));
+        let host_args = [
+            "check",
+            "--locations",
+            "a,b",
+            "--locations",
+            "c",
+            "--channel-id",
+            "x,y",
+            "--channel-id",
+            "z",
+        ];
+        let values = cmd.clone().try_get_matches_from(host_args).unwrap();
+        assert_eq!(
+            values
+                .get_many::<String>("locations")
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["a,b", "c"]
+        );
+        assert_eq!(
+            values
+                .get_many::<String>("channel-id")
+                .unwrap()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["x,y", "z"]
+        );
+        assert!(
+            cmd.render_long_help()
+                .to_string()
+                .contains("--channel-id <stringArray>")
+        );
+        assert!(
+            cmd.render_long_help()
+                .to_string()
+                .contains("--locations <locations>")
+        );
+    }
 
     #[test]
     fn floating_point_overflow_is_rejected() {

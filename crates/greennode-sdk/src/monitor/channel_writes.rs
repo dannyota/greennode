@@ -664,7 +664,7 @@ fn validate_channel(
     Ok(())
 }
 fn screen_error(error: Error, privacy: &Evidence) -> Error {
-    error.screen_api(&|text| privacy.text_reflects(text))
+    super::mutation::screen_details(error, privacy)
 }
 fn screen_failure<T>(failure: Failure<T>, privacy: &Evidence) -> Failure<T> {
     let (error, partial, dispatch) = failure.into_parts();

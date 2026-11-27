@@ -28,3 +28,6 @@ log-project, and quota read goldens.
 
 Run `go test ./internal/cli -run '^TestMonitorChannelWriteGoldens$' -count=1`
 with TZ=UTC and the same settings for the 12 channel and OTP write goldens.
+
+Run `go test ./internal/cli -run '^TestMonitorCheckWriteGoldens$' -count=1`
+with the same settings for the 15 synthetic check write goldens.

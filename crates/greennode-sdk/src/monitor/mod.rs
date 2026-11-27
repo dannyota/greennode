@@ -9,6 +9,7 @@ mod alarms;
 mod channel_writes;
 mod channels;
 mod check_alarm;
+mod check_writes;
 mod checks;
 mod dashboards;
 mod history;
@@ -32,6 +33,7 @@ pub use alarms::*;
 pub use channel_writes::*;
 pub use channels::*;
 pub use check_alarm::*;
+pub use check_writes::*;
 pub use checks::*;
 pub use dashboards::*;
 pub use history::*;
@@ -44,6 +46,7 @@ pub use response_times::*;
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,
+    check_gates: Arc<check_writes::CheckGates>,
 }
 
 impl Client {
@@ -51,6 +54,7 @@ impl Client {
     pub fn new(config: &Config) -> Self {
         Self {
             session: Arc::clone(config.session()),
+            check_gates: Arc::default(),
         }
     }
 }

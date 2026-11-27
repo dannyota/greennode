@@ -6,7 +6,7 @@ use crate::model::wire::{Field, WireField, model};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::Shape;
 use crate::{Failure, List, RequestContext};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use std::{collections::BTreeMap, fmt};
 
@@ -135,10 +135,8 @@ pub struct CheckRequest {
     /// HTTP method.
     pub method: String,
     /// Request headers.
-    #[serde(serialize_with = "text_map")]
     pub headers: BTreeMap<String, String>,
     /// Query parameters.
-    #[serde(serialize_with = "text_map")]
     pub query: BTreeMap<String, String>,
     /// Request body.
     pub body: String,
@@ -197,12 +195,6 @@ impl WireField for TextMap {
         self.0.retain(|key, _| !evidence.text_reflects(key));
         self.0.values_mut().all(|value| value.0.redact(evidence))
     }
-}
-fn text_map<S: Serializer>(
-    map: &BTreeMap<String, String>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_newtype_struct("$greennode::dynamic-map", map)
 }
 
 model! { @ true; struct RequestWire {

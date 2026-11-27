@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -312,6 +314,67 @@ func TestMonitorChannelWriteGoldens(t *testing.T) {
 				root.SetArgs(args)
 				if err := root.ExecuteContext(context.Background()); err != nil || stderr.Len() != 0 || server.requestCount() != len(routes) {
 					t.Fatalf("Monitor channel write failed (requests %d)", server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestMonitorCheckWriteGoldens(t *testing.T) {
+	beforeBytes, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), "remaining_check.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := string(beforeBytes)
+	check := "/vmonitor-uptime-manager/v1/uptimes"
+	for _, tc := range []struct {
+		operation string
+		flags     []string
+	}{
+		{"create-check", []string{"--name", "Probe", "--url", "https://example.test/", "--locations", "loc-1"}},
+		{"update-check", []string{"--check-id", "chk-1", "--name", "Changed"}},
+		{"delete-check", []string{"--check-id", "chk-1", "--yes"}},
+		{"pause-check", []string{"--check-id", "chk-1"}},
+		{"resume-check", []string{"--check-id", "chk-1"}},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.operation+"/"+format, func(t *testing.T) {
+				routes := map[string]func(http.ResponseWriter, *http.Request){}
+				count := 1
+				switch tc.operation {
+				case "create-check":
+					routes[check] = jsonHandler(201, before)
+				case "update-check":
+					count = 2
+					routes[check+"/chk-1"] = func(w http.ResponseWriter, r *http.Request) {
+						body := before
+						if r.Method == "PUT" {
+							body = strings.ReplaceAll(body, `"Probe"`, `"Changed"`)
+						}
+						jsonHandler(200, body)(w, r)
+					}
+				case "delete-check":
+					routes[check+"/chk-1"] = jsonHandler(204, "")
+				case "pause-check", "resume-check":
+					count = 3
+					var sent atomic.Bool
+					routes[check+"/status/chk-1"] = func(w http.ResponseWriter, r *http.Request) { sent.Store(true); w.WriteHeader(204) }
+					routes[check+"/chk-1"] = func(w http.ResponseWriter, r *http.Request) {
+						body := before
+						if (tc.operation == "pause-check") == sent.Load() {
+							body = strings.ReplaceAll(body, "ENABLED", "DISABLED")
+						}
+						jsonHandler(200, body)(w, r)
+					}
+				}
+				server := newSvcFixture(routes)
+				root, stdout, stderr := newSvcRoot(t, server)
+				root.SetArgs(append([]string{"--region", "hcm-3", "--output", format, "monitor", tc.operation}, tc.flags...))
+				if err := root.ExecuteContext(context.Background()); err != nil || stderr.Len() != 0 || server.requestCount() != count {
+					t.Fatalf("Monitor check write failed (requests %d)", server.requestCount())
 				}
 				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
 					t.Fatal(err)

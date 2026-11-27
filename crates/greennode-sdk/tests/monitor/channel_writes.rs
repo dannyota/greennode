@@ -9,7 +9,7 @@ use greennode_sdk::{Config, ConfigOptions, ErrorClass, RequestContext, Secret, W
 const CHANNELS: &str = include_str!("../fixtures/monitor/remaining_channels.json");
 const CREATED: &str = r#"{"id":"channel-new","name":"Alerts","address":"example@example.test","createdDate":"2000-01-01"}"#;
 
-fn client(server: &Server) -> Client {
+pub(super) fn client(server: &Server) -> Client {
     let options = ConfigOptions::default()
         .with_region("hcm-3".into())
         .with_static_token(Secret::new("toy-management"));
@@ -224,4 +224,28 @@ async fn create_channel_requires_authoritative_id_and_update_refuses_guard_alias
     assert_eq!(error.error().api_error().unwrap().code(), "InvalidResponse");
     assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn guarded_channel_lookup_withholds_a_known_address_from_not_found_diagnostics() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"lstData":[],"page":1,"pageSize":10,"totalPage":0,"totalItem":0}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let address = "contact-canary";
+    let mut input = UpdateChannelInput::new(address);
+    input.address = Some(address.into());
+    let failure = client(&server)
+        .update_channel(&ctx, input)
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotFound));
+    assert!(
+        !failure
+            .error()
+            .detail::<String>()
+            .is_some_and(|text| text.contains(address))
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
 }

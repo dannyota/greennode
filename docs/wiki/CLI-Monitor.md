@@ -24,6 +24,38 @@ masked before rendering or querying.
 greennode monitor create-channel --name <name> --type Webhook --cli-input-json file://channel.json
 ```
 
+## create-check
+
+Kind: Write.
+
+Repeat --in-alarm-channel-id, --up-channel-id, and --undetermined-channel-id for
+separate channel IDs. One empty occurrence clears its list. For updates, provide
+all three flags together or use JSON Notifications with In-alarm, Up, and
+Undetermined.
+
+| Flag                                          | Type                         | Required |
+| --------------------------------------------- | ---------------------------- | -------- |
+| `--name`                                      | `string`                     | yes      |
+| `--url`                                       | `string`                     | yes      |
+| `--locations`                                 | `[]string`                   | yes      |
+| `--method`                                    | `string`                     |          |
+| `--body`                                      | `string`                     |          |
+| `--timeout`                                   | `int`                        |          |
+| `--test-frequency`                            | `int`                        |          |
+| `--tests`                                     | `int`                        |          |
+| `--failed-locations`                          | `int`                        |          |
+| `--in-alarm-channel-id`                       | `stringArray`                |          |
+| `--undetermined-channel-id`                   | `stringArray`                |          |
+| `--up-channel-id`                             | `stringArray`                |          |
+| `Headers` (via `--cli-input-json` only)       | `map[string]string`          |          |
+| `Query` (via `--cli-input-json` only)         | `map[string]string`          |          |
+| `Assertions` (via `--cli-input-json` only)    | `[]monitor.Assertion`        |          |
+| `Notifications` (via `--cli-input-json` only) | `monitor.CheckNotifications` |          |
+
+```sh
+greennode monitor create-check --name <name> --url <url> --locations <locations>
+```
+
 ## delete-channel
 
 Kind: Write, destructive.
@@ -36,6 +68,20 @@ Requires --yes. GreenNode removes the deleted channel from checks that used it.
 
 ```sh
 greennode monitor delete-channel --channel-id <channel-id> --yes
+```
+
+## delete-check
+
+Kind: Write, destructive.
+
+Requires --yes. Deleting a check removes its history.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--check-id` | `string` | yes      |
+
+```sh
+greennode monitor delete-check --check-id <check-id> --yes
 ```
 
 ## get-alarm
@@ -388,6 +434,21 @@ No fields.
 greennode monitor list-synthetic-packages
 ```
 
+## pause-check
+
+Kind: Write.
+
+Toggles the check once when enabled and reads the result back. Changed is false
+for an already-paused check.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--check-id` | `string` | yes      |
+
+```sh
+greennode monitor pause-check --check-id <check-id>
+```
+
 ## quota-status
 
 Kind: Read.
@@ -496,6 +557,21 @@ MaxDaysLeft, and NoWait are ignored. Read-only permits this quote.
 greennode monitor quote-renew-synthetic-quota --expected-end-time <expected-end-time>
 ```
 
+## resume-check
+
+Kind: Write.
+
+Toggles the check once when disabled and reads the result back. Changed is false
+for an already-enabled check.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--check-id` | `string` | yes      |
+
+```sh
+greennode monitor resume-check --check-id <check-id>
+```
+
 ## send-channel-otp
 
 Kind: Write.
@@ -533,4 +609,40 @@ update that carries a validated OTP sends once.
 
 ```sh
 greennode monitor update-channel --channel-id <channel-id> --cli-input-json file://channel.json
+```
+
+## update-check
+
+Kind: Write.
+
+Repeat --in-alarm-channel-id, --up-channel-id, and --undetermined-channel-id for
+separate channel IDs. One empty occurrence clears its list. For updates, provide
+all three flags together or use JSON Notifications with In-alarm, Up, and
+Undetermined.
+
+Updates preserve the current enabled or disabled state. Pause, resume, and
+update serialize by CheckID within one SDK client.
+
+| Flag                                          | Type                          | Required |
+| --------------------------------------------- | ----------------------------- | -------- |
+| `--check-id`                                  | `string`                      | yes      |
+| `--name`                                      | `*string`                     |          |
+| `--url`                                       | `*string`                     |          |
+| `--method`                                    | `*string`                     |          |
+| `--body`                                      | `*string`                     |          |
+| `--timeout`                                   | `*int`                        |          |
+| `--test-frequency`                            | `*int`                        |          |
+| `--tests`                                     | `*int`                        |          |
+| `--failed-locations`                          | `*int`                        |          |
+| `--locations`                                 | `*[]string`                   |          |
+| `--in-alarm-channel-id`                       | `stringArray`                 |          |
+| `--undetermined-channel-id`                   | `stringArray`                 |          |
+| `--up-channel-id`                             | `stringArray`                 |          |
+| `Headers` (via `--cli-input-json` only)       | `*map[string]string`          |          |
+| `Query` (via `--cli-input-json` only)         | `*map[string]string`          |          |
+| `Assertions` (via `--cli-input-json` only)    | `*[]monitor.Assertion`        |          |
+| `Notifications` (via `--cli-input-json` only) | `*monitor.CheckNotifications` |          |
+
+```sh
+greennode monitor update-check --check-id <check-id> --name <name>
 ```

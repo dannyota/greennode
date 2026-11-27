@@ -23,6 +23,10 @@ use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 pub enum WriteError {
     /// The channel validation endpoint rejected the supplied OTP.
     OtpRejected,
+    /// The current check status does not support a toggle.
+    UnexpectedStatus,
+    /// The toggle may have acted, but no confirmation reached its target.
+    StatusUnconfirmed,
 }
 
 pub(super) struct Mutation {
@@ -249,4 +253,19 @@ pub(super) fn maybe_sent<T>(error: Error) -> Failure<T> {
 }
 pub(super) fn before_write<T>(failure: Failure<T>) -> Failure<T> {
     not_sent(failure.into_parts().0)
+}
+
+pub(super) fn screen_details(error: Error, evidence: &Evidence) -> Error {
+    let mut error = error.screen_api(&|text| evidence.text_reflects(text));
+    if error
+        .detail::<String>()
+        .is_some_and(|detail| evidence.text_reflects(detail))
+    {
+        error.remove_details::<String>(|detail| evidence.text_reflects(detail));
+        let fixed = "monitor: request failed; details withheld";
+        if !evidence.text_reflects(fixed) {
+            error = error.with_outer_detail(fixed.to_owned());
+        }
+    }
+    error
 }

@@ -5,7 +5,7 @@ use greennode_sdk::{ConfigOptions, RequestContext, Secret, SystemClock};
 use std::{ffi::OsString, process::ExitCode};
 
 const TOKEN: &str = "toy-monitor-write-token";
-fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
+pub(super) fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let context = RequestContext::new().0;
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let options = ConfigOptions::default().with_static_token(Secret::new(TOKEN));

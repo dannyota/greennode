@@ -1,4 +1,5 @@
 mod channel_writes;
+mod check_writes;
 mod quota;
 
 use std::io::Write;
@@ -317,6 +318,36 @@ pub(super) const SERVICE: Service = Service {
     name: "monitor",
     error_rules: &[
         Rule {
+            identity: "monitor-check-unexpected-status",
+            matches: |error| {
+                error.detail::<greennode_sdk::monitor::WriteError>()
+                    == Some(&greennode_sdk::monitor::WriteError::UnexpectedStatus)
+            },
+            name: Some(RuleName {
+                rank: 10,
+                code: "UnexpectedStatus",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
+            identity: "monitor-check-status-unconfirmed",
+            matches: |error| {
+                error.detail::<greennode_sdk::monitor::WriteError>()
+                    == Some(&greennode_sdk::monitor::WriteError::StatusUnconfirmed)
+            },
+            name: Some(RuleName {
+                rank: 11,
+                code: "StatusUnconfirmed",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: None,
+        },
+        Rule {
             identity: "monitor-otp-rejected",
             matches: |error| {
                 error.detail::<greennode_sdk::monitor::WriteError>()
@@ -386,6 +417,11 @@ pub(super) const SERVICE: Service = Service {
         channel_writes::UPDATE,
         channel_writes::DELETE,
         channel_writes::SEND,
+        check_writes::CREATE,
+        check_writes::UPDATE,
+        check_writes::DELETE,
+        check_writes::PAUSE,
+        check_writes::RESUME,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,
