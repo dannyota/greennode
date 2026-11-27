@@ -6,7 +6,7 @@ use error::{
     ApiError, Error, ErrorClass, Failure, LoginError, SafeText, ServiceAccountLoginError,
     WriteDispatch,
 };
-use greennode_sdk::{ContextEnd, Secret};
+use greennode_sdk::{ContextEnd, Secret, pricing};
 
 fn safe(text: &str) -> SafeText {
     SafeText::new(text, &[])

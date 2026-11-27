@@ -80,6 +80,23 @@ fn delete_output_uses_baseline_projection_name() {
 }
 
 #[tokio::test]
+async fn cluster_settlement_refuses_reflected_active_state() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"id":"cluster-1","status":"ACTIVE"}"#,
+    )]);
+    let result = test_client(&server, "hcm-3", "ACTIVE")
+        .cluster_state(
+            &RequestContext::new().0,
+            "cluster-1",
+            &mut crate::wire::product::evidence::Evidence::new(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn delete_preflights_sends_once_and_confirms_absence() {
     let server = Server::start(vec![
         response("200 OK", r#"{"id":"cluster-1","status":"ACTIVE"}"#),

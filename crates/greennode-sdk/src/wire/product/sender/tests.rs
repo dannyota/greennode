@@ -96,6 +96,7 @@ fn response(status: &str, headers: &[(&str, &str)]) -> Response {
 }
 fn operation(method: Method, retry: redirect::Retry) -> Operation<'static> {
     Operation {
+        guard: None,
         pacing: None,
         response_guard: None,
         attempt_check: None,

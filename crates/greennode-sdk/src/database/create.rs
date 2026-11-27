@@ -521,6 +521,7 @@ impl Output for CreateReply {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct RejectedFields(pub(super) Vec<&'static str>);
 
 fn field_errors(body: &[u8]) -> RejectedFields {

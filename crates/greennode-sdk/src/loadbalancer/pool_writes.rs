@@ -78,6 +78,7 @@ impl Serialize for CreatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("CreatePoolOutput", 1)?;
         if let Some(projection) = &self.projection {
+            crate::wire::product::identifier::check_retained::<_, S::Error>(&self.pool)?;
             output.serialize_field("Pool", projection)?;
         } else {
             output.serialize_field("Pool", &self.pool)?;
@@ -148,6 +149,7 @@ impl Serialize for UpdatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("UpdatePoolOutput", 1)?;
         if let Some(projection) = &self.projection {
+            crate::wire::product::identifier::check_retained::<_, S::Error>(&self.pool)?;
             output.serialize_field("Pool", projection)?;
         } else {
             output.serialize_field("Pool", &self.pool)?;

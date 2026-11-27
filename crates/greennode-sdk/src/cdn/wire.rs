@@ -7,7 +7,7 @@ use super::{Client, ErrorDetail};
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{Operation, RouteAuth, execute_raw},
+    operation::{GuardOperation, Operation, RouteAuth, execute_raw},
     options::Options,
     redirect::{Classification, Retry},
     response::{classify, sanitize_error_text},
@@ -96,7 +96,8 @@ impl Call {
         self.id.strip_prefix("cdn.").unwrap_or(self.id)
     }
 
-    fn refused(&self, status: u16, envelope: &Envelope, evidence: &Evidence) -> Error {
+    fn refused(&self, status: u16, envelope: GuardEnvelope<'_>, evidence: &Evidence) -> Error {
+        let GuardEnvelope(envelope) = envelope;
         if let Some(not_found) = self.not_found
             && empty_data(envelope.data.as_deref())
         {
@@ -185,6 +186,16 @@ struct Envelope {
     data: Option<Box<RawValue>>,
 }
 
+struct GuardEnvelope<'a>(&'a Envelope);
+
+impl<'a> GuardEnvelope<'a> {
+    fn checked(envelope: &'a Envelope, reflection: Option<bool>) -> Option<Self> {
+        (reflection == Some(false)).then_some(Self(envelope))
+    }
+}
+
+pub(super) struct GuardCall(pub(super) Call);
+
 const ENVELOPE: Shape<'static> = Shape::Object(&[
     ShapeField {
         name: "success",
@@ -232,6 +243,30 @@ impl Client {
         body: Bytes,
         evidence: &mut Evidence,
     ) -> Result<Option<Box<RawValue>>, Failure<()>> {
+        self.call_with_policy(ctx, call, path, body, evidence, false)
+            .await
+    }
+
+    pub(super) async fn call_guard(
+        &self,
+        ctx: &RequestContext,
+        guard: &GuardCall,
+        path: &[&str],
+        evidence: &mut Evidence,
+    ) -> Result<Option<Box<RawValue>>, Failure<()>> {
+        self.call_with_policy(ctx, &guard.0, path, Bytes::new(), evidence, true)
+            .await
+    }
+
+    async fn call_with_policy(
+        &self,
+        ctx: &RequestContext,
+        call: &Call,
+        path: &[&str],
+        body: Bytes,
+        evidence: &mut Evidence,
+        guard: bool,
+    ) -> Result<Option<Box<RawValue>>, Failure<()>> {
         let mut operation = operation(
             call.id,
             call.route,
@@ -244,7 +279,14 @@ impl Client {
         }
         operation.retry = call.retry;
         let sent_failure = |error| Failure::new(error, None, call.dispatch(true));
-        let reply = raw(self, ctx, &operation, path, body, evidence, false)
+        let guarded;
+        let operation = if guard {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
+        };
+        let reply = raw(self, ctx, operation, path, body, evidence, false)
             .await
             .map_err(|failure| {
                 let dispatch = match failure.write_dispatch() {
@@ -305,7 +347,9 @@ impl Client {
         let envelope: Envelope = serde_json::from_slice(&reply.body)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         if !envelope.success {
-            return Err(sent_failure(call.refused(status, &envelope, evidence)));
+            let checked = GuardEnvelope::checked(&envelope, reply.reflection)
+                .ok_or_else(|| sent_failure(call.unexpected(status)))?;
+            return Err(sent_failure(call.refused(status, checked, evidence)));
         }
         Ok(envelope.data)
     }

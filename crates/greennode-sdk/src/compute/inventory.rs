@@ -122,10 +122,18 @@ impl Client {
     ) -> Result<Server, Failure<O>> {
         GET_SERVER.path("ServerID", id).map_err(failure)?;
         let ctx = self.server_deadline(ctx);
-        let envelope = self.read(&ctx, &GET_SERVER, &[id], &[], evidence).await?;
-        if reject_reflection && envelope.reflects(evidence) {
-            return Err(failure(GET_SERVER.invalid(evidence)));
-        }
+        let envelope = if reject_reflection {
+            self.read_guard(
+                &ctx,
+                super::wire::GuardRead(&GET_SERVER),
+                &[id],
+                &[],
+                evidence,
+            )
+            .await?
+        } else {
+            self.read(&ctx, &GET_SERVER, &[id], &[], evidence).await?
+        };
         let server: Server = envelope.field("data", &GET_SERVER, evidence)?;
         if server.uuid != id {
             return Err(failure(GET_SERVER.invalid(evidence)));

@@ -29,7 +29,9 @@ const LOAD_BALANCER: Read = Read {
     route: "v2/{}/loadBalancers/{}",
 };
 
+#[derive(Debug)]
 pub(super) struct BusyRefusal;
+#[derive(Debug)]
 pub(super) struct CompleteRefusal;
 
 pub(super) type WriteResult<T> = Result<T, Failure<T>>;
@@ -96,7 +98,13 @@ impl<'a> ChildWriter<'a> {
     ) -> Result<String, Box<Error>> {
         let text = self
             .client
-            .read_text(ctx, read, ids, &[], &mut self.evidence, true)
+            .read_guard_text(
+                ctx,
+                super::wire::GuardRead(read),
+                ids,
+                &[],
+                &mut self.evidence,
+            )
             .await?;
         let wrapper = Envelope::parse(&text, read, &self.evidence)?;
         Ok(wrapper

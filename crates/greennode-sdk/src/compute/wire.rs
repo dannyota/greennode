@@ -7,7 +7,7 @@ use serde_json::value::RawValue;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
     response, retry,
@@ -23,6 +23,8 @@ pub(super) enum ReadStyle {
     Server,
     Console,
 }
+
+pub(super) struct GuardRead<'a>(pub(super) &'a Read);
 
 pub(super) struct Read {
     pub(super) id: &'static str,
@@ -184,6 +186,31 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
     ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, read, ids, query, evidence, false)
+            .await
+    }
+
+    pub(super) async fn read_guard<O>(
+        &self,
+        ctx: &RequestContext,
+        guard: GuardRead<'_>,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+    ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, guard.0, ids, query, evidence, true)
+            .await
+    }
+
+    async fn read_with_policy<O>(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        guard: bool,
+    ) -> Result<Envelope, Failure<O>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -237,10 +264,17 @@ impl Client {
             no_redirect: protected,
             retry_config: retry::Config::default(),
         };
+        let guarded;
+        let operation = if guard {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
+        };
         let result = operation::execute_raw(
             runtime,
             base,
-            &operation,
+            operation,
             &Options::DEFAULT,
             &path,
             query,

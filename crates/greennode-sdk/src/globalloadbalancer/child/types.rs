@@ -155,6 +155,7 @@ impl CreatePoolOutput {
 impl Serialize for CreatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check_retained::<_, S::Error>(&(&self.pool, &self.pool_member))?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("CreatePoolOutput", 2)?;
@@ -184,6 +185,7 @@ impl CreateListenerOutput {
 impl Serialize for CreateListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check_retained::<_, S::Error>(&self.listener)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("CreateListenerOutput", 1)?;
@@ -218,6 +220,8 @@ impl DeletePoolOutput {
 impl Serialize for DeletePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check::<_, S::Error>(&(&self.load_balancer_id, &self.pool_id))?;
+            identifier::check_retained::<_, S::Error>(&self.deleted)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeletePoolOutput", 3)?;
@@ -257,6 +261,8 @@ impl DeleteListenerOutput {
 impl Serialize for DeleteListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check::<_, S::Error>(&(&self.load_balancer_id, &self.listener_id))?;
+            identifier::check_retained::<_, S::Error>(&self.deleted)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeleteListenerOutput", 3)?;
@@ -303,6 +309,15 @@ fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::Secret;
+
+    #[test]
+    fn delete_output_redacts_the_actual_typed_pool_identifier() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let pool = DeletePoolOutput::new("glb-1", "pre6A6B6Cpost", false, &evidence);
+        assert!(pool.pool_id == "<redacted>");
+        assert!(!evidence.serialized_output_reflects(&pool));
+    }
 
     #[test]
     fn debug_uses_each_child_outputs_screened_projection() {

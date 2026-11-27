@@ -49,19 +49,19 @@ impl Client {
         let mut op = super::read_operation("vks.GetCluster", "v1/clusters/{}");
         op.no_redirect = true;
         op.keep_status = true;
-        let (_, state) = operation::execute_with_evidence::<ClusterState>(
-            runtime,
-            base,
-            &op,
-            &Options::DEFAULT,
-            &[id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-            evidence,
-        )
-        .await
-        .map_err(|failure| Box::new(super::safe_error(op.id, failure.error())))?;
+        let op = operation::GuardOperation::new(op);
+        let (_, state) = op
+            .execute::<ClusterState>(
+                runtime,
+                base,
+                &Options::DEFAULT,
+                &[id],
+                &[],
+                self.session.bearer_source(),
+                evidence,
+            )
+            .await
+            .map_err(|failure| Box::new(super::safe_error(op.id, failure.error())))?;
         if state.id != id || !valid_status(&state.status) {
             return Err(Box::new(super::malformed(op.id)));
         }

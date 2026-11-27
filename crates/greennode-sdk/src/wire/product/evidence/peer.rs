@@ -6,24 +6,41 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, false, &|text, identifier, _| {
+    check_decoded(body, false, identifier_key, &|text, identifier, _| {
         matcher.reflects(text.as_bytes(), identifier)
     })
+}
+
+pub(super) fn request_identifier_key(key: &str) -> bool {
+    identifier_key(key) || matches!(key, "policyIdList" | "serverIdList")
+}
+
+pub(super) fn request_reflects(matcher: &BodyMatcher<'_>, body: &[u8], identifier: bool) -> bool {
+    check_decoded(
+        body,
+        identifier,
+        request_identifier_key,
+        &|text, identifier, _| matcher.reflects(text.as_bytes(), identifier),
+    ) == Some(true)
 }
 
 pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option<bool> {
     let matcher = BodyMatcher::for_output(evidence.credentials(), body.len());
-    if matcher.literal(std::str::from_utf8(body).ok()?) {
+    output_with_matcher(&matcher, body)
+}
+
+pub(super) fn output_with_matcher(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
+    if matcher.reflects(body, false) {
         return Some(true);
     }
-    check_decoded(body, false, &|text, identifier, number| {
+    check_decoded(body, false, identifier_key, &|text, identifier, number| {
         matcher.reflects(text.as_bytes(), identifier)
-            || (number && output_number_reflects(&matcher, text, identifier))
+            || (number && output_number_reflects(matcher, text, identifier))
     })
 }
 
 pub(super) fn output_identifier_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, true, &|text, identifier, number| {
+    check_decoded(body, true, identifier_key, &|text, identifier, number| {
         matcher.reflects(text.as_bytes(), identifier)
             || (number && output_number_reflects(matcher, text, identifier))
     })
@@ -48,11 +65,13 @@ fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: boo
 fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
     body: &[u8],
     root_identifier: bool,
+    identifier_key: fn(&str) -> bool,
     matches: &F,
 ) -> Option<bool> {
     let raw: &RawValue = serde_json::from_slice(body).ok()?;
     Walker {
         matches,
+        identifier_key,
         identifier: root_identifier,
         depth: 0,
     }
@@ -62,6 +81,7 @@ fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
 
 struct Walker<'a, F> {
     matches: &'a F,
+    identifier_key: fn(&str) -> bool,
     identifier: bool,
     depth: usize,
 }
@@ -88,6 +108,7 @@ impl<F: Fn(&str, bool, bool) -> bool> Walker<'_, F> {
     fn child(&self, identifier: bool) -> Self {
         Self {
             matches: self.matches,
+            identifier_key: self.identifier_key,
             identifier,
             depth: self.depth + 1,
         }
@@ -108,7 +129,7 @@ impl<'de, F: Fn(&str, bool, bool) -> bool> Visitor<'de> for Walker<'_, F> {
             if !reflects {
                 reflects = (self.matches)(&key, self.identifier, false)
                     || self
-                        .child(self.identifier || identifier_key(&key))
+                        .child(self.identifier || (self.identifier_key)(&key))
                         .check(raw)
                         .map_err(serde::de::Error::custom)?;
             }

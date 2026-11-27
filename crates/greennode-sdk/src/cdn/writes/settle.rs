@@ -1,3 +1,4 @@
+use crate::wire::product::operation::RefusedGuard;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -74,7 +75,7 @@ impl<'a> Poll<'a> {
     async fn detail(&mut self) -> Result<WebDetail, Error> {
         let result = self
             .client
-            .read_web_detail(&self.context, self.id, self.cdn_id, self.evidence)
+            .read_guard_detail(&self.context, self.id, self.cdn_id, self.evidence)
             .await;
         if self.client.session.clock().monotonic_now() >= self.deadline {
             return Err(Error::new(ErrorClass::DeadlineExceeded));
@@ -94,6 +95,7 @@ impl<'a> Poll<'a> {
                     return Ok(detail);
                 }
                 Ok(_) => last = None,
+                Err(error) if error.detail::<RefusedGuard>().is_some() => return Err(Some(error)),
                 Err(error) => last = Some(error),
             }
         }
@@ -126,6 +128,10 @@ impl<'a> Poll<'a> {
                         observed = true;
                     }
                     Err(error) if error.has_class(ErrorClass::NotFound) => {
+                        return (last, Some(error));
+                    }
+                    Err(error) if error.detail::<RefusedGuard>().is_some() => {
+                        let error = self.not_settled(&last, Some(error));
                         return (last, Some(error));
                     }
                     Err(error) => cause = Some(error),

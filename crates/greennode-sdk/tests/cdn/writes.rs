@@ -143,6 +143,37 @@ async fn update_partial_redacts_the_cdn_key_and_user_identifier() {
 }
 
 #[tokio::test]
+async fn reflective_cdn_envelope_cannot_choose_special_error_identity() {
+    for (code, message, detail) in [
+        (
+            400,
+            "ordinary response is not allow to update or delete",
+            Some(ErrorDetail::ResourceBusy),
+        ),
+        (400, "Not found cdn ordinary response", None),
+        (
+            202,
+            "Last CDN flush cache time ordinary response",
+            Some(ErrorDetail::PurgeCooldown),
+        ),
+    ] {
+        let body = json!({"success":false,"code":code,"message":format!("{message} {CDN_KEY}")});
+        let server = Server::start(vec![reply(&body.to_string())]);
+        let failure = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/img/a.webp".into()]),
+            )
+            .await
+            .unwrap_err();
+        assert!(!failure.error().has_identity(ErrorClass::NotFound));
+        if let Some(detail) = detail {
+            assert_ne!(failure.error().detail::<ErrorDetail>(), Some(&detail));
+        }
+    }
+}
+
+#[tokio::test]
 async fn purge_paths_sends_exact_paths_once_and_classifies_cooldown() {
     let (ctx, _) = RequestContext::new();
     let server = Server::start(vec![reply(include_str!(
@@ -200,7 +231,7 @@ async fn toggle_after_a_cancelled_send_is_unconfirmed_and_keeps_dispatch_evidenc
 }
 
 #[tokio::test]
-async fn settlement_returns_the_latest_safe_read_on_unexpected_status() {
+async fn settlement_refuses_a_reflected_reply_and_retains_the_last_safe_read() {
     let unexpected =
         r#"{"success":true,"data":{"cdnId":"cdn-1","status":42,"domainName":"TOY-CDN-KEY"}}"#;
     let server = Server::start(vec![reply(ACTIVE), reply(TOGGLED), reply(unexpected)]);
@@ -211,14 +242,12 @@ async fn settlement_returns_the_latest_safe_read_on_unexpected_status() {
         .update_web_accelerator(&ctx, input)
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<ErrorDetail>(),
-        Some(&ErrorDetail::UnexpectedStatus)
-    );
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.error().detail::<ErrorDetail>(), None);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
-    assert_eq!(partial["WebAccelerator"]["Status"], 42);
-    assert!(partial["WebAccelerator"]["DomainName"] == "<redacted>");
+    assert_eq!(partial["WebAccelerator"]["Status"], 1);
+    assert!(!partial.to_string().to_ascii_lowercase().contains(CDN_KEY));
     assert_eq!(server.requests(), 3);
 }
 

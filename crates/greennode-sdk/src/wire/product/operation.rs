@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Reflection {
     Refuse,
+    Guard,
     Redact,
     PrivateDelivery,
 }
@@ -30,6 +31,63 @@ pub(crate) struct Operation {
     pub(crate) reflection: Reflection,
     pub(crate) no_redirect: bool,
     pub(crate) retry_config: retry::Config,
+}
+
+pub(crate) struct GuardOperation(Operation);
+
+impl GuardOperation {
+    pub(crate) fn new(mut operation: Operation) -> Self {
+        assert!(matches!(operation.class, redirect::Classification::Read));
+        operation.reflection = Reflection::Guard;
+        Self(operation)
+    }
+
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    pub(crate) async fn execute<T: Output>(
+        &self,
+        runtime: sender::Runtime<'_>,
+        base: &crate::endpoint::Base,
+        options: &Options<'_>,
+        path: &[&str],
+        query: &[(&str, &str)],
+        source: &dyn sender::BearerSource,
+        evidence: &mut Evidence,
+    ) -> Result<(StatusCode, T), crate::Failure<T>> {
+        execute_with_evidence(
+            runtime,
+            base,
+            self,
+            options,
+            path,
+            query,
+            source,
+            bytes::Bytes::new(),
+            evidence,
+        )
+        .await
+    }
+}
+
+impl std::ops::Deref for GuardOperation {
+    type Target = Operation;
+
+    fn deref(&self) -> &Operation {
+        &self.0
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RefusedGuard;
+
+pub(super) fn unsafe_guard_response(id: &'static str) -> crate::Error {
+    crate::Error::from_api(crate::ApiError::without_fallback(
+        id,
+        None,
+        crate::error::SafeText::new("InvalidResponse", &[]),
+        crate::error::SafeText::new("response failed validation; body withheld", &[]),
+        false,
+    ))
+    .with_detail(RefusedGuard)
 }
 
 #[allow(clippy::result_large_err)]
@@ -324,6 +382,7 @@ async fn send_route<T>(
         body,
     };
     let policy = sender::Operation {
+        guard: (operation.reflection == Reflection::Guard).then_some(operation.id),
         pacing: options.pacing,
         response_guard: options.response_guard.map(|guard| (operation.id, guard)),
         attempt_check: options.attempt_check,

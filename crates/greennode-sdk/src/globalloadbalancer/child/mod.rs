@@ -11,7 +11,7 @@ pub use types::*;
 
 use http::{Method, StatusCode};
 use serde::Serialize;
-use serde_json::{Value, value::RawValue};
+use serde_json::Value;
 use std::time::Duration;
 
 use super::load_balancer_writes::decode_with;
@@ -123,7 +123,7 @@ impl Child<'_> {
         };
         let reply = self
             .0
-            .request_on(ctx, &op, base, path, None)
+            .guard_on(ctx, &op, base, path)
             .await
             .map_err(|failure| {
                 let error = failure.into_parts().0;
@@ -163,7 +163,7 @@ impl Child<'_> {
                     .unwrap_or(DecodeError::InvalidShape),
             )
         })?;
-        if !self.clean_document(&reply.body) {
+        if reply.reflection != Some(false) {
             return Err(self.invalid(DecodeError::ReflectedCredential));
         }
         Ok(result)
@@ -215,20 +215,11 @@ impl Child<'_> {
     fn acceptance(&self, reply: &Response, template: &'static str) -> Option<model::Acceptance> {
         let op = guard_operation(self.0.id, template);
         let result = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
-        if !self.clean_document(&reply.body) {
+        if reply.reflection != Some(false) {
             None
         } else {
             Some(result)
         }
-    }
-
-    fn clean_document(&self, body: &[u8]) -> bool {
-        let text = super::wire::go_json(body);
-        let Ok(raw) = serde_json::from_str::<&RawValue>(&text) else {
-            return false;
-        };
-        crate::quote::catalog::value(self.0.id, raw)
-            .is_ok_and(|value| !self.0.evidence.output_reflects(&value))
     }
 
     fn fail<O: Serialize>(&self, reason: &'static str, partial: O) -> Failure<O> {
@@ -391,6 +382,7 @@ impl Child<'_> {
     }
 }
 
+#[derive(Debug)]
 struct Absent;
 
 fn decode_canonical<T: serde::de::DeserializeOwned + Default>(
@@ -402,7 +394,7 @@ fn decode_canonical<T: serde::de::DeserializeOwned + Default>(
 }
 
 fn internal_error(reply: &Response) -> bool {
-    if reply.status != StatusCode::INTERNAL_SERVER_ERROR {
+    if reply.status != StatusCode::INTERNAL_SERVER_ERROR || reply.reflection != Some(false) {
         return false;
     }
     let op = guard_operation("", "");
@@ -513,7 +505,7 @@ impl Chain {
 }
 
 fn safe_id(id: &str, evidence: &Evidence) -> String {
-    if evidence.text_reflects(id) {
+    if evidence.id_reflects(id) {
         "<redacted>".into()
     } else {
         id.into()

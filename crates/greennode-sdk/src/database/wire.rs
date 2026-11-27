@@ -84,6 +84,7 @@ impl<T: Data> Output for Envelope<T> {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct CompletedNotFound;
 
 pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {

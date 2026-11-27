@@ -82,6 +82,7 @@ pub(crate) type ResponseGuard = fn(
 ) -> Option<Box<crate::Error>>;
 
 pub(crate) struct Operation<'a> {
+    pub(crate) guard: Option<&'static str>,
     pub(crate) pacing: Option<&'a super::options::Pacing>,
     pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
     pub(crate) attempt_check: Option<super::options::AttemptCheck<'a>>,
@@ -560,8 +561,19 @@ async fn run_inner(
             let body_reflection = result.as_ref().ok().and_then(|reply| {
                 let mut evidence = super::evidence::Evidence::from_credentials(reflection);
                 evidence.absorb(sent);
+                if op.guard.is_some() {
+                    evidence = evidence.transport_only();
+                }
                 evidence.go_peer_body_reflects(&reply.body)
             });
+            if let Some(id) = op.guard
+                && body_reflection == Some(true)
+            {
+                evidence.status = None;
+                return Err(Error::Provider(Box::new(
+                    super::operation::unsafe_guard_response(id),
+                )));
+            }
             if let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
                 && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
             {

@@ -11,7 +11,7 @@ use crate::endpoint::Base;
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::Options,
     redirect::{Classification, Retry},
     response,
@@ -95,7 +95,17 @@ impl Write<'_> {
         .await
     }
 
-    pub(super) async fn request_on(
+    pub(super) async fn guard_on(
+        &mut self,
+        ctx: &RequestContext,
+        op: &GuardOperation,
+        base: Option<&Base>,
+        path: &[&str],
+    ) -> Result<Response, Failure<()>> {
+        self.request_on(ctx, op, base, path, None).await
+    }
+
+    async fn request_on(
         &mut self,
         ctx: &RequestContext,
         op: &Operation,
@@ -161,7 +171,7 @@ impl Write<'_> {
     }
 
     pub(super) fn safe_output(&self, output: &impl Serialize) -> bool {
-        serde_json::to_value(output).is_ok_and(|value| !self.evidence.output_reflects(&value))
+        !self.evidence.serialized_output_reflects(output)
     }
 
     pub(super) fn wait_context(&self, ctx: &RequestContext, duration: Duration) -> RequestContext {
@@ -296,11 +306,15 @@ pub(super) fn write_operation(
         allow_recovery: false,
         keep_status: true,
         overflow_overrides_status: false,
-        ..guard_operation(id, template)
+        ..write_read_settings(id, template)
     }
 }
 
-pub(super) fn guard_operation(id: &'static str, template: &'static str) -> Operation {
+pub(super) fn guard_operation(id: &'static str, template: &'static str) -> GuardOperation {
+    GuardOperation::new(write_read_settings(id, template))
+}
+
+fn write_read_settings(id: &'static str, template: &'static str) -> Operation {
     Operation {
         allow_empty: false,
         overflow_overrides_status: true,

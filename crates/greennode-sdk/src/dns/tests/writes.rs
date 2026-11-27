@@ -6,6 +6,10 @@ fn body(server: &Server, index: usize) -> Value {
 }
 
 fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Client {
+    client_with_rotating_bearer(server, bearer, 2)
+}
+
+fn client_with_rotating_bearer(server: &Server, bearer: &'static str, after: usize) -> Client {
     use crate::{CredentialsProvider, Token};
     use std::future::{Future, ready};
     use std::pin::Pin;
@@ -17,13 +21,14 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
     struct Provider {
         calls: AtomicUsize,
         confirmation_bearer: &'static str,
+        after: usize,
     }
     impl CredentialsProvider for Provider {
         fn token<'a>(
             &'a self,
             _: &'a RequestContext,
         ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
-            let value = if self.calls.fetch_add(1, Ordering::Relaxed) < 2 {
+            let value = if self.calls.fetch_add(1, Ordering::Relaxed) < self.after {
                 BEARER
             } else {
                 self.confirmation_bearer
@@ -44,6 +49,7 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
             .with_credentials_provider(Arc::new(Provider {
                 calls: AtomicUsize::new(0),
                 confirmation_bearer: bearer,
+                after,
             }))
             .with_endpoint_overrides(EndpointOverrides {
                 dns: Some(format!("{}/vdns-api/", server.origin)),
@@ -55,6 +61,56 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
         .session()
         .set_test_product_root(server.root_der.clone());
     Client::new(&config)
+}
+
+#[tokio::test]
+async fn replacement_rechecks_copied_association_ids_against_the_write_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":["pre6A6B6Cpost"]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let failure = client_with_rotating_bearer(&server, "jkl", 1)
+        .update_hosted_zone(
+            &RequestContext::new().0,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::InvalidInput));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn readiness_refuses_a_reflected_active_state() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":[]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "ACTIVE")
+        .update_hosted_zone(
+            &ctx,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ use crate::error::SafeText;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
     response, retry,
@@ -30,8 +30,10 @@ pub enum DecodeError {
     ReflectedCredential,
 }
 
+#[derive(Debug)]
 pub(super) struct CompleteNotFound;
 
+#[derive(Debug)]
 pub(super) struct PoolInUseRefusal(pub(super) SafeText);
 
 pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<PoolInUseRefusal> {
@@ -50,6 +52,8 @@ pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<Po
     })
     .flatten()
 }
+
+pub(super) struct GuardRead<'a>(pub(super) &'a Read);
 
 pub(super) struct Read {
     pub(super) id: &'static str,
@@ -256,7 +260,19 @@ impl Client {
         Ok(Document { text, evidence })
     }
 
-    pub(super) async fn read_text(
+    pub(super) async fn read_guard_text(
+        &self,
+        ctx: &RequestContext,
+        guard: GuardRead<'_>,
+        ids: &[(&str, &str)],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+    ) -> Result<String, Box<Error>> {
+        self.read_text(ctx, guard.0, ids, query, evidence, true)
+            .await
+    }
+
+    async fn read_text(
         &self,
         ctx: &RequestContext,
         read: &Read,
@@ -309,10 +325,17 @@ impl Client {
             no_redirect: require_complete,
             retry_config: retry::Config::default(),
         };
+        let guarded;
+        let operation = if require_complete {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
+        };
         let result = operation::execute_raw(
             runtime,
             base,
-            &operation,
+            operation,
             &Options::DEFAULT,
             &path,
             query,

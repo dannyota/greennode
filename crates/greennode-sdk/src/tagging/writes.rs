@@ -187,29 +187,28 @@ impl Client {
             .vserver
             .as_ref()
             .ok_or_else(|| fail(Error::new(ErrorClass::InvalidConfig)))?;
-        let read = operation(op_id, false);
+        let read = crate::wire::product::operation::GuardOperation::new(operation(op_id, false));
         let write = operation(op_id, true);
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|e| fail(*e))?;
-        let (_, snapshot) = operation::execute_with_evidence::<RawSnapshot>(
-            runtime,
-            base,
-            &read,
-            &Options::DEFAULT,
-            &[&project, id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-            &mut evidence,
-        )
-        .await
-        .map_err(|f| {
-            let (e, _, _) = f.into_parts();
-            fail(e)
-        })?;
+        let (_, snapshot) = read
+            .execute::<RawSnapshot>(
+                runtime,
+                base,
+                &Options::DEFAULT,
+                &[&project, id],
+                &[],
+                self.session.bearer_source(),
+                &mut evidence,
+            )
+            .await
+            .map_err(|f| {
+                let (e, _, _) = f.into_parts();
+                fail(e)
+            })?;
         let current = snapshot.0;
         if current.iter().any(|tag| tag.system_tag && tag.key == key) {
             return Err(fail(system_tag_error(&evidence, op_id, Some(id), key)));
@@ -305,18 +304,17 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             )
         })?;
-        let confirmed = operation::execute_with_evidence::<RawSnapshot>(
-            runtime,
-            base,
-            &read,
-            &Options::DEFAULT,
-            &[&project, id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-            &mut evidence,
-        )
-        .await;
+        let confirmed = read
+            .execute::<RawSnapshot>(
+                runtime,
+                base,
+                &Options::DEFAULT,
+                &[&project, id],
+                &[],
+                self.session.bearer_source(),
+                &mut evidence,
+            )
+            .await;
         let (_, snapshot) = confirmed.map_err(|failure| {
             let failure = Failure::<Value>::wrap(
                 Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),

@@ -54,16 +54,6 @@ impl<'a> BodyMatcher<'a> {
         self.remaining.get()
     }
 
-    pub(in crate::wire::product) fn literal(&self, text: &str) -> bool {
-        let Some(patterns) = self.credentials.patterns() else {
-            return true;
-        };
-        let mut work = self.remaining.get();
-        let reflects = patterns.literal(text.as_bytes(), false, false, &mut work);
-        self.remaining.set(work);
-        reflects
-    }
-
     pub(in crate::wire::product) fn raw(&self, bytes: &[u8]) -> bool {
         if bytes.is_empty() || self.credentials.values().is_empty() {
             return false;

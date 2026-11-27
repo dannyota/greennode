@@ -272,7 +272,7 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(WebDetail, bool), Failure<()>> {
         let detail = self
-            .read_web_detail(ctx, call.id, cdn_id, evidence)
+            .read_guard_detail(ctx, call.id, cdn_id, evidence)
             .await
             .map_err(|failure| before_send(failure.into_parts().0))?;
         let send = match detail.status {
@@ -317,7 +317,7 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Failure<()> {
         if failure.error().api_error().and_then(ApiError::status) == Some(401)
-            && let Err(read) = self.read_web_detail(ctx, call.id, cdn_id, evidence).await
+            && let Err(read) = self.read_guard_detail(ctx, call.id, cdn_id, evidence).await
             && read.error().has_class(ErrorClass::NotFound)
         {
             return Failure::new(read.into_parts().0, None, failure.write_dispatch());

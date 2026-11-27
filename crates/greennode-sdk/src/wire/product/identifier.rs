@@ -38,17 +38,30 @@ pub(crate) fn declared(wire: &str, output: &str) -> bool {
 }
 
 pub(crate) fn check<T: Serialize + ?Sized, E: serde::ser::Error>(value: &T) -> Result<(), E> {
+    check_with(value, super::evidence::identifier_projection_reflects)
+}
+
+pub(crate) fn check_retained<T: Serialize + ?Sized, E: serde::ser::Error>(
+    value: &T,
+) -> Result<(), E> {
+    check_with(value, super::evidence::retained_projection_reflects)
+}
+
+fn check_with<T: Serialize + ?Sized, E: serde::ser::Error>(
+    value: &T,
+    reflects: fn(&BodyMatcher<'_>, &[u8]) -> Option<bool>,
+) -> Result<(), E> {
     if !ACTIVE.with(|slot| slot.borrow().is_some()) {
         return Ok(());
     }
-    let bytes = serde_json::to_vec(value).map_err(E::custom)?;
+    let bytes = zeroize::Zeroizing::new(serde_json::to_vec(value).map_err(E::custom)?);
     let reflects = ACTIVE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(state) = slot.as_mut() else {
             return true;
         };
         let matcher = BodyMatcher::with_work(&state.credentials, state.remaining);
-        match super::evidence::identifier_projection_reflects(&matcher, &bytes) {
+        match reflects(&matcher, &bytes) {
             Some(false) => {
                 state.remaining = matcher.remaining();
                 false
@@ -57,7 +70,7 @@ pub(crate) fn check<T: Serialize + ?Sized, E: serde::ser::Error>(value: &T) -> R
         }
     });
     if reflects {
-        Err(E::custom("unsafe output identifier"))
+        Err(E::custom("unsafe output field"))
     } else {
         Ok(())
     }

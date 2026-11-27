@@ -363,6 +363,7 @@ impl DeleteReply {
     }
 }
 
+#[derive(Debug)]
 struct UnsafeReply;
 
 impl Output for DeleteReply {

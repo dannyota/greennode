@@ -191,11 +191,6 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         }
         None => (None, None),
     };
-    let code = error.screened_diagnostic_text(code);
-    let message = error.screened_diagnostic_text(message);
-    let operation = operation
-        .map(|text| error.screened_diagnostic_text(text))
-        .filter(|text| !text.is_empty());
     Classified {
         envelope: Envelope {
             code,

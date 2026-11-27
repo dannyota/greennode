@@ -224,6 +224,37 @@ async fn delete_listener_confirms_list_and_detail_then_preserves_pool_and_group(
 }
 
 #[tokio::test]
+async fn reflective_internal_error_cannot_settle_a_pool_delete() {
+    let f = child_fixture();
+    let mut glb = catalog(&f);
+    glb.extend([
+        ok(&json!([f["pool"]])),
+        ok(&f["pool"]),
+        empty(),
+        ok(&json!([f["group"]])),
+        ok(&f["group"]),
+        response("202 Accepted", ""),
+        empty(),
+        internal(),
+        ok(&f["parent"]),
+        response(
+            "500 Internal Server Error",
+            json!({"code":"internal_error","message":TOKEN}).to_string(),
+        ),
+    ]);
+    let (client, glb, _) = servers(glb, vec![], true, TOKEN);
+    let failure = client
+        .delete_pool(
+            &RequestContext::new().0,
+            DeletePoolInput::new("glb-1", "pool-1"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(glb.requests(), 13);
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+}
+
+#[tokio::test]
 async fn delete_pool_accepts_complete_internal_error_only_after_pool_disappears() {
     let f = child_fixture();
     for code in ["internal_error", "other_error"] {
@@ -344,6 +375,37 @@ async fn unrestricted_and_noncanonical_listener_sources_fail_before_io() {
     }
     assert_eq!(glb.requests(), 0);
     assert_eq!(regional.requests(), 0);
+}
+
+#[tokio::test]
+async fn glb_guard_does_not_render_an_ignored_peer_number() {
+    let f = child_fixture();
+    let mut replies = catalog(&f);
+    let mut parent = f["parent"].to_string();
+    parent.pop();
+    parent.push_str(r#", "note": 987654e-3}"#);
+    replies[0] = response("200 OK", parent);
+    replies.extend([
+        empty(),
+        empty(),
+        accepted(&f["pool_accept"]),
+        ok(&f["parent"]),
+    ]);
+    replies.extend(chain(&f));
+    replies.push(empty());
+    let (client, glb, regional) = servers(replies, placement(&f), true, "987.654");
+    let output = client
+        .create_pool(&RequestContext::new().0, pool_input())
+        .await
+        .unwrap_or_else(|failure| {
+            panic!(
+                "GLB fixture after {} regional and {} GLB requests: {:?}",
+                regional.requests(),
+                glb.requests(),
+                failure.write_dispatch()
+            )
+        });
+    assert_eq!(output.pool.id, "pool-1");
 }
 
 #[tokio::test]

@@ -341,7 +341,13 @@ impl Client {
         package_requirement: PackageRequirement,
     ) -> Result<LoadBalancer, Box<Error>> {
         let text = self
-            .read_text(ctx, &GET, &[("LoadBalancerID", id)], &[], evidence, true)
+            .read_guard_text(
+                ctx,
+                super::wire::GuardRead(&GET),
+                &[("LoadBalancerID", id)],
+                &[],
+                evidence,
+            )
             .await?;
         let envelope = Envelope::parse(&text, &GET, evidence)?;
         let ZonedLoadBalancer(row) = GET.parse(envelope.raw(&GET, evidence, "data")?, evidence)?;

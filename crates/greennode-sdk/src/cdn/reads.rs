@@ -203,7 +203,7 @@ impl Client {
         })
     }
 
-    pub(super) async fn read_web_detail(
+    async fn read_web_detail(
         &self,
         ctx: &RequestContext,
         id: &'static str,
@@ -214,21 +214,19 @@ impl Client {
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;
-        let malformed = || read_failure(call.unexpected(200));
-        let raw = data.ok_or_else(malformed)?;
-        let text = raw.get();
-        validate_shape(text.as_bytes(), &STATE, text.len()).map_err(|_| malformed())?;
-        let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
-        if state.id != cdn_id {
-            return Err(malformed());
-        }
-        let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
-        model.status = super::Field::Value(state.status);
-        Ok(WebDetail {
-            raw,
-            status: state.status,
-            model,
-        })
+        decode_web_detail(&call, cdn_id, data)
+    }
+
+    pub(super) async fn read_guard_detail(
+        &self,
+        ctx: &RequestContext,
+        id: &'static str,
+        cdn_id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<WebDetail, Failure<()>> {
+        let guard = super::wire::GuardCall(Call { id, ..GET_WEB });
+        let data = self.call_guard(ctx, &guard, &[cdn_id], evidence).await?;
+        decode_web_detail(&guard.0, cdn_id, data)
     }
 
     /// Lists certificate metadata without PEM text.
@@ -338,4 +336,26 @@ impl Client {
             screened(List { items }, &LIST_KEYS, &answer.evidence)
         })
     }
+}
+
+fn decode_web_detail(
+    call: &Call,
+    cdn_id: &str,
+    data: Option<Box<serde_json::value::RawValue>>,
+) -> Result<WebDetail, Failure<()>> {
+    let malformed = || read_failure(call.unexpected(200));
+    let raw = data.ok_or_else(malformed)?;
+    let text = raw.get();
+    validate_shape(text.as_bytes(), &STATE, text.len()).map_err(|_| malformed())?;
+    let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
+    if state.id != cdn_id {
+        return Err(malformed());
+    }
+    let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
+    model.status = super::Field::Value(state.status);
+    Ok(WebDetail {
+        raw,
+        status: state.status,
+        model,
+    })
 }

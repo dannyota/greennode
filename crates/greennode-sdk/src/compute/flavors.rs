@@ -1,7 +1,7 @@
 use crate::wire::product::evidence::Evidence;
 use crate::{Failure, List, RequestContext};
 
-use super::wire::{Read, ReadStyle, invalid_input};
+use super::wire::{GuardRead, Read, ReadStyle, invalid_input};
 use super::*;
 
 const ZONES: Read = Read::new(
@@ -25,7 +25,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             let mut evidence = Evidence::new();
             let zones = self
-                .flavor_zones(ctx, &input.zone_id, &mut evidence)
+                .flavor_zones(ctx, &input.zone_id, &mut evidence, None)
                 .await?;
             Ok(List {
                 items: ZONES.retain(zones, &evidence)?,
@@ -47,7 +47,7 @@ impl Client {
             }
             let mut evidence = Evidence::new();
             let ids = if input.flavor_zone_id.is_empty() {
-                self.flavor_zones(ctx, &input.zone_id, &mut evidence)
+                self.flavor_zones(ctx, &input.zone_id, &mut evidence, Some(GuardRead(&ZONES)))
                     .await?
                     .into_iter()
                     .map(|zone| zone.id)
@@ -58,7 +58,9 @@ impl Client {
             let mut items = Vec::new();
             for id in ids {
                 FLAVORS.path("FlavorZoneID", &id).map_err(failure)?;
-                let rows = self.read(ctx, &FLAVORS, &[&id], &[], &mut evidence).await?;
+                let rows = self
+                    .read_guard(ctx, GuardRead(&FLAVORS), &[&id], &[], &mut evidence)
+                    .await?;
                 let flavors: Vec<Flavor> = rows.field("flavors", &FLAVORS, &evidence)?;
                 for mut flavor in flavors
                     .into_iter()
@@ -84,8 +86,12 @@ impl Client {
         ctx: &RequestContext,
         zone: &str,
         evidence: &mut Evidence,
+        guard: Option<GuardRead<'_>>,
     ) -> Result<Vec<FlavorZone>, Failure<O>> {
-        let envelope = self.read(ctx, &ZONES, &[], &[], evidence).await?;
+        let envelope = match guard {
+            Some(guard) => self.read_guard(ctx, guard, &[], &[], evidence).await?,
+            None => self.read(ctx, &ZONES, &[], &[], evidence).await?,
+        };
         let mut rows: Vec<FlavorZone> = envelope.field("flavorZones", &ZONES, evidence)?;
         if !zone.is_empty() {
             rows.retain(|row| row.zone_id == zone);

@@ -285,7 +285,13 @@ impl Client {
             route: LB_ROUTE,
         };
         let text = self
-            .read_text(ctx, &read, &[("LoadBalancerID", id)], &[], evidence, true)
+            .read_guard_text(
+                ctx,
+                super::wire::GuardRead(&read),
+                &[("LoadBalancerID", id)],
+                &[],
+                evidence,
+            )
             .await?;
         let data = Envelope::parse(&text, &read, evidence)?;
         let ZonedLoadBalancer(row) = read.parse(data.raw(&read, evidence, "data")?, evidence)?;
@@ -307,7 +313,13 @@ impl Client {
             route: CERT_ROUTE,
         };
         let text = self
-            .read_text(ctx, &read, &[("CertificateID", id)], &[], evidence, true)
+            .read_guard_text(
+                ctx,
+                super::wire::GuardRead(&read),
+                &[("CertificateID", id)],
+                &[],
+                evidence,
+            )
             .await?;
         let cert: Certificate = read.parse(&text, evidence)?;
         let fields = Envelope::parse(&text, &read, evidence)?;
@@ -365,7 +377,7 @@ impl Client {
         let query = page_query("", 0, DEFAULT_PAGE_SIZE);
         let query = query.each_ref().map(|(key, value)| (*key, value.as_str()));
         let text = self
-            .read_text(ctx, &read, &[], &query, evidence, true)
+            .read_guard_text(ctx, super::wire::GuardRead(&read), &[], &query, evidence)
             .await?;
         let envelope = Envelope::parse(&text, &read, evidence)?;
         let Some(rows) = read.parse::<Option<Vec<Certificate>>>(

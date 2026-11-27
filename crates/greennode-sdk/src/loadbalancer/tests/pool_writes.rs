@@ -26,7 +26,7 @@ fn update() -> UpdatePoolInput {
 }
 
 #[tokio::test]
-async fn reflected_member_data_is_redacted_in_a_submitted_update_output() {
+async fn pool_update_refuses_a_preflight_with_reflected_member_data() {
     let server = Server::start(vec![
         response("200 OK", PARENT),
         response(
@@ -37,16 +37,13 @@ async fn reflected_member_data_is_redacted_in_a_submitted_update_output() {
         response("202 Accepted", ""),
     ]);
     let (ctx, _) = RequestContext::new();
-    let output = client(&server, "42")
+    let failure = client(&server, "42")
         .update_pool(&ctx, update())
         .await
-        .unwrap();
-    assert!(!output.pool.members[0].name.contains("42"));
-    assert_ne!(output.pool.members[0].weight, 42);
-    let projected = serde_json::to_value(output).unwrap();
-    assert_eq!(projected["Pool"]["Members"][0]["Name"], "<redacted>");
-    assert_eq!(projected["Pool"]["Members"][0]["Weight"], "<redacted>");
-    assert_eq!(server.requests(), 4);
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
 }
 
 #[tokio::test]

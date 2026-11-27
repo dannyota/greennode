@@ -24,6 +24,7 @@ pub(super) enum Family {
     Quota { no_redirect: bool },
 }
 
+#[derive(Debug)]
 pub(super) struct BodyReadFailure;
 
 pub(super) struct Read {

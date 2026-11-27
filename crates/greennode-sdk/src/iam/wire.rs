@@ -374,7 +374,7 @@ impl<T: Wire> Output for Body<T> {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub(super) enum ObservedResponse {
     ClientRejection,
     NoContent,

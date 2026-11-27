@@ -384,6 +384,22 @@ async fn regression_resize_error_status_precedes_the_confirmation_package_requir
     assert_eq!(server.requests(), 10);
 }
 
+#[tokio::test]
+async fn resize_refuses_reflected_readiness_before_quote() {
+    let current = r#"{"data":{"uuid":"lb-1","packageId":"package-1","progressStatus":"CREATED","description":"toy-resize-token"}}"#;
+    let server = Server::start(vec![
+        response("200 OK", current),
+        response("200 OK", current),
+    ]);
+    let client = client(&server, "toy-resize-token");
+    let failure = client
+        .resize_load_balancer(&RequestContext::new().0, resize(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
 fn resize(no_wait: bool) -> ResizeLoadBalancerInput {
     ResizeLoadBalancerInput {
         load_balancer_id: "lb-1".into(),

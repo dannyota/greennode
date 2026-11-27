@@ -12,7 +12,7 @@ use super::wire::{Detail, ZoneSnapshot};
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, Output},
+    operation::{self, GuardOperation, Operation, Output},
     options::Options,
     redirect::{Classification, Retry},
 };
@@ -141,12 +141,21 @@ impl<'a> Workflow<'a> {
         template: &'static str,
         path: &[&str],
     ) -> Result<T, Box<Error>> {
-        let op = Operation {
+        let op = GuardOperation::new(Operation {
             cap: 256 << 10,
             allow_empty: false,
             ..read_operation(self.id, template)
-        };
-        self.call(ctx, &op, path, Bytes::new())
+        });
+        self.read_guard(ctx, &op, path).await
+    }
+
+    async fn read_guard<T: Output>(
+        &mut self,
+        ctx: &RequestContext,
+        op: &GuardOperation,
+        path: &[&str],
+    ) -> Result<T, Box<Error>> {
+        self.call(ctx, op, path, Bytes::new())
             .await
             .map(|(_, data)| data)
             .map_err(|err| Box::new(err.into_parts().0))

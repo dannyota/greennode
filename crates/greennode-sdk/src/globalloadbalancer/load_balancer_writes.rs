@@ -300,6 +300,7 @@ impl Client {
     }
 }
 
+#[derive(Debug)]
 struct ConfirmedAbsence;
 
 #[derive(Default, Deserialize)]
@@ -355,7 +356,16 @@ impl Write<'_> {
     ) -> Result<Detail, Box<Error>> {
         let operation = guard_operation("globalloadbalancer.WriteDetail", RESOURCE);
         let reply = self
-            .request(ctx, &operation, &[id], None)
+            .guard_on(
+                ctx,
+                &operation,
+                self.client
+                    .session
+                    .endpoints()
+                    .global_load_balancer
+                    .as_ref(),
+                &[id],
+            )
             .await
             .map_err(|failure| {
                 let error = failure.into_parts().0;

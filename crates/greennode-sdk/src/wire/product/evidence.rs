@@ -175,7 +175,11 @@ pub(super) fn body_reflects(
     if let Some(slot) = password_slot {
         return check_password_body(body, credentials, slot).unwrap_or(true);
     }
-    !body.is_empty() && response::reflects_credential(&String::from_utf8_lossy(body), credentials)
+    if body.is_empty() || credentials.values().is_empty() {
+        return false;
+    }
+    let matcher = response::BodyMatcher::new(credentials, body.len());
+    matcher.reflects(body, false) || peer::request_reflects(&matcher, body, false)
 }
 
 fn check_password_body(
@@ -202,17 +206,27 @@ fn check_password_body(
     if authorized_value.as_str() != password.expose_secret() {
         return None;
     }
-    let reflects = |text: &str| response::reflects_credential(text, credentials);
+    let matcher = response::BodyMatcher::new(credentials, body.len());
+    let reflects = |text: &str| matcher.reflects(text.as_bytes(), false);
     let other_credentials = credentials.without_operation_password(password);
     Some(
         (nested && reflects("user"))
             || reflects("password")
             || response::reflects_credential(authorized_field.get(), &other_credentials)
-            || fields
-                .into_iter()
-                .chain(user)
-                .any(|(name, value)| reflects(&name) || reflects(value.get())),
+            || fields.into_iter().chain(user).any(|(name, value)| {
+                let bytes = value.get().as_bytes();
+                reflects(&name)
+                    || matcher.reflects(bytes, false)
+                    || peer::request_reflects(&matcher, bytes, peer::request_identifier_key(&name))
+            }),
     )
+}
+
+pub(super) fn retained_projection_reflects(
+    matcher: &response::BodyMatcher<'_>,
+    body: &[u8],
+) -> Option<bool> {
+    peer::output_with_matcher(matcher, body)
 }
 
 pub(super) fn identifier_projection_reflects(
@@ -482,6 +496,10 @@ impl Evidence {
         error.screen_api(&|text| self.text_reflects(text))
     }
 
+    pub(crate) fn screen_public_error(&self, error: crate::Error) -> crate::Error {
+        error.screen_public(&|text| self.text_reflects(text))
+    }
+
     fn string_reflects(&self, text: &str, identifier: bool) -> bool {
         if identifier {
             self.id_reflects(text)
@@ -535,6 +553,28 @@ mod tests {
         assert!(!exact.reflects(b"long-line"));
         let oversized = SentCredentials::for_test(vec![crate::Secret::new("x".repeat(64 << 10))]);
         assert!(oversized.reflects(b"ordinary"));
+    }
+
+    #[test]
+    fn write_body_strictly_checks_identifier_values() {
+        let evidence = evidence(&["jkl"]);
+        let credentials = evidence.credentials();
+        assert!(!body_reflects(
+            br#"{"note":"pre6A6B6Cpost"}"#,
+            credentials,
+            None
+        ));
+        assert!(body_reflects(
+            br#"{"assocVpcIds":["pre6A6B6Cpost"]}"#,
+            credentials,
+            None
+        ));
+    }
+
+    #[test]
+    fn assembled_sdk_json_screens_a_credential_across_syntax_after_decoding() {
+        let evidence = evidence(&[r#"note":"toy secret"#]);
+        assert!(evidence.serialized_output_reflects(&json!({"note": "toy%20secret"})));
     }
 
     #[test]

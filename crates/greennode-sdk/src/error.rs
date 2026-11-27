@@ -1,6 +1,10 @@
 use std::any::Any;
 use std::fmt;
 
+#[path = "error/detail.rs"]
+mod detail;
+use detail::Detail;
+
 /// Stable categories for operation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -53,6 +57,7 @@ pub enum ErrorClass {
     DeadlineExceeded,
 }
 
+#[derive(Debug)]
 pub(crate) struct SafeText(String);
 
 impl SafeText {
@@ -81,6 +86,7 @@ impl SafeText {
 }
 
 /// Fixed diagnostic for a failure without a service response.
+#[derive(Debug)]
 pub enum Diagnostic {
     /// No project quota matched the requested name.
     QuotaNotFound,
@@ -96,6 +102,7 @@ impl Diagnostic {
 }
 
 /// Safe recovery guidance for a write failure.
+#[derive(Debug)]
 pub struct RecoveryAdvice(SafeText);
 
 impl RecoveryAdvice {
@@ -110,6 +117,7 @@ impl RecoveryAdvice {
 }
 
 /// Full refusal text for a system tag key, without the generic length cap.
+#[derive(Debug)]
 pub struct SystemTagText(pub(crate) String);
 
 impl SystemTagText {
@@ -314,13 +322,15 @@ pub struct Error {
     identity: bool,
     fallback_message_reflected: bool,
     display_reflected: bool,
+    debug_reflected: bool,
     api: Option<ApiError>,
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
-    detail: Option<Box<dyn Any + Send + Sync>>,
+    detail: Option<Detail>,
     cause: Option<Box<Error>>,
 }
 
+#[derive(Debug)]
 struct BodyTooLarge;
 
 impl Error {
@@ -335,6 +345,7 @@ impl Error {
             identity: true,
             fallback_message_reflected: false,
             display_reflected: false,
+            debug_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -401,45 +412,26 @@ impl Error {
                 login.status = None;
             }
         }
-        if let Some(detail) = self.detail.as_mut() {
-            if let Some(text) = detail.downcast_mut::<&'static str>()
-                && reflects(text)
-            {
-                *text = "";
-            }
-            if let Some(text) = detail.downcast_mut::<String>()
-                && reflects(text)
-            {
-                text.clear();
-            }
-            if let Some(advice) = detail.downcast_mut::<RecoveryAdvice>()
-                && reflects(advice.message())
-            {
-                advice.0.0.clear();
-            }
-            if let Some(text) = detail.downcast_mut::<SystemTagText>()
-                && reflects(text.message())
-            {
-                text.0.clear();
-            }
-            if let Some(diagnostic) = detail.downcast_ref::<Diagnostic>()
-                && reflects(diagnostic.message())
-            {
-                self.detail = None;
-            }
-        }
-        if self
-            .detail
-            .as_ref()
-            .and_then(|detail| detail.downcast_ref::<http::StatusCode>())
-            .is_some_and(|status| reflects(status.as_str()))
-        {
-            self.detail = None;
+        if let Some(detail) = &mut self.detail {
+            detail.screen_fields(reflects);
         }
         self.cause = self.cause.map(|cause| Box::new(cause.screen_api(reflects)));
         self.display_reflected =
             self.display_reflected || reflects(&zeroize::Zeroizing::new(self.to_string()));
         self
+    }
+
+    pub(crate) fn screen_public(self, reflects: &impl Fn(&str) -> bool) -> Self {
+        let mut error = self.screen_api(reflects);
+        let mut node = Some(&mut error);
+        while let Some(current) = node {
+            if let Some(detail) = &mut current.detail {
+                detail.screen_public(reflects);
+            }
+            current.debug_reflected |= detail::debug_reflects(current, reflects);
+            node = current.cause.as_deref_mut();
+        }
+        error
     }
 
     pub(crate) fn screen_diagnostic_fallback(mut self, reflects: impl Fn(&str) -> bool) -> Self {
@@ -449,14 +441,6 @@ impl Error {
 
     /// Returns the diagnostic fallback after credential screening.
     pub fn diagnostic_fallback(&self) -> &'static str {
-        self.screened_diagnostic_text(DIAGNOSTIC_FALLBACK)
-    }
-
-    /// Withholds a fixed CLI diagnostic that matches evidence recorded for this failure.
-    pub fn screened_diagnostic_text<'a>(&self, text: &'a str) -> &'a str {
-        if text != DIAGNOSTIC_FALLBACK {
-            return text;
-        }
         let mut error = Some(self);
         while let Some(node) = error {
             if node.fallback_message_reflected {
@@ -464,7 +448,7 @@ impl Error {
             }
             error = node.cause.as_deref();
         }
-        text
+        DIAGNOSTIC_FALLBACK
     }
 
     pub(crate) fn with_cause(mut self, cause: Error) -> Self {
@@ -488,16 +472,17 @@ impl Error {
         self.service_login = Some(detail);
         self
     }
-    pub(crate) fn with_outer_detail<T: Any + Send + Sync>(self, detail: T) -> Self {
+    pub(crate) fn with_outer_detail<T: Any + Send + Sync + fmt::Debug>(self, detail: T) -> Self {
         Self {
             class: self.class,
             identity: false,
             fallback_message_reflected: false,
             display_reflected: false,
+            debug_reflected: false,
             api: None,
             login: None,
             service_login: None,
-            detail: Some(Box::new(detail)),
+            detail: Some(Detail::new(detail)),
             cause: Some(Box::new(self)),
         }
     }
@@ -507,8 +492,8 @@ impl Error {
     pub(crate) fn with_body_too_large(self) -> Self {
         self.with_outer_detail(BodyTooLarge)
     }
-    pub(crate) fn with_detail<T: Any + Send + Sync>(mut self, detail: T) -> Self {
-        self.detail = Some(Box::new(detail));
+    pub(crate) fn with_detail<T: Any + Send + Sync + fmt::Debug>(mut self, detail: T) -> Self {
+        self.detail = Some(Detail::new(detail));
         self
     }
     pub(crate) fn remove_details<T: Any + Send + Sync>(&mut self, matches: impl Fn(&T) -> bool) {
@@ -517,7 +502,7 @@ impl Error {
             if node
                 .detail
                 .as_ref()
-                .and_then(|detail| detail.downcast_ref())
+                .and_then(|detail| detail.value().downcast_ref())
                 .is_some_and(&matches)
             {
                 node.detail = None;
@@ -574,7 +559,7 @@ impl Error {
     pub fn detail<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.detail
             .as_ref()
-            .and_then(|detail| detail.downcast_ref())
+            .and_then(Detail::public)
             .or_else(|| self.cause.as_ref().and_then(|cause| cause.detail::<T>()))
     }
 }
@@ -589,6 +574,9 @@ impl From<crate::ContextEnd> for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.debug_reflected {
+            return f.write_str("");
+        }
         f.debug_struct("Error")
             .field("class", &self.class)
             .finish_non_exhaustive()
@@ -621,6 +609,7 @@ pub struct Failure<T> {
     partial: Option<T>,
     dispatch: WriteDispatch,
     private_delivery: Option<Box<crate::Secret>>,
+    debug_reflected: bool,
 }
 impl<T> Failure<T> {
     pub(crate) fn new(error: Error, partial: Option<T>, dispatch: WriteDispatch) -> Self {
@@ -629,6 +618,7 @@ impl<T> Failure<T> {
             partial,
             dispatch,
             private_delivery: None,
+            debug_reflected: false,
         }
     }
     pub(crate) fn with_private_delivery(mut self, secret: crate::Secret) -> Self {
@@ -656,6 +646,7 @@ impl<T> Failure<T> {
         screen_error: impl FnOnce(Error) -> Error,
         reflects: impl FnOnce(&T) -> bool,
         private_reflects: impl FnOnce(&crate::Secret) -> bool,
+        debug_reflects: impl Fn(&str) -> bool,
     ) -> Self {
         self.error = screen_error(self.error);
         if self.partial.as_ref().is_some_and(reflects) {
@@ -668,6 +659,7 @@ impl<T> Failure<T> {
         {
             self.private_delivery = None;
         }
+        self.debug_reflected |= detail::debug_reflects(&self, &debug_reflects);
         self
     }
     /// Returns the categorized error.
@@ -690,6 +682,9 @@ impl<T> Failure<T> {
 }
 impl<T> fmt::Debug for Failure<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.debug_reflected {
+            return f.write_str("");
+        }
         f.debug_struct("Failure")
             .field("error", &self.error)
             .field("has_partial", &self.partial.is_some())

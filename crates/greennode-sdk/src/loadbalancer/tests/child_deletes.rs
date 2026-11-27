@@ -273,7 +273,7 @@ async fn conflict_arrays_require_go_error_fields_and_accept_detail_text() {
 }
 
 #[tokio::test]
-async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
+async fn reflected_listener_id_cannot_classify_the_pool_as_in_use() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"{"data":[{"uuid":"toy-secret","defaultPoolId":"pool-1"}]}"#,
@@ -283,18 +283,8 @@ async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
         .delete_pool(&ctx, pool_input(true))
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<WriteError>(),
-        Some(&WriteError::ResourceInUse)
-    );
-    assert!(!failure.error().has_class(ErrorClass::InvalidInput));
-    let message = failure
-        .error()
-        .detail::<crate::RecoveryAdvice>()
-        .unwrap()
-        .message();
-    assert!(!message.contains(CANARY));
-    assert!(message.contains("<redacted>"));
+    assert_eq!(failure.error().detail::<WriteError>(), None);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
 
@@ -319,7 +309,7 @@ async fn pool_delete_classifies_only_screened_messages_on_the_readiness_retry() 
         .await
         .unwrap_err();
     assert_eq!(failure.error().detail::<WriteError>(), None);
-    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let message = failure.error().api_error().unwrap().message();
     assert!(!message.contains(CANARY));

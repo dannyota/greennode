@@ -67,6 +67,7 @@ const POLICY: Shape<'_> = shape!("uuid", "name", "description", "redirectPoolId"
     "action", "redirectUrl", "redirectHttpCode", "keepQueryString", "position", "displayStatus",
     "createdAt", "updatedAt", "progressStatus"; "l7Rules" => Shape::Array(&RULE));
 
+#[derive(Debug)]
 struct BusyRefusal;
 
 /// Identifies a pool to delete and controls confirmation.
@@ -295,13 +296,12 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
         let text = self
-            .read_text(
+            .read_guard_text(
                 ctx,
-                &LISTENERS,
+                super::wire::GuardRead(&LISTENERS),
                 &[("LoadBalancerID", child.load_balancer)],
                 &[],
                 evidence,
-                true,
             )
             .await?;
         let wrapper = Envelope::parse(&text, &LISTENERS, evidence)?;
@@ -437,7 +437,9 @@ impl Client {
         id: &str,
         evidence: &mut Evidence,
     ) -> Result<String, Box<Error>> {
-        let text = self.read_text(ctx, read, ids, &[], evidence, true).await?;
+        let text = self
+            .read_guard_text(ctx, super::wire::GuardRead(read), ids, &[], evidence)
+            .await?;
         let wrapper = Envelope::parse(&text, read, evidence)?;
         let data = wrapper.canonical_raw(read, evidence, "data")?;
         macro_rules! typed_progress {

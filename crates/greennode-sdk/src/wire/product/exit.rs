@@ -53,7 +53,7 @@ pub(crate) fn recorded_exactly(value: &str) -> bool {
 pub(crate) fn authenticate_error(error: Error, configured: &SentCredentials) -> Error {
     let mut evidence = Evidence::from_credentials(configured);
     let _ = OBSERVED.try_with(|state| evidence.absorb(&state.borrow().public));
-    evidence.screen_error(error)
+    evidence.screen_public_error(error)
 }
 
 pub(super) fn observe_operation_password(slot: super::options::PasswordSlot<'_>) {
@@ -119,19 +119,21 @@ pub(crate) async fn verify<T: Serialize>(
         }
         let evidence = Evidence::from_credentials(&state.public);
         let reflected = |output: &T| evidence.serialized_output_reflects(output);
-        match result {
-            Ok(output) if reflected(&output) => Err(Box::new(Failure::new(
-                evidence.screen_error(Error::new(ErrorClass::Api)),
+        let result = match result {
+            Ok(output) if !reflected(&output) => return Ok(output),
+            Ok(_) => Failure::new(
+                Error::new(ErrorClass::Api),
                 None,
                 state.write.unwrap_or(WriteDispatch::NotAWrite),
-            ))),
-            Ok(output) => Ok(output),
-            Err(failure) => Err(Box::new(failure.screen_exit(
-                |error| evidence.screen_error(error),
-                reflected,
-                |secret| state.transport.text_reflects(secret.expose_secret()),
-            ))),
-        }
+            ),
+            Err(failure) => failure,
+        };
+        Err(Box::new(result.screen_exit(
+            |error| evidence.screen_public_error(error),
+            reflected,
+            |secret| state.transport.text_reflects(secret.expose_secret()),
+            |text| evidence.text_reflects(text),
+        )))
     })
     .await
 }
@@ -262,6 +264,50 @@ mod tests {
         })
         .unwrap_err();
         assert!(failure.error().to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failure_debug_and_typed_arithmetic_detail_do_not_reflect() {
+        let credentials = SentCredentials::for_test(
+            [
+                "class: EstimateOverflow",
+                "write_dispatch: NotSent",
+                "multiplication",
+                "toy-item",
+            ]
+            .into_iter()
+            .map(crate::Secret::new)
+            .collect(),
+        );
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotSent);
+            Err::<(), _>(Failure::new(
+                Error::new(ErrorClass::EstimateOverflow).with_detail(
+                    crate::pricing::EstimateArithmeticError {
+                        stage: "multiplication",
+                        item_key: "toy-item".into(),
+                    },
+                ),
+                None,
+                WriteDispatch::NotSent,
+            ))
+        })
+        .unwrap_err();
+        let error = failure.error();
+        assert!(error.has_identity(ErrorClass::EstimateOverflow));
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        for rendered in [
+            format!("{error:?}"),
+            format!("{error:#?}"),
+            format!("{failure:?}"),
+            format!("{failure:#?}"),
+        ] {
+            assert!(!credentials.text_reflects(&rendered));
+        }
+        if let Some(detail) = error.detail::<crate::pricing::EstimateArithmeticError>() {
+            assert!(!credentials.text_reflects(detail.stage));
+            assert!(!credentials.text_reflects(&detail.item_key));
+        }
     }
 
     #[tokio::test]

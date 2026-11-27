@@ -44,6 +44,28 @@ fn client_with_token(server: &TestServer, token: &str) -> Client {
 }
 
 #[tokio::test]
+async fn flavor_zone_discovery_refuses_a_reflected_non_retained_field() {
+    let server = TestServer::start(vec![
+        response(
+            r#"{"flavorZones":[{"id":"flavor-1","zoneId":"zone-1","description":"toy-secret"}]}"#,
+        ),
+        response(r#"{"flavors":[]}"#),
+    ]);
+    let result = client(&server)
+        .list_flavors(
+            &RequestContext::new().0,
+            ListFlavorsInput {
+                zone_id: "zone-1".into(),
+                flavor_zone_id: String::new(),
+                name: String::new(),
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn server_detail_matches_identity_and_redacts_encoded_reflection() {
     let server = TestServer::start(vec![
         response(
