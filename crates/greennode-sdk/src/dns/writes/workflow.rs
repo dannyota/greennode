@@ -12,6 +12,7 @@ use super::wire::{Detail, ZoneSnapshot};
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
+    guard::Guarded,
     operation::{self, GuardOperation, Operation, Output},
     options::Options,
     redirect::{Classification, Retry},
@@ -161,7 +162,11 @@ impl<'a> Workflow<'a> {
             .map_err(|err| Box::new(err.into_parts().0))
     }
 
-    async fn zone(&mut self, ctx: &RequestContext, id: &str) -> Result<HostedZone, Box<Error>> {
+    async fn zone(
+        &mut self,
+        ctx: &RequestContext,
+        id: &str,
+    ) -> Result<Guarded<HostedZone>, Box<Error>> {
         let data: Detail<Option<ZoneSnapshot>> = self.read(ctx, ZONE, &[id]).await?;
         let Some((zone, complete)) = data
             .data
@@ -181,7 +186,7 @@ impl<'a> Workflow<'a> {
                 "dns.UpdateHostedZone: incomplete hosted zone replacement snapshot",
             )));
         }
-        Ok(zone)
+        Guarded::latest(zone, &self.evidence)
     }
 
     async fn record(
@@ -189,9 +194,10 @@ impl<'a> Workflow<'a> {
         ctx: &RequestContext,
         zone_id: &str,
         id: &str,
-    ) -> Result<Record, Box<Error>> {
+    ) -> Result<Guarded<Record>, Box<Error>> {
         let data: Detail<Option<Record>> = self.read(ctx, RECORD, &[zone_id, id]).await?;
-        data.data
+        let record = data
+            .data
             .filter(|record| {
                 record.id == id && record.hosted_zone_id == zone_id && !record.status.is_empty()
             })
@@ -201,13 +207,14 @@ impl<'a> Workflow<'a> {
                     "",
                     &format!("{}: record identity or state is unproven", self.id),
                 ))
-            })
+            })?;
+        Guarded::latest(record, &self.evidence)
     }
 
     pub(super) async fn ready<T>(
         &mut self,
         zone_id: &str,
-    ) -> Result<crate::wire::product::guard::Guarded<HostedZone>, Failure<T>> {
+    ) -> Result<Guarded<HostedZone>, Failure<T>> {
         self.poll(
             |flow| {
                 flow.diagnostic(
@@ -222,7 +229,6 @@ impl<'a> Workflow<'a> {
             },
             async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, zone_id).await?;
-                let zone = crate::wire::product::guard::Guarded::latest(zone, &flow.evidence)?;
                 Ok(matches!(
                     zone.recheck(&flow.evidence)?.status.as_str(),
                     ACTIVE | ERROR
@@ -245,13 +251,16 @@ impl<'a> Workflow<'a> {
         let resource = |flow: &Self| flow.zone_label(id);
         let mut last = fallback;
         let result = if no_wait {
-            self.zone(self.ctx, id).await.map(|zone| last = zone)
+            self.zone(self.ctx, id)
+                .await
+                .and_then(|zone| zone.into_checked(&self.evidence))
+                .map(|zone| last = zone)
         } else {
             self.poll(
                 |flow| flow.unconfirmed(&format!("{} was accepted; do not send the same write again", resource(flow))),
                 async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, id).await?;
-                last = zone;
+                last = zone.into_checked(&flow.evidence)?;
                 if settled(&last) {
                     Ok(Some(()))
                 } else if last.status == ERROR {
@@ -280,6 +289,7 @@ impl<'a> Workflow<'a> {
         let result = if no_wait {
             self.record(self.ctx, zone_id, id)
                 .await
+                .and_then(|record| record.into_checked(&self.evidence))
                 .map(|record| last = record)
         } else {
             self.poll(
@@ -291,24 +301,38 @@ impl<'a> Workflow<'a> {
                 },
                 async |flow: &mut Self, ctx: &RequestContext| {
                     let zone = flow.zone(ctx, zone_id).await?;
-                    last = flow.record(ctx, zone_id, id).await?;
-                    if zone.status == ERROR || last.status == ERROR {
-                        Err(Box::new(flow.diagnostic(
-                            ErrorClass::Failed,
-                            &format!(
-                                "vngcloud: write failed: {}: {} is ERROR",
-                                flow.id,
-                                resource(flow)
-                            ),
-                        )))
-                    } else {
-                        Ok((zone.status == ACTIVE && settled(&last, &zone)).then_some(()))
-                    }
+                    let record = flow.record(ctx, zone_id, id).await?;
+                    flow.record_settlement(zone_id, id, zone, record, &mut last, &mut settled)
                 },
             )
             .await
         };
         self.finish(result, last, &resource(self), output)
+    }
+
+    fn record_settlement(
+        &self,
+        zone_id: &str,
+        id: &str,
+        zone: Guarded<HostedZone>,
+        record: Guarded<Record>,
+        last: &mut Record,
+        settled: &mut impl FnMut(&Record, &HostedZone) -> bool,
+    ) -> Result<Option<()>, Box<Error>> {
+        let zone = zone.recheck(&self.evidence)?;
+        *last = record.into_checked(&self.evidence)?;
+        if zone.status == ERROR || last.status == ERROR {
+            Err(Box::new(self.diagnostic(
+                ErrorClass::Failed,
+                &format!(
+                    "vngcloud: write failed: {}: {} is ERROR",
+                    self.id,
+                    self.record_label(id, Some(zone_id))
+                ),
+            )))
+        } else {
+            Ok((zone.status == ACTIVE && settled(last, zone)).then_some(()))
+        }
     }
 
     pub(super) async fn wait_gone<O>(
@@ -358,7 +382,9 @@ impl<'a> Workflow<'a> {
         let clock = self.client.session.clock();
         let bound = clock.monotonic_now() + POLL_BOUND;
         let child = self.ctx.child_with_deadline(bound);
+        let checkpoint = self.evidence.guard_checkpoint();
         while child.check(clock).is_none() {
+            self.evidence.discard_guards_after(checkpoint);
             let result = step(self, &child).await;
             if child.check(clock).is_some() {
                 break;

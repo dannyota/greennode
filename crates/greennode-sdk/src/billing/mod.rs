@@ -82,7 +82,7 @@ impl GetBudgetInput {
 }
 
 /// Details of a single budget.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetBudgetOutput {
     /// Budget details with costs and percentages when the API supplies them.
     #[serde(rename = "Budget")]

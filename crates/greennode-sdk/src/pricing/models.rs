@@ -180,7 +180,7 @@ pub struct EstimateStorage {
 }
 
 /// Ordered quote rows, VND totals, coverage and processing metadata.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct EstimateOutput {
     /// Requested rows in setup order.
     #[serde(rename = "Items")]
@@ -204,7 +204,7 @@ crate::wire::product::output::public_fields!(EstimateOutput {
 });
 
 /// One requested component group.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct EstimateItem {
     /// Unique component key.
     #[serde(rename = "Key")]
@@ -248,7 +248,7 @@ crate::wire::product::output::public_fields!(EstimateItem {
 });
 
 /// One informational charge per unit.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct EstimateCharge {
     /// Charge name from the quote.
     #[serde(rename = "Name")]
@@ -264,7 +264,7 @@ crate::wire::product::output::public_fields!(EstimateCharge {
 });
 
 /// Independent monthly VND quote totals and completeness.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct EstimateTotal {
     /// Sum of valid monthly amounts when finite and known.
     #[serde(rename = "KnownMonthlySubtotal")]
@@ -304,7 +304,7 @@ crate::wire::product::output::public_fields!(EstimateTotal {
 });
 
 /// Coverage for a requested component or the entire setup.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct EstimateCoverage {
     /// Coverage topic.
     #[serde(rename = "Topic")]

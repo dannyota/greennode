@@ -75,7 +75,7 @@ impl Client {
                 .await
                 .map_err(preflight)?;
             let parent = run.parent(ctx, glb).await.map_err(preflight)?;
-            let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
+            let region = run.region(ctx, &parent).await.map_err(preflight)?;
             let address = run
                 .placement(
                     ctx,
@@ -86,19 +86,35 @@ impl Client {
                 )
                 .await
                 .map_err(preflight)?;
-            if !run.pools(ctx, glb).await.map_err(preflight)?.is_empty() {
+            let pools = run.pools(ctx, glb).await.map_err(preflight)?;
+            if !pools
+                .recheck(&run.0.evidence)
+                .map_err(preflight)?
+                .is_empty()
+            {
                 return Err(preflight(refuse("the load balancer already has a pool")));
             }
-            if !run.listeners(ctx, glb).await.map_err(preflight)?.is_empty() {
+            if !run
+                .listeners(ctx, glb)
+                .await
+                .map_err(preflight)?
+                .recheck(&run.0.evidence)
+                .map_err(preflight)?
+                .is_empty()
+            {
                 return Err(preflight(refuse(
                     "the load balancer already has a listener",
                 )));
             }
+            let evidence = &run.0.evidence;
+            pools.recheck(evidence).map_err(preflight)?;
+            let verified_region = region.recheck(evidence).map_err(preflight)?;
+            let verified_address = address.recheck(evidence).map_err(preflight)?;
             let body = json!({
                 "name": input.name, "protocol": TCP, "algorithm": ALGORITHM,
                 "health": {"protocol": TCP, "healthyThreshold": HEALTHY, "unhealthyThreshold": UNHEALTHY, "interval": INTERVAL, "timeout": HEALTH_TIMEOUT},
-                "globalPoolMembers": [{"name": input.member_name, "region": region, "type": PRIVATE, "vpcId": input.backend_vpc_id, "trafficDial": TRAFFIC,
-                    "members": [{"name": input.member_name, "address": address, "subnetId": input.backend_subnet_id, "port": input.backend_port,
+                "globalPoolMembers": [{"name": input.member_name, "region": verified_region, "type": PRIVATE, "vpcId": input.backend_vpc_id, "trafficDial": TRAFFIC,
+                    "members": [{"name": input.member_name, "address": verified_address, "subnetId": input.backend_subnet_id, "port": input.backend_port,
                     "monitorPort": input.backend_port, "weight": WEIGHT, "backupRole": false}]}]
             });
             let reply = run
@@ -143,7 +159,9 @@ impl Client {
                 return Err(run.fail("create response has an invalid backend", partial(&run, "")));
             }
             let wait = run.0.wait_context(ctx, CREATE_WAIT);
+            let checkpoint = run.0.evidence.guard_checkpoint();
             let reason = loop {
+                run.0.evidence.discard_guards_after(checkpoint);
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
@@ -154,14 +172,20 @@ impl Client {
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
+                let evidence = &run.0.evidence;
+                let (Ok(region), Ok(address)) =
+                    (region.recheck(evidence), address.recheck(evidence))
+                else {
+                    break Settlement::Unknown("create confirmation could not be proven");
+                };
                 if !member(&chain.group).is_some_and(|m| {
                     row.is_none_or(|id| m.id == id)
                         && m.name == input.member_name
                         && m.subnet == input.backend_subnet_id
-                        && m.address == address
+                        && m.address == *address
                         && m.port == input.backend_port
                 }) || chain.group.name != input.member_name
-                    || chain.group.region != region
+                    || chain.group.region != *region
                     || chain.group.vpc != input.backend_vpc_id
                 {
                     break Settlement::Unknown("create confirmation could not be proven");
@@ -244,18 +268,21 @@ impl Client {
                 .await
                 .map_err(preflight)?;
             let parent = run.parent(ctx, glb).await.map_err(preflight)?;
-            let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
+            let region = run.region(ctx, &parent).await.map_err(preflight)?;
             run.no_listeners(ctx, glb).await.map_err(preflight)?;
             let chain = run
                 .chain(ctx, glb, pool, None, "")
                 .await
                 .map_err(preflight)?;
-            if chain.state() != State::Active || chain.group.region != region {
+            let verified = chain.recheck(&run.0.evidence).map_err(preflight)?;
+            if verified.state() != State::Active
+                || verified.group.region != *region.recheck(&run.0.evidence).map_err(preflight)?
+            {
                 return Err(preflight(refuse(
                     "the pool and member group are not settled in the verified region",
                 )));
             }
-            let before = &chain.group;
+            let before = &verified.group;
             let row = member(before).ok_or_else(|| {
                 preflight(refuse(
                     "the member group does not match the supported private backend",
@@ -271,7 +298,10 @@ impl Client {
                 )
                 .await
                 .map_err(preflight)?;
-            if address != row.address {
+            let evidence = &run.0.evidence;
+            region.recheck(evidence).map_err(preflight)?;
+            chain.recheck(evidence).map_err(preflight)?;
+            if *address.recheck(evidence).map_err(preflight)? != row.address {
                 return Err(preflight(refuse(
                     "the pool backend address does not match the server",
                 )));
@@ -291,12 +321,14 @@ impl Client {
                 ));
             };
             let wait = run.0.wait_context(ctx, CREATE_WAIT);
+            let checkpoint = run.0.evidence.guard_checkpoint();
             let reason = loop {
+                run.0.evidence.discard_guards_after(checkpoint);
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
                 let Ok(listener) = run
-                    .confirm_listener(&wait, &input, &accepted.id, before)
+                    .confirm_listener(&wait, &input, &accepted.id, &chain)
                     .await
                 else {
                     break Settlement::Unknown("create confirmation could not be proven");
@@ -338,21 +370,29 @@ impl Child<'_> {
         group: &str,
     ) -> Result<(State, Chain), Box<Error>> {
         let glb = input.load_balancer_id.as_str();
-        let parent: Parent = self.get(ctx, PARENT, &[glb]).await?;
-        let parent_state = state(&parent.status);
-        if parent.id != glb
-            || parent.kind != "Layer 4"
-            || !matches!(parent_state, State::Active | State::Transitioning)
-        {
-            return Err(refuse(
-                "the load balancer is no longer the expected Layer 4 load balancer",
-            ));
-        }
+        let parent = self
+            .read_guard::<Parent>(ctx, PARENT, &[glb], false)
+            .await?;
+        confirm_parent(glb, parent.recheck(&self.0.evidence)?)?;
         let chain = self
             .chain(ctx, glb, &accepted.id, Some(group), &input.name)
             .await?;
-        self.no_listeners(ctx, glb).await?;
-        Ok((parent_state, chain))
+        let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;
+        self.pool_decision(glb, parent, chain, listeners)
+    }
+
+    fn pool_decision(
+        &self,
+        glb: &str,
+        parent: Guarded<Parent>,
+        chain: Guarded<Chain>,
+        listeners: Guarded<Vec<ListenerWire>>,
+    ) -> Result<(State, Chain), Box<Error>> {
+        let parent_state = confirm_parent(glb, parent.recheck(&self.0.evidence)?)?;
+        if !listeners.recheck(&self.0.evidence)?.is_empty() {
+            return Err(refuse("the load balancer has a listener"));
+        }
+        Ok((parent_state, chain.into_checked(&self.0.evidence)?))
     }
 
     async fn confirm_listener(
@@ -360,19 +400,38 @@ impl Child<'_> {
         ctx: &RequestContext,
         input: &CreateListenerInput,
         id: &str,
-        before: &Group,
+        before: &Guarded<Chain>,
     ) -> Result<ListenerWire, Box<Error>> {
         let glb = input.load_balancer_id.as_str();
         let pool = input.pool_id.as_str();
-        let listener: ListenerWire = self.get(ctx, LISTENER, &[glb, id]).await?;
-        let listeners = self.listeners(ctx, glb).await?;
-        let chain = self.chain(ctx, glb, pool, Some(&before.id), "").await?;
+        let listener = self.read_guard(ctx, LISTENER, &[glb, id], false).await?;
+        let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;
+        let group = &before.recheck(&self.0.evidence)?.group.id;
+        let chain = self.chain(ctx, glb, pool, Some(group), "").await?;
+        self.listener_decision(input, id, before, listener, listeners, chain)
+    }
+
+    fn listener_decision(
+        &self,
+        input: &CreateListenerInput,
+        id: &str,
+        before: &Guarded<Chain>,
+        listener: Guarded<ListenerWire>,
+        listeners: Guarded<Vec<ListenerWire>>,
+        chain: Guarded<Chain>,
+    ) -> Result<ListenerWire, Box<Error>> {
+        let glb = &input.load_balancer_id;
+        let pool = &input.pool_id;
+        let before = &before.recheck(&self.0.evidence)?.group;
+        let listener = listener.into_checked(&self.0.evidence)?;
+        let listeners = listeners.recheck(&self.0.evidence)?;
+        let chain = chain.recheck(&self.0.evidence)?;
         if !matches!(listeners.as_slice(), [row] if row.id == id)
             || chain.state() != State::Active
             || !same_backend(&chain.group, before)
             || listener.id != id
-            || listener.glb != glb
-            || listener.pool != pool
+            || listener.glb != *glb
+            || listener.pool != *pool
             || listener.name != input.name
             || listener.protocol != TCP
             || listener.port != input.port
@@ -385,6 +444,19 @@ impl Child<'_> {
         }
         Ok(listener)
     }
+}
+
+fn confirm_parent(glb: &str, parent: &Parent) -> Result<State, Box<Error>> {
+    let parent_state = state(&parent.status);
+    if parent.id != glb
+        || parent.kind != "Layer 4"
+        || !matches!(parent_state, State::Active | State::Transitioning)
+    {
+        return Err(refuse(
+            "the load balancer is no longer the expected Layer 4 load balancer",
+        ));
+    }
+    Ok(parent_state)
 }
 
 fn same_backend(a: &Group, b: &Group) -> bool {

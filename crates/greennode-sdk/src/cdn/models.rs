@@ -62,8 +62,10 @@ impl<T: Serialize> Field<T> {
 }
 
 /// A timestamp with its offset and nanosecond precision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp(pub OffsetDateTime);
+
+crate::wire::product::output::debug_record!(Timestamp(0));
 
 impl crate::wire::product::output::PublicOutput for Timestamp {
     fn public_reflects(
@@ -175,7 +177,7 @@ pub fn status_name(status: i64) -> String {
 }
 
 /// A certificate and its public PEM chain.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Certificate {
     /// Resource identifier.
@@ -278,7 +280,7 @@ impl Certificate {
 }
 
 /// Metadata for an API key.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ApiKey {
     /// Resource identifier.
@@ -337,7 +339,7 @@ impl ApiKey {
 }
 
 /// A Web Accelerator in the account inventory.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct WebAcceleratorSummary {
     /// Web Accelerator identifier.
@@ -402,7 +404,7 @@ impl WebAcceleratorSummary {
 }
 
 /// An origin configured on a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Upstream {
     /// Resource identifier.
@@ -449,7 +451,7 @@ impl Upstream {
 }
 
 /// A default action configured on a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct RuleAction {
     /// Resource identifier.
@@ -496,7 +498,7 @@ impl RuleAction {
 }
 
 /// The configuration and state of a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WebAccelerator {
     /// Web Accelerator identifier.

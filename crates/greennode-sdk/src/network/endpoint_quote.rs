@@ -57,7 +57,7 @@ impl QuoteCreateEndpointInput {
 }
 
 /// Monthly private Gateway endpoint quote.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct QuoteCreateEndpointOutput {
     /// Quoted monthly amount.
     #[serde(rename = "MonthlyPrice")]

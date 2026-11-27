@@ -21,7 +21,7 @@ id_input!(
 );
 
 /// Details of the requested IAM user.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetUserOutput {
     /// Safe user details and MFA state.
     #[serde(rename = "User")]
@@ -49,7 +49,7 @@ id_input!(
 );
 
 /// Details of the requested service account.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetServiceAccountOutput {
     /// Service-account metadata.
     #[serde(rename = "ServiceAccount")]

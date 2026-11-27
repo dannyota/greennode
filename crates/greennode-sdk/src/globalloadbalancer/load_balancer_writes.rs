@@ -46,7 +46,7 @@ impl CreateLoadBalancerInput {
 }
 
 /// The confirmed load balancer or its last safely retained identity and state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreateLoadBalancerOutput {
     /// Load balancer details established by confirmation reads.
     pub load_balancer: LoadBalancer,
@@ -105,7 +105,7 @@ impl DeleteLoadBalancerInput {
 }
 
 /// Identifies the target and whether its absence was confirmed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct DeleteLoadBalancerOutput {
     /// Target load balancer identifier.
     pub load_balancer_id: String,

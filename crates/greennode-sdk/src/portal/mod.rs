@@ -34,7 +34,7 @@ pub struct Client {
 pub struct GetUserInfoInput {}
 
 /// Information about the current portal user.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetUserInfoOutput {
     /// Account data with the keys returned by the API.
     #[serde(rename = "UserInfo")]
@@ -50,7 +50,7 @@ pub struct UserInfo {
     pub fields: BTreeMap<String, Value>,
 }
 
-crate::wire::product::output::public_fields!(UserInfo { fields });
+crate::wire::product::output::public_fields!(custom_debug UserInfo { fields });
 
 impl Serialize for UserInfo {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

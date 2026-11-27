@@ -147,7 +147,7 @@ pub type ListPoliciesOutput = List<Policy>;
 pub type ListTagsOutput = List<Tag>;
 
 /// The result of reading a load balancer.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetLoadBalancerOutput {
     /// Load balancer returned by the service.
     #[serde(rename = "LoadBalancer")]
@@ -157,7 +157,7 @@ pub struct GetLoadBalancerOutput {
 crate::wire::product::output::public_fields!(GetLoadBalancerOutput { load_balancer });
 
 /// The result of reading a listener.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetListenerOutput {
     /// Listener returned by the service.
     #[serde(rename = "Listener")]
@@ -167,7 +167,7 @@ pub struct GetListenerOutput {
 crate::wire::product::output::public_fields!(GetListenerOutput { listener });
 
 /// The result of reading a pool.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPoolOutput {
     /// Pool returned by the service.
     #[serde(rename = "Pool")]
@@ -177,7 +177,7 @@ pub struct GetPoolOutput {
 crate::wire::product::output::public_fields!(GetPoolOutput { pool });
 
 /// The result of reading a health monitor.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPoolHealthMonitorOutput {
     /// Health monitor returned by the service.
     #[serde(rename = "HealthMonitor")]
@@ -187,7 +187,7 @@ pub struct GetPoolHealthMonitorOutput {
 crate::wire::product::output::public_fields!(GetPoolHealthMonitorOutput { health_monitor });
 
 /// The result of reading a policy.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPolicyOutput {
     /// Policy returned by the service.
     #[serde(rename = "Policy")]
@@ -197,7 +197,7 @@ pub struct GetPolicyOutput {
 crate::wire::product::output::public_fields!(GetPolicyOutput { policy });
 
 /// The result of reading a certificate.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetCertificateOutput {
     /// Certificate returned by the service.
     #[serde(rename = "Certificate")]

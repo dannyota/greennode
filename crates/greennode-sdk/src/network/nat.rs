@@ -48,7 +48,7 @@ impl GetNatInstanceInput {
 }
 
 /// Detail of the selected Public NAT.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetNatInstanceOutput {
     /// NAT configuration and status.
     #[serde(rename = "NAT")]
@@ -58,7 +58,7 @@ pub struct GetNatInstanceOutput {
 crate::wire::product::output::public_fields!(GetNatInstanceOutput { nat });
 
 /// Public NAT configuration and status.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct NatDetail {
     /// Identifier matching the requested NAT.
     #[serde(rename = "ID")]
@@ -128,7 +128,7 @@ impl ListNatInboundRulesInput {
 pub type ListNatInboundRulesOutput = List<NatInboundRule>;
 
 /// Inbound rule for a Public NAT instance.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct NatInboundRule {
     /// Provider rule identifier.
     #[serde(rename = "ID")]

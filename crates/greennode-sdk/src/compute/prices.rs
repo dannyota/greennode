@@ -35,7 +35,7 @@ pub struct ListFlavorPricesInput {
 }
 
 /// Flavor price rows and discovery metadata.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListFlavorPricesOutput {
     /// Items.
     #[serde(rename = "Items")]
@@ -48,7 +48,7 @@ pub struct ListFlavorPricesOutput {
 crate::wire::product::output::public_fields!(ListFlavorPricesOutput { items, metadata });
 
 /// One catalog flavor and the price of its reference instance.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct FlavorPrice {
     /// Flavor.
     #[serde(rename = "Flavor")]
@@ -112,7 +112,7 @@ crate::wire::product::output::public_fields!(FlavorPrice {
 });
 
 /// The image and root disk chosen for an instance quote.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct FlavorPriceReference {
     /// Image id.
     #[serde(rename = "ImageID")]

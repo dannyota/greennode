@@ -339,7 +339,7 @@ macro_rules! model {
         $(#[$derived_meta:meta])* $derived:ident: $derived_type:ty => $derived_go:literal, $derive:expr;
     })?) => {
         $(#[$model_meta])*
-        #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+        #[derive(Clone, Default, PartialEq, serde::Serialize)]
         #[serde(remote = "Self")]
         $vis struct $model {
             $(
@@ -353,6 +353,8 @@ macro_rules! model {
                 pub $derived: $derived_type,
             )?
         }
+
+        crate::wire::product::output::debug_record!($model { $($field),* });
 
         impl crate::wire::product::output::PublicOutput for $model {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

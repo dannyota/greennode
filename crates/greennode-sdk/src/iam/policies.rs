@@ -41,7 +41,7 @@ id_input!(
 );
 
 /// The requested IAM policy and its statements.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPolicyOutput {
     /// Policy details and statement document.
     #[serde(rename = "Policy")]
@@ -58,7 +58,7 @@ id_input!(
 );
 
 /// Groups, users, and service accounts attached to one policy.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListPolicyAttachmentsOutput {
     /// Groups attached to the policy.
     #[serde(rename = "Groups")]
@@ -85,7 +85,7 @@ id_input!(
 );
 
 /// The requested IAM group and its members and policies.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetGroupOutput {
     /// Group details.
     #[serde(rename = "Group")]

@@ -47,7 +47,7 @@ impl CreateBudgetInput {
 }
 
 /// Details returned for a confirmed create.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateBudgetOutput {
     /// Created budget, including the UUID returned by the API.
     #[serde(rename = "Budget")]
@@ -88,7 +88,7 @@ impl UpdateBudgetInput {
 }
 
 /// A confirmed update with no returned budget fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct UpdateBudgetOutput {}
 
 crate::wire::product::output::public_fields!(UpdateBudgetOutput {});
@@ -110,7 +110,7 @@ impl DeleteBudgetInput {
 }
 
 /// A confirmed deletion with no returned budget fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteBudgetOutput {}
 
 crate::wire::product::output::public_fields!(DeleteBudgetOutput {});

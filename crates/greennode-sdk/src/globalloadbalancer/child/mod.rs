@@ -7,6 +7,10 @@ mod fold_table;
 mod model;
 mod types;
 
+#[cfg(test)]
+#[path = "../tests/child/retained_guards.rs"]
+mod retained_guards;
+
 pub use types::*;
 
 use http::{Method, StatusCode};
@@ -24,7 +28,7 @@ use super::{Client, invalid_input};
 use crate::endpoint::Base;
 use crate::quote::{catalog::unique, request};
 use crate::wire::product::{
-    evidence::Evidence, operation::Operation, options::PathIds, sender::Response,
+    evidence::Evidence, guard::Guarded, operation::Operation, options::PathIds, sender::Response,
 };
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
@@ -98,22 +102,29 @@ impl Child<'_> {
         }
     }
 
-    async fn get<T: WireField>(
-        &mut self,
-        ctx: &RequestContext,
-        template: &'static str,
-        path: &[&str],
-    ) -> Result<T, Box<Error>> {
-        self.get_from(ctx, template, path, false).await
-    }
-
-    async fn get_from<T: WireField>(
+    async fn read_guard<T: WireField>(
         &mut self,
         ctx: &RequestContext,
         template: &'static str,
         path: &[&str],
         regional: bool,
-    ) -> Result<T, Box<Error>> {
+    ) -> Result<Guarded<T>, Box<Error>> {
+        self.read_guard_reply(ctx, template, path, regional)
+            .await?
+            .try_map(&self.0.evidence, |reply| match reply {
+                GuardReply::Present(value) => Ok(value),
+                GuardReply::Absent(error) => Err(error),
+            })
+    }
+
+    async fn read_guard_reply<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        template: &'static str,
+        path: &[&str],
+        regional: bool,
+    ) -> Result<Guarded<GuardReply<T>>, Box<Error>> {
+        let checkpoint = self.0.evidence.guard_checkpoint();
         let op = guard_operation(self.0.id, template);
         let session = &self.0.client.session;
         let base = if regional {
@@ -144,13 +155,15 @@ impl Child<'_> {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
         if reply.status != StatusCode::OK {
-            let classified = rejected_response(&op, &reply, None, Some(PROVIDER_TEXT));
-            let absent = reply.status == StatusCode::NOT_FOUND || internal_error(&reply);
-            return Err(Box::new(if absent {
-                classified.with_detail(Absent)
-            } else {
-                classified
-            }));
+            let error = Box::new(rejected_response(&op, &reply, None, Some(PROVIDER_TEXT)));
+            if reply.status == StatusCode::NOT_FOUND || internal_error(&reply) {
+                return Guarded::from_checkpoint(
+                    GuardReply::Absent(error),
+                    &self.0.evidence,
+                    checkpoint,
+                );
+            }
+            return Err(error);
         }
         if reply.body.is_empty() || super::wire::go_json(&reply.body).trim() == "null" {
             return Err(self.invalid(DecodeError::InvalidShape));
@@ -166,8 +179,7 @@ impl Child<'_> {
         if reply.reflection != Some(false) {
             return Err(self.invalid(DecodeError::ReflectedCredential));
         }
-        let guarded = crate::wire::product::guard::Guarded::latest(result, &self.0.evidence)?;
-        guarded.into_checked(&self.0.evidence)
+        Guarded::from_checkpoint(GuardReply::Present(result), &self.0.evidence, checkpoint)
     }
 
     fn invalid(&self, detail: DecodeError) -> Box<Error> {
@@ -227,8 +239,15 @@ impl Child<'_> {
         self.0.finish(Settlement::Unknown(reason), Some(partial))
     }
 
-    async fn parent(&mut self, ctx: &RequestContext, glb: &str) -> Result<Parent, Box<Error>> {
-        let parent: Parent = self.get(ctx, PARENT, &[glb]).await?;
+    async fn parent(
+        &mut self,
+        ctx: &RequestContext,
+        glb: &str,
+    ) -> Result<Guarded<Parent>, Box<Error>> {
+        let guarded = self
+            .read_guard::<Parent>(ctx, PARENT, &[glb], false)
+            .await?;
+        let parent = guarded.recheck(&self.0.evidence)?;
         if parent.id != glb
             || parent.kind != "Layer 4"
             || state(&parent.status) != State::Active
@@ -238,27 +257,25 @@ impl Child<'_> {
                 "the load balancer is not an eligible Layer 4 load balancer",
             ));
         }
-        Ok(parent)
+        Ok(guarded)
     }
 
     async fn pools(
         &mut self,
         ctx: &RequestContext,
         glb: &str,
-    ) -> Result<Vec<PoolWire>, Box<Error>> {
-        let rows: Vec<PoolWire> = self.get(ctx, POOLS, &[glb]).await?;
-        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
-        Ok(rows)
+    ) -> Result<Guarded<Vec<PoolWire>>, Box<Error>> {
+        self.list(ctx, POOLS, &[glb], |row: &PoolWire| &row.id)
+            .await
     }
 
     async fn listeners(
         &mut self,
         ctx: &RequestContext,
         glb: &str,
-    ) -> Result<Vec<ListenerWire>, Box<Error>> {
-        let rows: Vec<ListenerWire> = self.get(ctx, LISTENERS, &[glb]).await?;
-        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
-        Ok(rows)
+    ) -> Result<Guarded<Vec<ListenerWire>>, Box<Error>> {
+        self.list(ctx, LISTENERS, &[glb], |row: &ListenerWire| &row.id)
+            .await
     }
 
     async fn groups(
@@ -266,9 +283,25 @@ impl Child<'_> {
         ctx: &RequestContext,
         glb: &str,
         pool: &str,
-    ) -> Result<Vec<Group>, Box<Error>> {
-        let rows: Vec<Group> = self.get(ctx, GROUPS, &[glb, pool]).await?;
-        self.unique(rows.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
+    ) -> Result<Guarded<Vec<Group>>, Box<Error>> {
+        self.list(ctx, GROUPS, &[glb, pool], |row: &Group| &row.id)
+            .await
+    }
+
+    async fn list<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        template: &'static str,
+        path: &[&str],
+        id: impl Fn(&T) -> &str,
+    ) -> Result<Guarded<Vec<T>>, Box<Error>> {
+        let rows = self
+            .read_guard::<Vec<T>>(ctx, template, path, false)
+            .await?;
+        self.unique(
+            rows.recheck(&self.0.evidence)?.iter().map(id),
+            PathIds::Strict,
+        )?;
         Ok(rows)
     }
 
@@ -281,7 +314,12 @@ impl Child<'_> {
     }
 
     async fn no_listeners(&mut self, ctx: &RequestContext, glb: &str) -> Result<(), Box<Error>> {
-        if self.listeners(ctx, glb).await?.is_empty() {
+        if self
+            .listeners(ctx, glb)
+            .await?
+            .recheck(&self.0.evidence)?
+            .is_empty()
+        {
             Ok(())
         } else {
             Err(refuse("the load balancer has a listener"))
@@ -294,8 +332,11 @@ impl Child<'_> {
         glb: &str,
         id: &str,
         name: &str,
-    ) -> Result<PoolWire, Box<Error>> {
-        let pool: PoolWire = self.get(ctx, POOL, &[glb, id]).await?;
+    ) -> Result<Guarded<PoolWire>, Box<Error>> {
+        let guarded = self
+            .read_guard::<PoolWire>(ctx, POOL, &[glb, id], false)
+            .await?;
+        let pool = guarded.recheck(&self.0.evidence)?;
         if pool.id != id
             || pool.glb != glb
             || (!name.is_empty() && pool.name != name)
@@ -315,7 +356,7 @@ impl Child<'_> {
                 "the pool does not match the supported TCP configuration",
             ));
         }
-        Ok(pool)
+        Ok(guarded)
     }
 
     async fn exact_group(
@@ -324,17 +365,20 @@ impl Child<'_> {
         glb: &str,
         pool: &str,
         group: &str,
-    ) -> Result<Group, Box<Error>> {
+    ) -> Result<Guarded<Group>, Box<Error>> {
         if !PathIds::Strict.allows(group) {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
-        let row: Group = self.get(ctx, GROUP, &[glb, pool, group]).await?;
+        let guarded = self
+            .read_guard::<Group>(ctx, GROUP, &[glb, pool, group], false)
+            .await?;
+        let row = guarded.recheck(&self.0.evidence)?;
         if row.id != group
             || row.pool != pool
             || row.glb != glb
             || row.kind != PRIVATE
             || row.traffic_dial != TRAFFIC
-            || member(&row).is_none_or(|m| {
+            || member(row).is_none_or(|m| {
                 !PathIds::WithUnderscore.allows(&m.id)
                     || m.group != group
                     || m.glb != glb
@@ -350,7 +394,7 @@ impl Child<'_> {
                 "the member group does not match the supported private backend",
             ));
         }
-        Ok(row)
+        Ok(guarded)
     }
 
     async fn chain(
@@ -360,15 +404,17 @@ impl Child<'_> {
         pool: &str,
         group: Option<&str>,
         name: &str,
-    ) -> Result<Chain, Box<Error>> {
-        if !matches!(self.pools(ctx, glb).await?.as_slice(), [row] if row.id == pool) {
+    ) -> Result<Guarded<Chain>, Box<Error>> {
+        let checkpoint = self.0.evidence.guard_checkpoint();
+        let pools = self.pools(ctx, glb).await?;
+        if !matches!(pools.recheck(&self.0.evidence)?.as_slice(), [row] if row.id == pool) {
             return Err(refuse(
                 "the load balancer must hold exactly the expected pool",
             ));
         }
-        let pool = self.exact_pool(ctx, glb, pool, name).await?;
-        let rows = self.groups(ctx, glb, &pool.id).await?;
-        let [row] = rows.as_slice() else {
+        let pool_detail = self.exact_pool(ctx, glb, pool, name).await?;
+        let rows = self.groups(ctx, glb, pool).await?;
+        let [row] = rows.recheck(&self.0.evidence)?.as_slice() else {
             return Err(refuse(
                 "the pool must hold exactly the expected member group",
             ));
@@ -378,13 +424,22 @@ impl Child<'_> {
                 "the pool must hold exactly the expected member group",
             ));
         }
-        let group = self.exact_group(ctx, glb, &pool.id, &row.id).await?;
-        Ok(Chain { pool, group })
+        let group = self.exact_group(ctx, glb, pool, &row.id).await?;
+        let evidence = &self.0.evidence;
+        pools.recheck(evidence)?;
+        rows.recheck(evidence)?;
+        let chain = Chain {
+            pool: pool_detail.into_checked(evidence)?,
+            group: group.into_checked(evidence)?,
+        };
+        Guarded::from_checkpoint(chain, evidence, checkpoint)
     }
 }
 
-#[derive(Debug)]
-struct Absent;
+enum GuardReply<T> {
+    Present(T),
+    Absent(Box<Error>),
+}
 
 fn decode_canonical<T: serde::de::DeserializeOwned + Default>(
     op: &Operation,

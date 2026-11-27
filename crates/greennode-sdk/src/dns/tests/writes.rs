@@ -230,6 +230,37 @@ async fn post_write_reads_cannot_replace_a_partial_with_the_wrong_record() {
 }
 
 #[tokio::test]
+async fn record_confirmation_rechecks_the_earlier_zone_with_the_final_bearer() {
+    let late = "toy-zone-description";
+    let observed_zone = ZONE.replace(
+        r#""status""#,
+        &format!(r#""description":"{late}","status""#),
+    );
+    let created = include_str!("../../../tests/fixtures/dns/create_record.json");
+    let server = Server::start(vec![
+        response("200 OK", ZONE),
+        response("200 OK", created),
+        response("200 OK", &observed_zone),
+        response("200 OK", RECORD),
+    ]);
+    let input = CreateRecordInput::new(
+        "zone-1",
+        "A",
+        vec![RecordValue {
+            value: "192.0.2.1".into(),
+            ..Default::default()
+        }],
+    );
+    let failure = client_with_rotating_bearer(&server, late, 3)
+        .create_record(&RequestContext::new().0, input)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
 async fn record_create_uses_defaults_and_retains_terminal_error_result() {
     let created = include_str!("../../../tests/fixtures/dns/create_record.json");
     let server = Server::start(vec![

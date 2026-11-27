@@ -19,7 +19,7 @@ pub const DIRECTION_DEBIT: &str = "DEBIT";
 pub const GATEWAY_BALANCE: &str = "use_balance";
 
 /// A wallet ledger entry with its amount and resulting balance.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase", try_from = "TransactionWire")]
 pub struct Transaction {
     /// Numeric wallet transaction ID.
@@ -63,7 +63,7 @@ crate::wire::product::output::public_fields!(Transaction {
 });
 
 /// A payment entry as reported by billing.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase", try_from = "PaymentWire")]
 pub struct Payment {
     /// Numeric payment ID.

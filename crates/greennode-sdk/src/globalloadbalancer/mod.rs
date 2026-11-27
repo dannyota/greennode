@@ -83,7 +83,7 @@ impl GetLoadBalancerInput {
 }
 
 /// The requested global load balancer.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetLoadBalancerOutput {
     /// Global load balancer returned by the service.
     #[serde(rename = "LoadBalancer")]
@@ -150,7 +150,7 @@ impl GetListenerInput {
 }
 
 /// The requested listener.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetListenerOutput {
     /// Listener returned by the service.
     #[serde(rename = "Listener")]
@@ -208,7 +208,7 @@ impl GetPoolMemberInput {
 }
 
 /// The requested pool member group.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPoolMemberOutput {
     /// Pool member group returned by the service.
     #[serde(rename = "PoolMember")]

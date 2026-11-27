@@ -508,7 +508,6 @@ async fn send_route<T>(
     };
     evidence.absorb(&response.credentials);
     if operation.reflection == Reflection::Guard
-        && operation.success.contains(&response.status)
         && !evidence.keep_guard(operation.id, &response.body)
     {
         return Err(crate::Failure::new(

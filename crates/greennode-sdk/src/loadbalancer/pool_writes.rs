@@ -67,7 +67,7 @@ pub struct CreatePoolInput {
 }
 
 /// Holds the pool returned by the create or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreatePoolOutput {
     /// The observed or submitted pool.
     pub pool: Pool,
@@ -140,7 +140,7 @@ pub struct UpdatePoolInput {
 }
 
 /// Holds the pool returned by the update or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct UpdatePoolOutput {
     /// The observed or submitted pool.
     pub pool: Pool,

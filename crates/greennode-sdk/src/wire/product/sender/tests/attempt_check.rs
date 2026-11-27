@@ -173,7 +173,21 @@ async fn guard_reflection_on_401_rejects_and_evicts_without_resending() {
             Box::pin(std::future::ready(Ok(())))
         }
     }
-    for (age, evict) in [(29, false), (30, true)] {
+    fn refuse(
+        _: &'static str,
+        _: http::StatusCode,
+        _: &[u8],
+        _: &SentCredentials,
+        _: &SentCredentials,
+    ) -> Option<Box<crate::Error>> {
+        Some(Box::new(crate::Error::new(crate::ErrorClass::Api)))
+    }
+    for (callback, age, evict) in [
+        (false, 29, false),
+        (false, 30, true),
+        (true, 29, false),
+        (true, 30, true),
+    ] {
         let body = br#"{"reason":"toy-session-token"}"#;
         let server = Server::start(vec![Response::Http {
             status: "401 Unauthorized".into(),
@@ -192,7 +206,8 @@ async fn guard_reflection_on_401_rejects_and_evicts_without_resending() {
             &clock,
             deadline,
             &Operation {
-                guard: Some("test.guard"),
+                guard: (!callback).then_some("test.guard"),
+                response_guard: callback.then_some(("test.guard", refuse as ResponseGuard)),
                 ..operation(Method::GET, redirect::Retry::Repeatable)
             },
             Auth::Bearer(&source),
@@ -204,7 +219,10 @@ async fn guard_reflection_on_401_rejects_and_evicts_without_resending() {
         let failure = result.err().unwrap();
         assert_eq!(*source.rejection.lock().unwrap(), Some(evict));
         assert_eq!(source.acquisitions.load(Ordering::SeqCst), 1);
-        assert!(failure.status.is_none());
+        assert_eq!(
+            failure.status,
+            callback.then_some(http::StatusCode::UNAUTHORIZED)
+        );
         assert_eq!(server.requests(), 1);
     }
 }

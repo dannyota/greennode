@@ -85,7 +85,7 @@ impl CreateDatabaseInstanceInput {
 }
 
 /// Instance details after confirmation, or an instance with only its ID set on failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateDatabaseInstanceOutput {
     /// Confirmed instance or ID-only partial.
     #[serde(rename = "Instance")]

@@ -156,7 +156,7 @@ model! {
 }
 
 /// A server-group placement policy.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ServerGroupPolicy {
     /// Display name.
     #[serde(rename = "Name")]
@@ -336,7 +336,7 @@ pub struct ListFlavorsInput {
 pub type ListServersOutput = PagedList<Server>;
 
 /// Result of the get server operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerOutput {
     /// The resource returned by the service.
     #[serde(rename = "Server")]
@@ -346,7 +346,7 @@ pub struct GetServerOutput {
 crate::wire::product::output::public_fields!(GetServerOutput { server });
 
 /// Result of the get server console log operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerConsoleLogOutput {
     /// Console output. Ordinary formatting redacts it.
     #[serde(rename = "Log")]
@@ -359,7 +359,7 @@ crate::wire::product::output::public_fields!(GetServerConsoleLogOutput { log });
 pub type ListSshKeysOutput = PagedList<SshKey>;
 
 /// Result of the get ssh key operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetSshKeyOutput {
     /// The resource returned by the service.
     #[serde(rename = "SSHKey")]
@@ -372,7 +372,7 @@ crate::wire::product::output::public_fields!(GetSshKeyOutput { ssh_key });
 pub type ListServerGroupsOutput = PagedList<ServerGroup>;
 
 /// Result of the get server group operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerGroupOutput {
     /// The resource returned by the service.
     #[serde(rename = "ServerGroup")]

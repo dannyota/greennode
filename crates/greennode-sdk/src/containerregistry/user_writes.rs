@@ -59,7 +59,7 @@ impl CreateUserInput {
 }
 
 /// A registry user create result carrying the issued one-time secret.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateUserOutput {
     /// Empty when the service response cannot prove ownership of a user identity.
     #[serde(rename = "User")]
@@ -112,7 +112,7 @@ impl DeleteUserInput {
 }
 
 /// An acknowledged user deletion with no resource fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DeleteUserOutput {}
 
 crate::wire::product::output::public_fields!(DeleteUserOutput {});

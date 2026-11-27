@@ -83,14 +83,73 @@ impl Detail {
             }
             self.withheld |= reflects(arithmetic.stage) || reflects(&arithmetic.item_key);
         }
-        self.withheld |= debug_reflects(self.value.as_ref(), reflects);
+        self.withheld |= value
+            .downcast_ref::<http::StatusCode>()
+            .is_some_and(|status| status_reflects(*status, reflects))
+            || debug_reflects(self.value.as_ref(), reflects);
     }
 }
 
-pub(super) fn debug_reflects(
+fn status_reflects(status: http::StatusCode, reflects: &impl Fn(&str) -> bool) -> bool {
+    [
+        status.to_string(),
+        format!("{status:+?}"),
+        format!("{status:x?}"),
+        format!("{status:X?}"),
+        format!("{status:+x?}"),
+        format!("{status:+X?}"),
+        format!("{status:#x?}"),
+        format!("{status:#X?}"),
+        format!("{status:+#x?}"),
+        format!("{status:+#X?}"),
+    ]
+    .iter()
+    .any(|text| reflects(text))
+}
+
+pub(crate) fn debug_reflects(
     value: &(impl Debug + ?Sized),
     reflects: &impl Fn(&str) -> bool,
 ) -> bool {
-    reflects(&Zeroizing::new(format!("{value:?}")))
-        || reflects(&Zeroizing::new(format!("{value:#?}")))
+    [false, true]
+        .into_iter()
+        .any(|alternate| render_debug(value, alternate).is_none_or(|text| reflects(&text)))
+}
+
+pub(crate) fn write_debug(
+    formatter: &mut std::fmt::Formatter<'_>,
+    fields: impl Fn(&mut std::fmt::Formatter<'_>) -> std::fmt::Result,
+) -> std::fmt::Result {
+    struct Neutral<F>(F);
+    impl<F: Fn(&mut std::fmt::Formatter<'_>) -> std::fmt::Result> Debug for Neutral<F> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            (self.0)(formatter)
+        }
+    }
+    if formatter.alternate() {
+        write!(formatter, "{:#?}", Neutral(fields))
+    } else {
+        write!(formatter, "{:?}", Neutral(fields))
+    }
+}
+
+fn render_debug(value: &(impl Debug + ?Sized), alternate: bool) -> Option<Zeroizing<String>> {
+    use std::fmt::{self, Write};
+    struct Buffer(Zeroizing<String>);
+    impl Write for Buffer {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            if self.0.len().saturating_add(text.len()) > 64 << 20 {
+                return Err(fmt::Error);
+            }
+            self.0.push_str(text);
+            Ok(())
+        }
+    }
+    let mut buffer = Buffer(Zeroizing::new(String::new()));
+    if alternate {
+        write!(buffer, "{value:#?}").ok()?;
+    } else {
+        write!(buffer, "{value:?}").ok()?;
+    }
+    Some(buffer.0)
 }

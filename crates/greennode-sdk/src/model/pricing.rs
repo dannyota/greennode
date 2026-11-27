@@ -2,7 +2,7 @@ use serde::{Serialize, Serializer};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 /// Quote amount and basis, with unknown amounts left absent.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct DiscoveryPrice {
     /// Pricing status.
     #[serde(rename = "Status")]
@@ -46,7 +46,7 @@ crate::wire::product::output::public_fields!(DiscoveryPrice {
 });
 
 /// Coverage and completion metadata for one discovery invocation.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct DiscoveryMetadata {
     /// Configured region.
     #[serde(rename = "Region")]
@@ -83,7 +83,7 @@ crate::wire::product::output::public_fields!(DiscoveryMetadata {
 });
 
 /// Safe scope and classification of a discovery failure.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct DiscoveryFailure {
     /// Operation associated with the failure.
     #[serde(rename = "Operation")]
@@ -107,7 +107,7 @@ crate::wire::product::output::public_fields!(DiscoveryFailure {
 });
 
 /// Published or observed pricing context.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct PricingNote {
     /// Note topic.
     #[serde(rename = "Topic")]

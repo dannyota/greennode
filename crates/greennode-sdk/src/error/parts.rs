@@ -92,14 +92,16 @@ impl ApiError {
 
 impl fmt::Debug for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.debug_reflected {
-            return f.write_str("");
-        }
-        f.debug_struct("ApiError")
-            .field("operation", &self.operation)
-            .field("status", &self.status)
-            .field("retryable", &self.retryable)
-            .finish_non_exhaustive()
+        super::detail::write_debug(f, |f| {
+            if self.debug_reflected {
+                return f.write_str("");
+            }
+            f.debug_struct("ApiError")
+                .field("operation", &self.operation)
+                .field("status", &self.status)
+                .field("retryable", &self.retryable)
+                .finish_non_exhaustive()
+        })
     }
 }
 
@@ -171,13 +173,15 @@ impl LoginError {
 }
 impl fmt::Debug for LoginError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.debug_reflected {
-            return f.write_str("");
-        }
-        f.debug_struct("LoginError")
-            .field("status", &self.status)
-            .field("captcha_suspected", &self.captcha_suspected)
-            .finish_non_exhaustive()
+        super::detail::write_debug(f, |f| {
+            if self.debug_reflected {
+                return f.write_str("");
+            }
+            f.debug_struct("LoginError")
+                .field("status", &self.status)
+                .field("captcha_suspected", &self.captcha_suspected)
+                .finish_non_exhaustive()
+        })
     }
 }
 
@@ -210,11 +214,13 @@ impl ServiceAccountLoginError {
 }
 impl fmt::Debug for ServiceAccountLoginError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.debug_reflected {
-            return f.write_str("");
-        }
-        f.debug_struct("ServiceAccountLoginError")
-            .field("status", &self.status)
-            .finish_non_exhaustive()
+        super::detail::write_debug(f, |f| {
+            if self.debug_reflected {
+                return f.write_str("");
+            }
+            f.debug_struct("ServiceAccountLoginError")
+                .field("status", &self.status)
+                .finish_non_exhaustive()
+        })
     }
 }

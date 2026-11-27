@@ -70,7 +70,7 @@ pub struct CreateListenerInput {
 }
 
 /// Holds the listener returned by the create or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreateListenerOutput {
     /// The observed or submitted listener.
     pub listener: Listener,
@@ -133,7 +133,7 @@ pub struct UpdateListenerInput {
 }
 
 /// Holds the listener returned by the update or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct UpdateListenerOutput {
     /// The observed or submitted listener.
     pub listener: Listener,

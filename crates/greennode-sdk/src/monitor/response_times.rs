@@ -46,7 +46,7 @@ impl ListCheckResponseTimesInput {
 }
 
 /// Response-time series and the effective UTC window.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListCheckResponseTimesOutput {
     /// Series sorted by location identifier.
@@ -62,7 +62,7 @@ pub struct ListCheckResponseTimesOutput {
 crate::wire::product::output::public_fields!(ListCheckResponseTimesOutput { items, start, end });
 
 /// The response-time buckets for one probe location.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CheckResponseTimeSeries {
     /// Probe location identifier.
@@ -78,7 +78,7 @@ crate::wire::product::output::public_fields!(CheckResponseTimeSeries {
 });
 
 /// Average HTTP response time for one bucket.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CheckResponseTimePoint {
     /// UTC bucket timestamp.

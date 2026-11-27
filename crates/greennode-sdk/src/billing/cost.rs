@@ -60,7 +60,7 @@ impl GetCostOverviewInput {
 }
 
 /// Headline costs and series returned for a date range.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCostOverviewOutput {
     /// Current and prior costs, forecast, and breakdown.
@@ -135,7 +135,7 @@ impl ListCostResourcesInput {
 }
 
 /// One page of resource costs and the range's overall summary.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ListCostResourcesOutput {
     /// Resource costs and pagination metadata returned by the API.
     pub resources: PagedList<CostResource>,
@@ -163,7 +163,7 @@ impl Serialize for ListCostResourcesOutput {
 pub struct GetBalancesInput {}
 
 /// Cash and pay-on-credit balances for the authenticated account.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetBalancesOutput {
     /// Balance amounts by kind.
     #[serde(rename = "Balances")]
@@ -394,7 +394,7 @@ fn read_failure<O>(error: Error) -> Failure<O> {
 }
 
 /// One entry in the cost breakdown.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CostBreakdown {
     /// Group key reported by the API.
@@ -438,7 +438,7 @@ impl<'de> Deserialize<'de> for CostBreakdown {
 }
 
 /// Headline cost totals for the selected dates.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSummary {
     /// Total cost in VND for the requested period.
@@ -470,7 +470,7 @@ crate::wire::product::output::public_fields!(CostSummary {
 });
 
 /// A legacy date and cost point.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeries {
     /// Date as reported by the API.
@@ -482,7 +482,7 @@ pub struct CostSeries {
 crate::wire::product::output::public_fields!(CostSeries { date, cost });
 
 /// A group in the cost overview.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeriesGroup {
     /// Group key reported by the API.
@@ -497,7 +497,7 @@ pub struct CostSeriesGroup {
 crate::wire::product::output::public_fields!(CostSeriesGroup { key, color, points });
 
 /// One bucket in a grouped cost series.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeriesPoint {
     /// Unparsed API bucket label.
@@ -511,7 +511,7 @@ pub struct CostSeriesPoint {
 crate::wire::product::output::public_fields!(CostSeriesPoint { date, cost });
 
 /// Cost of a resource over the requested range.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostResource {
     /// Resource identifier.
@@ -556,7 +556,7 @@ crate::wire::product::output::public_fields!(CostResource {
 });
 
 /// Aggregate costs across matching resources.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostResourceSummary {
     /// Total cost in VND for all matching resources.
@@ -574,7 +574,7 @@ crate::wire::product::output::public_fields!(CostResourceSummary {
 });
 
 /// Cash and pay-on-credit balances. A missing balance kind is reported as `None`.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Balances {
     /// Cash balance.

@@ -24,7 +24,7 @@ required_id_input!(
 );
 
 /// The selected route table, including its routes.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetRouteTableOutput {
     /// Route table settings and routes.
     #[serde(rename = "RouteTable")]

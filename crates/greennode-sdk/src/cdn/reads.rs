@@ -58,7 +58,7 @@ impl GetWebAcceleratorInput {
 }
 
 /// The selected Web Accelerator.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct GetWebAcceleratorOutput {
     /// The configuration and status of the selected CDN.
     #[serde(rename = "WebAccelerator")]
@@ -91,7 +91,7 @@ impl GetCertificateInput {
 }
 
 /// The selected certificate and public PEM chain.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct GetCertificateOutput {
     /// The certificate detail.
     #[serde(rename = "Certificate")]

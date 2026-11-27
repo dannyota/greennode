@@ -19,7 +19,7 @@ pub struct GetQuotaInput {
 #[derive(Clone, Debug, Default)]
 pub struct GetTagQuotaInput {}
 /// Zone properties returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Zone {
     /// Zone identifier.
@@ -73,7 +73,7 @@ pub type ListZonesOutput = crate::List<Zone>;
 /// Quota entries for the configured project.
 pub type ListQuotaUsedOutput = crate::List<Quota>;
 /// One matching quota entry.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetQuotaOutput {
     /// The matching quota.
     #[serde(rename = "Quota")]
@@ -82,7 +82,7 @@ pub struct GetQuotaOutput {
 
 crate::wire::product::output::public_fields!(GetQuotaOutput { quota });
 /// The project tag quota.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetTagQuotaOutput {
     /// The tag quota.
     #[serde(rename = "TagQuota")]

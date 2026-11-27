@@ -63,7 +63,7 @@ pub struct ListDatabaseStorageTypesInput {
     pub zone_id: String,
 }
 /// Storage types and the project reported by the service.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseStorageTypesOutput {
     /// Project ID returned by the service.
     #[serde(rename = "ProjectID")]
@@ -91,7 +91,7 @@ pub struct ListDatabaseInstancesInput {
     pub page_size: i32,
 }
 /// One page of database instances and its metadata.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseInstancesOutput {
     /// Project ID returned by the service.
     #[serde(rename = "ProjectID")]
@@ -118,7 +118,7 @@ pub struct GetDatabaseInstanceInput {
 }
 
 /// The requested relational database instance.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetDatabaseInstanceOutput {
     /// Instance details returned by the service.
     #[serde(rename = "Instance")]

@@ -62,9 +62,11 @@ impl<T> Field<T> {
 }
 
 /// A DNS timestamp with its original offset and nanosecond precision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Timestamp(#[serde(with = "rfc3339")] pub OffsetDateTime);
+
+crate::wire::product::output::debug_record!(Timestamp(0));
 
 impl crate::wire::product::output::PublicOutput for Timestamp {
     fn public_reflects(
@@ -107,7 +109,7 @@ mod rfc3339 {
 }
 
 /// A VPC association returned with a hosted zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -128,7 +130,7 @@ pub struct VpcMapRegion {
 crate::wire::product::output::public_fields!(VpcMapRegion { vpc_id, region });
 
 /// A hosted DNS zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -201,7 +203,7 @@ crate::wire::product::output::public_fields!(HostedZone {
 });
 
 /// One value in a DNS record's routing policy.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "PascalCase"))]
 pub struct RecordValue {
     /// The record data.
@@ -220,7 +222,7 @@ crate::wire::product::output::public_fields!(RecordValue {
 });
 
 /// A record in a hosted DNS zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")

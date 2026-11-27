@@ -29,7 +29,7 @@ pub enum ErrorDetail {
 pub use crate::error::SystemTagText;
 
 /// One resource tag, including whether it is managed by the platform.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Tag {
     /// Tag key.
@@ -92,7 +92,7 @@ pub struct UntagResourceInput {
 }
 
 /// The last observed tags and the value before a replacement.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct WriteResourceTagsOutput {
     /// All observed tags, including system tags.

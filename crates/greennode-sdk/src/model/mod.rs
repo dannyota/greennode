@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::wire::strict_json::field_matches;
 
 /// A project returned by the project service.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Project {
     /// Project identifier.
     #[serde(rename = "ID")]
@@ -151,7 +151,7 @@ pub const DEFAULT_PAGE: i64 = 1;
 pub const DEFAULT_PAGE_SIZE: i64 = 10_000;
 
 /// Items returned without pagination metadata; serialized keys use the service format.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct List<T> {
     /// Items in this result.
     #[serde(rename = "Items")]
@@ -161,7 +161,7 @@ pub struct List<T> {
 crate::wire::product::output::public_fields!(List<T> { items });
 
 /// Items and pagination metadata, serialized with service-format keys.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PagedList<T> {
     /// Items in this result.
     #[serde(rename = "Items")]

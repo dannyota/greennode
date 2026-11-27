@@ -36,7 +36,7 @@ pub struct Client {
 pub struct ListBackendsInput;
 
 /// Backend list with nullable page metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListBackendsOutput {
     /// Backends visible to the caller.
@@ -88,7 +88,7 @@ impl GetPolicyInput {
 }
 
 /// The requested Backup Center policy.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetPolicyOutput {
     /// Policy and its verified schedule settings.
     #[serde(rename = "Policy")]

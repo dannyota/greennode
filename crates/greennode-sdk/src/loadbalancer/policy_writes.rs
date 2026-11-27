@@ -72,7 +72,7 @@ pub struct CreatePolicyInput {
 }
 
 /// Holds the policy returned by the create or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreatePolicyOutput {
     /// The observed or submitted policy.
     pub policy: Policy,
@@ -129,7 +129,7 @@ pub struct UpdatePolicyInput {
 }
 
 /// Holds the policy returned by the update or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct UpdatePolicyOutput {
     /// The observed or submitted policy.
     pub policy: Policy,

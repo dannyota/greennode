@@ -19,7 +19,7 @@ const CAP: usize = 4 << 20;
 pub struct ListIpRangesInput;
 
 /// The canonical IP prefixes and their source.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListIpRangesOutput {
     /// Canonical IP ranges sorted by IP address and prefix length.

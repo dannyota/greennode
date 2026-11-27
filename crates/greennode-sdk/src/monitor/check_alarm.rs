@@ -41,7 +41,7 @@ impl GetCheckAlarmInput {
 }
 
 /// Current check alarm and location states.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetCheckAlarmOutput {
     /// The current alarm definition and its location states.
     #[serde(rename = "Alarm")]
@@ -51,7 +51,7 @@ pub struct GetCheckAlarmOutput {
 crate::wire::product::output::public_fields!(GetCheckAlarmOutput { alarm });
 
 /// Current state of the check's alarm definition.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CheckAlarm {
     /// Alarm definition identifier.
@@ -74,7 +74,7 @@ crate::wire::product::output::public_fields!(CheckAlarm {
 });
 
 /// State of one probe location's alarm.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CheckLocationAlarm {
     /// Identifier of the location alarm.

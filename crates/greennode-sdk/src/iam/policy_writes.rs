@@ -48,7 +48,7 @@ impl CreatePolicyInput {
 }
 
 /// A newly created policy, with only its ID when confirmation failed.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreatePolicyOutput {
     /// The policy returned by IAM.
     #[serde(rename = "Policy")]
@@ -83,7 +83,7 @@ impl UpdatePolicyInput {
 }
 
 /// The updated policy, with only its ID when confirmation failed.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct UpdatePolicyOutput {
     /// The policy returned by IAM.
     #[serde(rename = "Policy")]
@@ -100,7 +100,7 @@ super::id_input!(
 );
 
 /// A completed policy deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
 
 crate::wire::product::output::public_fields!(DeletePolicyOutput {});

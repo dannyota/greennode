@@ -56,7 +56,7 @@ impl QuoteCreateNatInstanceInput {
 }
 
 /// Monthly Public NAT quote in VND.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct NetworkQuoteOutput {
     /// Quoted optimum price.
     #[serde(rename = "OptimumPrice")]

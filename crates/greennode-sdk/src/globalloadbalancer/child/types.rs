@@ -142,7 +142,7 @@ pub struct CreatePoolOutput {
     screen: Option<Value>,
 }
 
-crate::wire::product::output::public_fields!(CreatePoolOutput { pool, pool_member; screen });
+crate::wire::product::output::public_fields!(custom_debug CreatePoolOutput { pool, pool_member; screen });
 impl CreatePoolOutput {
     pub(super) fn new(pool: Pool, pool_member: PoolMember, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -175,7 +175,7 @@ pub struct CreateListenerOutput {
     screen: Option<Value>,
 }
 
-crate::wire::product::output::public_fields!(CreateListenerOutput { listener; screen });
+crate::wire::product::output::public_fields!(custom_debug CreateListenerOutput { listener; screen });
 impl CreateListenerOutput {
     pub(super) fn new(listener: Listener, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -210,7 +210,7 @@ pub struct DeletePoolOutput {
     screen: Option<Value>,
 }
 
-crate::wire::product::output::public_fields!(DeletePoolOutput { load_balancer_id, pool_id, deleted; screen });
+crate::wire::product::output::public_fields!(custom_debug DeletePoolOutput { load_balancer_id, pool_id, deleted; screen });
 impl DeletePoolOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -253,7 +253,7 @@ pub struct DeleteListenerOutput {
     screen: Option<Value>,
 }
 
-crate::wire::product::output::public_fields!(DeleteListenerOutput { load_balancer_id, listener_id, deleted; screen });
+crate::wire::product::output::public_fields!(custom_debug DeleteListenerOutput { load_balancer_id, listener_id, deleted; screen });
 impl DeleteListenerOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -288,10 +288,12 @@ macro_rules! debug_projection {
     ($($output:ident),+ $(,)?) => {$(
         impl fmt::Debug for $output {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match serde_json::to_value(self) {
-                    Ok(value) => fmt::Debug::fmt(&value, f),
-                    Err(_) => f.write_str("<redacted>"),
-                }
+                crate::error::write_debug(f, |f| {
+                    match serde_json::to_value(self) {
+                        Ok(value) => fmt::Debug::fmt(&value, f),
+                        Err(_) => f.write_str("<redacted>"),
+                    }
+                })
             }
         }
     )+};

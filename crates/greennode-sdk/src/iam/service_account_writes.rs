@@ -47,7 +47,7 @@ impl CreateServiceAccountInput {
 }
 
 /// Service-account creation result. A failure partial contains only safe metadata.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateServiceAccountOutput {
     /// Confirmed service account or safe identity retained from create.
     #[serde(rename = "ServiceAccount")]
@@ -147,7 +147,7 @@ impl UpdateServiceAccountInput {
 }
 
 /// Service-account metadata after the update.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UpdateServiceAccountOutput {
     /// Confirmed account, or its safe identity after an unconfirmed write.
     #[serde(rename = "ServiceAccount")]
@@ -175,7 +175,7 @@ impl DeleteServiceAccountInput {
 }
 
 /// Acknowledges deletion without resource fields.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteServiceAccountOutput {}
 
 crate::wire::product::output::public_fields!(DeleteServiceAccountOutput {});
@@ -188,7 +188,7 @@ id_input!(
 );
 
 /// The one-time secret produced by a successful rotation.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct ResetServiceAccountSecretOutput {
     #[serde(rename = "ClientSecret")]
     client_secret: Secret,

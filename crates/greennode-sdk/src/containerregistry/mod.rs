@@ -49,7 +49,7 @@ pub struct ListPermissionsInput {}
 pub type ListPermissionsOutput = List<Permission>;
 
 /// A container registry repository.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -114,7 +114,7 @@ crate::wire::product::output::public_fields!(Repository {
 });
 
 /// A registry permission and its policy identifier.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Permission {
     /// Permission identifier.

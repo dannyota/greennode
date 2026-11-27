@@ -34,7 +34,7 @@ impl GetQuoteInput {
 }
 
 /// Current account quote. A negative resize amount indicates an expected credit.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetQuoteOutput {
     /// Final amount.
@@ -58,7 +58,7 @@ crate::wire::product::output::public_fields!(GetQuoteOutput {
 });
 
 /// One line of a regional quote.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PriceProperty {
     /// Line name.

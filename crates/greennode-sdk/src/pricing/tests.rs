@@ -563,7 +563,10 @@ async fn pricing_refuses_malformed_inventory_error_without_retry() {
             panic!("malformed inventory reply was retried");
         };
         assert_eq!(server.requests(), 1);
-        assert_eq!(provider.0.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            provider.0.swap(0, Ordering::Relaxed),
+            usize::from(code == 401)
+        );
         let api = failure.error().api_error().unwrap();
         assert_eq!(api.status(), Some(code));
         assert_eq!(api.code(), "InvalidResponse");

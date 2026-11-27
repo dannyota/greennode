@@ -43,7 +43,7 @@ pub struct DeleteLoadBalancerInput {
 }
 
 /// A load balancer delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteLoadBalancerOutput {}
 
 crate::wire::product::output::public_fields!(DeleteLoadBalancerOutput {});
@@ -56,7 +56,7 @@ pub struct DeleteCertificateInput {
 }
 
 /// A certificate delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteCertificateOutput {}
 
 crate::wire::product::output::public_fields!(DeleteCertificateOutput {});

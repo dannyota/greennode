@@ -37,7 +37,7 @@ macro_rules! attachment {
         }
 
         /// A completed IAM attachment or membership change.
-        #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+        #[derive(Clone, PartialEq, Eq, Serialize)]
         pub struct $output {}
 
         crate::wire::product::output::public_fields!($output {});

@@ -20,7 +20,7 @@ pub enum DecodeError {
 }
 
 /// A single page of DNS resources with redaction-aware pagination metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, bound(deserialize = "T: Default + Deserialize<'de>"))]
 pub struct Page<T> {
     /// Resources returned in this page.

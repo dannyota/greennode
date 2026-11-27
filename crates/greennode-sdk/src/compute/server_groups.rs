@@ -74,7 +74,7 @@ pub struct DeleteServerGroupInput {
 }
 
 /// The group returned by a successful create.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateServerGroupOutput {
     /// The newly created group.
@@ -84,7 +84,7 @@ pub struct CreateServerGroupOutput {
 crate::wire::product::output::public_fields!(CreateServerGroupOutput { server_group });
 
 /// The group read after an update.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateServerGroupOutput {
     /// The confirmed group, or its requested fields on an unconfirmed update.
@@ -94,7 +94,7 @@ pub struct UpdateServerGroupOutput {
 crate::wire::product::output::public_fields!(UpdateServerGroupOutput { server_group });
 
 /// An acknowledgement of server-group deletion.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct DeleteServerGroupOutput {}
 
 crate::wire::product::output::public_fields!(DeleteServerGroupOutput {});

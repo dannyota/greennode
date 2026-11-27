@@ -34,7 +34,7 @@ impl DeleteClusterInput {
 }
 
 /// Reports whether absence was confirmed after deletion.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteClusterOutput {
     /// True only when a subsequent read confirms absence.
     #[serde(rename = "Deleted")]

@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 
 /// An account's configured spend cap and its available period summary.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")

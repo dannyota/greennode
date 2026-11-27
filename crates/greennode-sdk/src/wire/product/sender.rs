@@ -567,12 +567,13 @@ async fn run_inner(
                 evidence.go_peer_body_reflects(&reply.body)
             });
             let refused = op.guard.filter(|_| body_reflection == Some(true));
-            if refused.is_none()
+            let callback_refusal = if refused.is_none()
                 && let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
-                && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
             {
-                return Err(Error::Provider(error));
-            }
+                guard(id, reply.status, &reply.body, reflection, sent)
+            } else {
+                None
+            };
             let is_401 = match &result {
                 Ok(reply) => reply.status == http::StatusCode::UNAUTHORIZED,
                 Err(error) => error
@@ -584,7 +585,7 @@ async fn run_inner(
                     auth,
                     bearer.as_ref(),
                     op,
-                    result.is_err() || refused.is_some(),
+                    result.is_err() || refused.is_some() || callback_refusal.is_some(),
                     recovered,
                     clock,
                 );
@@ -610,6 +611,9 @@ async fn run_inner(
                 return Err(Error::Provider(Box::new(
                     super::operation::unsafe_guard_response(id),
                 )));
+            }
+            if let Some(error) = callback_refusal {
+                return Err(Error::Provider(error));
             }
             let outcome = match &result {
                 Ok(reply) => {

@@ -5,7 +5,7 @@ use super::{
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub(crate) trait PublicOutput {
+pub(crate) trait PublicOutput: std::fmt::Debug {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool;
 }
 
@@ -34,8 +34,37 @@ impl<'a> FieldScan<'a> {
     }
 }
 
+macro_rules! debug_record {
+    ($name:ident $(<$item:ident>)? { $($field:ident),* $(,)? }) => {
+        impl $(<$item: std::fmt::Debug>)? std::fmt::Debug for $name $(<$item>)? {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| {
+                    f.debug_struct(stringify!($name))
+                        $(.field(stringify!($field).trim_start_matches("r#"), &self.$field))*
+                        .finish()
+                })
+            }
+        }
+    };
+    ($name:ident ($field:tt)) => {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| {
+                    f.debug_tuple(stringify!($name)).field(&self.$field).finish()
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use debug_record;
+
 macro_rules! public_fields {
     ($name:ident $(<$item:ident>)? { $($field:ident),* $(; $($private:ident),* $(,)?)? }) => {
+        crate::wire::product::output::debug_record!($name $(<$item>)? { $($field,)* $($($private,)*)? });
+        crate::wire::product::output::public_fields!(custom_debug $name $(<$item>)? { $($field),* $(; $($private),*)? });
+    };
+    (custom_debug $name:ident $(<$item:ident>)? { $($field:ident),* $(; $($private:ident),* $(,)?)? }) => {
         impl $(<$item: crate::wire::product::output::PublicOutput>)? crate::wire::product::output::PublicOutput for $name $(<$item>)? {
             fn public_reflects(&self, _scan: &crate::wire::product::output::FieldScan<'_>, _identifier: bool) -> bool {
                 let Self { $($field,)* $($($private: _,)*)? } = self;
@@ -167,9 +196,10 @@ mod tests {
         let records =
             Regex::new(r"(?ms)^pub struct (\w+)(?:<T>)?[ \t]*\{(?:[ \t]*\}|[ \t]*\n(.*?)^\})")
                 .unwrap();
-        let registrations =
-            Regex::new(r"(?s)public_fields!\(\s*(\w+)(?:<T>)?\s*\{([^};]*)(?:;[^}]*)?\}\s*\)")
-                .unwrap();
+        let registrations = Regex::new(
+            r"(?s)public_fields!\(\s*(?:custom_debug\s+)?(\w+)(?:<T>)?\s*\{([^};]*)(?:;[^}]*)?\}\s*\)",
+        )
+        .unwrap();
         let public_fields = Regex::new(r"(?m)^    pub ((?:r#)?\w+)\s*:").unwrap();
         fn inspect(
             path: &Path,

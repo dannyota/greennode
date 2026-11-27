@@ -23,7 +23,7 @@ const GET: Read = Read {
 };
 
 /// Public dashboard metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Dashboard {
     /// Dashboard identifier.
     #[serde(
@@ -104,7 +104,7 @@ impl GetDashboardInput {
 }
 
 /// The selected dashboard's metadata.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetDashboardOutput {
     /// Dashboard without widgets.
     #[serde(rename = "Dashboard")]

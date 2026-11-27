@@ -42,7 +42,7 @@ mfa_input!(
 );
 
 /// The observed outcome of an IAM MFA state change.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UserMfaWriteOutput {
     /// The supported factor method.
     #[serde(rename = "Method")]

@@ -4,7 +4,7 @@ use serde_json::value::RawValue;
 use crate::wire::product::sender::SentCredentials;
 
 /// A Backup Center storage backend.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Backend {
     /// Backend identifier.
@@ -23,7 +23,7 @@ pub struct Backend {
 crate::wire::product::output::public_fields!(Backend { id, name });
 
 /// A Backup Center policy and its verified schedule settings.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Policy {
     /// Policy identifier.
@@ -87,7 +87,7 @@ crate::wire::product::output::public_fields!(Policy {
 });
 
 /// Schedule start time and cadence flags. Only daily settings are projected.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct PolicyConfig {
     /// Hour of the scheduled start.
@@ -131,7 +131,7 @@ crate::wire::product::output::public_fields!(PolicyConfig {
 });
 
 /// Daily backup settings with absent values preserved.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct DailyConfig {
     /// Retention setting, including an explicit zero.

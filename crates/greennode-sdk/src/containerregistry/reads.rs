@@ -43,7 +43,7 @@ impl GetRepositoryInput {
     }
 }
 /// The requested repository.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetRepositoryOutput {
     /// Repository with its matching identifier.
     #[serde(rename = "Repository")]
@@ -53,7 +53,7 @@ pub struct GetRepositoryOutput {
 crate::wire::product::output::public_fields!(GetRepositoryOutput { repository });
 
 /// A registry user and its repository permissions.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -121,7 +121,7 @@ crate::wire::product::output::public_fields!(User {
     repositories
 });
 /// Permissions for a particular repository.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RepositoryPermission {
     /// Repository identifier.

@@ -110,7 +110,7 @@ pub struct RenameServerInput {
 }
 
 /// Result of starting a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StartServerOutput {
     /// Last verified server state.
@@ -122,7 +122,7 @@ pub struct StartServerOutput {
 crate::wire::product::output::public_fields!(StartServerOutput { server, changed });
 
 /// Result of stopping a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StopServerOutput {
     /// Last verified server state.
@@ -134,7 +134,7 @@ pub struct StopServerOutput {
 crate::wire::product::output::public_fields!(StopServerOutput { server, changed });
 
 /// Result of rebooting a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RebootServerOutput {
     /// Last verified server state.
@@ -144,7 +144,7 @@ pub struct RebootServerOutput {
 crate::wire::product::output::public_fields!(RebootServerOutput { server });
 
 /// Server returned by a successful rename.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RenameServerOutput {
     /// The renamed server.
@@ -154,7 +154,7 @@ pub struct RenameServerOutput {
 crate::wire::product::output::public_fields!(RenameServerOutput { server });
 
 /// Result of changing the server's flavor.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResizeServerOutput {
     /// Last verified server state.

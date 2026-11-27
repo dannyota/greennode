@@ -55,7 +55,7 @@ pub struct DetachVolumeInput {
 }
 
 /// The attachment state and whether the request changed it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct AttachVolumeOutput {
     /// Last observed or pre-write volume state.
@@ -85,7 +85,7 @@ pub struct DeleteVolumeInput {
 }
 
 /// The deletion acknowledgement has no result fields.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Serialize)]
 pub struct DeleteVolumeOutput {}
 
 crate::wire::product::output::public_fields!(DeleteVolumeOutput {});

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize, Serializer};
 pub struct GetCurrentPeriodCostInput {}
 
 /// The account's actual and forecasted cost for its current period.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetCurrentPeriodCostOutput {
     /// Costs and dates for the current period.
     #[serde(rename = "PeriodCost")]
@@ -22,7 +22,7 @@ pub struct GetCurrentPeriodCostOutput {
 crate::wire::product::output::public_fields!(GetCurrentPeriodCostOutput { period_cost });
 
 /// Dates and spend for the current billing period.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct PeriodCost {
     /// Billing period key in `YYYY-MM` form.
@@ -68,7 +68,7 @@ impl ListBudgetThresholdsInput {
 pub type ListBudgetThresholdsOutput = List<Threshold>;
 
 /// The settings and notification state of a budget threshold.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -138,7 +138,7 @@ impl ListBudgetAlertsInput {
 pub type ListBudgetAlertsOutput = List<Alert>;
 
 /// A notification sent when spend breached a budget threshold.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(from = "AlertWire", rename_all = "PascalCase")]
 pub struct Alert {
     /// Time the threshold triggered, as reported by the API.

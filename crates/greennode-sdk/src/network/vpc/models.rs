@@ -362,7 +362,7 @@ pub type ListSecurityGroupRulesOutput = List<SecurityGroupRule>;
 pub type ListAllSecurityGroupRulesOutput = List<SecurityGroupRule>;
 
 /// VPC detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetVpcOutput {
     /// The VPC.
     #[serde(rename = "VPC")]
@@ -372,7 +372,7 @@ pub struct GetVpcOutput {
 crate::wire::product::output::public_fields!(GetVpcOutput { vpc });
 
 /// Subnet detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetSubnetOutput {
     /// The subnet.
     #[serde(rename = "Subnet")]
@@ -382,7 +382,7 @@ pub struct GetSubnetOutput {
 crate::wire::product::output::public_fields!(GetSubnetOutput { subnet });
 
 /// DHCP options detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetDhcpOptionsOutput {
     /// The DHCP options set.
     #[serde(rename = "DHCPOptions")]
@@ -392,7 +392,7 @@ pub struct GetDhcpOptionsOutput {
 crate::wire::product::output::public_fields!(GetDhcpOptionsOutput { dhcp_options });
 
 /// Network ACL detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetNetworkAclOutput {
     /// The network ACL.
     #[serde(rename = "ACL")]
@@ -402,7 +402,7 @@ pub struct GetNetworkAclOutput {
 crate::wire::product::output::public_fields!(GetNetworkAclOutput { acl });
 
 /// Security group detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetSecurityGroupOutput {
     /// The security group.
     #[serde(rename = "SecurityGroup")]

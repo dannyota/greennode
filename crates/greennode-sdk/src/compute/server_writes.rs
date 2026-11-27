@@ -39,7 +39,7 @@ const CREATE_UNKNOWN: &str = "create response had no id; the server may exist, l
 const CREATE_AMBIGUOUS: &str = "create may have already reached the server; list servers and match the name exactly before creating it again";
 
 /// Result of ordering a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateServerOutput {
     /// The last confirmed server data, or the ID and requested name.
@@ -65,7 +65,7 @@ pub struct DeleteServerInput {
 }
 
 /// Volumes requested for deletion or retained when a server is deleted.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct DeleteServerOutput {
     /// Volumes requested for deletion if `delete_volumes` was selected.
     #[serde(rename = "DeletedVolumeIDs")]

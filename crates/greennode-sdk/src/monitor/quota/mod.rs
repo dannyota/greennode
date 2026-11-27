@@ -61,7 +61,7 @@ macro_rules! output {
         $($(#[$field_meta:meta])* $field:ident: $ty:ty => $name:literal,)*
     }) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, serde::Serialize)]
+        #[derive(Clone, serde::Serialize)]
         pub struct $model {
             $($(#[$field_meta])* #[serde(rename = $name)] pub $field: $ty,)*
         }

@@ -4,6 +4,7 @@ use std::fmt;
 #[path = "error/detail.rs"]
 mod detail;
 use detail::Detail;
+pub(crate) use detail::{debug_reflects, write_debug};
 #[path = "error/parts.rs"]
 mod parts;
 pub(crate) use parts::LoginFailureKind;
@@ -254,7 +255,7 @@ impl Error {
             if let Some(login) = &mut current.service_login {
                 login.screen_formatter(reflects);
             }
-            current.debug_reflected |= detail::debug_reflects(current, reflects);
+            current.debug_reflected |= debug_reflects(current, reflects);
             node = current.cause.as_deref_mut();
         }
         error
@@ -400,12 +401,14 @@ impl From<crate::ContextEnd> for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.debug_reflected {
-            return f.write_str("");
-        }
-        f.debug_struct("Error")
-            .field("class", &self.class)
-            .finish_non_exhaustive()
+        crate::error::write_debug(f, |f| {
+            if self.debug_reflected {
+                return f.write_str("");
+            }
+            f.debug_struct("Error")
+                .field("class", &self.class)
+                .finish_non_exhaustive()
+        })
     }
 }
 impl fmt::Display for Error {
@@ -472,7 +475,7 @@ impl<T> Failure<T> {
         screen_error: impl FnOnce(Error) -> Error,
         reflects: impl FnOnce(&T) -> bool,
         private_reflects: impl FnOnce(&crate::Secret) -> bool,
-        debug_reflects: impl Fn(&str) -> bool,
+        reflects_debug: impl Fn(&str) -> bool,
     ) -> Self {
         self.error = screen_error(self.error);
         if self.partial.as_ref().is_some_and(reflects) {
@@ -485,7 +488,7 @@ impl<T> Failure<T> {
         {
             self.private_delivery = None;
         }
-        self.debug_reflected |= detail::debug_reflects(&self, &debug_reflects);
+        self.debug_reflected |= debug_reflects(&self, &reflects_debug);
         self
     }
     /// Returns the categorized error.
@@ -508,13 +511,15 @@ impl<T> Failure<T> {
 }
 impl<T> fmt::Debug for Failure<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.debug_reflected {
-            return f.write_str("");
-        }
-        f.debug_struct("Failure")
-            .field("error", &self.error)
-            .field("has_partial", &self.partial.is_some())
-            .field("write_dispatch", &self.dispatch)
-            .finish()
+        crate::error::write_debug(f, |f| {
+            if self.debug_reflected {
+                return f.write_str("");
+            }
+            f.debug_struct("Failure")
+                .field("error", &self.error)
+                .field("has_partial", &self.partial.is_some())
+                .field("write_dispatch", &self.dispatch)
+                .finish()
+        })
     }
 }

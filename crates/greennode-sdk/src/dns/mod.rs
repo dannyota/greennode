@@ -77,7 +77,7 @@ impl GetHostedZoneInput {
 }
 
 /// The requested hosted zone.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetHostedZoneOutput {
     /// The returned zone.
     #[serde(rename = "HostedZone")]
@@ -128,7 +128,7 @@ impl GetRecordInput {
 }
 
 /// The requested DNS record.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetRecordOutput {
     /// The returned record.
     #[serde(rename = "Record")]

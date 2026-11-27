@@ -322,6 +322,20 @@ impl Evidence {
         true
     }
 
+    pub(crate) fn guard_checkpoint(&self) -> usize {
+        self.guards.len()
+    }
+
+    pub(crate) fn discard_guards_after(&mut self, checkpoint: usize) {
+        for proof in self.guards.drain(checkpoint..) {
+            self.guard_bytes -= proof.body.len();
+        }
+    }
+
+    pub(super) fn guards_after(&self, checkpoint: usize) -> &[super::guard::Proof] {
+        &self.guards[checkpoint..]
+    }
+
     pub(super) fn last_guard(&self) -> Option<super::guard::Proof> {
         self.guards.last().cloned()
     }

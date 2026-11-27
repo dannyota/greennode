@@ -121,6 +121,7 @@ pub(crate) async fn verify<T: Serialize + super::output::PublicOutput>(
         let reflected = |output: &T| {
             output.public_reflects(&super::output::FieldScan::new(&evidence), false)
                 || evidence.serialized_output_reflects(output)
+                || crate::error::debug_reflects(output, &|text| bytes_reflect(text.as_bytes()))
         };
         let result = match result {
             Ok(output) if !reflected(&output) => return Ok(output),
@@ -311,6 +312,96 @@ mod tests {
             assert!(!credentials.text_reflects(detail.stage));
             assert!(!credentials.text_reflects(&detail.item_key));
         }
+    }
+
+    #[tokio::test]
+    async fn exit_verifies_debug_of_both_success_and_partial() {
+        use crate::portal::UserInfo;
+        let credentials =
+            SentCredentials::for_test(vec![crate::Secret::new("UserInfo([REDACTED])")]);
+        let success = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Ok(UserInfo::default())
+        });
+        assert!(success.is_err());
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Err::<UserInfo, _>(Failure::new(
+                Error::new(ErrorClass::Api),
+                Some(UserInfo::default()),
+                WriteDispatch::NotAWrite,
+            ))
+        })
+        .unwrap_err();
+        assert!(failure.partial().is_none());
+    }
+
+    #[tokio::test]
+    async fn macro_models_and_generic_outputs_keep_the_screened_debug_spelling() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("193")]);
+        let result = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Ok(crate::PagedList {
+                items: vec![crate::globalloadbalancer::RegionalPackage {
+                    id: 403,
+                    ..Default::default()
+                }],
+                page: 403,
+                page_size: 1,
+                total_page: 1,
+                total_item: 1,
+            })
+        })
+        .unwrap();
+        assert!(format!("{result:?}").contains("id: 403"));
+        assert!(format!("{result:?}").contains("page: 403"));
+        assert!(format!("{result:x?}") == format!("{result:?}"));
+        assert!(format!("{result:+16x?}") == format!("{result:?}"));
+        assert!(format!("{result:#X?}") == format!("{result:#?}"));
+        assert!(format!("{:x?}", result.items[0]) == format!("{:?}", result.items[0]));
+    }
+
+    #[tokio::test]
+    async fn foreign_status_detail_is_withheld_if_its_hex_debug_reflects() {
+        for (marker, exposed) in [("193", false), ("different-marker", true)] {
+            let credentials = SentCredentials::for_test(vec![crate::Secret::new(marker)]);
+            let failure = finish!(async {
+                record(&credentials, &credentials, WriteDispatch::NotAWrite);
+                let error = Error::new(ErrorClass::PermissionDenied)
+                    .with_outer_detail(http::StatusCode::FORBIDDEN);
+                Err::<(), _>(Failure::new(error, None, WriteDispatch::NotAWrite))
+            })
+            .unwrap_err();
+            assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+            assert_eq!(
+                failure.error().detail::<http::StatusCode>().is_some(),
+                exposed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn debug_caller_flags_cannot_reformat_a_screened_status() {
+        use crate::error::SafeText;
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("193")]);
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            let error = Error::from_api(crate::ApiError::new(
+                "test",
+                Some(403),
+                SafeText::new("", &[]),
+                SafeText::new("", &[]),
+                false,
+            ));
+            Err::<(), _>(Failure::new(error, None, WriteDispatch::NotAWrite))
+        })
+        .unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(403));
+        let neutral = format!("{api:?}");
+        assert!(neutral.contains("403"));
+        assert_eq!(format!("{api:x?}"), neutral);
+        assert_eq!(format!("{api:+16X?}"), neutral);
     }
 
     #[tokio::test]

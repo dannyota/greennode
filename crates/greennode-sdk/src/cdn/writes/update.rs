@@ -147,7 +147,7 @@ impl UpdateWebAcceleratorInput {
 }
 
 /// The last good Web Accelerator detail read during an update.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateWebAcceleratorOutput {
     /// Web Accelerator detail.

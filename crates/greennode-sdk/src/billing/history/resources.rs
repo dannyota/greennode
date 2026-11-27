@@ -31,7 +31,7 @@ pub const RENEW_TYPE_AUTO_RENEW: &str = "AUTO-RENEW";
 pub struct ListResourcesInput {}
 
 /// Prepaid resource renewal state and aggregate counts.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all(deserialize = "camelCase", serialize = "PascalCase"))]
 pub struct ListResourcesOutput {
     /// Resources in API order.
@@ -63,7 +63,7 @@ crate::wire::product::output::public_fields!(ListResourcesOutput {
 });
 
 /// A prepaid resource's identity, renewal state, and billing details.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")
@@ -136,7 +136,7 @@ crate::wire::product::output::public_fields!(Resource {
 });
 
 /// One billing element of a prepaid resource.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")
@@ -160,7 +160,7 @@ crate::wire::product::output::public_fields!(ResourceBillingElement {
 });
 
 /// Warning and alarm thresholds supplied with prepaid resources.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")

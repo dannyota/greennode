@@ -92,7 +92,7 @@ impl GetTrafficReportInput {
 }
 
 /// One sample in a CDN traffic or request rate series.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CacheSample {
     /// The UTC timestamp for the sample.
@@ -110,7 +110,7 @@ crate::wire::product::output::public_fields!(CacheSample {
 });
 
 /// One sample in a traffic report.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Sample {
     /// The UTC timestamp for the sample.
@@ -122,7 +122,7 @@ pub struct Sample {
 crate::wire::product::output::public_fields!(Sample { time, value });
 
 /// Traffic samples for a CDN domain and traffic group.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct DomainTraffic {
     /// The customer domain.
@@ -177,7 +177,7 @@ struct ReportWire {
 pub type GetTrafficInput = Range;
 
 /// Output from `get_traffic`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetTrafficOutput {
     /// Samples in ascending timestamp order.
@@ -204,7 +204,7 @@ impl Client {
 pub type GetRequestRateInput = Range;
 
 /// Output from `get_request_rate`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetRequestRateOutput {
     /// Samples in ascending timestamp order.
@@ -234,7 +234,7 @@ impl Client {
 pub type GetCacheStatusInput = Range;
 
 /// Output from `get_cache_status`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCacheStatusOutput {
     /// Counts keyed by the server’s category.
@@ -264,7 +264,7 @@ impl Client {
 pub type GetHttpCodesInput = Range;
 
 /// Output from `get_http_codes`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetHttpCodesOutput {
     /// Counts keyed by the server’s category.

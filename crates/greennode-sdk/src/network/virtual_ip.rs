@@ -33,7 +33,7 @@ required_id_input!(
 );
 
 /// The selected virtual IP address.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetVirtualIpAddressOutput {
     /// The virtual IP and its reported settings.
     #[serde(rename = "VirtualIPAddress")]

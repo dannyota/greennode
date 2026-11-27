@@ -37,7 +37,7 @@ impl DeleteDatabaseInstanceInput {
 }
 
 /// The selected instance and whether deletion was confirmed.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteDatabaseInstanceOutput {
     /// Instance ID.
     #[serde(rename = "ID")]

@@ -11,7 +11,7 @@ macro_rules! model {
         $($(#[$field_meta:meta])* $field:ident: $type:ty => $wire:literal, $go:literal;)*
     }) => {
         $(#[$model_meta])*
-        #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+        #[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
         #[serde(default, remote = "Self")]
         pub struct $model {
             $(
@@ -20,6 +20,8 @@ macro_rules! model {
                 pub $field: $type,
             )*
         }
+
+        crate::wire::product::output::debug_record!($model { $($field),* });
 
         impl crate::wire::product::output::PublicOutput for $model {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

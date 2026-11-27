@@ -1,13 +1,13 @@
-mod child;
+pub(super) mod child;
 mod writes;
 
 use super::*;
 use crate::wire::test_server::{Response, Server};
 use crate::{ConfigOptions, EndpointOverrides, Secret};
 
-const TOKEN: &str = "toy-glb-session-bearer";
+pub(super) const TOKEN: &str = "toy-glb-session-bearer";
 
-fn response(status: &str, body: impl AsRef<[u8]>) -> Response {
+pub(super) fn response(status: &str, body: impl AsRef<[u8]>) -> Response {
     let body = body.as_ref();
     Response::Http {
         status: status.into(),

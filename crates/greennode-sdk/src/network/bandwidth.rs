@@ -28,7 +28,7 @@ pub struct ListBandwidthPackagesInput {}
 pub type ListBandwidthPackagesOutput = List<BandwidthPackage>;
 
 /// An offer from the regional bandwidth catalog.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct BandwidthPackage {
     /// Package identifier.
     #[serde(rename = "ID")]

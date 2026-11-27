@@ -55,7 +55,7 @@ pub struct CreateClusterInput {
 }
 
 /// Reports the accepted cluster identifier and last observed status.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CreateClusterOutput {
     /// Cluster identifier.
     #[serde(rename = "ID")]

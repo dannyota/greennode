@@ -36,7 +36,7 @@ impl CreateRepositoryInput {
 }
 
 /// The created repository, available as partial output if confirmation fails.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateRepositoryOutput {
     /// Repository with reflected strings replaced and reflected numeric fields zeroed.
     #[serde(skip)]
@@ -138,7 +138,7 @@ impl DeleteRepositoryInput {
 }
 
 /// An accepted repository deletion with no resource fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteRepositoryOutput {}
 
 crate::wire::product::output::public_fields!(DeleteRepositoryOutput {});

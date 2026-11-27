@@ -39,7 +39,7 @@ macro_rules! record {
         $($(#[$field_meta:meta])* $(@ $screen:ident)? $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)? $(=> $projection:path)?;) +
     }) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, Default, PartialEq)]
+        #[derive(Clone, Default, PartialEq)]
         pub struct $name $(<$item>)? {
             $(
                 $(#[$field_meta])*
@@ -70,6 +70,8 @@ macro_rules! record {
                 false
             }
         }
+
+        crate::wire::product::output::debug_record!($name $(<$item>)? { $($field),* });
 
         impl $(<$item: crate::wire::product::output::PublicOutput>)? crate::wire::product::output::PublicOutput for $name $(<$item>)? {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

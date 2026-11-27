@@ -45,7 +45,7 @@ impl CreateUserInput {
 }
 
 /// Safe user metadata and any generated password available for private delivery.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateUserOutput {
     /// Confirmed user details or safe partial metadata.
     #[serde(rename = "User")]
@@ -64,7 +64,15 @@ pub struct CreateUserOutput {
     evidence: Evidence,
 }
 
-crate::wire::product::output::public_fields!(CreateUserOutput { user, created_id, candidate_id; password_marker, password, evidence });
+crate::wire::product::output::public_fields!(custom_debug CreateUserOutput { user, created_id, candidate_id; password_marker, password, evidence });
+crate::wire::product::output::debug_record!(CreateUserOutput {
+    user,
+    password_marker,
+    created_id,
+    candidate_id,
+    password,
+    evidence
+});
 
 impl CreateUserOutput {
     /// Borrows the locally generated password, if present.
@@ -102,7 +110,7 @@ id_input!(
 );
 
 /// An acknowledged user deletion.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteUserOutput {}
 
 crate::wire::product::output::public_fields!(DeleteUserOutput {});
@@ -130,7 +138,7 @@ impl ResetUserPasswordInput {
 }
 
 /// An accepted reset, with a locally generated password when applicable.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct ResetUserPasswordOutput {
     #[serde(rename = "Password", skip_serializing_if = "Option::is_none")]
     password_marker: Option<&'static str>,

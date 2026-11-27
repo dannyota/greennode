@@ -65,13 +65,13 @@ pub struct CreateSshKeyOutput {
     evidence: Evidence,
 }
 
-crate::wire::product::output::public_fields!(CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
+crate::wire::product::output::public_fields!(custom_debug CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
 
 impl std::fmt::Debug for CreateSshKeyOutput {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CreateSshKeyOutput")
-            .finish_non_exhaustive()
+        crate::error::write_debug(formatter, |f| {
+            f.debug_struct("CreateSshKeyOutput").finish_non_exhaustive()
+        })
     }
 }
 
@@ -123,7 +123,7 @@ pub struct ImportSshKeyInput {
 }
 
 /// The public SSH key record returned by an import.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ImportSshKeyOutput {
     /// Imported public key record.
     #[serde(rename = "SSHKey")]
@@ -140,7 +140,7 @@ pub struct DeleteSshKeyInput {
 }
 
 /// An acknowledgement of SSH key deletion.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct DeleteSshKeyOutput {}
 
 crate::wire::product::output::public_fields!(DeleteSshKeyOutput {});

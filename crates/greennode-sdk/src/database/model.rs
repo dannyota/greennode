@@ -15,7 +15,7 @@ const fn field(name: &'static str) -> ShapeField<'static> {
 }
 
 /// Database EngineVersion returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EngineVersion {
     /// Name reported by the service.
@@ -69,7 +69,7 @@ impl EngineVersion {
 }
 
 /// Database Zone returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Zone {
     /// UUID reported by the service.
@@ -116,7 +116,7 @@ impl Zone {
 }
 
 /// Database Flavor returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Flavor {
     /// ID reported by the service.
@@ -278,7 +278,7 @@ impl Flavor {
 }
 
 /// Database StorageType returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StorageType {
     /// ID reported by the service.
@@ -351,7 +351,7 @@ impl StorageType {
 }
 
 /// Database Subnet returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Subnet {
     /// UUID reported by the service.
@@ -408,7 +408,7 @@ impl Subnet {
 }
 
 /// Database Network returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Network {
     /// UUID reported by the service.
@@ -464,7 +464,7 @@ impl Network {
 }
 
 /// Database Instance returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Instance {
     /// ID reported by the service.
@@ -616,7 +616,7 @@ impl Instance {
 }
 
 /// Database Page returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Page {
     /// TotalPages reported by the service.

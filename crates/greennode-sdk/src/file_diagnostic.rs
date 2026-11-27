@@ -8,12 +8,25 @@ pub enum FileSlot {
 }
 
 /// Value-free details of a configuration file failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct FileDiagnostic {
     slot: FileSlot,
     source: &'static str,
     reason: &'static str,
     line: Option<u32>,
+}
+
+impl std::fmt::Debug for FileDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::error::write_debug(formatter, |f| {
+            f.debug_struct("FileDiagnostic")
+                .field("slot", &self.slot)
+                .field("source", &self.source)
+                .field("reason", &self.reason)
+                .field("line", &self.line)
+                .finish()
+        })
+    }
 }
 
 impl FileDiagnostic {

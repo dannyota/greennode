@@ -72,7 +72,7 @@ impl std::fmt::Debug for ImportCertificateInput {
 }
 
 /// Metadata returned by certificate import.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImportCertificateOutput {
     /// Imported certificate metadata.

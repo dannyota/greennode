@@ -39,7 +39,7 @@ pub struct ListVolumePricesInput {
 }
 
 /// Available volume offerings with their quoted prices and coverage.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListVolumePricesOutput {
     /// Rows in zone, type name, type ID, and encryption order.
@@ -51,7 +51,7 @@ pub struct ListVolumePricesOutput {
 crate::wire::product::output::public_fields!(ListVolumePricesOutput { items, metadata });
 
 /// One volume offering and the price quoted for the requested size.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VolumePrice {
     /// Volume type and supported size bounds.

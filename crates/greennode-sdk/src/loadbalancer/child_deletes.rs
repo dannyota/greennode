@@ -82,7 +82,7 @@ pub struct DeletePoolInput {
 }
 
 /// A pool delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePoolOutput {}
 
 crate::wire::product::output::public_fields!(DeletePoolOutput {});
@@ -99,7 +99,7 @@ pub struct DeleteListenerInput {
 }
 
 /// A listener delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteListenerOutput {}
 
 crate::wire::product::output::public_fields!(DeleteListenerOutput {});
@@ -118,7 +118,7 @@ pub struct DeletePolicyInput {
 }
 
 /// A policy delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
 
 crate::wire::product::output::public_fields!(DeletePolicyOutput {});

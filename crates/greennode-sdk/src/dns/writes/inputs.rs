@@ -78,7 +78,7 @@ impl DeleteHostedZoneInput {
 }
 
 /// A hosted zone deletion acknowledgement.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteHostedZoneOutput {}
 
 crate::wire::product::output::public_fields!(DeleteHostedZoneOutput {});
@@ -193,7 +193,7 @@ impl DeleteRecordInput {
 }
 
 /// A record deletion acknowledgement.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteRecordOutput {}
 
 crate::wire::product::output::public_fields!(DeleteRecordOutput {});

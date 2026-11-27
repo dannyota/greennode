@@ -62,7 +62,7 @@ pub type ListClusterVersionsOutput = List<ClusterVersion>;
 pub struct GetQuotaInput;
 
 /// The configured region's account quota.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetQuotaOutput {
     /// Account quota and current cluster usage.
     #[serde(rename = "Quota")]

@@ -99,7 +99,7 @@ pub struct RemovePoolMemberInput {
 macro_rules! member_output {
     ($(#[$meta:meta])* $output:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, PartialEq)]
         pub struct $output {
             /// The observed or submitted pool.
             pub pool: Pool,

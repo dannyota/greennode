@@ -1,5 +1,3 @@
-mod retained_guards;
-
 use super::*;
 use crate::testing::{Product, with_product_loopback, with_write_loopback};
 use serde_json::{Value, json};
@@ -12,20 +10,20 @@ const GROUP: &str = "/global-pools/pool-1/pool-members/group-1";
 const LISTENERS: &str = "/global-listeners";
 const LISTENER: &str = "/global-listeners/listener-1";
 
-fn child_fixture() -> Value {
+pub(in crate::globalloadbalancer) fn child_fixture() -> Value {
     serde_json::from_str(include_str!(
         "../../../tests/fixtures/globalloadbalancer/child_writes.json"
     ))
     .unwrap()
 }
 
-fn ok(value: &Value) -> Response {
+pub(in crate::globalloadbalancer) fn ok(value: &Value) -> Response {
     response("200 OK", value.to_string())
 }
-fn accepted(value: &Value) -> Response {
+pub(in crate::globalloadbalancer) fn accepted(value: &Value) -> Response {
     response("202 Accepted", value.to_string())
 }
-fn empty() -> Response {
+pub(in crate::globalloadbalancer) fn empty() -> Response {
     response("200 OK", "[]")
 }
 fn gone() -> Response {
@@ -49,7 +47,7 @@ fn servers(
     )
 }
 
-fn servers_with_auth(
+pub(in crate::globalloadbalancer) fn servers_with_auth(
     glb: Vec<Response>,
     regional: Vec<Response>,
     project: bool,
@@ -72,10 +70,10 @@ fn servers_with_auth(
     (Client::new(&Config::new(options).unwrap()), glb, regional)
 }
 
-fn catalog(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn catalog(f: &Value) -> Vec<Response> {
     vec![ok(&f["parent"]), ok(&f["regions"]), ok(&f["packages"])]
 }
-fn chain(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn chain(f: &Value) -> Vec<Response> {
     vec![
         ok(&json!([f["pool"]])),
         ok(&f["pool"]),
@@ -83,10 +81,10 @@ fn chain(f: &Value) -> Vec<Response> {
         ok(&f["group"]),
     ]
 }
-fn placement(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn placement(f: &Value) -> Vec<Response> {
     vec![ok(&f["server"]), ok(&f["vpc"]), ok(&f["subnet"])]
 }
-fn pool_input() -> CreatePoolInput {
+pub(in crate::globalloadbalancer) fn pool_input() -> CreatePoolInput {
     CreatePoolInput::new(
         "glb-1",
         "demo-pool",

@@ -18,6 +18,35 @@ impl Output for Json {
 }
 
 #[tokio::test]
+async fn the_live_guard_receipt_limit_fails_closed_and_retirement_frees_space() {
+    let server = Server::start(vec![response("200 OK", b"{}"), response("200 OK", b"{}")]);
+    let mut evidence = Evidence::new();
+    assert!(evidence.keep_guard("test", b"{}"));
+    let checkpoint = evidence.guard_checkpoint();
+    for _ in checkpoint..512 {
+        assert!(evidence.keep_guard("test", b"{}"));
+    }
+    let mut op = declaration();
+    op.reflection = Reflection::Guard;
+    let options = Options::default();
+    let refused = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
+        .await
+        .unwrap_err();
+    assert!(refused.error().detail::<RefusedGuard>().is_some());
+    assert_eq!(evidence.guard_checkpoint(), 512);
+    evidence.discard_guards_after(checkpoint);
+    assert_eq!(evidence.guard_checkpoint(), checkpoint);
+    assert!(evidence.credentials().text_reflects("toy-first"));
+    assert!(
+        call_evidence(&server, &op, &options, "one", "toy-next", &mut evidence)
+            .await
+            .is_ok()
+    );
+    assert_eq!(evidence.guard_checkpoint(), checkpoint + 1);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
 async fn ordinary_operation_refuses_reflected_wire_before_decode() {
     let server = Server::start(vec![response(
         "200 OK",

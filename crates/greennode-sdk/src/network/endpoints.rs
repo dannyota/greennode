@@ -59,7 +59,7 @@ impl GetEndpointInput {
 pub type EndpointDetail = Endpoint;
 
 /// Detail of the selected endpoint.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetEndpointOutput {
     /// Endpoint details as supplied by the service.
     #[serde(rename = "Endpoint")]

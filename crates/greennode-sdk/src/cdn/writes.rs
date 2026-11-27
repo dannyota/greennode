@@ -62,7 +62,7 @@ macro_rules! toggle_types {
         }
 
         /// Result of changing a Web Accelerator's enabled state.
-        #[derive(Clone, Debug, Serialize)]
+        #[derive(Clone, Serialize)]
         #[serde(rename_all = "PascalCase")]
         pub struct $output {
             /// Last confirmed Web Accelerator detail.
@@ -98,7 +98,7 @@ impl DeleteWebAcceleratorInput {
 }
 
 /// An accepted Web Accelerator deletion.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteWebAcceleratorOutput {}
 
 crate::wire::product::output::public_fields!(DeleteWebAcceleratorOutput {});
@@ -123,7 +123,7 @@ impl PurgePathsInput {
 }
 
 /// An accepted purge of the requested paths.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct PurgePathsOutput {}
 
 crate::wire::product::output::public_fields!(PurgePathsOutput {});

@@ -41,7 +41,7 @@ const CREATE_ADVICE: &str = "loadbalancer.CreateLoadBalancer: create may have al
 const POLL: Duration = Duration::from_secs(10);
 
 /// Result of ordering a regional load balancer.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateLoadBalancerOutput {
     /// The confirmed resource, or known submitted fields when confirmation is skipped.
@@ -56,7 +56,7 @@ crate::wire::product::output::public_fields!(CreateLoadBalancerOutput {
 });
 
 /// Result of resizing a regional load balancer.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResizeLoadBalancerOutput {
     /// Resource metadata at the last observed state.

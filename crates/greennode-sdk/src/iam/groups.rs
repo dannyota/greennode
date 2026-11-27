@@ -44,7 +44,7 @@ impl CreateGroupInput {
 }
 
 /// Group returned by a create or its confirmation failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateGroupOutput {
     /// The confirmed group, or only its ID when confirmation failed.
     #[serde(rename = "Group")]
@@ -76,7 +76,7 @@ impl UpdateGroupInput {
 }
 
 /// Group returned by an update or its confirmation failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct UpdateGroupOutput {
     /// The confirmed group, the pre-write read, or the supplied ID.
     #[serde(rename = "Group")]
@@ -93,7 +93,7 @@ super::id_input!(
 );
 
 /// A completed group deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteGroupOutput {}
 
 crate::wire::product::output::public_fields!(DeleteGroupOutput {});

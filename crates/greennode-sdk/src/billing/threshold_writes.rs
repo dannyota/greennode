@@ -42,7 +42,7 @@ impl CreateBudgetThresholdInput {
 }
 
 /// Details returned for a confirmed threshold create.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateBudgetThresholdOutput {
     /// The created threshold, including its assigned UUID.
     #[serde(rename = "Threshold")]
@@ -83,7 +83,7 @@ impl UpdateBudgetThresholdInput {
 }
 
 /// A confirmed update with no returned fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct UpdateBudgetThresholdOutput {}
 
 crate::wire::product::output::public_fields!(UpdateBudgetThresholdOutput {});
@@ -108,7 +108,7 @@ impl DeleteBudgetThresholdInput {
 }
 
 /// A confirmed deletion with no returned fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteBudgetThresholdOutput {}
 
 crate::wire::product::output::public_fields!(DeleteBudgetThresholdOutput {});

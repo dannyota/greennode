@@ -28,7 +28,7 @@ pub struct ListNetworkPricesInput {
 }
 
 /// Network price rows and their discovery coverage.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListNetworkPricesOutput {
     /// Quoted or unpriced network products.
     #[serde(rename = "Items")]
@@ -41,7 +41,7 @@ pub struct ListNetworkPricesOutput {
 crate::wire::product::output::public_fields!(ListNetworkPricesOutput { items, metadata });
 
 /// The quoted or unknown charge for one network product.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct NetworkPrice {
     /// Product kind.
     #[serde(rename = "Kind")]

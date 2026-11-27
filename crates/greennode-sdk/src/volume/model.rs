@@ -14,11 +14,13 @@ fn slice_or_empty<S: Serializer>(
 macro_rules! row {
     ($(#[$doc:meta])* $name:ident { $($(#[$field_doc:meta])* $field:ident : $ty:ty = $key:literal, $wire:literal, $read:ident;)* }) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+        #[derive(Clone, Default, PartialEq, Serialize)]
         #[serde(remote = "Self")]
         pub struct $name {
             $($(#[$field_doc])* #[serde(rename = $key)] pub $field: $ty,)*
         }
+
+        crate::wire::product::output::debug_record!($name { $($field),* });
 
         impl crate::wire::product::output::PublicOutput for $name {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

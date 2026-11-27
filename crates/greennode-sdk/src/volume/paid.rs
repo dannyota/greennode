@@ -32,7 +32,7 @@ const RESIZE: Mutation = Mutation {
 };
 
 /// The created volume and price used for the cap.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateVolumeOutput {
     /// Last confirmed volume, or just its UUID and requested name.
@@ -53,7 +53,7 @@ impl Redact for CreateVolumeOutput {
 }
 
 /// The resized volume and adjustment used for the price cap.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResizeVolumeOutput {
     /// Last observed or pre-resize volume.

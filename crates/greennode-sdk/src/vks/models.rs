@@ -6,7 +6,7 @@ use crate::wire::strict_json::{Shape, ShapeField};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Cluster inventory in the configured region.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -62,7 +62,7 @@ crate::wire::product::output::public_fields!(Cluster {
 });
 
 /// Kubernetes version and its availability.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct ClusterVersion {
     /// Kubernetes version.
@@ -84,7 +84,7 @@ crate::wire::product::output::public_fields!(ClusterVersion {
 });
 
 /// Kubernetes limits and cluster usage for the account in one region.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Quota {
     /// Maximum cluster count.

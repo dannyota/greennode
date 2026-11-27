@@ -35,8 +35,10 @@ pub struct GetQuotaStatusInput {
 }
 
 /// A timestamp returned by a Monitor quota read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct QuotaTimestamp(pub OffsetDateTime);
+
+crate::wire::product::output::debug_record!(QuotaTimestamp(0));
 
 impl crate::wire::product::output::PublicOutput for QuotaTimestamp {
     fn public_reflects(
