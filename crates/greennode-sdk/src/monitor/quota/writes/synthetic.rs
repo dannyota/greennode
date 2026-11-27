@@ -149,12 +149,10 @@ impl Client {
                 };
                 unsettled(spec.op, Some(cause))
             });
-        let login_evidence = if matches!(spec.intent, Intent::Create { .. })
-            && state.dispatch == WriteDispatch::NotSent
-            && outcome
-                .as_ref()
-                .is_err_and(|error| error.service_account_login_error().is_some())
-        {
+        let login_evidence = if state.dispatch == WriteDispatch::NotSent
+            && outcome.as_ref().is_err_and(|error| {
+                error.service_account_login_error().is_some() || error.login_error().is_some()
+            }) {
             state.evidence.for_first_login_preflight()
         } else {
             None
