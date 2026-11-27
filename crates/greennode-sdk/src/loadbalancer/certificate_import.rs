@@ -18,6 +18,7 @@ const REQUEST: Write = Write {
     method: Method::POST,
     success: &[StatusCode::CREATED],
     sensitive: true,
+    report_redirect: false,
 };
 
 /// Certificate type for TLS imports with a private key.

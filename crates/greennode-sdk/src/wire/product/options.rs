@@ -68,6 +68,7 @@ pub(crate) struct Options<'a> {
     pub(crate) response_guard: Option<super::sender::ResponseGuard>,
     pub(crate) password_slot: Option<PasswordSlot<'a>>,
     pub(crate) headers: &'a [(&'static str, &'a str)],
+    pub(crate) report_redirect: bool,
 }
 
 impl Options<'_> {
@@ -78,6 +79,7 @@ impl Options<'_> {
         response_guard: None,
         password_slot: None,
         headers: &[],
+        report_redirect: false,
     };
 
     pub(crate) fn apply_headers(&self, headers: &mut http::HeaderMap) -> Result<(), ()> {

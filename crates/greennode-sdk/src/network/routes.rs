@@ -82,12 +82,17 @@ impl Client {
         let incomplete = || failure(ROUTE_TABLE.incomplete(&evidence));
         let mut table: RouteTable = field(&envelope, "data").map_err(|()| incomplete())?;
         let fields = envelope
-            .optional::<Option<super::wire::Fields<'_>>>("data")
+            .output_raw("data")
             .map_err(|()| incomplete())?
-            .flatten()
-            .ok_or_else(incomplete)?;
+            .and_then(|raw| {
+                serde_json::from_str::<Option<super::wire::Fields<'_>>>(raw.get())
+                    .map_err(|_| ())
+                    .transpose()
+            })
+            .ok_or_else(incomplete)?
+            .map_err(|()| incomplete())?;
         if fields
-            .raw("routes")
+            .output_raw("routes")
             .map_err(|()| incomplete())?
             .is_none_or(|value| value.get() == "null")
             || table.uuid != *id

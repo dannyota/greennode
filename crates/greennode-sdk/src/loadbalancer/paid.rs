@@ -27,6 +27,7 @@ const CREATE_WRITE: Write = Write {
     method: Method::POST,
     success: &[StatusCode::OK, StatusCode::ACCEPTED],
     sensitive: false,
+    report_redirect: true,
 };
 const RESIZE_WRITE: Write = Write {
     id: RESIZE,
@@ -34,6 +35,7 @@ const RESIZE_WRITE: Write = Write {
     method: Method::PUT,
     success: &[StatusCode::OK, StatusCode::ACCEPTED],
     sensitive: false,
+    report_redirect: true,
 };
 const CREATE_ADVICE: &str = "loadbalancer.CreateLoadBalancer: create may have already reached the server; check with list-load-balancers --name and match the name exactly";
 const POLL: Duration = Duration::from_secs(10);

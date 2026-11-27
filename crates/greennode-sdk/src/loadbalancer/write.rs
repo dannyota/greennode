@@ -21,6 +21,7 @@ pub(super) struct Write {
     pub(super) method: Method,
     pub(super) success: &'static [StatusCode],
     pub(super) sensitive: bool,
+    pub(super) report_redirect: bool,
 }
 
 impl Client {
@@ -79,7 +80,10 @@ impl Client {
             runtime,
             base,
             &op,
-            &Options::DEFAULT,
+            &Options {
+                report_redirect: request.report_redirect,
+                ..Options::DEFAULT
+            },
             &path,
             &[],
             RouteAuth::Bearer(session.bearer_source()),

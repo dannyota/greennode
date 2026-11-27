@@ -273,6 +273,7 @@ impl Client {
             } else {
                 PathIds::Strict
             },
+            report_redirect: read.kind == ResponseKind::RouteTable,
             ..Options::DEFAULT
         };
         let response = operation::execute_raw(
@@ -311,11 +312,6 @@ impl Client {
                         return read.invalid(evidence);
                     }
                     return read.vpn_refused(status, api.retryable(), evidence);
-                }
-                if error.detail::<StatusCode>().is_some()
-                    && status.is_some_and(|status| !status.is_redirection())
-                {
-                    return read.api(None, "", "", false, evidence);
                 }
                 if status.is_some() {
                     return read.api(
@@ -421,9 +417,11 @@ impl Client {
 }
 
 pub(super) fn field<T: WireField>(fields: &Fields<'_>, name: &str) -> Result<T, ()> {
-    Ok(fields
-        .optional::<Field<T>>(name)?
-        .map_or_else(T::default, |field| field.0))
+    fields
+        .output_raw(name)?
+        .map(|raw| serde_json::from_str::<Field<T>>(raw.get()).map_err(|_| ()))
+        .transpose()
+        .map(|field| field.map_or_else(T::default, |field| field.0))
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]

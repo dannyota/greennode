@@ -23,7 +23,7 @@ async fn route_inventory_regressions() {
 }
 
 #[tokio::test]
-async fn route_inventory_ignores_lone_case_variant_after_rebase() {
+async fn route_inventory_ignores_a_lone_case_variant_key() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"{"listData":[{"Name":"case"}]}"#,
@@ -243,7 +243,8 @@ async fn truncated_redirect_drops_status_and_reports_the_body_failure() {
         .unwrap_err();
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.status(), None);
-    assert_ne!(api.message(), "security group response withheld");
+    assert_eq!(failure.error().class(), ErrorClass::Api);
+    assert_eq!((api.code(), api.message()), ("", ""));
     assert_eq!(server.heads().len(), 1);
 }
 

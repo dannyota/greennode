@@ -246,6 +246,25 @@ async fn returned_identifiers_reject_hex_credentials() {
 }
 
 #[tokio::test]
+async fn bandwidth_refuses_a_lone_case_variant_key() {
+    let body = r#"{"Success":false,"data":[{"uuid":"pkg-1","name":"offer","type":"x","description":"ok","bandwidth":100}]}"#;
+    let server = Server::start(vec![response("200 OK", body)]);
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        Client::new(&config)
+            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn bandwidth_accepts_credential_words_in_description() {
     let body = r#"{"data":[{"uuid":"pkg-1","name":"offer","type":"x","description":"client secret","bandwidth":100}]}"#;
     let server = Server::start(vec![response("200 OK", body)]);

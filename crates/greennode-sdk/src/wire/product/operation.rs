@@ -315,7 +315,7 @@ async fn send_route<T>(
             }
             let status = failure.status;
             let overflow = matches!(&failure.error, sender::Error::Send(error) if matches!(error.kind(), send::Error::BodyTooLarge));
-            let refused_redirect = (operation.keep_status || operation.no_redirect)
+            let refused_redirect = (operation.keep_status || options.report_redirect)
                 && matches!(&failure.error, sender::Error::Redirect(_));
             if let Some(status) = status
                 && (refused_redirect
@@ -1074,6 +1074,67 @@ mod tests {
             crate::WriteDispatch::MayHaveBeenSent
         );
         assert_eq!(server.requests(), 1);
+    }
+
+    #[tokio::test]
+    async fn reported_redirect_keeps_the_status() {
+        let failure = refused_redirect(true).await;
+        assert_eq!(failure.error().api_error().unwrap().status(), Some(302));
+    }
+
+    #[tokio::test]
+    async fn unreported_redirect_drops_the_status() {
+        let failure = refused_redirect(false).await;
+        assert_eq!(failure.error().api_error().unwrap().status(), None);
+    }
+
+    async fn refused_redirect(report: bool) -> crate::Failure<()> {
+        let server = Server::start(vec![Response::Http {
+            status: "302 Found".into(),
+            headers: vec![
+                ("Location".into(), "/other".into()),
+                ("Content-Length".into(), "0".into()),
+            ],
+            body: Vec::new(),
+        }]);
+        let mut op = declaration();
+        op.no_redirect = true;
+        let clients = sender::Clients {
+            pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone()))
+                .unwrap(),
+            one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone()))
+                .unwrap(),
+        };
+        let (ctx, _) = crate::RequestContext::new();
+        let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+        let deadline = clock.monotonic_now() + Duration::from_secs(5);
+        let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+        let options = Options {
+            report_redirect: report,
+            ..Options::DEFAULT
+        };
+        execute_raw(
+            sender::Runtime {
+                configured_credentials: None,
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &Immediate,
+                jitter: &mut || 0,
+            },
+            &base,
+            &op,
+            &options,
+            &["one"],
+            &[],
+            RouteAuth::Bearer(&Source(false, "toy-token")),
+            bytes::Bytes::new(),
+            &mut Evidence::new(),
+        )
+        .await
+        .err()
+        .unwrap()
     }
 
     #[test]

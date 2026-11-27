@@ -367,6 +367,17 @@ impl<'a> Fields<'a> {
     }
 
     pub(super) fn raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {
+        if self
+            .0
+            .keys()
+            .any(|key| key != name && field_matches(key, name))
+        {
+            return Err(());
+        }
+        Ok(self.0.get(name).copied())
+    }
+
+    pub(super) fn output_raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {
         let variants = self
             .0
             .keys()

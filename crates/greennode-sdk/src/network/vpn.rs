@@ -98,7 +98,7 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
     let fields = VPN.fields(text, evidence)?;
     let invalid = |()| VPN.invalid(evidence);
     let success: bool = fields.required("success").map_err(invalid)?;
-    if let Some(data) = fields.raw("data").map_err(invalid)?
+    if let Some(data) = fields.output_raw("data").map_err(invalid)?
         && data.get() != "null"
     {
         Vec::<VpnConnection>::check_fields(data).map_err(invalid)?;
@@ -119,7 +119,7 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
     if page <= 0 || page_size <= 0 {
         return Err(invalid(()));
     }
-    let items = if let Some(raw) = fields.raw("data").map_err(invalid)? {
+    let items = if let Some(raw) = fields.output_raw("data").map_err(invalid)? {
         serde_json::from_str::<Vec<VpnConnection>>(raw.get()).map_err(|_| invalid(()))?
     } else if total_page == 0 && total_item == 0 {
         Vec::new()
@@ -143,7 +143,7 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
 #[cfg(test)]
 mod tests {
     #[test]
-    fn hex_credentials_in_numeric_fields_are_withheld_after_rebase() {
+    fn hex_credentials_in_numeric_fields_are_withheld() {
         let mut evidence = crate::wire::product::evidence::Evidence::new();
         evidence.add_secret(&crate::Secret::new("AAA"));
         let vpn = r#"{"success":true,"data":[{"uuid":"vpn-1","packageModel":{"tunnelLimit":414141}}],"page":1,"size":10,"totalPage":1,"total":1}"#;
@@ -210,7 +210,7 @@ macro_rules! vpn_model {
         impl CheckedField for $name {
             fn check_fields(raw: &RawValue) -> Result<(), ()> {
                 let fields: Fields<'_> = serde_json::from_str(raw.get()).map_err(|_| ())?;
-                $(if let Some(raw) = fields.raw($wire)? {
+                $(if let Some(raw) = fields.output_raw($wire)? {
                     <$type>::check_fields(raw)?;
                 })*
                 Ok(())
