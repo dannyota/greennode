@@ -90,30 +90,32 @@ impl Client {
         ctx: &RequestContext,
         input: ListNatInstancesInput,
     ) -> Result<ListNatInstancesOutput, Failure<ListNatInstancesOutput>> {
-        if input.page < 0 || input.size < 0 {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(crate::quote::request::api("", None, "InvalidUsage", "vngcloud: invalid input: network.ListNATInstances requires nonnegative Page and Size", false))));
-        }
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let scope = self
-            .nat_scope(ctx, INSTANCES, input.zone_id, &mut evidence, true)
-            .await
-            .map_err(failure)?;
-        let params = params(
-            input.page.max(1),
-            if input.size == 0 { 10 } else { input.size },
-        );
-        let body = self
-            .nat_catalog_request(
-                ctx,
-                INSTANCES,
-                &scope,
-                &[("params", &params)],
-                &mut evidence,
-            )
-            .await
-            .map_err(failure)?;
-        let text = go_json(&body);
-        decode_instances(&text, &evidence).map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            if input.page < 0 || input.size < 0 {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(crate::quote::request::api("", None, "InvalidUsage", "vngcloud: invalid input: network.ListNATInstances requires nonnegative Page and Size", false))));
+            }
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let scope = self
+                .nat_scope(ctx, INSTANCES, input.zone_id, &mut evidence, true)
+                .await
+                .map_err(failure)?;
+            let params = params(
+                input.page.max(1),
+                if input.size == 0 { 10 } else { input.size },
+            );
+            let body = self
+                .nat_catalog_request(
+                    ctx,
+                    INSTANCES,
+                    &scope,
+                    &[("params", &params)],
+                    &mut evidence,
+                )
+                .await
+                .map_err(failure)?;
+            let text = go_json(&body);
+            decode_instances(&text, &evidence).map_err(failure)
+        })
     }
 
     /// Lists the Public NAT availability-zone catalog.
@@ -122,16 +124,18 @@ impl Client {
         ctx: &RequestContext,
         input: ListNatZonesInput,
     ) -> Result<ListNatZonesOutput, Failure<ListNatZonesOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let scope = self
-            .nat_scope(ctx, ZONES, input.zone_id, &mut evidence, false)
-            .await
-            .map_err(failure)?;
-        let items = self
-            .nat_zones(ctx, ZONES.id, &scope, &mut evidence)
-            .await
-            .map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let scope = self
+                .nat_scope(ctx, ZONES, input.zone_id, &mut evidence, false)
+                .await
+                .map_err(failure)?;
+            let items = self
+                .nat_zones(ctx, ZONES.id, &scope, &mut evidence)
+                .await
+                .map_err(failure)?;
+            Ok(List { items })
+        })
     }
 
     /// Lists Public NAT packages for the selected availability zone.
@@ -140,28 +144,30 @@ impl Client {
         ctx: &RequestContext,
         input: ListNatPackagesInput,
     ) -> Result<ListNatPackagesOutput, Failure<ListNatPackagesOutput>> {
-        PACKAGES
-            .path("AvailabilityZoneID", &input.availability_zone_id)
-            .map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        if evidence.id_reflects(&input.availability_zone_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
-        }
-        let scope = self
-            .nat_scope(ctx, PACKAGES, input.zone_id, &mut evidence, false)
-            .await
-            .map_err(failure)?;
-        let items = self
-            .nat_packages(
-                ctx,
-                PACKAGES.id,
-                &scope,
-                &input.availability_zone_id,
-                &mut evidence,
-            )
-            .await
-            .map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            PACKAGES
+                .path("AvailabilityZoneID", &input.availability_zone_id)
+                .map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            if evidence.id_reflects(&input.availability_zone_id) {
+                return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            }
+            let scope = self
+                .nat_scope(ctx, PACKAGES, input.zone_id, &mut evidence, false)
+                .await
+                .map_err(failure)?;
+            let items = self
+                .nat_packages(
+                    ctx,
+                    PACKAGES.id,
+                    &scope,
+                    &input.availability_zone_id,
+                    &mut evidence,
+                )
+                .await
+                .map_err(failure)?;
+            Ok(List { items })
+        })
     }
 
     pub(super) async fn nat_scope(

@@ -169,48 +169,52 @@ impl Client {
         ctx: &RequestContext,
         input: GetCostOverviewInput,
     ) -> Result<GetCostOverviewOutput, Failure<GetCostOverviewOutput>> {
-        let mut query = cost_query(
-            &input.start_date,
-            &input.end_date,
-            [
-                ("product", &input.product),
-                ("resourceType", &input.resource_type),
-                ("resourceId", &input.resource_id),
-                ("q", &input.query),
-            ],
-        )?;
-        query.extend([
-            ("groupBy", fallback(&input.group_by, "product")),
-            ("interval", fallback(&input.interval, "daily")),
-        ]);
-        let data: OverviewData = self
-            .read(
-                ctx,
-                &read_operation(OVERVIEW, "gateway/api/v2/cost-explorer/overview"),
-                &[],
-                &query,
-            )
-            .await?;
-        let mut series = data
-            .series
-            .as_ref()
-            .filter(|items| items.is_empty())
-            .map(|_| Vec::new());
-        let mut grouped_series = None;
-        for item in data.series.into_iter().flatten() {
-            match item {
-                SeriesItem::Flat(point) => series.get_or_insert_with(Vec::new).push(point),
-                SeriesItem::Group(group) => grouped_series.get_or_insert_with(Vec::new).push(group),
+        crate::wire::product::exit::finish!(async {
+            let mut query = cost_query(
+                &input.start_date,
+                &input.end_date,
+                [
+                    ("product", &input.product),
+                    ("resourceType", &input.resource_type),
+                    ("resourceId", &input.resource_id),
+                    ("q", &input.query),
+                ],
+            )?;
+            query.extend([
+                ("groupBy", fallback(&input.group_by, "product")),
+                ("interval", fallback(&input.interval, "daily")),
+            ]);
+            let data: OverviewData = self
+                .read(
+                    ctx,
+                    &read_operation(OVERVIEW, "gateway/api/v2/cost-explorer/overview"),
+                    &[],
+                    &query,
+                )
+                .await?;
+            let mut series = data
+                .series
+                .as_ref()
+                .filter(|items| items.is_empty())
+                .map(|_| Vec::new());
+            let mut grouped_series = None;
+            for item in data.series.into_iter().flatten() {
+                match item {
+                    SeriesItem::Flat(point) => series.get_or_insert_with(Vec::new).push(point),
+                    SeriesItem::Group(group) => {
+                        grouped_series.get_or_insert_with(Vec::new).push(group)
+                    }
+                }
             }
-        }
-        Ok(GetCostOverviewOutput {
-            summary: data.summary,
-            series,
-            grouped_series,
-            interval: data.interval,
-            start_date: data.start_date,
-            end_date: data.end_date,
-            group_by: data.group_by,
+            Ok(GetCostOverviewOutput {
+                summary: data.summary,
+                series,
+                grouped_series,
+                interval: data.interval,
+                start_date: data.start_date,
+                end_date: data.end_date,
+                group_by: data.group_by,
+            })
         })
     }
 
@@ -220,55 +224,57 @@ impl Client {
         ctx: &RequestContext,
         input: ListCostResourcesInput,
     ) -> Result<ListCostResourcesOutput, Failure<ListCostResourcesOutput>> {
-        let mut query = cost_query(
-            &input.start_date,
-            &input.end_date,
-            [
-                ("product", &input.product),
-                ("resourceType", &input.resource_type),
-                ("resourceId", &input.resource_id),
-                ("q", &input.query),
-                ("sort", &input.sort),
-                ("order", &input.order),
-            ],
-        )?;
-        let page = (input.page.max(1) - 1).to_string();
-        let size = if (1..=MAX_RESOURCE_SIZE).contains(&input.size) {
-            input.size
-        } else {
-            MAX_RESOURCE_SIZE
-        }
-        .to_string();
-        query.extend([("page", page.as_str()), ("size", size.as_str())]);
+        crate::wire::product::exit::finish!(async {
+            let mut query = cost_query(
+                &input.start_date,
+                &input.end_date,
+                [
+                    ("product", &input.product),
+                    ("resourceType", &input.resource_type),
+                    ("resourceId", &input.resource_id),
+                    ("q", &input.query),
+                    ("sort", &input.sort),
+                    ("order", &input.order),
+                ],
+            )?;
+            let page = (input.page.max(1) - 1).to_string();
+            let size = if (1..=MAX_RESOURCE_SIZE).contains(&input.size) {
+                input.size
+            } else {
+                MAX_RESOURCE_SIZE
+            }
+            .to_string();
+            query.extend([("page", page.as_str()), ("size", size.as_str())]);
 
-        let operation = read_operation(RESOURCES, "gateway/api/v2/cost-explorer/resources");
-        let data: ResourcesData = self.read(ctx, &operation, &[], &query).await?;
-        let page = data
-            .pagination
-            .page
-            .checked_add(1)
-            .filter(|page| *page > 0)
-            .ok_or_else(|| {
-                read_failure(
-                    Error::from_api(ApiError::without_fallback(
-                        RESOURCES,
-                        Some(StatusCode::OK.as_u16()),
-                        SafeText::new("InvalidResponse", &[]),
-                        SafeText::new("invalid cost resource page; body withheld", &[]),
-                        false,
-                    ))
-                    .with_outer_detail(StatusCode::OK),
-                )
-            })?;
-        Ok(ListCostResourcesOutput {
-            resources: PagedList {
-                items: data.items,
-                page,
-                page_size: data.pagination.size,
-                total_page: data.pagination.total_pages,
-                total_item: data.pagination.total,
-            },
-            summary: data.summary,
+            let operation = read_operation(RESOURCES, "gateway/api/v2/cost-explorer/resources");
+            let data: ResourcesData = self.read(ctx, &operation, &[], &query).await?;
+            let page = data
+                .pagination
+                .page
+                .checked_add(1)
+                .filter(|page| *page > 0)
+                .ok_or_else(|| {
+                    read_failure(
+                        Error::from_api(ApiError::without_fallback(
+                            RESOURCES,
+                            Some(StatusCode::OK.as_u16()),
+                            SafeText::new("InvalidResponse", &[]),
+                            SafeText::new("invalid cost resource page; body withheld", &[]),
+                            false,
+                        ))
+                        .with_outer_detail(StatusCode::OK),
+                    )
+                })?;
+            Ok(ListCostResourcesOutput {
+                resources: PagedList {
+                    items: data.items,
+                    page,
+                    page_size: data.pagination.size,
+                    total_page: data.pagination.total_pages,
+                    total_item: data.pagination.total,
+                },
+                summary: data.summary,
+            })
         })
     }
 
@@ -278,45 +284,47 @@ impl Client {
         ctx: &RequestContext,
         _: GetBalancesInput,
     ) -> Result<GetBalancesOutput, Failure<GetBalancesOutput>> {
-        let operation = read_operation(BALANCES, "navbar/balances/v1");
-        let session = &self.session;
-        let base = session
-            .endpoints()
-            .billing
-            .as_ref()
-            .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let mut jitter = || session.retry_jitter();
-        let runtime = session
-            .runtime(ctx, &mut jitter)
-            .map_err(|error| read_failure(*error))?;
-        let (_, BalancesResponse(balances)) = operation::execute(
-            runtime,
-            base,
-            &operation,
-            &[],
-            &[],
-            session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map_err(|error| {
-            let (error, _, dispatch) = error.into_parts();
-            let error = match error.detail::<StatusCode>().copied() {
-                Some(status)
-                    if status.is_success()
-                        && error.class() == ErrorClass::Api
-                        && error
-                            .api_error()
-                            .is_none_or(|api| api.code() != "InvalidResponse") =>
-                {
-                    invalid_response(&operation, status, error.is_body_too_large())
-                        .with_cause(error)
-                }
-                _ => error,
-            };
-            Failure::new(error, None, dispatch)
-        })?;
-        Ok(GetBalancesOutput { balances })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(BALANCES, "navbar/balances/v1");
+            let session = &self.session;
+            let base = session
+                .endpoints()
+                .billing
+                .as_ref()
+                .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let mut jitter = || session.retry_jitter();
+            let runtime = session
+                .runtime(ctx, &mut jitter)
+                .map_err(|error| read_failure(*error))?;
+            let (_, BalancesResponse(balances)) = operation::execute(
+                runtime,
+                base,
+                &operation,
+                &[],
+                &[],
+                session.bearer_source(),
+                bytes::Bytes::new(),
+            )
+            .await
+            .map_err(|error| {
+                let (error, _, dispatch) = error.into_parts();
+                let error = match error.detail::<StatusCode>().copied() {
+                    Some(status)
+                        if status.is_success()
+                            && error.class() == ErrorClass::Api
+                            && error
+                                .api_error()
+                                .is_none_or(|api| api.code() != "InvalidResponse") =>
+                    {
+                        invalid_response(&operation, status, error.is_body_too_large())
+                            .with_cause(error)
+                    }
+                    _ => error,
+                };
+                Failure::new(error, None, dispatch)
+            })?;
+            Ok(GetBalancesOutput { balances })
+        })
     }
 }
 

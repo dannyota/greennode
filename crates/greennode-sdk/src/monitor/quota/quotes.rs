@@ -142,7 +142,9 @@ impl Client {
         input: CreateNotificationQuotaInput,
     ) -> Result<QuoteCreateNotificationQuotaOutput, Failure<QuoteCreateNotificationQuotaOutput>>
     {
-        self.notification_quote(ctx, input).await.map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.notification_quote(ctx, input).await.map_err(failure)
+        })
     }
 
     async fn notification_quote(
@@ -219,9 +221,11 @@ impl Client {
         ctx: &RequestContext,
         input: CreateSyntheticQuotaInput,
     ) -> Result<QuoteCreateSyntheticQuotaOutput, Failure<QuoteCreateSyntheticQuotaOutput>> {
-        self.create_synthetic_quote(ctx, input)
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.create_synthetic_quote(ctx, input)
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Quotes one month of renewal for the active synthetic quota at the expected expiry.
@@ -230,9 +234,11 @@ impl Client {
         ctx: &RequestContext,
         input: RenewSyntheticQuotaInput,
     ) -> Result<QuoteRenewSyntheticQuotaOutput, Failure<QuoteRenewSyntheticQuotaOutput>> {
-        self.renew_synthetic_quote(ctx, input)
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.renew_synthetic_quote(ctx, input)
+                .await
+                .map_err(failure)
+        })
     }
 
     async fn create_synthetic_quote(

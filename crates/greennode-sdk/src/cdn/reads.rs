@@ -163,16 +163,18 @@ impl Client {
         ctx: &RequestContext,
         _: ListWebAcceleratorsInput,
     ) -> Result<ListWebAcceleratorsOutput, Failure<ListWebAcceleratorsOutput>> {
-        let answer = self
-            .call(ctx, &LIST_WEB, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let mut items = list::<WebAcceleratorSummary>(&LIST_WEB, answer.data.as_deref(), true)
-            .map_err(convert)?;
-        for item in &mut items {
-            item.redact(&answer.evidence);
-        }
-        screened(List { items }, &LIST_WEB, &answer.evidence)
+        crate::wire::product::exit::finish!(async {
+            let answer = self
+                .call(ctx, &LIST_WEB, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let mut items = list::<WebAcceleratorSummary>(&LIST_WEB, answer.data.as_deref(), true)
+                .map_err(convert)?;
+            for item in &mut items {
+                item.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_WEB, &answer.evidence)
+        })
     }
 
     /// Reads the Web Accelerator with the requested identifier.
@@ -181,22 +183,24 @@ impl Client {
         ctx: &RequestContext,
         input: GetWebAcceleratorInput,
     ) -> Result<GetWebAcceleratorOutput, Failure<GetWebAcceleratorOutput>> {
-        if !PathIds::Strict.allows(&input.cdn_id) {
-            return Err(invalid());
-        }
-        let mut evidence = Evidence::new();
-        let mut detail = self
-            .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
-            .await
-            .map_err(convert)?;
-        detail.model.redact(&evidence);
-        screened(
-            GetWebAcceleratorOutput {
-                web_accelerator: detail.model,
-            },
-            &GET_WEB,
-            &evidence,
-        )
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.cdn_id) {
+                return Err(invalid());
+            }
+            let mut evidence = Evidence::new();
+            let mut detail = self
+                .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
+                .await
+                .map_err(convert)?;
+            detail.model.redact(&evidence);
+            screened(
+                GetWebAcceleratorOutput {
+                    web_accelerator: detail.model,
+                },
+                &GET_WEB,
+                &evidence,
+            )
+        })
     }
 
     pub(super) async fn read_web_detail(
@@ -233,24 +237,26 @@ impl Client {
         ctx: &RequestContext,
         _: ListCertificatesInput,
     ) -> Result<ListCertificatesOutput, Failure<ListCertificatesOutput>> {
-        let mut answer = self
-            .call(ctx, &LIST_CERTIFICATES, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let rows = list::<CertificateWire>(&LIST_CERTIFICATES, answer.data.as_deref(), true)
-            .map_err(convert)?;
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            answer.evidence.add_secret(&Secret::new(row.private_key));
-            let mut certificate = row.certificate;
-            certificate.certificate.clear();
-            certificate.ca_root.clear();
-            items.push(certificate);
-        }
-        for certificate in &mut items {
-            certificate.redact(&answer.evidence);
-        }
-        screened(List { items }, &LIST_CERTIFICATES, &answer.evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut answer = self
+                .call(ctx, &LIST_CERTIFICATES, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let rows = list::<CertificateWire>(&LIST_CERTIFICATES, answer.data.as_deref(), true)
+                .map_err(convert)?;
+            let mut items = Vec::with_capacity(rows.len());
+            for row in rows {
+                answer.evidence.add_secret(&Secret::new(row.private_key));
+                let mut certificate = row.certificate;
+                certificate.certificate.clear();
+                certificate.ca_root.clear();
+                items.push(certificate);
+            }
+            for certificate in &mut items {
+                certificate.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_CERTIFICATES, &answer.evidence)
+        })
     }
 
     /// Reads certificate metadata and its public PEM chain.
@@ -259,31 +265,33 @@ impl Client {
         ctx: &RequestContext,
         input: GetCertificateInput,
     ) -> Result<GetCertificateOutput, Failure<GetCertificateOutput>> {
-        if !PathIds::Strict.allows(&input.certificate_id) {
-            return Err(invalid());
-        }
-        let mut answer = self
-            .call(
-                ctx,
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.certificate_id) {
+                return Err(invalid());
+            }
+            let mut answer = self
+                .call(
+                    ctx,
+                    &GET_CERTIFICATE,
+                    &[&input.certificate_id],
+                    Bytes::new(),
+                )
+                .await
+                .map_err(convert)?;
+            let row: CertificateWire = answer
+                .data
+                .as_deref()
+                .and_then(|data| serde_json::from_str(data.get()).ok())
+                .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
+            answer.evidence.add_secret(&Secret::new(row.private_key));
+            let mut certificate = row.certificate;
+            certificate.redact(&answer.evidence);
+            screened(
+                GetCertificateOutput { certificate },
                 &GET_CERTIFICATE,
-                &[&input.certificate_id],
-                Bytes::new(),
+                &answer.evidence,
             )
-            .await
-            .map_err(convert)?;
-        let row: CertificateWire = answer
-            .data
-            .as_deref()
-            .and_then(|data| serde_json::from_str(data.get()).ok())
-            .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
-        answer.evidence.add_secret(&Secret::new(row.private_key));
-        let mut certificate = row.certificate;
-        certificate.redact(&answer.evidence);
-        screened(
-            GetCertificateOutput { certificate },
-            &GET_CERTIFICATE,
-            &answer.evidence,
-        )
+        })
     }
 
     /// Lists key metadata and marks the key used for this request.
@@ -292,40 +300,42 @@ impl Client {
         ctx: &RequestContext,
         _: ListApiKeysInput,
     ) -> Result<ListApiKeysOutput, Failure<ListApiKeysOutput>> {
-        let mut answer = self
-            .call(ctx, &LIST_KEYS, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let rows =
-            list::<ApiKeyWire>(&LIST_KEYS, answer.data.as_deref(), false).map_err(convert)?;
-        let key = self
-            .session
-            .cdn_key()
-            .ok_or_else(|| read_failure(Error::new(ErrorClass::NoCredentials)))?;
-        let comparator = {
-            let mut comparison_key = Zeroizing::new([0; 32]);
-            getrandom::fill(comparison_key.as_mut())
-                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?;
-            Hmac::<Sha256>::new_from_slice(comparison_key.as_ref())
-                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?
-        };
-        let mut expected = comparator.clone();
-        expected.update(key.expose_secret().as_bytes());
-        let expected = expected.finalize().into_bytes();
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            let mut metadata = row.metadata;
-            let token = Secret::new(row.token);
-            let mut tag = comparator.clone();
-            tag.update(token.expose_secret().as_bytes());
-            metadata.current =
-                !token.expose_secret().is_empty() && tag.verify_slice(&expected).is_ok();
-            answer.evidence.add_secret(&token);
-            items.push(metadata);
-        }
-        for metadata in &mut items {
-            metadata.redact(&answer.evidence);
-        }
-        screened(List { items }, &LIST_KEYS, &answer.evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut answer = self
+                .call(ctx, &LIST_KEYS, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let rows =
+                list::<ApiKeyWire>(&LIST_KEYS, answer.data.as_deref(), false).map_err(convert)?;
+            let key = self
+                .session
+                .cdn_key()
+                .ok_or_else(|| read_failure(Error::new(ErrorClass::NoCredentials)))?;
+            let comparator = {
+                let mut comparison_key = Zeroizing::new([0; 32]);
+                getrandom::fill(comparison_key.as_mut())
+                    .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?;
+                Hmac::<Sha256>::new_from_slice(comparison_key.as_ref())
+                    .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?
+            };
+            let mut expected = comparator.clone();
+            expected.update(key.expose_secret().as_bytes());
+            let expected = expected.finalize().into_bytes();
+            let mut items = Vec::with_capacity(rows.len());
+            for row in rows {
+                let mut metadata = row.metadata;
+                let token = Secret::new(row.token);
+                let mut tag = comparator.clone();
+                tag.update(token.expose_secret().as_bytes());
+                metadata.current =
+                    !token.expose_secret().is_empty() && tag.verify_slice(&expected).is_ok();
+                answer.evidence.add_secret(&token);
+                items.push(metadata);
+            }
+            for metadata in &mut items {
+                metadata.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_KEYS, &answer.evidence)
+        })
     }
 }

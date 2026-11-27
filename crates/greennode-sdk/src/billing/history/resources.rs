@@ -150,16 +150,18 @@ impl Client {
         ctx: &RequestContext,
         _input: ListResourcesInput,
     ) -> Result<ListResourcesOutput, Failure<ListResourcesOutput>> {
-        let operation = Operation {
-            cap: 4 << 20,
-            reflection: crate::wire::product::operation::Reflection::Refuse,
-            overflow_overrides_status: true,
-            ..history_operation("billing.ListResources", "gateway/api/v1/resources")
-        };
-        self.history_request::<ResourceEnvelope>(ctx, &operation, &[], RESOURCE_WITHHELD)
-            .await
-            .map(|output| output.data)
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let operation = Operation {
+                cap: 4 << 20,
+                reflection: crate::wire::product::operation::Reflection::Refuse,
+                overflow_overrides_status: true,
+                ..history_operation("billing.ListResources", "gateway/api/v1/resources")
+            };
+            self.history_request::<ResourceEnvelope>(ctx, &operation, &[], RESOURCE_WITHHELD)
+                .await
+                .map(|output| output.data)
+                .map_err(|error| failure(*error))
+        })
     }
 }
 

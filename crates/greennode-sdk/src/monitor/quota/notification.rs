@@ -86,26 +86,28 @@ impl Client {
         ctx: &RequestContext,
         input: GetNotificationQuotaInput,
     ) -> Result<GetNotificationQuotaOutput, Failure<GetNotificationQuotaOutput>> {
-        const OP: &str = "monitor.GetNotificationQuota";
-        let kind = notification_kind(OP, &input.kind).map_err(failure)?;
-        let mut reader = notification_reader(self, ctx, OP);
-        let route = kind.quota_route();
-        let raw = reader.get(route, &[]).await.map_err(failure)?;
-        let quota = reader
-            .decode(decode_quota(&raw))
-            .map_err(failure)?
-            .into_model();
-        if [&quota.id, &quota.package_id]
-            .into_iter()
-            .any(|id| reader.evidence.id_reflects(id))
-        {
-            return Err(failure(reader.invalid()));
-        }
-        let mut output = GetNotificationQuotaOutput { quota };
-        if !output.screen(&reader.evidence) {
-            return Err(failure(reader.invalid()));
-        }
-        Ok(output)
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "monitor.GetNotificationQuota";
+            let kind = notification_kind(OP, &input.kind).map_err(failure)?;
+            let mut reader = notification_reader(self, ctx, OP);
+            let route = kind.quota_route();
+            let raw = reader.get(route, &[]).await.map_err(failure)?;
+            let quota = reader
+                .decode(decode_quota(&raw))
+                .map_err(failure)?
+                .into_model();
+            if [&quota.id, &quota.package_id]
+                .into_iter()
+                .any(|id| reader.evidence.id_reflects(id))
+            {
+                return Err(failure(reader.invalid()));
+            }
+            let mut output = GetNotificationQuotaOutput { quota };
+            if !output.screen(&reader.evidence) {
+                return Err(failure(reader.invalid()));
+            }
+            Ok(output)
+        })
     }
 
     /// Reads the number of messages charged against the Email notification quota.
@@ -114,21 +116,23 @@ impl Client {
         ctx: &RequestContext,
         input: GetNotificationQuotaUsageInput,
     ) -> Result<GetNotificationQuotaUsageOutput, Failure<GetNotificationQuotaUsageOutput>> {
-        const OP: &str = "monitor.GetNotificationQuotaUsage";
-        if notification_kind(OP, &input.kind).map_err(failure)? == NotificationKind::Sms {
-            return Err(failure(usage(OP, "SMS usage read is unsupported")));
-        }
-        let mut reader = notification_reader(self, ctx, OP);
-        let raw = reader
-            .get("billing-api/v1/email/quota/usages", &[])
-            .await
-            .map_err(failure)?;
-        let usage = reader.decode(notification_usage(&raw)).map_err(failure)?;
-        let mut output = GetNotificationQuotaUsageOutput { usage };
-        if !output.screen(&reader.evidence) {
-            return Err(failure(reader.invalid()));
-        }
-        Ok(output)
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "monitor.GetNotificationQuotaUsage";
+            if notification_kind(OP, &input.kind).map_err(failure)? == NotificationKind::Sms {
+                return Err(failure(usage(OP, "SMS usage read is unsupported")));
+            }
+            let mut reader = notification_reader(self, ctx, OP);
+            let raw = reader
+                .get("billing-api/v1/email/quota/usages", &[])
+                .await
+                .map_err(failure)?;
+            let usage = reader.decode(notification_usage(&raw)).map_err(failure)?;
+            let mut output = GetNotificationQuotaUsageOutput { usage };
+            if !output.screen(&reader.evidence) {
+                return Err(failure(reader.invalid()));
+            }
+            Ok(output)
+        })
     }
 }
 

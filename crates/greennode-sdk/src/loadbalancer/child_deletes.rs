@@ -1,3 +1,7 @@
+mod timing;
+
+use timing::{check_confirm_time, check_ready_time};
+
 use std::{collections::BTreeSet, time::Duration};
 
 use bytes::Bytes;
@@ -134,25 +138,27 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePoolInput,
     ) -> ChildFailure<DeletePoolOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeletePool",
-                kind: "pool",
-                read: Read {
-                    id: "loadbalancer.GetPool",
-                    route: "v2/{}/loadBalancers/{}/pools/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeletePool",
+                    kind: "pool",
+                    read: Read {
+                        id: "loadbalancer.GetPool",
+                        route: "v2/{}/loadBalancers/{}/pools/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("PoolID", &input.pool_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.pool_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("PoolID", &input.pool_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.pool_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     /// Deletes a listener and confirms that it is absent.
@@ -161,25 +167,27 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteListenerInput,
     ) -> ChildFailure<DeleteListenerOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeleteListener",
-                kind: "listener",
-                read: Read {
-                    id: "loadbalancer.GetListener",
-                    route: "v2/{}/loadBalancers/{}/listeners/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeleteListener",
+                    kind: "listener",
+                    read: Read {
+                        id: "loadbalancer.GetListener",
+                        route: "v2/{}/loadBalancers/{}/listeners/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("ListenerID", &input.listener_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.listener_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("ListenerID", &input.listener_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.listener_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     /// Deletes an L7 policy and confirms that it is absent.
@@ -188,26 +196,28 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePolicyInput,
     ) -> ChildFailure<DeletePolicyOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeletePolicy",
-                kind: "policy",
-                read: Read {
-                    id: "loadbalancer.GetPolicy",
-                    route: "v2/{}/loadBalancers/{}/listeners/{}/l7policies/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeletePolicy",
+                    kind: "policy",
+                    read: Read {
+                        id: "loadbalancer.GetPolicy",
+                        route: "v2/{}/loadBalancers/{}/listeners/{}/l7policies/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("ListenerID", &input.listener_id),
+                        ("PolicyID", &input.policy_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.policy_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("ListenerID", &input.listener_id),
-                    ("PolicyID", &input.policy_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.policy_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     async fn delete_child<O: Default>(
@@ -613,61 +623,6 @@ fn api_error_text(api: &crate::ApiError) -> String {
         (operation, None) => format!("{operation}: {message}"),
         (operation, Some(status)) => format!("{operation}: {message} (status {status})"),
     }
-}
-
-fn check_ready_time(
-    parent: &RequestContext,
-    wait: &RequestContext,
-    clock: &dyn crate::Clock,
-    child: &Child<'_>,
-    evidence: &Evidence,
-) -> Result<(), Box<Error>> {
-    if let Some(end) = parent.check(clock) {
-        return Err(Box::new(context_error(end)));
-    }
-    if wait.check(clock).is_some() {
-        let lb = safe_text(child.load_balancer, evidence);
-        let id = safe_text(child.id, evidence);
-        let message = format!(
-            "loadbalancer: resource busy: {}: load balancer {lb} or {} {id} is not ready within 10m0s; nothing sent",
-            child.operation, child.kind
-        );
-        return Err(Box::new(
-            local(ErrorClass::Api, &message, evidence).with_outer_detail(WriteError::ResourceBusy),
-        ));
-    }
-    Ok(())
-}
-
-fn check_confirm_time(
-    parent: &RequestContext,
-    wait: &RequestContext,
-    clock: &dyn crate::Clock,
-    child: &Child<'_>,
-    evidence: &Evidence,
-) -> Result<(), Box<Error>> {
-    let Some(end) = wait.check(clock) else {
-        return Ok(());
-    };
-    let reason = match end {
-        ContextEnd::Cancelled => "confirmation cancelled by caller",
-        ContextEnd::DeadlineExceeded if parent.deadline() == wait.deadline() => {
-            "confirmation stopped at the caller's deadline"
-        }
-        ContextEnd::DeadlineExceeded => "did not settle within 10m0s",
-    };
-    let id = safe_text(child.id, evidence);
-    let message = format!(
-        "vngcloud: write outcome not confirmed: {}: {} {id} {reason}; delete was sent and a rerun is safe",
-        child.operation, child.kind
-    );
-    let error = local(ErrorClass::NotSettled, &message, evidence);
-    let error = if let Some(end) = parent.check(clock) {
-        error.with_cause(context_error(end))
-    } else {
-        error
-    };
-    Err(Box::new(error))
 }
 
 fn busy(progress: &str, parent: bool) -> bool {

@@ -107,19 +107,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetsInput,
     ) -> Result<ListBudgetsOutput, Failure<ListBudgetsOutput>> {
-        let mut query = vec![("view", "summary")];
-        if !input.status.is_empty() {
-            query.push(("status", input.status.as_str()));
-        }
-        let items = self
-            .read(
-                ctx,
-                &read_operation("billing.ListBudgets", "gateway/api/v1/budgets"),
-                &[],
-                &query,
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut query = vec![("view", "summary")];
+            if !input.status.is_empty() {
+                query.push(("status", input.status.as_str()));
+            }
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation("billing.ListBudgets", "gateway/api/v1/budgets"),
+                    &[],
+                    &query,
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads an account-wide budget. An invalid path ID fails before authentication.
@@ -128,15 +130,17 @@ impl Client {
         ctx: &RequestContext,
         input: GetBudgetInput,
     ) -> Result<GetBudgetOutput, Failure<GetBudgetOutput>> {
-        let budget = self
-            .read(
-                ctx,
-                &read_operation("billing.GetBudget", "gateway/api/v1/budgets/{}"),
-                &[&input.budget_uuid],
-                &[],
-            )
-            .await?;
-        Ok(GetBudgetOutput { budget })
+        crate::wire::product::exit::finish!(async {
+            let budget = self
+                .read(
+                    ctx,
+                    &read_operation("billing.GetBudget", "gateway/api/v1/budgets/{}"),
+                    &[&input.budget_uuid],
+                    &[],
+                )
+                .await?;
+            Ok(GetBudgetOutput { budget })
+        })
     }
 
     async fn read<T: BudgetData, O>(

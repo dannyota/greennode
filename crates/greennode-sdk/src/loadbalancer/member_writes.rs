@@ -171,13 +171,15 @@ macro_rules! member_method {
     ($(#[$meta:meta])* $method:ident, $input:ty, $output:ident, $operation:expr, $mutation:expr) => {
         $(#[$meta])*
         pub async fn $method(&self, ctx: &RequestContext, input: $input) -> WriteResult<$output> {
-            let selection = Selection {
-                load_balancer: &input.load_balancer_id, pool: &input.pool_id, address: &input.address,
-                port: input.port, no_wait: input.no_wait,
-            };
-            self.change_members(ctx, $operation, selection, &input, ($mutation)(&input), |result| $output {
-                pool: result.pool, changed: result.changed, projection: result.projection, redact_changed: result.redact_changed,
-            }).await
+            crate::wire::product::exit::finish!(async {
+                let selection = Selection {
+                    load_balancer: &input.load_balancer_id, pool: &input.pool_id, address: &input.address,
+                    port: input.port, no_wait: input.no_wait,
+                };
+                self.change_members(ctx, $operation, selection, &input, ($mutation)(&input), |result| $output {
+                    pool: result.pool, changed: result.changed, projection: result.projection, redact_changed: result.redact_changed,
+                }).await
+            })
         }
     };
 }

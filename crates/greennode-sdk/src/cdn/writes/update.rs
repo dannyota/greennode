@@ -162,53 +162,55 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateWebAcceleratorInput,
     ) -> Result<UpdateWebAcceleratorOutput, Failure<UpdateWebAcceleratorOutput>> {
-        input.validate().map_err(convert)?;
-        let mut evidence = self
-            .write_evidence(ctx, Some(&input.values()), Some(&input.cdn_id))
-            .map_err(convert)?;
-        let (initial, _) = self
-            .preflight(
-                ctx,
-                &UPDATE,
-                &input.cdn_id,
-                WriteKind::Update,
-                &mut evidence,
-            )
-            .await
-            .map_err(convert)?;
-        let merged = merge_update(initial.raw.get(), &input).map_err(convert)?;
-        let malformed = |_| invalid("the merged CDN detail is not valid JSON");
-        let original: Value = serde_json::from_str(initial.raw.get()).map_err(malformed)?;
-        let projected = serde_json::to_value(&merged).map_err(malformed)?;
-        let output = |web_accelerator| UpdateWebAcceleratorOutput { web_accelerator };
-        if original == projected {
-            return finish(initial, None, &mut evidence, output);
-        }
-        let body = encode(&merged)?;
-        if evidence.output_reflects(&projected)
-            || evidence.peer_body_reflects(&body).unwrap_or(true)
-        {
-            return Err(invalid(
-                "the merged CDN detail contains a configured credential",
-            ));
-        }
-        record_user_uuids(initial.raw.get(), &mut evidence);
-        if let Err(failure) = self
-            .call_with_evidence(ctx, &UPDATE, &[], body, &mut evidence)
-            .await
-        {
-            let failure = self
-                .explain_401(ctx, &UPDATE, &input.cdn_id, failure, &mut evidence)
-                .await;
-            return Err(convert(possibly_applied(failure, "update")));
-        }
-        let mut poll = Poll::new(self, ctx, &UPDATE, &input.cdn_id, &mut evidence);
-        let (last, error) = if input.no_wait {
-            poll.read_once(initial).await
-        } else {
-            poll.settle(Target::ACTIVE, initial, false).await
-        };
-        finish(last, error, &mut evidence, output)
+        crate::wire::product::exit::finish!(async {
+            input.validate().map_err(convert)?;
+            let mut evidence = self
+                .write_evidence(ctx, Some(&input.values()), Some(&input.cdn_id))
+                .map_err(convert)?;
+            let (initial, _) = self
+                .preflight(
+                    ctx,
+                    &UPDATE,
+                    &input.cdn_id,
+                    WriteKind::Update,
+                    &mut evidence,
+                )
+                .await
+                .map_err(convert)?;
+            let merged = merge_update(initial.raw.get(), &input).map_err(convert)?;
+            let malformed = |_| invalid("the merged CDN detail is not valid JSON");
+            let original: Value = serde_json::from_str(initial.raw.get()).map_err(malformed)?;
+            let projected = serde_json::to_value(&merged).map_err(malformed)?;
+            let output = |web_accelerator| UpdateWebAcceleratorOutput { web_accelerator };
+            if original == projected {
+                return finish(initial, None, &mut evidence, output);
+            }
+            let body = encode(&merged)?;
+            if evidence.output_reflects(&projected)
+                || evidence.peer_body_reflects(&body).unwrap_or(true)
+            {
+                return Err(invalid(
+                    "the merged CDN detail contains a configured credential",
+                ));
+            }
+            record_user_uuids(initial.raw.get(), &mut evidence);
+            if let Err(failure) = self
+                .call_with_evidence(ctx, &UPDATE, &[], body, &mut evidence)
+                .await
+            {
+                let failure = self
+                    .explain_401(ctx, &UPDATE, &input.cdn_id, failure, &mut evidence)
+                    .await;
+                return Err(convert(possibly_applied(failure, "update")));
+            }
+            let mut poll = Poll::new(self, ctx, &UPDATE, &input.cdn_id, &mut evidence);
+            let (last, error) = if input.no_wait {
+                poll.read_once(initial).await
+            } else {
+                poll.settle(Target::ACTIVE, initial, false).await
+            };
+            finish(last, error, &mut evidence, output)
+        })
     }
 }
 

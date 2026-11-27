@@ -105,24 +105,26 @@ impl Client {
         ctx: &RequestContext,
         _input: ListBackendsInput,
     ) -> Result<ListBackendsOutput, Failure<ListBackendsOutput>> {
-        let base = self.base(
-            "vngcloud: invalid config: backup.ListBackends: requires a supported Backup Center region",
-        )?;
-        let result: Collection<Backend, Option<i64>> = self
-            .read(
-                ctx,
-                base,
-                &read_operation("backup.ListBackends", "v1/backends"),
-                &[],
-                &[],
-            )
-            .await?;
-        Ok(ListBackendsOutput {
-            items: result.items,
-            page: result.page,
-            page_size: result.page_size,
-            total_page: result.total_pages,
-            total_item: result.total_items,
+        crate::wire::product::exit::finish!(async {
+            let base = self.base(
+                "vngcloud: invalid config: backup.ListBackends: requires a supported Backup Center region",
+            )?;
+            let result: Collection<Backend, Option<i64>> = self
+                .read(
+                    ctx,
+                    base,
+                    &read_operation("backup.ListBackends", "v1/backends"),
+                    &[],
+                    &[],
+                )
+                .await?;
+            Ok(ListBackendsOutput {
+                items: result.items,
+                page: result.page,
+                page_size: result.page_size,
+                total_page: result.total_pages,
+                total_item: result.total_items,
+            })
         })
     }
 
@@ -132,31 +134,33 @@ impl Client {
         ctx: &RequestContext,
         input: ListPoliciesInput,
     ) -> Result<ListPoliciesOutput, Failure<ListPoliciesOutput>> {
-        let base = self.base(
-            "vngcloud: invalid config: backup.ListPolicies: requires a supported Backup Center region",
-        )?;
-        if input.page < 0 || input.size < 0 {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
-                "vngcloud: invalid input: backup.ListPolicies: Page and Size must not be negative",
-            )));
-        }
-        let page = input.page.max(1).to_string();
-        let size = if input.size == 0 { 200 } else { input.size }.to_string();
-        let result: Collection<Policy, i64> = self
-            .read(
-                ctx,
-                base,
-                &read_operation("backup.ListPolicies", "v1/backup-policies"),
-                &[],
-                &[("page", &page), ("size", &size)],
-            )
-            .await?;
-        Ok(PagedList {
-            items: result.items,
-            page: result.page,
-            page_size: result.page_size,
-            total_page: result.total_pages,
-            total_item: result.total_items,
+        crate::wire::product::exit::finish!(async {
+            let base = self.base(
+                "vngcloud: invalid config: backup.ListPolicies: requires a supported Backup Center region",
+            )?;
+            if input.page < 0 || input.size < 0 {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
+                    "vngcloud: invalid input: backup.ListPolicies: Page and Size must not be negative",
+                )));
+            }
+            let page = input.page.max(1).to_string();
+            let size = if input.size == 0 { 200 } else { input.size }.to_string();
+            let result: Collection<Policy, i64> = self
+                .read(
+                    ctx,
+                    base,
+                    &read_operation("backup.ListPolicies", "v1/backup-policies"),
+                    &[],
+                    &[("page", &page), ("size", &size)],
+                )
+                .await?;
+            Ok(PagedList {
+                items: result.items,
+                page: result.page,
+                page_size: result.page_size,
+                total_page: result.total_pages,
+                total_item: result.total_items,
+            })
         })
     }
 
@@ -166,31 +170,33 @@ impl Client {
         ctx: &RequestContext,
         input: GetPolicyInput,
     ) -> Result<GetPolicyOutput, Failure<GetPolicyOutput>> {
-        let base = self.base(
-            "vngcloud: invalid config: backup.GetPolicy: requires a supported Backup Center region",
-        )?;
-        if input.policy_id.is_empty()
-            || !input
-                .policy_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
-                "vngcloud: invalid input: backup.GetPolicy requires PolicyID to match ^[A-Za-z0-9-]+$",
-            )));
-        }
-        let operation = read_operation(GET_POLICY, "v1/backup-policies/{}");
-        let result: Detail = self
-            .read(ctx, base, &operation, &[&input.policy_id], &[])
-            .await?;
-        if result.policy.id != input.policy_id {
-            return Err(failure(invalid_body(&operation)));
-        }
-        if result.reflected {
-            return Err(failure(reflected_credential(&operation)));
-        }
-        Ok(GetPolicyOutput {
-            policy: result.policy,
+        crate::wire::product::exit::finish!(async {
+            let base = self.base(
+                "vngcloud: invalid config: backup.GetPolicy: requires a supported Backup Center region",
+            )?;
+            if input.policy_id.is_empty()
+                || !input
+                    .policy_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail(
+                    "vngcloud: invalid input: backup.GetPolicy requires PolicyID to match ^[A-Za-z0-9-]+$",
+                )));
+            }
+            let operation = read_operation(GET_POLICY, "v1/backup-policies/{}");
+            let result: Detail = self
+                .read(ctx, base, &operation, &[&input.policy_id], &[])
+                .await?;
+            if result.policy.id != input.policy_id {
+                return Err(failure(invalid_body(&operation)));
+            }
+            if result.reflected {
+                return Err(failure(reflected_credential(&operation)));
+            }
+            Ok(GetPolicyOutput {
+                policy: result.policy,
+            })
         })
     }
 

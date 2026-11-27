@@ -62,113 +62,115 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteDatabaseInstanceInput,
     ) -> Result<DeleteDatabaseInstanceOutput, Failure<DeleteDatabaseInstanceOutput>> {
-        let id = input.id;
-        if !valid_id(&id) {
-            let message = if id.is_empty() {
-                "vngcloud: invalid input: database.DeleteDatabaseInstance requires ID"
-            } else {
-                "vngcloud: invalid input: database.DeleteDatabaseInstance: ID must contain only letters, digits, hyphens, and underscores"
-            };
-            return Err(not_sent(local_error(
-                ErrorClass::InvalidInput,
-                "InvalidUsage",
-                message,
-            )));
-        }
-        self.write_provenance()?;
-        let mut evidence = Evidence::new();
-        self.delete_preflight(ctx, &id, &mut evidence).await?;
-        let body = json!({
-            "databaseInstances": [{"instancesId": id, "config": {"createFinalBackup": false, "deleteAllBackup": false}}],
-            "action": "delete", "resType": "dbaas",
-        });
-        let operation = write_operation(
-            DELETE,
-            "vdb-relational/v1/database-instances/{}/delete",
-            &SUCCESS_2XX,
-            true,
-        );
-        let options = Options {
-            path_ids: PathIds::WithUnderscore,
-            ..Options::DEFAULT
-        };
-        let reply = match self
-            .send_write::<DeleteReply>(
-                ctx,
-                &operation,
-                &options,
-                &[&id],
-                body.to_string().into(),
-                &mut evidence,
-            )
-            .await
-        {
-            Ok(reply) => reply,
-            Err(failure) => {
-                let reason = if failure.error().detail::<UnsafeReply>().is_some() {
-                    "vngcloud: write outcome not confirmed: delete response withheld"
+        crate::wire::product::exit::finish!(async {
+            let id = input.id;
+            if !valid_id(&id) {
+                let message = if id.is_empty() {
+                    "vngcloud: invalid input: database.DeleteDatabaseInstance requires ID"
                 } else {
-                    "vngcloud: write outcome not confirmed: delete request unconfirmed"
+                    "vngcloud: invalid input: database.DeleteDatabaseInstance: ID must contain only letters, digits, hyphens, and underscores"
                 };
-                return Err(rejection(failure, DELETE).unwrap_or_else(|| {
-                    unsettled(
-                        DELETE,
-                        Settlement::NotSettled(reason),
-                        Some(id),
-                        &evidence,
-                        unconfirmed,
-                    )
-                }));
+                return Err(not_sent(local_error(
+                    ErrorClass::InvalidInput,
+                    "InvalidUsage",
+                    message,
+                )));
             }
-        };
-        if reply.rejected() {
-            return Err(Failure::new(
-                api_error(
-                    DELETE,
-                    Some(200),
-                    "DeleteRejected",
-                    "delete not accepted",
-                    false,
-                ),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        let result = self
-            .poll_instance(
-                ctx,
-                &id,
-                &mut evidence,
-                INTERRUPTED,
-                |instance| match instance {
-                    None => Poll::Ready(Ok(())),
-                    Some(instance) => match instance.status.to_ascii_uppercase().as_str() {
-                        "DELETED" => Poll::Ready(Ok(())),
-                        "ACTIVE" | "DELETING" => Poll::Pending,
-                        _ => Poll::Ready(Err(Settlement::NotSettled(
-                            "vngcloud: write outcome not confirmed: delete status unrecognized",
-                        ))),
-                    },
-                },
-            )
-            .await;
-        match result {
-            Ok(()) => {
-                let id = if evidence.credentials().reflects(id.as_bytes()) {
-                    "<redacted>".to_owned()
-                } else {
-                    id
-                };
-                Ok(DeleteDatabaseInstanceOutput { id, deleted: true })
-            }
-            Err(settlement) => Err(unsettled(
+            self.write_provenance()?;
+            let mut evidence = Evidence::new();
+            self.delete_preflight(ctx, &id, &mut evidence).await?;
+            let body = json!({
+                "databaseInstances": [{"instancesId": id, "config": {"createFinalBackup": false, "deleteAllBackup": false}}],
+                "action": "delete", "resType": "dbaas",
+            });
+            let operation = write_operation(
                 DELETE,
-                settlement,
-                Some(id),
-                &evidence,
-                unconfirmed,
-            )),
-        }
+                "vdb-relational/v1/database-instances/{}/delete",
+                &SUCCESS_2XX,
+                true,
+            );
+            let options = Options {
+                path_ids: PathIds::WithUnderscore,
+                ..Options::DEFAULT
+            };
+            let reply = match self
+                .send_write::<DeleteReply>(
+                    ctx,
+                    &operation,
+                    &options,
+                    &[&id],
+                    body.to_string().into(),
+                    &mut evidence,
+                )
+                .await
+            {
+                Ok(reply) => reply,
+                Err(failure) => {
+                    let reason = if failure.error().detail::<UnsafeReply>().is_some() {
+                        "vngcloud: write outcome not confirmed: delete response withheld"
+                    } else {
+                        "vngcloud: write outcome not confirmed: delete request unconfirmed"
+                    };
+                    return Err(rejection(failure, DELETE).unwrap_or_else(|| {
+                        unsettled(
+                            DELETE,
+                            Settlement::NotSettled(reason),
+                            Some(id),
+                            &evidence,
+                            unconfirmed,
+                        )
+                    }));
+                }
+            };
+            if reply.rejected() {
+                return Err(Failure::new(
+                    api_error(
+                        DELETE,
+                        Some(200),
+                        "DeleteRejected",
+                        "delete not accepted",
+                        false,
+                    ),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            let result = self
+                .poll_instance(
+                    ctx,
+                    &id,
+                    &mut evidence,
+                    INTERRUPTED,
+                    |instance| match instance {
+                        None => Poll::Ready(Ok(())),
+                        Some(instance) => match instance.status.to_ascii_uppercase().as_str() {
+                            "DELETED" => Poll::Ready(Ok(())),
+                            "ACTIVE" | "DELETING" => Poll::Pending,
+                            _ => Poll::Ready(Err(Settlement::NotSettled(
+                                "vngcloud: write outcome not confirmed: delete status unrecognized",
+                            ))),
+                        },
+                    },
+                )
+                .await;
+            match result {
+                Ok(()) => {
+                    let id = if evidence.credentials().reflects(id.as_bytes()) {
+                        "<redacted>".to_owned()
+                    } else {
+                        id
+                    };
+                    Ok(DeleteDatabaseInstanceOutput { id, deleted: true })
+                }
+                Err(settlement) => Err(unsettled(
+                    DELETE,
+                    settlement,
+                    Some(id),
+                    &evidence,
+                    unconfirmed,
+                )),
+            }
+        })
     }
 
     async fn delete_preflight(

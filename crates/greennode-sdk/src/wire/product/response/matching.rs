@@ -34,6 +34,40 @@ impl<'a> BodyMatcher<'a> {
         }
     }
 
+    pub(in crate::wire::product) fn for_output(
+        credentials: &'a SentCredentials,
+        len: usize,
+    ) -> Self {
+        Self {
+            credentials,
+            remaining: std::cell::Cell::new(len.saturating_mul(48).clamp(8 << 20, 1 << 30)),
+        }
+    }
+
+    pub(in crate::wire::product) fn literal(&self, text: &str) -> bool {
+        let Some(patterns) = self.credentials.patterns() else {
+            return true;
+        };
+        let text = Zeroizing::new(text.to_ascii_lowercase());
+        for needle in &patterns.literal {
+            let Some(work) = self
+                .remaining
+                .get()
+                .checked_sub(text.len().saturating_add(needle.len()))
+            else {
+                return true;
+            };
+            self.remaining.set(work);
+            let Ok(needle) = std::str::from_utf8(needle) else {
+                return true;
+            };
+            if text.contains(needle) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(in crate::wire::product) fn reflects(&self, bytes: &[u8], identifier: bool) -> bool {
         if self.credentials.values().is_empty() {
             return false;
@@ -85,7 +119,7 @@ pub(super) fn matching_work_limit(length: usize, error_text: bool) -> usize {
 
 pub(super) struct MatchState<'a> {
     pub(super) work: usize,
-    pub(super) forms: Vec<Zeroizing<Vec<u8>>>,
+    pub(super) forms: Vec<(Zeroizing<Vec<u8>>, bool)>,
     pub(super) visited: Vec<(usize, [u8; 4])>,
     pub(super) encoded_needles: &'a [EncodedNeedle],
     pub(super) hex_needles: &'a [Zeroizing<String>],
@@ -109,12 +143,13 @@ pub(super) fn matches_forms(
     counts: [u8; 4],
     state: &mut MatchState<'_>,
 ) -> bool {
+    let decoded_base64 = counts[3] != 0;
     let mut found = None;
     for index in 0..state.forms.len() {
         if !state.charge(input.len()) {
             return true;
         }
-        if state.forms[index].as_slice() == input {
+        if state.forms[index].0.as_slice() == input && state.forms[index].1 == decoded_base64 {
             found = Some(index);
             break;
         }
@@ -153,6 +188,9 @@ pub(super) fn matches_forms(
                 return true;
             }
             for needle in needles {
+                if decoded_base64 && !search_decoded(needle, state.strict_base64) {
+                    continue;
+                }
                 if !state.charge(lower.len().saturating_add(needle.len())) {
                     return true;
                 }
@@ -167,7 +205,9 @@ pub(super) fn matches_forms(
                 }
             }
         }
-        state.forms.push(Zeroizing::new(input.to_vec()));
+        state
+            .forms
+            .push((Zeroizing::new(input.to_vec()), decoded_base64));
         state.forms.len() - 1
     };
     if state.visited.contains(&(index, counts)) {
@@ -188,12 +228,12 @@ pub(super) fn matches_forms(
             ),
             1 => json_unescape(input),
             2 => Zeroizing::new(percent_decode(input)),
-            _ if (state.strict_base64 || input.len() >= 8)
-                && needles
-                    .iter()
-                    .map(|needle| needle.len().saturating_mul(8).saturating_add(5) / 6)
-                    .min()
-                    .is_some_and(|minimum| input.len() >= minimum) =>
+            _ if needles
+                .iter()
+                .map(|needle| needle.len().saturating_mul(8).saturating_add(5) / 6)
+                .filter(|length| state.strict_base64 || *length >= 7)
+                .min()
+                .is_some_and(|minimum| input.len() >= minimum) =>
             {
                 decode_base64(input).unwrap_or_else(|| Zeroizing::new(input.to_vec()))
             }
@@ -204,6 +244,9 @@ pub(super) fn matches_forms(
                 if step == 3 {
                     let lower = Zeroizing::new(next.to_ascii_lowercase());
                     for needle in needles {
+                        if !search_decoded(needle, state.strict_base64) {
+                            continue;
+                        }
                         if !state.charge(lower.len().saturating_add(needle.len())) {
                             return true;
                         }
@@ -235,6 +278,10 @@ pub(super) fn matches_forms(
         }
     }
     false
+}
+
+fn search_decoded(needle: &[u8], identifier: bool) -> bool {
+    identifier || needle.len().saturating_mul(8).div_ceil(6) >= 8
 }
 
 fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {

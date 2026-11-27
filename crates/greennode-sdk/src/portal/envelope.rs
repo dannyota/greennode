@@ -82,8 +82,14 @@ impl Output for Envelope {
         {
             return operation::decode_response(operation, response);
         }
-        operation::decode_response(operation, response)
-            .map_err(|_| Box::new(invalid_response(operation, response)))
+        let output: Self = operation::decode_response(operation, response)
+            .map_err(|_| Box::new(invalid_response(operation, response)))?;
+        let evidence =
+            crate::wire::product::evidence::Evidence::from_credentials(&response.credentials);
+        if evidence.serialized_output_reflects(&output.0.fields) {
+            return Err(Box::new(invalid_response(operation, response)));
+        }
+        Ok(output)
     }
 }
 

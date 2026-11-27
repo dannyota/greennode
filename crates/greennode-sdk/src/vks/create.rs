@@ -250,7 +250,18 @@ impl Client {
         ctx: &RequestContext,
         input: CreateClusterInput,
     ) -> Result<CreateClusterOutput, Failure<CreateClusterOutput>> {
-        let base = self.write_base()?;
+        crate::wire::product::exit::finish!(async {
+            self.create_cluster_inner(ctx, input, self.write_base()?)
+                .await
+        })
+    }
+
+    async fn create_cluster_inner(
+        &self,
+        ctx: &RequestContext,
+        input: CreateClusterInput,
+        base: &crate::endpoint::Base,
+    ) -> Result<CreateClusterOutput, Failure<CreateClusterOutput>> {
         if let Some((field, rule)) = input.invalid_field() {
             return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
                 format!("greennode: invalid input: {CREATE}: {field} {rule}"),
@@ -328,7 +339,7 @@ impl Client {
             )) => output,
         };
         if !input.no_wait {
-            if evidence.credentials().reflects(output.id.as_bytes()) {
+            if evidence.id_reflects(&output.id) {
                 return Err(partial_failure(unsettled(None), output, &evidence));
             }
             let result = wait_cluster(ctx, self.session.clock(), async |wait| {
@@ -466,6 +477,37 @@ mod tests {
             vec!["security-1".into()],
             "key-1".into(),
         )
+    }
+
+    #[tokio::test]
+    async fn vks_no_wait_exit_refuses_a_short_encoding_in_the_cluster_id() {
+        use crate::wire::test_server::{Response, Server};
+        let body = br#"{"id":"pre6A6B6Cpost","status":"CREATING"}"#.to_vec();
+        let server = Server::start(vec![Response::Http {
+            status: "202 Accepted".into(),
+            headers: vec![("Content-Length".into(), body.len().to_string())],
+            body,
+        }]);
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("jkl")),
+        )
+        .unwrap();
+        config
+            .session()
+            .set_test_product_root(server.root_der.clone());
+        let client = Client::new(&config);
+        let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+        let mut order = input();
+        order.no_wait = true;
+        let ctx = RequestContext::new().0;
+        let result =
+            crate::wire::product::exit::finish!(client.create_cluster_inner(&ctx, order, &base));
+        assert_eq!(server.requests(), 1);
+        let failure = result.unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert!(failure.partial().is_none());
     }
 
     #[test]

@@ -338,6 +338,7 @@ pub(super) async fn run(
     let result = run_inner(runtime, op, auth, request, route_inputs, &mut evidence).await;
     let mut credentials = evidence.reflection;
     credentials.extend(&evidence.sent);
+    super::exit::record(&credentials, &evidence.sent, evidence.dispatch);
     match result {
         Ok((reply, reflection)) => Ok(Response {
             reply,
@@ -432,6 +433,7 @@ async fn run_inner(
             .and_then(|value| value.signin_credentials.as_deref())
         {
             reflection.extend(credentials);
+            sent.extend(credentials);
             if route_inputs.reflects(credentials) {
                 return Err(Error::InvalidRequest);
             }

@@ -44,11 +44,13 @@ impl Run<'_> {
         if !zones.iter().any(|row| row.id == zone) {
             return Err(invalid("ZoneID"));
         }
-        cached(
+        let volumes = cached(
             &mut self.memo.volumes,
             self.catalog.volume_catalog(&project),
         )
-        .await
+        .await?;
+        self.screen_cached(crate::quote::catalog::TYPES, &volumes)?;
+        Ok(volumes)
     }
 
     async fn encryption(&mut self, ids: &[&str]) -> Shared<()> {
@@ -61,6 +63,16 @@ impl Run<'_> {
             self.catalog.encryptions(&project),
         )
         .await?;
+        self.screen_cached(crate::quote::catalog::ENCRYPTIONS, &keys)?;
+        if keys
+            .iter()
+            .any(|entry| self.catalog.evidence.id_reflects(&entry.key))
+        {
+            return Err(Arc::from(crate::quote::request::invalid(
+                crate::quote::catalog::ENCRYPTIONS,
+                200,
+            )));
+        }
         if ids
             .iter()
             .any(|id| !id.is_empty() && !keys.iter().any(|entry| entry.key == *id))

@@ -511,3 +511,22 @@ async fn status_and_overflow_errors_withhold_peer_fields() {
         assert!(!format!("{error:?} {error}").contains(TOKEN));
     }
 }
+
+#[tokio::test]
+async fn backup_exit_screens_the_locally_selected_forbidden_code() {
+    let server = Server::start(vec![response("403 Forbidden", "{}")]);
+    let client = configured_client(
+        &server,
+        "han-1",
+        ConfigOptions::default().with_static_token(Secret::new("Forbidden")),
+    );
+    let failure = client
+        .get_policy(&RequestContext::new().0, GetPolicyInput::new("policy-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert!(api.code().is_empty());
+    assert_eq!(api.status(), Some(403));
+    assert_eq!(failure.error().class(), ErrorClass::PermissionDenied);
+    assert_eq!(server.requests(), 1);
+}

@@ -77,131 +77,137 @@ impl Client {
         ctx: &RequestContext,
         input: CreateLoadBalancerInput,
     ) -> Result<CreateLoadBalancerOutput, Failure<CreateLoadBalancerOutput>> {
-        let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
-        let fields = [
-            ("Name", input.name.as_str()),
-            ("PackageID", &input.package_id),
-            ("Type", &input.r#type),
-            ("Scheme", &input.scheme),
-            ("SubnetID", &input.subnet_id),
-            ("ZoneID", &input.zone_id),
-        ];
-        screen_input(&evidence, fields.iter().map(|(_, value)| *value))
-            .map_err(|error| not_sent(*error))?;
-        for (field, value) in fields {
-            if value.is_empty() {
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
+            let fields = [
+                ("Name", input.name.as_str()),
+                ("PackageID", &input.package_id),
+                ("Type", &input.r#type),
+                ("Scheme", &input.scheme),
+                ("SubnetID", &input.subnet_id),
+                ("ZoneID", &input.zone_id),
+            ];
+            screen_input(&evidence, fields.iter().map(|(_, value)| *value))
+                .map_err(|error| not_sent(*error))?;
+            for (field, value) in fields {
+                if value.is_empty() {
+                    return Err(not_sent(*invalid_input(&format!(
+                        "{CREATE} requires {field}"
+                    ))));
+                }
+            }
+            if !matches!(input.scheme.as_str(), "Internet" | "Internal") {
                 return Err(not_sent(*invalid_input(&format!(
-                    "{CREATE} requires {field}"
+                    "{CREATE}: Scheme must be \"Internet\" or \"Internal\", got {:?}",
+                    input.scheme
                 ))));
             }
-        }
-        if !matches!(input.scheme.as_str(), "Internet" | "Internal") {
-            return Err(not_sent(*invalid_input(&format!(
-                "{CREATE}: Scheme must be \"Internet\" or \"Internal\", got {:?}",
-                input.scheme
-            ))));
-        }
-        validate_ids(
-            CREATE,
-            &[
-                ("PackageID", &input.package_id),
-                ("SubnetID", &input.subnet_id),
-            ],
-            PathIds::Strict,
-        )
-        .map_err(|error| not_sent(*error))?;
-        check_max_price(CREATE, input.max_price, &evidence).map_err(|error| not_sent(*error))?;
-        let price = self
-            .guard_price(
-                ctx,
-                &mut evidence,
+            validate_ids(
                 CREATE,
-                input.max_price,
-                PriceAction::Create(&input),
+                &[
+                    ("PackageID", &input.package_id),
+                    ("SubnetID", &input.subnet_id),
+                ],
+                PathIds::Strict,
             )
-            .await
-            .map_err(not_sent)?;
-        screen_input(&evidence, fields.iter().map(|(_, value)| *value))
             .map_err(|error| not_sent(*error))?;
-        let body = json!({
-            "name": input.name, "packageId": input.package_id, "scheme": input.scheme,
-            "subnetId": input.subnet_id, "type": input.r#type, "zoneId": input.zone_id,
-            "autoScalable": false, "isPoc": false,
-        });
-        let result = self
-            .send_once(ctx, &CREATE_WRITE, &[], body, &mut evidence)
-            .await;
-        let advice = |failure| advise(failure, CREATE_ADVICE, &evidence);
-        let (status, raw) = result.map_err(advice)?;
-        let raw = reject(&CREATE_WRITE, status, raw, &evidence, None).map_err(|failure| {
-            if status.is_client_error() {
-                failure
+            check_max_price(CREATE, input.max_price, &evidence)
+                .map_err(|error| not_sent(*error))?;
+            let price = self
+                .guard_price(
+                    ctx,
+                    &mut evidence,
+                    CREATE,
+                    input.max_price,
+                    PriceAction::Create(&input),
+                )
+                .await
+                .map_err(not_sent)?;
+            screen_input(&evidence, fields.iter().map(|(_, value)| *value))
+                .map_err(|error| not_sent(*error))?;
+            let body = json!({
+                "name": input.name, "packageId": input.package_id, "scheme": input.scheme,
+                "subnetId": input.subnet_id, "type": input.r#type, "zoneId": input.zone_id,
+                "autoScalable": false, "isPoc": false,
+            });
+            let result = self
+                .send_once(ctx, &CREATE_WRITE, &[], body, &mut evidence)
+                .await;
+            let advice = |failure| advise(failure, CREATE_ADVICE, &evidence);
+            let (status, raw) = result.map_err(advice)?;
+            let raw = reject(&CREATE_WRITE, status, raw, &evidence, None).map_err(|failure| {
+                if status.is_client_error() {
+                    failure
+                } else {
+                    advice(failure)
+                }
+            })?;
+            let read = Read {
+                id: CREATE,
+                route: CREATE_WRITE.route,
+            };
+            let decode_failed = |error: Box<Error>| {
+                advice(Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))
+            };
+            let text = go_json(&raw);
+            serde_json::from_str::<&serde_json::value::RawValue>(&text).map_err(|_| {
+                decode_failed(read.decode_error(&evidence, DecodeError::MalformedJson))
+            })?;
+            crate::wire::strict_json::validate(text.as_bytes(), &[], text.len()).map_err(|_| {
+                decode_failed(read.decode_error(&evidence, DecodeError::InvalidShape))
+            })?;
+            let envelope = Envelope::parse(&text, &read, &evidence).map_err(decode_failed)?;
+            let id: String = read
+                .parse(
+                    envelope
+                        .raw(&read, &evidence, "uuid")
+                        .map_err(decode_failed)?,
+                    &evidence,
+                )
+                .map_err(decode_failed)?;
+            let policy = if input.no_wait {
+                PathIds::WithUnderscore
             } else {
-                advice(failure)
+                PathIds::Strict
+            };
+            if !policy.allows(&id) || evidence.text_reflects(&id) {
+                let error = api(
+                    CREATE,
+                    Some(status),
+                    "",
+                    "create response had no id; the resource may exist, check with list-load-balancers --name and match the name exactly",
+                    &evidence,
+                );
+                return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
             }
-        })?;
-        let read = Read {
-            id: CREATE,
-            route: CREATE_WRITE.route,
-        };
-        let decode_failed =
-            |error: Box<Error>| advice(Failure::new(*error, None, WriteDispatch::MayHaveBeenSent));
-        let text = go_json(&raw);
-        serde_json::from_str::<&serde_json::value::RawValue>(&text)
-            .map_err(|_| decode_failed(read.decode_error(&evidence, DecodeError::MalformedJson)))?;
-        crate::wire::strict_json::validate(text.as_bytes(), &[], text.len())
-            .map_err(|_| decode_failed(read.decode_error(&evidence, DecodeError::InvalidShape)))?;
-        let envelope = Envelope::parse(&text, &read, &evidence).map_err(decode_failed)?;
-        let id: String = read
-            .parse(
-                envelope
-                    .raw(&read, &evidence, "uuid")
-                    .map_err(decode_failed)?,
-                &evidence,
-            )
-            .map_err(decode_failed)?;
-        let policy = if input.no_wait {
-            PathIds::WithUnderscore
-        } else {
-            PathIds::Strict
-        };
-        if !policy.allows(&id) || evidence.text_reflects(&id) {
-            let error = api(
-                CREATE,
-                Some(status),
-                "",
-                "create response had no id; the resource may exist, check with list-load-balancers --name and match the name exactly",
-                &evidence,
-            );
-            return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
-        }
-        let fallback = LoadBalancer {
-            uuid: id.clone(),
-            name: input.name,
-            package_id: input.package_id,
-            r#type: input.r#type,
-            load_balancer_schema: input.scheme,
-            private_subnet_id: input.subnet_id,
-            zone_id: input.zone_id,
-            ..Default::default()
-        };
-        let target = Target::Create;
-        let (load_balancer, error) = if input.no_wait {
-            (fallback, None)
-        } else {
-            self.settle(ctx, &mut evidence, target, &id, fallback).await
-        };
-        complete(
-            load_balancer,
-            price,
-            error,
-            &evidence,
-            target,
-            |load_balancer| CreateLoadBalancerOutput {
+            let fallback = LoadBalancer {
+                uuid: id.clone(),
+                name: input.name,
+                package_id: input.package_id,
+                r#type: input.r#type,
+                load_balancer_schema: input.scheme,
+                private_subnet_id: input.subnet_id,
+                zone_id: input.zone_id,
+                ..Default::default()
+            };
+            let target = Target::Create;
+            let (load_balancer, error) = if input.no_wait {
+                (fallback, None)
+            } else {
+                self.settle(ctx, &mut evidence, target, &id, fallback).await
+            };
+            complete(
                 load_balancer,
-                quoted_price: price,
-            },
-        )
+                price,
+                error,
+                &evidence,
+                target,
+                |load_balancer| CreateLoadBalancerOutput {
+                    load_balancer,
+                    quoted_price: price,
+                },
+            )
+        })
     }
 
     /// Quotes and submits a package change once, then optionally confirms the new package.
@@ -210,114 +216,117 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeLoadBalancerInput,
     ) -> Result<ResizeLoadBalancerOutput, Failure<ResizeLoadBalancerOutput>> {
-        let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
-        let id = &input.load_balancer_id;
-        let package = &input.package_id;
-        screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;
-        validate_ids(RESIZE, &[("LoadBalancerID", id)], PathIds::Strict)
-            .map_err(|error| not_sent(*error))?;
-        validate_ids(RESIZE, &[("PackageID", package)], PathIds::Strict)
-            .map_err(|error| not_sent(*error))?;
-        check_max_price(RESIZE, input.max_price, &evidence).map_err(|error| not_sent(*error))?;
-        let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
-        let mut current = self
-            .read_state(ctx, id, &mut evidence, PackageRequirement::Required)
-            .await
-            .map_err(|error| not_sent(*error))?;
-        if current.package_id == *package {
-            let load_balancer = GET
-                .retain(current, &evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
+            let id = &input.load_balancer_id;
+            let package = &input.package_id;
+            screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;
+            validate_ids(RESIZE, &[("LoadBalancerID", id)], PathIds::Strict)
                 .map_err(|error| not_sent(*error))?;
-            if price_reflects(0.0, &evidence) || evidence.text_reflects("false") {
-                return Err(not_sent(
-                    *GET.decode_error(&evidence, DecodeError::ReflectedCredential),
-                ));
-            }
-            return Ok(ResizeLoadBalancerOutput {
-                load_balancer,
-                quoted_price: 0.0,
-                changed: false,
-            });
-        }
-        self.wait_ready(ctx, id, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        let price = self
-            .guard_price(
-                ctx,
-                &mut evidence,
-                RESIZE,
-                input.max_price,
-                PriceAction::Resize(&input),
-            )
-            .await
-            .map_err(not_sent)?;
-        screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;
-        let result = self
-            .send_once(
-                ctx,
-                &RESIZE_WRITE,
-                &[id],
-                json!({ "packageId": package }),
-                &mut evidence,
-            )
-            .await;
-        let advice = format!(
-            "{RESIZE}: load balancer {id}: resize may have already reached the server; read the load balancer with GetLoadBalancer and compare its package to the one requested before any rerun"
-        );
-        let (status, raw) = result.map_err(|failure| advise(failure, &advice, &evidence))?;
-        let busy = status.is_client_error()
-            && crate::wire::product::response::error_message_matches(&raw, |message| {
-                let message = message.to_ascii_lowercase();
-                ["is not ready", "is updating", "is creating", "is deleting"]
-                    .iter()
-                    .any(|part| message.contains(part))
-            });
-        let acknowledgement = match reject(&RESIZE_WRITE, status, raw, &evidence, None) {
-            Ok(acknowledgement) => acknowledgement,
-            Err(failure) => {
-                if busy && let Some(api_error) = failure.error().api_error() {
-                    let message = format!(
-                        "loadbalancer: resource busy: {RESIZE}: load balancer {id}: {RESIZE}: {} (status {status_code})",
-                        api_error.message(),
-                        status_code = status.as_u16()
-                    );
-                    let (error, _, dispatch) = failure.into_parts();
-                    let error = outcome(ErrorClass::Api, &message, &evidence)
-                        .with_outer_detail(ResourceBusy)
-                        .with_cause(error);
-                    return Err(Failure::new(error, None, dispatch));
+            validate_ids(RESIZE, &[("PackageID", package)], PathIds::Strict)
+                .map_err(|error| not_sent(*error))?;
+            check_max_price(RESIZE, input.max_price, &evidence)
+                .map_err(|error| not_sent(*error))?;
+            let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
+            let mut current = self
+                .read_state(ctx, id, &mut evidence, PackageRequirement::Required)
+                .await
+                .map_err(|error| not_sent(*error))?;
+            if current.package_id == *package {
+                let load_balancer = GET
+                    .retain(current, &evidence)
+                    .map_err(|error| not_sent(*error))?;
+                if price_reflects(0.0, &evidence) || evidence.text_reflects("false") {
+                    return Err(not_sent(
+                        *GET.decode_error(&evidence, DecodeError::ReflectedCredential),
+                    ));
                 }
-                return Err(if status.is_client_error() {
-                    failure
-                } else {
-                    advise(failure, &advice, &evidence)
+                return Ok(ResizeLoadBalancerOutput {
+                    load_balancer,
+                    quoted_price: 0.0,
+                    changed: false,
                 });
             }
-        };
-        let target = Target::Resize(package);
-        let (load_balancer, error) = if input.no_wait {
-            check_resize_acknowledgement(&acknowledgement, id, &evidence).map_err(|error| {
-                let failure = Failure::new(*error, None, WriteDispatch::MayHaveBeenSent);
-                advise(failure, &advice, &evidence)
-            })?;
-            current.package_id.clone_from(package);
-            (current, None)
-        } else {
-            self.settle(ctx, &mut evidence, target, id, current).await
-        };
-        complete(
-            load_balancer,
-            price,
-            error,
-            &evidence,
-            target,
-            |load_balancer| ResizeLoadBalancerOutput {
+            self.wait_ready(ctx, id, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            let price = self
+                .guard_price(
+                    ctx,
+                    &mut evidence,
+                    RESIZE,
+                    input.max_price,
+                    PriceAction::Resize(&input),
+                )
+                .await
+                .map_err(not_sent)?;
+            screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;
+            let result = self
+                .send_once(
+                    ctx,
+                    &RESIZE_WRITE,
+                    &[id],
+                    json!({ "packageId": package }),
+                    &mut evidence,
+                )
+                .await;
+            let advice = format!(
+                "{RESIZE}: load balancer {id}: resize may have already reached the server; read the load balancer with GetLoadBalancer and compare its package to the one requested before any rerun"
+            );
+            let (status, raw) = result.map_err(|failure| advise(failure, &advice, &evidence))?;
+            let busy = status.is_client_error()
+                && crate::wire::product::response::error_message_matches(&raw, |message| {
+                    let message = message.to_ascii_lowercase();
+                    ["is not ready", "is updating", "is creating", "is deleting"]
+                        .iter()
+                        .any(|part| message.contains(part))
+                });
+            let acknowledgement = match reject(&RESIZE_WRITE, status, raw, &evidence, None) {
+                Ok(acknowledgement) => acknowledgement,
+                Err(failure) => {
+                    if busy && let Some(api_error) = failure.error().api_error() {
+                        let message = format!(
+                            "loadbalancer: resource busy: {RESIZE}: load balancer {id}: {RESIZE}: {} (status {status_code})",
+                            api_error.message(),
+                            status_code = status.as_u16()
+                        );
+                        let (error, _, dispatch) = failure.into_parts();
+                        let error = outcome(ErrorClass::Api, &message, &evidence)
+                            .with_outer_detail(ResourceBusy)
+                            .with_cause(error);
+                        return Err(Failure::new(error, None, dispatch));
+                    }
+                    return Err(if status.is_client_error() {
+                        failure
+                    } else {
+                        advise(failure, &advice, &evidence)
+                    });
+                }
+            };
+            let target = Target::Resize(package);
+            let (load_balancer, error) = if input.no_wait {
+                check_resize_acknowledgement(&acknowledgement, id, &evidence).map_err(|error| {
+                    let failure = Failure::new(*error, None, WriteDispatch::MayHaveBeenSent);
+                    advise(failure, &advice, &evidence)
+                })?;
+                current.package_id.clone_from(package);
+                (current, None)
+            } else {
+                self.settle(ctx, &mut evidence, target, id, current).await
+            };
+            complete(
                 load_balancer,
-                quoted_price: price,
-                changed: true,
-            },
-        )
+                price,
+                error,
+                &evidence,
+                target,
+                |load_balancer| ResizeLoadBalancerOutput {
+                    load_balancer,
+                    quoted_price: price,
+                    changed: true,
+                },
+            )
+        })
     }
 
     async fn read_state(

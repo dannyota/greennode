@@ -45,41 +45,43 @@ impl Client {
         ctx: &RequestContext,
         input: ListFlavorPricesInput,
     ) -> Result<ListFlavorPricesOutput, Failure<ListFlavorPricesOutput>> {
-        validate(&input).map_err(|error| failure(*error))?;
-        let mut run = Run {
-            catalog: Catalog::new(&self.session, ctx, input.max_requests),
-            input: &input,
-            output: ListFlavorPricesOutput {
-                items: Vec::new(),
-                metadata: DiscoveryMetadata {
-                    region: self.region.clone(),
-                    complete: true,
-                    requests: 0,
-                    quoted_at: self.session.clock().utc_now(),
-                    failures: Vec::new(),
-                    notes: discovery_notes()
-                        .into_iter()
-                        .filter(|note| {
-                            !matches!(
-                                note.scope.as_str(),
-                                "storage" | "object-storage" | "network"
-                            )
-                        })
-                        .collect(),
-                    excluded_groups: None,
+        crate::wire::product::exit::finish!(async {
+            validate(&input).map_err(|error| failure(*error))?;
+            let mut run = Run {
+                catalog: Catalog::new(&self.session, ctx, input.max_requests),
+                input: &input,
+                output: ListFlavorPricesOutput {
+                    items: Vec::new(),
+                    metadata: DiscoveryMetadata {
+                        region: self.region.clone(),
+                        complete: true,
+                        requests: 0,
+                        quoted_at: self.session.clock().utc_now(),
+                        failures: Vec::new(),
+                        notes: discovery_notes()
+                            .into_iter()
+                            .filter(|note| {
+                                !matches!(
+                                    note.scope.as_str(),
+                                    "storage" | "object-storage" | "network"
+                                )
+                            })
+                            .collect(),
+                        excluded_groups: None,
+                    },
                 },
-            },
-            identities: HashMap::new(),
-            tuples: HashMap::new(),
-            stopped: false,
-            errors: Vec::new(),
-        };
-        run.note("visibility", "compute", "Console-family scope excludes custom, partner, and legacy catalogs unless requested. Catalog visibility establishes no sale eligibility.");
-        run.note("reference-component", "compute", "Each price is the instance component of its recorded reference configuration. The root disk and other excluded costs are not included.");
-        if let Err(error) = run.discover().await {
-            return Err(failure(run.safe_error(*error)));
-        }
-        run.finish()
+                identities: HashMap::new(),
+                tuples: HashMap::new(),
+                stopped: false,
+                errors: Vec::new(),
+            };
+            run.note("visibility", "compute", "Console-family scope excludes custom, partner, and legacy catalogs unless requested. Catalog visibility establishes no sale eligibility.");
+            run.note("reference-component", "compute", "Each price is the instance component of its recorded reference configuration. The root disk and other excluded costs are not included.");
+            if let Err(error) = run.discover().await {
+                return Err(failure(run.safe_error(*error)));
+            }
+            run.finish()
+        })
     }
 }
 

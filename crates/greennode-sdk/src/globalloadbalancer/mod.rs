@@ -255,9 +255,11 @@ impl Client {
         ctx: &RequestContext,
         _: ListPackagesInput,
     ) -> Result<ListPackagesOutput, Failure<ListPackagesOutput>> {
-        let operation = read_operation("globalloadbalancer.ListPackages", "v1/packages");
-        let items = self.read(ctx, &operation, &[], &[]).await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation("globalloadbalancer.ListPackages", "v1/packages");
+            let items = self.read(ctx, &operation, &[], &[]).await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads the global load balancer region catalog.
@@ -266,9 +268,11 @@ impl Client {
         ctx: &RequestContext,
         _: ListRegionsInput,
     ) -> Result<ListRegionsOutput, Failure<ListRegionsOutput>> {
-        let operation = read_operation("globalloadbalancer.ListRegions", "v1/regions");
-        let items = self.read(ctx, &operation, &[], &[]).await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation("globalloadbalancer.ListRegions", "v1/regions");
+            let items = self.read(ctx, &operation, &[], &[]).await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads one page of global load balancers.
@@ -277,28 +281,30 @@ impl Client {
         ctx: &RequestContext,
         input: ListLoadBalancersInput,
     ) -> Result<ListLoadBalancersOutput, Failure<ListLoadBalancersOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.ListLoadBalancers",
-            "v1/global-load-balancers",
-        );
-        let offset = input.offset.max(0).to_string();
-        let limit = if input.limit > 0 {
-            input.limit
-        } else {
-            DEFAULT_PAGE_SIZE
-        }
-        .to_string();
-        self.read(
-            ctx,
-            &operation,
-            &[],
-            &[
-                ("name", &input.name),
-                ("offset", &offset),
-                ("limit", &limit),
-            ],
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.ListLoadBalancers",
+                "v1/global-load-balancers",
+            );
+            let offset = input.offset.max(0).to_string();
+            let limit = if input.limit > 0 {
+                input.limit
+            } else {
+                DEFAULT_PAGE_SIZE
+            }
+            .to_string();
+            self.read(
+                ctx,
+                &operation,
+                &[],
+                &[
+                    ("name", &input.name),
+                    ("offset", &offset),
+                    ("limit", &limit),
+                ],
+            )
+            .await
+        })
     }
 
     /// Reads a global load balancer by ID.
@@ -307,19 +313,21 @@ impl Client {
         ctx: &RequestContext,
         input: GetLoadBalancerInput,
     ) -> Result<GetLoadBalancerOutput, Failure<GetLoadBalancerOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.GetLoadBalancer",
-            "v1/global-load-balancers/{}",
-        );
-        let load_balancer = self
-            .read(
-                ctx,
-                &operation,
-                &[("LoadBalancerID", &input.load_balancer_id)],
-                &[],
-            )
-            .await?;
-        Ok(GetLoadBalancerOutput { load_balancer })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.GetLoadBalancer",
+                "v1/global-load-balancers/{}",
+            );
+            let load_balancer = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[("LoadBalancerID", &input.load_balancer_id)],
+                    &[],
+                )
+                .await?;
+            Ok(GetLoadBalancerOutput { load_balancer })
+        })
     }
 
     /// Reads pools belonging to a global load balancer.
@@ -328,19 +336,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListPoolsInput,
     ) -> Result<ListPoolsOutput, Failure<ListPoolsOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.ListPools",
-            "v1/global-load-balancers/{}/global-pools",
-        );
-        let items = self
-            .read(
-                ctx,
-                &operation,
-                &[("LoadBalancerID", &input.load_balancer_id)],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.ListPools",
+                "v1/global-load-balancers/{}/global-pools",
+            );
+            let items = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[("LoadBalancerID", &input.load_balancer_id)],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads listeners belonging to a global load balancer.
@@ -349,19 +359,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListListenersInput,
     ) -> Result<ListListenersOutput, Failure<ListListenersOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.ListListeners",
-            "v1/global-load-balancers/{}/global-listeners",
-        );
-        let items = self
-            .read(
-                ctx,
-                &operation,
-                &[("LoadBalancerID", &input.load_balancer_id)],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.ListListeners",
+                "v1/global-load-balancers/{}/global-listeners",
+            );
+            let items = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[("LoadBalancerID", &input.load_balancer_id)],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads an individual listener.
@@ -370,22 +382,24 @@ impl Client {
         ctx: &RequestContext,
         input: GetListenerInput,
     ) -> Result<GetListenerOutput, Failure<GetListenerOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.GetListener",
-            "v1/global-load-balancers/{}/global-listeners/{}",
-        );
-        let listener = self
-            .read(
-                ctx,
-                &operation,
-                &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("ListenerID", &input.listener_id),
-                ],
-                &[],
-            )
-            .await?;
-        Ok(GetListenerOutput { listener })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.GetListener",
+                "v1/global-load-balancers/{}/global-listeners/{}",
+            );
+            let listener = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("ListenerID", &input.listener_id),
+                    ],
+                    &[],
+                )
+                .await?;
+            Ok(GetListenerOutput { listener })
+        })
     }
 
     /// Reads member groups belonging to a global pool.
@@ -394,22 +408,24 @@ impl Client {
         ctx: &RequestContext,
         input: ListPoolMembersInput,
     ) -> Result<ListPoolMembersOutput, Failure<ListPoolMembersOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.ListPoolMembers",
-            "v1/global-load-balancers/{}/global-pools/{}/pool-members",
-        );
-        let items = self
-            .read(
-                ctx,
-                &operation,
-                &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("PoolID", &input.pool_id),
-                ],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.ListPoolMembers",
+                "v1/global-load-balancers/{}/global-pools/{}/pool-members",
+            );
+            let items = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("PoolID", &input.pool_id),
+                    ],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads an individual global pool member group.
@@ -418,23 +434,25 @@ impl Client {
         ctx: &RequestContext,
         input: GetPoolMemberInput,
     ) -> Result<GetPoolMemberOutput, Failure<GetPoolMemberOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.GetPoolMember",
-            "v1/global-load-balancers/{}/global-pools/{}/pool-members/{}",
-        );
-        let pool_member = self
-            .read(
-                ctx,
-                &operation,
-                &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("PoolID", &input.pool_id),
-                    ("PoolMemberID", &input.pool_member_id),
-                ],
-                &[],
-            )
-            .await?;
-        Ok(GetPoolMemberOutput { pool_member })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.GetPoolMember",
+                "v1/global-load-balancers/{}/global-pools/{}/pool-members/{}",
+            );
+            let pool_member = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("PoolID", &input.pool_id),
+                        ("PoolMemberID", &input.pool_member_id),
+                    ],
+                    &[],
+                )
+                .await?;
+            Ok(GetPoolMemberOutput { pool_member })
+        })
     }
 
     /// Reads usage history, passing any nonempty filters to the service.
@@ -443,25 +461,27 @@ impl Client {
         ctx: &RequestContext,
         input: ListUsageHistoriesInput,
     ) -> Result<ListUsageHistoriesOutput, Failure<ListUsageHistoriesOutput>> {
-        let operation = read_operation(
-            "globalloadbalancer.ListUsageHistories",
-            "v1/global-load-balancers/{}/usage-histories",
-        );
-        let query: Vec<_> = [
-            ("from", input.from.as_str()),
-            ("to", input.to.as_str()),
-            ("type", input.r#type.as_str()),
-        ]
-        .into_iter()
-        .filter(|(_, value)| !value.is_empty())
-        .collect();
-        self.read(
-            ctx,
-            &operation,
-            &[("LoadBalancerID", &input.load_balancer_id)],
-            &query,
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "globalloadbalancer.ListUsageHistories",
+                "v1/global-load-balancers/{}/usage-histories",
+            );
+            let query: Vec<_> = [
+                ("from", input.from.as_str()),
+                ("to", input.to.as_str()),
+                ("type", input.r#type.as_str()),
+            ]
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
+            self.read(
+                ctx,
+                &operation,
+                &[("LoadBalancerID", &input.load_balancer_id)],
+                &query,
+            )
+            .await
+        })
     }
 
     async fn read<T: WireField, O>(

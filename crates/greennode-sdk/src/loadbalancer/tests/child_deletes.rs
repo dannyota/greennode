@@ -304,7 +304,7 @@ async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
 }
 
 #[tokio::test]
-async fn pool_delete_classifies_in_use_on_the_readiness_retry() {
+async fn pool_delete_classifies_only_screened_messages_on_the_readiness_retry() {
     let server = Server::start(
         pool_preflight()
             .into_iter()
@@ -323,17 +323,10 @@ async fn pool_delete_classifies_in_use_on_the_readiness_retry() {
         .delete_pool(&ctx, pool_input(true))
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<WriteError>(),
-        Some(&WriteError::ResourceInUse)
-    );
+    assert_eq!(failure.error().detail::<WriteError>(), None);
     assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    let message = failure
-        .error()
-        .detail::<crate::RecoveryAdvice>()
-        .unwrap()
-        .message();
+    let message = failure.error().api_error().unwrap().message();
     assert!(!message.contains(CANARY));
     assert!(!message.contains("toy%2Dsecret"));
     assert_eq!(server.requests(), 6);

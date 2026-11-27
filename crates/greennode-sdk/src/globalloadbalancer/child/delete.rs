@@ -15,57 +15,59 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteListenerInput,
     ) -> Result<DeleteListenerOutput, Failure<DeleteListenerOutput>> {
-        let (glb, id) = (input.load_balancer_id.as_str(), input.listener_id.as_str());
-        ids(
-            DELETE_LISTENER,
-            &[("LoadBalancerID", glb), ("ListenerID", id)],
-        )
-        .map_err(preflight)?;
-        let mut run = self.start_child(DELETE_LISTENER)?;
-        run.screen_input(ctx, &json!([glb, id]))
+        crate::wire::product::exit::finish!(async {
+            let (glb, id) = (input.load_balancer_id.as_str(), input.listener_id.as_str());
+            ids(
+                DELETE_LISTENER,
+                &[("LoadBalancerID", glb), ("ListenerID", id)],
+            )
             .map_err(preflight)?;
-        let parent = run.parent(ctx, glb).await.map_err(preflight)?;
-        let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
-        let listener: ListenerWire = run
-            .get(ctx, LISTENER, &[glb, id])
-            .await
-            .map_err(preflight)?;
-        let listeners = run.listeners(ctx, glb).await.map_err(preflight)?;
-        if listener.id != id
-            || listener.glb != glb
-            || listener.protocol != TCP
-            || state(&listener.status) != State::Active
-            || !matches!(listeners.as_slice(), [row] if row.id == id)
-            || !PathIds::Strict.allows(&listener.pool)
-        {
-            return Err(preflight(refuse(
-                "the listener is not an eligible sole TCP listener",
-            )));
-        }
-        let pool = run
-            .in_pool(ctx, glb, &listener.pool)
-            .await
-            .map_err(preflight)?;
-        if !stable(&pool) {
-            return Err(preflight(refuse("the pool is not in a stable state")));
-        }
-        let group = run
-            .sole_group(ctx, glb, &listener.pool)
-            .await
-            .map_err(preflight)?;
-        if group.region != region {
-            return Err(preflight(refuse(
-                "the member group is not the expected private group in the configured region",
-            )));
-        }
-        let plan = DeletePlan {
-            kind: Kind::Listener,
-            glb,
-            id,
-            pool: &listener.pool,
-            group: &group.id,
-        };
-        run.delete(ctx, plan, DeleteListenerOutput::new).await
+            let mut run = self.start_child(DELETE_LISTENER)?;
+            run.screen_input(ctx, &json!([glb, id]))
+                .map_err(preflight)?;
+            let parent = run.parent(ctx, glb).await.map_err(preflight)?;
+            let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
+            let listener: ListenerWire = run
+                .get(ctx, LISTENER, &[glb, id])
+                .await
+                .map_err(preflight)?;
+            let listeners = run.listeners(ctx, glb).await.map_err(preflight)?;
+            if listener.id != id
+                || listener.glb != glb
+                || listener.protocol != TCP
+                || state(&listener.status) != State::Active
+                || !matches!(listeners.as_slice(), [row] if row.id == id)
+                || !PathIds::Strict.allows(&listener.pool)
+            {
+                return Err(preflight(refuse(
+                    "the listener is not an eligible sole TCP listener",
+                )));
+            }
+            let pool = run
+                .in_pool(ctx, glb, &listener.pool)
+                .await
+                .map_err(preflight)?;
+            if !stable(&pool) {
+                return Err(preflight(refuse("the pool is not in a stable state")));
+            }
+            let group = run
+                .sole_group(ctx, glb, &listener.pool)
+                .await
+                .map_err(preflight)?;
+            if group.region != region {
+                return Err(preflight(refuse(
+                    "the member group is not the expected private group in the configured region",
+                )));
+            }
+            let plan = DeletePlan {
+                kind: Kind::Listener,
+                glb,
+                id,
+                pool: &listener.pool,
+                group: &group.id,
+            };
+            run.delete(ctx, plan, DeleteListenerOutput::new).await
+        })
     }
 
     /// Deletes the listener-free pool and its one private group, then verifies their absence.
@@ -74,37 +76,39 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePoolInput,
     ) -> Result<DeletePoolOutput, Failure<DeletePoolOutput>> {
-        let (glb, id) = (input.load_balancer_id.as_str(), input.pool_id.as_str());
-        ids(DELETE_POOL, &[("LoadBalancerID", glb), ("PoolID", id)]).map_err(preflight)?;
-        let mut run = self.start_child(DELETE_POOL)?;
-        run.screen_input(ctx, &json!([glb, id]))
-            .map_err(preflight)?;
-        let parent = run.parent(ctx, glb).await.map_err(preflight)?;
-        let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
-        let pool = run.in_pool(ctx, glb, id).await.map_err(preflight)?;
-        if !stable(&pool) {
-            return Err(preflight(refuse("the pool is not in a stable state")));
-        }
-        run.no_listeners(ctx, glb).await.map_err(preflight)?;
-        let group = run.sole_group(ctx, glb, id).await.map_err(preflight)?;
-        if group.region != region {
-            return Err(preflight(refuse(
-                "the member group is not the expected private group with one backend",
-            )));
-        }
-        if !healthy(&group.status) || !member(&group).is_some_and(|m| healthy(&m.status)) {
-            return Err(preflight(refuse(
-                "the backend row is not settled; wait for a health status",
-            )));
-        }
-        let plan = DeletePlan {
-            kind: Kind::Pool,
-            glb,
-            id,
-            pool: id,
-            group: &group.id,
-        };
-        run.delete(ctx, plan, DeletePoolOutput::new).await
+        crate::wire::product::exit::finish!(async {
+            let (glb, id) = (input.load_balancer_id.as_str(), input.pool_id.as_str());
+            ids(DELETE_POOL, &[("LoadBalancerID", glb), ("PoolID", id)]).map_err(preflight)?;
+            let mut run = self.start_child(DELETE_POOL)?;
+            run.screen_input(ctx, &json!([glb, id]))
+                .map_err(preflight)?;
+            let parent = run.parent(ctx, glb).await.map_err(preflight)?;
+            let region = run.region(ctx, &parent.package).await.map_err(preflight)?;
+            let pool = run.in_pool(ctx, glb, id).await.map_err(preflight)?;
+            if !stable(&pool) {
+                return Err(preflight(refuse("the pool is not in a stable state")));
+            }
+            run.no_listeners(ctx, glb).await.map_err(preflight)?;
+            let group = run.sole_group(ctx, glb, id).await.map_err(preflight)?;
+            if group.region != region {
+                return Err(preflight(refuse(
+                    "the member group is not the expected private group with one backend",
+                )));
+            }
+            if !healthy(&group.status) || !member(&group).is_some_and(|m| healthy(&m.status)) {
+                return Err(preflight(refuse(
+                    "the backend row is not settled; wait for a health status",
+                )));
+            }
+            let plan = DeletePlan {
+                kind: Kind::Pool,
+                glb,
+                id,
+                pool: id,
+                group: &group.id,
+            };
+            run.delete(ctx, plan, DeletePoolOutput::new).await
+        })
     }
 }
 

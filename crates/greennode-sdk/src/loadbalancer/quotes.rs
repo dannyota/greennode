@@ -54,33 +54,35 @@ impl Client {
         ctx: &RequestContext,
         input: CreateLoadBalancerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "loadbalancer.QuoteCreateLoadBalancer";
-        let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
-        screen_input(&evidence, [&*input.package_id, &input.zone_id]).map_err(failure)?;
-        if input.package_id.is_empty() {
-            return Err(failure(invalid_input(&format!("{OP} requires PackageID"))));
-        }
-        if input.zone_id.is_empty() {
-            return Err(failure(invalid_input(&format!("{OP} requires ZoneID"))));
-        }
-        if !matches!(input.scheme.as_str(), "" | "Internet" | "Internal") {
-            return Err(failure(invalid_input(&format!(
-                "{OP}: Scheme must be \"Internet\" or \"Internal\""
-            ))));
-        }
-        let ids = [
-            ("PackageID", input.package_id.as_str()),
-            ("SubnetID", input.subnet_id.as_str()),
-        ];
-        let ids = if input.subnet_id.is_empty() {
-            &ids[..1]
-        } else {
-            &ids
-        };
-        validate_ids(OP, ids, PathIds::Strict).map_err(failure)?;
-        let details = create_quote_info(&input);
-        self.request_quote(ctx, &mut evidence, "create", details)
-            .await
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "loadbalancer.QuoteCreateLoadBalancer";
+            let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
+            screen_input(&evidence, [&*input.package_id, &input.zone_id]).map_err(failure)?;
+            if input.package_id.is_empty() {
+                return Err(failure(invalid_input(&format!("{OP} requires PackageID"))));
+            }
+            if input.zone_id.is_empty() {
+                return Err(failure(invalid_input(&format!("{OP} requires ZoneID"))));
+            }
+            if !matches!(input.scheme.as_str(), "" | "Internet" | "Internal") {
+                return Err(failure(invalid_input(&format!(
+                    "{OP}: Scheme must be \"Internet\" or \"Internal\""
+                ))));
+            }
+            let ids = [
+                ("PackageID", input.package_id.as_str()),
+                ("SubnetID", input.subnet_id.as_str()),
+            ];
+            let ids = if input.subnet_id.is_empty() {
+                &ids[..1]
+            } else {
+                &ids
+            };
+            validate_ids(OP, ids, PathIds::Strict).map_err(failure)?;
+            let details = create_quote_info(&input);
+            self.request_quote(ctx, &mut evidence, "create", details)
+                .await
+        })
     }
 
     /// Quotes the new package for a load balancer without resizing it.
@@ -89,21 +91,24 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeLoadBalancerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "loadbalancer.QuoteResizeLoadBalancer";
-        let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
-        screen_input(&evidence, [&*input.load_balancer_id, &input.package_id]).map_err(failure)?;
-        validate_ids(
-            OP,
-            &[
-                ("LoadBalancerID", &input.load_balancer_id),
-                ("PackageID", &input.package_id),
-            ],
-            PathIds::Strict,
-        )
-        .map_err(failure)?;
-        let details = resize_quote_info(&input);
-        self.request_quote(ctx, &mut evidence, "resize", details)
-            .await
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "loadbalancer.QuoteResizeLoadBalancer";
+            let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
+            screen_input(&evidence, [&*input.load_balancer_id, &input.package_id])
+                .map_err(failure)?;
+            validate_ids(
+                OP,
+                &[
+                    ("LoadBalancerID", &input.load_balancer_id),
+                    ("PackageID", &input.package_id),
+                ],
+                PathIds::Strict,
+            )
+            .map_err(failure)?;
+            let details = resize_quote_info(&input);
+            self.request_quote(ctx, &mut evidence, "resize", details)
+                .await
+        })
     }
 
     pub(super) fn quote_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {

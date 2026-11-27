@@ -110,13 +110,15 @@ impl Client {
         ctx: &RequestContext,
         input: ListTransactionsInput,
     ) -> Result<ListTransactionsOutput, Failure<ListTransactionsOutput>> {
-        self.list_history::<Transaction>(
-            ctx,
-            &history_operation("billing.ListTransactions", "gateway/api/v1/transactions"),
-            input,
-        )
-        .await
-        .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            self.list_history::<Transaction>(
+                ctx,
+                &history_operation("billing.ListTransactions", "gateway/api/v1/transactions"),
+                input,
+            )
+            .await
+            .map_err(|error| failure(*error))
+        })
     }
 
     /// Reads payment history independently of wallet transactions.
@@ -125,19 +127,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListPaymentsInput,
     ) -> Result<ListPaymentsOutput, Failure<ListPaymentsOutput>> {
-        self.list_history::<Payment>(
-            ctx,
-            &history_operation("billing.ListPayments", "gateway/api/v1/payments"),
-            ListTransactionsInput {
-                start_date: input.start_date,
-                end_date: input.end_date,
-                page: input.page,
-                size: input.size,
-                all: input.all,
-            },
-        )
-        .await
-        .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            self.list_history::<Payment>(
+                ctx,
+                &history_operation("billing.ListPayments", "gateway/api/v1/payments"),
+                ListTransactionsInput {
+                    start_date: input.start_date,
+                    end_date: input.end_date,
+                    page: input.page,
+                    size: input.size,
+                    all: input.all,
+                },
+            )
+            .await
+            .map_err(|error| failure(*error))
+        })
     }
 
     async fn list_history<W: HistoryRow>(

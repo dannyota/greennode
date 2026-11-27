@@ -236,6 +236,7 @@ impl Evidence {
 
     pub(crate) fn add_secret(&mut self, secret: &Secret) {
         self.credentials.record(secret);
+        super::exit::record_secret(secret);
     }
 
     #[cfg(test)]
@@ -245,6 +246,7 @@ impl Evidence {
 
     pub(crate) fn add_redaction(&mut self, value: &Secret) {
         self.credentials.record_from(value, Source::Redaction);
+        super::exit::record_secret(value);
     }
 
     pub(crate) fn add_operation_password(&mut self, value: &Secret) {
@@ -289,7 +291,12 @@ impl Evidence {
     }
 
     pub(crate) fn serialized_output_reflects(&self, value: &impl serde::Serialize) -> bool {
-        serde_json::to_value(value).map_or(true, |value| self.output_reflects(&value))
+        if self.credentials.values().is_empty() {
+            return false;
+        }
+        serde_json::to_vec(value).map_or(true, |body| {
+            peer::output_reflects(self, &body) != Some(false)
+        })
     }
 
     pub(crate) fn output_reflects(&self, value: &Value) -> bool {
@@ -516,6 +523,20 @@ mod tests {
             evidence.peer_body_reflects(br#"{"note":"YQ=="}"#),
             Some(true)
         );
+    }
+
+    #[test]
+    fn short_credential_does_not_reflect_inside_a_longer_base64_field() {
+        for evidence in [evidence(&["a"]), evidence(&["a", "long-toy-secret"])] {
+            assert_eq!(
+                evidence.peer_body_reflects(br#"{"note":"QmFkZ2Vy"}"#),
+                Some(false)
+            );
+            assert_eq!(
+                evidence.peer_body_reflects(br#"{"note":"YQ=="}"#),
+                Some(true)
+            );
+        }
     }
 
     #[test]

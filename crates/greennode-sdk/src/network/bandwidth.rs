@@ -55,27 +55,29 @@ impl Client {
         ctx: &RequestContext,
         _input: ListBandwidthPackagesInput,
     ) -> Result<ListBandwidthPackagesOutput, Failure<ListBandwidthPackagesOutput>> {
-        let base = self.bandwidth_base().map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let project = if let Some(project) = self.session.configured_project_id() {
-            PACKAGES.path("ProjectID", project).map_err(failure)?;
-            if evidence.text_reflects(project) {
-                return Err(failure(Error::new(ErrorClass::InvalidInput)));
-            }
-            project.to_owned()
-        } else {
-            self.discover_project(ctx, &base, PROJECTS, &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            let base = self.bandwidth_base().map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let project = if let Some(project) = self.session.configured_project_id() {
+                PACKAGES.path("ProjectID", project).map_err(failure)?;
+                if evidence.text_reflects(project) {
+                    return Err(failure(Error::new(ErrorClass::InvalidInput)));
+                }
+                project.to_owned()
+            } else {
+                self.discover_project(ctx, &base, PROJECTS, &mut evidence)
+                    .await
+                    .map_err(failure)?
+            };
+            let raw = self
+                .read(ctx, &base, PACKAGES, &[&project], &mut evidence)
                 .await
-                .map_err(failure)?
-        };
-        let raw = self
-            .read(ctx, &base, PACKAGES, &[&project], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let items =
-            decode_packages(&text, &evidence).map_err(|()| failure(PACKAGES.invalid(&evidence)))?;
-        Ok(List { items })
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let items = decode_packages(&text, &evidence)
+                .map_err(|()| failure(PACKAGES.invalid(&evidence)))?;
+            Ok(List { items })
+        })
     }
 
     pub(super) fn bandwidth_base(&self) -> Result<Base, Error> {

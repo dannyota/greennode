@@ -56,10 +56,12 @@ impl Client {
         ctx: &RequestContext,
         volume: CreateVolumeInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let quote = create_quote("volume.QuoteCreateVolume", &volume).map_err(failure)?;
-        self.request_volume_quote(ctx, quote, &mut Evidence::new())
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            let quote = create_quote("volume.QuoteCreateVolume", &volume).map_err(failure)?;
+            self.request_volume_quote(ctx, quote, &mut Evidence::new())
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Reads the current size and type, then quotes a grow without resizing the volume.
@@ -68,30 +70,32 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeVolumeInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "volume.QuoteResizeVolume";
-        if input.size == 0 {
-            return Err(failure(invalid(
-                "vngcloud: invalid input: volume.QuoteResizeVolume requires Size",
-            )));
-        }
-        path_id(OP, "VolumeID", &input.volume_id).map_err(failure)?;
-        let mut evidence = Evidence::new();
-        self.guard_body(ctx, &mut evidence, &json!([input.volume_id, input.size]))
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "volume.QuoteResizeVolume";
+            if input.size == 0 {
+                return Err(failure(invalid(
+                    "vngcloud: invalid input: volume.QuoteResizeVolume requires Size",
+                )));
+            }
+            path_id(OP, "VolumeID", &input.volume_id).map_err(failure)?;
+            let mut evidence = Evidence::new();
+            self.guard_body(ctx, &mut evidence, &json!([input.volume_id, input.size]))
+                .map_err(failure)?;
+            let current = self
+                .volume(ctx, &input.volume_id, &mut evidence)
+                .await
+                .map_err(failure)?;
+            self.guard_body(
+                ctx,
+                &mut evidence,
+                &json!([current.size, current.volume_type_id]),
+            )
             .map_err(failure)?;
-        let current = self
-            .volume(ctx, &input.volume_id, &mut evidence)
-            .await
-            .map_err(failure)?;
-        self.guard_body(
-            ctx,
-            &mut evidence,
-            &json!([current.size, current.volume_type_id]),
-        )
-        .map_err(failure)?;
-        let (_, _, quote) = resize_bodies(OP, &input, &current).map_err(failure)?;
-        self.request_volume_quote(ctx, quote, &mut evidence)
-            .await
-            .map_err(failure)
+            let (_, _, quote) = resize_bodies(OP, &input, &current).map_err(failure)?;
+            self.request_volume_quote(ctx, quote, &mut evidence)
+                .await
+                .map_err(failure)
+        })
     }
 
     pub(super) async fn request_volume_quote(

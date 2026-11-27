@@ -120,39 +120,41 @@ impl Client {
         ctx: &RequestContext,
         input: CreateBudgetInput,
     ) -> Result<CreateBudgetOutput, Failure<CreateBudgetOutput>> {
-        if input.name.is_empty()
-            || input.period_type.is_empty()
-            || input.r#type.is_empty()
-            || input.limit_amount == 0
-        {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
-        }
-        let status = if input.status.is_empty() {
-            "ACTIVE"
-        } else {
-            &input.status
-        };
-        let body = json!({
-            "name": input.name,
-            "periodType": input.period_type,
-            "type": input.r#type,
-            "limitAmount": input.limit_amount,
-            "status": status,
-        });
-        let budget = self
-            .write(
-                ctx,
-                &write_operation(
-                    "billing.CreateBudget",
-                    Method::POST,
-                    "gateway/api/v1/budgets",
-                    false,
-                ),
-                &[],
-                Some(body),
-            )
-            .await?;
-        Ok(CreateBudgetOutput { budget })
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty()
+                || input.period_type.is_empty()
+                || input.r#type.is_empty()
+                || input.limit_amount == 0
+            {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
+            }
+            let status = if input.status.is_empty() {
+                "ACTIVE"
+            } else {
+                &input.status
+            };
+            let body = json!({
+                "name": input.name,
+                "periodType": input.period_type,
+                "type": input.r#type,
+                "limitAmount": input.limit_amount,
+                "status": status,
+            });
+            let budget = self
+                .write(
+                    ctx,
+                    &write_operation(
+                        "billing.CreateBudget",
+                        Method::POST,
+                        "gateway/api/v1/budgets",
+                        false,
+                    ),
+                    &[],
+                    Some(body),
+                )
+                .await?;
+            Ok(CreateBudgetOutput { budget })
+        })
     }
 
     /// Sends only selected fields, once. A request with no changes fails locally.
@@ -161,34 +163,36 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateBudgetInput,
     ) -> Result<UpdateBudgetOutput, Failure<UpdateBudgetOutput>> {
-        let body: Map<_, _> = [
-            ("name", input.name.map(Value::from)),
-            ("periodType", input.period_type.map(Value::from)),
-            ("type", input.r#type.map(Value::from)),
-            ("limitAmount", input.limit_amount.map(Value::from)),
-            ("status", input.status.map(Value::from)),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
-        .collect();
-        if body.is_empty() {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
-                "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change",
-            )));
-        }
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.UpdateBudget",
-                Method::PUT,
-                "gateway/api/v1/budgets/{}",
-                true,
-            ),
-            &[&input.budget_uuid],
-            Some(Value::Object(body)),
-        )
-        .await?;
-        Ok(UpdateBudgetOutput {})
+        crate::wire::product::exit::finish!(async {
+            let body: Map<_, _> = [
+                ("name", input.name.map(Value::from)),
+                ("periodType", input.period_type.map(Value::from)),
+                ("type", input.r#type.map(Value::from)),
+                ("limitAmount", input.limit_amount.map(Value::from)),
+                ("status", input.status.map(Value::from)),
+            ]
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
+            .collect();
+            if body.is_empty() {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
+                    "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change",
+                )));
+            }
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.UpdateBudget",
+                    Method::PUT,
+                    "gateway/api/v1/budgets/{}",
+                    true,
+                ),
+                &[&input.budget_uuid],
+                Some(Value::Object(body)),
+            )
+            .await?;
+            Ok(UpdateBudgetOutput {})
+        })
     }
 
     /// Deletes the budget and its API-managed thresholds in one request.
@@ -197,19 +201,21 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteBudgetInput,
     ) -> Result<DeleteBudgetOutput, Failure<DeleteBudgetOutput>> {
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.DeleteBudget",
-                Method::DELETE,
-                "gateway/api/v1/budgets/{}",
-                true,
-            ),
-            &[&input.budget_uuid],
-            None,
-        )
-        .await?;
-        Ok(DeleteBudgetOutput {})
+        crate::wire::product::exit::finish!(async {
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.DeleteBudget",
+                    Method::DELETE,
+                    "gateway/api/v1/budgets/{}",
+                    true,
+                ),
+                &[&input.budget_uuid],
+                None,
+            )
+            .await?;
+            Ok(DeleteBudgetOutput {})
+        })
     }
 
     pub(super) async fn write<T: BudgetData, O>(

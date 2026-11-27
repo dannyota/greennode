@@ -6,9 +6,46 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
+    check_decoded(body, false, &|text, identifier, _| {
+        matcher.reflects(text.as_bytes(), identifier)
+    })
+}
+
+pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option<bool> {
+    let matcher = BodyMatcher::for_output(evidence.credentials(), body.len());
+    if matcher.literal(std::str::from_utf8(body).ok()?) {
+        return Some(true);
+    }
+    check_decoded(body, true, &|text, identifier, number| {
+        matcher.reflects(text.as_bytes(), identifier)
+            || (number && output_number_reflects(&matcher, text, identifier))
+    })
+}
+
+fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: bool) -> bool {
+    let Ok(number) = text.parse::<f64>() else {
+        return false;
+    };
+    if text.parse::<i64>().is_err()
+        && text.parse::<u64>().is_err()
+        && serde_json::to_string(&number).is_ok_and(|canonical| canonical != text)
+    {
+        return false;
+    }
+    crate::output_number::any_spelling(number, false, |spelling| {
+        matcher.reflects(spelling.as_bytes(), identifier)
+    })
+}
+
+fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
+    body: &[u8],
+    projected: bool,
+    matches: &F,
+) -> Option<bool> {
     let raw: &RawValue = serde_json::from_slice(body).ok()?;
     Walker {
-        matcher,
+        matches,
+        projected,
         identifier: false,
         depth: 0,
     }
@@ -16,13 +53,14 @@ pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option
     .ok()
 }
 
-struct Walker<'a> {
-    matcher: &'a BodyMatcher<'a>,
+struct Walker<'a, F> {
+    matches: &'a F,
+    projected: bool,
     identifier: bool,
     depth: usize,
 }
 
-impl Walker<'_> {
+impl<F: Fn(&str, bool, bool) -> bool> Walker<'_, F> {
     fn check(self, value: &RawValue) -> Result<bool, serde_json::Error> {
         let raw = value.get();
         let mut decoder = serde_json::Deserializer::from_str(raw);
@@ -34,23 +72,24 @@ impl Walker<'_> {
             Some(b'[') => decoder.deserialize_seq(self),
             Some(b'"') => {
                 let decoded = Zeroizing::new(serde_json::from_str::<String>(raw)?);
-                Ok(self.matcher.reflects(decoded.as_bytes(), self.identifier))
+                Ok((self.matches)(&decoded, self.identifier, false))
             }
-            Some(b'-' | b'0'..=b'9') => Ok(self.matcher.reflects(raw.as_bytes(), self.identifier)),
-            _ => Ok(self.matcher.reflects(raw.as_bytes(), false)),
+            Some(b'-' | b'0'..=b'9') => Ok((self.matches)(raw, self.identifier, true)),
+            _ => Ok((self.matches)(raw, false, false)),
         }
     }
 
     fn child(&self, identifier: bool) -> Self {
         Self {
-            matcher: self.matcher,
+            matches: self.matches,
+            projected: self.projected,
             identifier,
             depth: self.depth + 1,
         }
     }
 }
 
-impl<'de> Visitor<'de> for Walker<'_> {
+impl<'de, F: Fn(&str, bool, bool) -> bool> Visitor<'de> for Walker<'_, F> {
     type Value = bool;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -62,9 +101,17 @@ impl<'de> Visitor<'de> for Walker<'_> {
         while let Some((key, raw)) = map.next_entry::<String, &RawValue>()? {
             let key = Zeroizing::new(key);
             if !reflects {
-                reflects = self.matcher.reflects(key.as_bytes(), self.identifier)
+                reflects = (self.matches)(&key, self.identifier, false)
                     || self
-                        .child(self.identifier || identifier_key(&key))
+                        .child(
+                            self.identifier
+                                || identifier_key(&key)
+                                || (self.projected
+                                    && matches!(
+                                        key.as_str(),
+                                        "CDNID" | "DNSID" | "NATID" | "VPCID" | "VPCIDs"
+                                    )),
+                        )
                         .check(raw)
                         .map_err(serde::de::Error::custom)?;
             }

@@ -152,14 +152,16 @@ impl Client {
         ctx: &RequestContext,
         input: GetNatInstanceInput,
     ) -> Result<GetNatInstanceOutput, Failure<GetNatInstanceOutput>> {
-        let (raw, evidence) = self
-            .nat_read(ctx, DETAIL, &input.nat_id, input.zone_id)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let nat = decode_detail(&text, &input.nat_id, &evidence)
-            .map_err(|()| failure(DETAIL.invalid(&evidence)))?;
-        Ok(GetNatInstanceOutput { nat })
+        crate::wire::product::exit::finish!(async {
+            let (raw, evidence) = self
+                .nat_read(ctx, DETAIL, &input.nat_id, input.zone_id)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let nat = decode_detail(&text, &input.nat_id, &evidence)
+                .map_err(|()| failure(DETAIL.invalid(&evidence)))?;
+            Ok(GetNatInstanceOutput { nat })
+        })
     }
 
     /// Lists a Public NAT instance's inbound rules in Hanoi or HCM.
@@ -168,14 +170,16 @@ impl Client {
         ctx: &RequestContext,
         input: ListNatInboundRulesInput,
     ) -> Result<ListNatInboundRulesOutput, Failure<ListNatInboundRulesOutput>> {
-        let (raw, evidence) = self
-            .nat_read(ctx, RULES, &input.nat_id, input.zone_id)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let items =
-            decode_rules(&text, &evidence).map_err(|()| failure(RULES.invalid(&evidence)))?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let (raw, evidence) = self
+                .nat_read(ctx, RULES, &input.nat_id, input.zone_id)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let items =
+                decode_rules(&text, &evidence).map_err(|()| failure(RULES.invalid(&evidence)))?;
+            Ok(List { items })
+        })
     }
 
     async fn nat_read(

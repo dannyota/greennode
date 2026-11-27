@@ -38,6 +38,18 @@ impl CancelHandle {
 }
 
 impl RequestContext {
+    /// Keeps response screening active until the supplied operation and its diagnostic finish.
+    #[doc(hidden)]
+    pub async fn with_response_screening<T>(future: impl std::future::Future<Output = T>) -> T {
+        crate::wire::product::exit::scope(future).await
+    }
+
+    /// Withholds a diagnostic that reflects credentials observed in this operation.
+    #[doc(hidden)]
+    pub fn screened_response_text(text: &str) -> &str {
+        crate::wire::product::exit::screen_text(text)
+    }
+
     /// Creates an uncancelled context without a deadline and its cancellation handle.
     pub fn new() -> (Self, CancelHandle) {
         let (cancelled, receiver) = watch::channel(false);

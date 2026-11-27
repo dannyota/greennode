@@ -377,3 +377,35 @@ async fn system_tag_prefix_screen_survives_a_cancelled_context() {
         .unwrap_err();
     assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
 }
+
+#[tokio::test]
+async fn tag_read_exit_refuses_a_reflected_redaction_marker() {
+    let raw = br#"[{"key":"env","value":"redacted","systemTag":false}]"#;
+    let server = Server::start(vec![Response::Http {
+        status: "200 OK".into(),
+        headers: vec![("Content-Length".into(), raw.len().to_string())],
+        body: raw.to_vec(),
+    }]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_static_token(Secret::new("redacted"))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(server.origin.clone()),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let result = Client::new(&config)
+        .list_resource_tags(
+            &RequestContext::new().0,
+            ListResourceTagsInput::new("res-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}

@@ -84,13 +84,15 @@ impl Client {
         ctx: &RequestContext,
         input: CreateServerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let info =
-            server_info("compute.QuoteCreateServer", &input).map_err(|error| failure(*error))?;
-        let mut evidence = Evidence::new();
-        add_user_data(&input, &mut evidence);
-        self.create_quote(ctx, &input, info, &mut evidence)
-            .await
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let info = server_info("compute.QuoteCreateServer", &input)
+                .map_err(|error| failure(*error))?;
+            let mut evidence = Evidence::new();
+            add_user_data(&input, &mut evidence);
+            self.create_quote(ctx, &input, info, &mut evidence)
+                .await
+                .map_err(|error| failure(*error))
+        })
     }
 
     /// Quotes a flavor change, which may return a credit.
@@ -99,11 +101,13 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeServerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let info =
-            resize_info("compute.QuoteResizeServer", &input).map_err(|error| failure(*error))?;
-        self.server_quote(ctx, "server", "resize", info, false, &mut Evidence::new())
-            .await
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let info = resize_info("compute.QuoteResizeServer", &input)
+                .map_err(|error| failure(*error))?;
+            self.server_quote(ctx, "server", "resize", info, false, &mut Evidence::new())
+                .await
+                .map_err(|error| failure(*error))
+        })
     }
 }
 

@@ -44,16 +44,18 @@ macro_rules! attachment {
         impl Client {
             $(#[$doc])*
             pub async fn $method(&self, ctx: &RequestContext, input: $input) -> Result<$output, Failure<$output>> {
-                let first = input.$first.as_str();
-                let second = input.$second.as_str();
-                let mut evidence = self.write_evidence(ctx, $op, &[($field1, first), ($field2, second)], &[])?;
-                let mut guard = Guard::new(self, ctx, $op, &mut evidence).await?;
-                pre_guard!($guard, guard)?;
-                guard.load_actions().await?;
-                $guard(&mut guard, $op, first, second).await?;
-                let operation = write_operation($op, Method::$method_type, $route, Retry::$retry, &[StatusCode::NO_CONTENT]);
-                self.write::<Value, _>(ctx, Api::Policies, &operation, &[first, second], None, &mut evidence).await?;
-                Ok($output {})
+                crate::wire::product::exit::finish!(async {
+                    let first = input.$first.as_str();
+                    let second = input.$second.as_str();
+                    let mut evidence = self.write_evidence(ctx, $op, &[($field1, first), ($field2, second)], &[])?;
+                    let mut guard = Guard::new(self, ctx, $op, &mut evidence).await?;
+                    pre_guard!($guard, guard)?;
+                    guard.load_actions().await?;
+                    $guard(&mut guard, $op, first, second).await?;
+                    let operation = write_operation($op, Method::$method_type, $route, Retry::$retry, &[StatusCode::NO_CONTENT]);
+                    self.write::<Value, _>(ctx, Api::Policies, &operation, &[first, second], None, &mut evidence).await?;
+                    Ok($output {})
+                })
             }
         }
     };

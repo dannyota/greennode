@@ -60,8 +60,10 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteClusterInput,
     ) -> Result<DeleteClusterOutput, Failure<DeleteClusterOutput>> {
-        self.write_base()?;
-        self.delete_cluster_inner(ctx, input).await
+        crate::wire::product::exit::finish!(async {
+            self.write_base()?;
+            self.delete_cluster_inner(ctx, input).await
+        })
     }
 
     pub(super) async fn delete_cluster_inner(

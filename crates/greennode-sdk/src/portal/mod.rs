@@ -133,34 +133,36 @@ impl Client {
         ctx: &RequestContext,
         _input: GetUserInfoInput,
     ) -> Result<GetUserInfoOutput, Failure<GetUserInfoOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        let session = &self.session;
-        let base = session
-            .endpoints()
-            .portal
-            .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let operation = user_info_operation();
-        let deadline = session.clock().monotonic_now() + Duration::from_secs(30);
-        let ctx = ctx.child_with_deadline(deadline);
-        let mut jitter = || session.retry_jitter();
-        let runtime = session
-            .runtime(&ctx, &mut jitter)
-            .map_err(|error| failure(*error))?;
-        operation::execute::<Envelope>(
-            runtime,
-            base,
-            &operation,
-            &[],
-            &[],
-            session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map(|(_, envelope)| GetUserInfoOutput {
-            user_info: envelope.0,
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            let session = &self.session;
+            let base = session
+                .endpoints()
+                .portal
+                .as_ref()
+                .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let operation = user_info_operation();
+            let deadline = session.clock().monotonic_now() + Duration::from_secs(30);
+            let ctx = ctx.child_with_deadline(deadline);
+            let mut jitter = || session.retry_jitter();
+            let runtime = session
+                .runtime(&ctx, &mut jitter)
+                .map_err(|error| failure(*error))?;
+            operation::execute::<Envelope>(
+                runtime,
+                base,
+                &operation,
+                &[],
+                &[],
+                session.bearer_source(),
+                bytes::Bytes::new(),
+            )
+            .await
+            .map(|(_, envelope)| GetUserInfoOutput {
+                user_info: envelope.0,
+            })
+            .map_err(|error| failure(withheld(&operation, error.into_parts().0)))
         })
-        .map_err(|error| failure(withheld(&operation, error.into_parts().0)))
     }
 }
 

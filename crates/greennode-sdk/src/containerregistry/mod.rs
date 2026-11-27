@@ -236,14 +236,16 @@ impl Client {
         ctx: &RequestContext,
         _input: ListPermissionsInput,
     ) -> Result<ListPermissionsOutput, Failure<ListPermissionsOutput>> {
-        let items: Permissions = self
-            .read(
-                ctx,
-                &read_operation("containerregistry.ListPermissions", "v1/user/permissions"),
-                &[],
-            )
-            .await?;
-        Ok(List { items: items.0 })
+        crate::wire::product::exit::finish!(async {
+            let items: Permissions = self
+                .read(
+                    ctx,
+                    &read_operation("containerregistry.ListPermissions", "v1/user/permissions"),
+                    &[],
+                )
+                .await?;
+            Ok(List { items: items.0 })
+        })
     }
 
     /// Reads repository summaries, returning partial output if continuation is required.
@@ -252,51 +254,53 @@ impl Client {
         ctx: &RequestContext,
         input: ListRepositoriesInput,
     ) -> Result<ListRepositoriesOutput, Failure<ListRepositoriesOutput>> {
-        let access = if input.access_level.is_empty() {
-            "ALL"
-        } else {
-            &input.access_level
-        };
-        let result: Repositories = self
-            .read(
-                ctx,
-                &read_operation("containerregistry.ListRepositories", "v1/repository"),
-                &[("accessLevel", access), ("name", &input.name)],
-            )
-            .await?;
-        let (items, total_page, total_item) = match (
-            result.data,
-            result.list_data,
-            result.total_page,
-            result.total_item,
-        ) {
-            (Some(items), None, Some(pages), Some(total))
-            | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
-            _ => return Err(failure(Error::new(ErrorClass::Api))),
-        };
-        let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
-        if result.page < 0
-            || result.page_size < 0
-            || total_page < 0
-            || total_item < 0
-            || len > total_item
-            || (total_page == 0 && total_item != 0)
-            || (total_item == 0 && total_page > 1)
-            || (total_page <= 1 && len != total_item)
-        {
-            return Err(failure(Error::new(ErrorClass::Api)));
-        }
-        let output = PagedList {
-            items,
-            page: result.page,
-            page_size: result.page_size,
-            total_page,
-            total_item,
-        };
-        if total_page > 1 || total_item > len {
-            return Err(Failure::new(Error::new(ErrorClass::Api).with_detail("containerregistry.ListRepositories: incomplete list; continuation parameters are unverified"), Some(output), WriteDispatch::NotAWrite));
-        }
-        Ok(output)
+        crate::wire::product::exit::finish!(async {
+            let access = if input.access_level.is_empty() {
+                "ALL"
+            } else {
+                &input.access_level
+            };
+            let result: Repositories = self
+                .read(
+                    ctx,
+                    &read_operation("containerregistry.ListRepositories", "v1/repository"),
+                    &[("accessLevel", access), ("name", &input.name)],
+                )
+                .await?;
+            let (items, total_page, total_item) = match (
+                result.data,
+                result.list_data,
+                result.total_page,
+                result.total_item,
+            ) {
+                (Some(items), None, Some(pages), Some(total))
+                | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
+                _ => return Err(failure(Error::new(ErrorClass::Api))),
+            };
+            let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+            if result.page < 0
+                || result.page_size < 0
+                || total_page < 0
+                || total_item < 0
+                || len > total_item
+                || (total_page == 0 && total_item != 0)
+                || (total_item == 0 && total_page > 1)
+                || (total_page <= 1 && len != total_item)
+            {
+                return Err(failure(Error::new(ErrorClass::Api)));
+            }
+            let output = PagedList {
+                items,
+                page: result.page,
+                page_size: result.page_size,
+                total_page,
+                total_item,
+            };
+            if total_page > 1 || total_item > len {
+                return Err(Failure::new(Error::new(ErrorClass::Api).with_detail("containerregistry.ListRepositories: incomplete list; continuation parameters are unverified"), Some(output), WriteDispatch::NotAWrite));
+            }
+            Ok(output)
+        })
     }
 
     async fn read<T: Output, O>(

@@ -125,13 +125,15 @@ impl Client {
         ctx: &RequestContext,
         _input: ListVNetworkRegionsInput,
     ) -> Result<ListVNetworkRegionsOutput, Failure<ListVNetworkRegionsOutput>> {
-        let base = self.vnetwork_base().map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let items = self
-            .regions(ctx, &base, &mut evidence)
-            .await
-            .map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let base = self.vnetwork_base().map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let items = self
+                .regions(ctx, &base, &mut evidence)
+                .await
+                .map_err(failure)?;
+            Ok(List { items })
+        })
     }
 
     /// Reads an endpoint in the configured project and region.
@@ -140,38 +142,40 @@ impl Client {
         ctx: &RequestContext,
         input: GetEndpointInput,
     ) -> Result<GetEndpointOutput, Failure<GetEndpointOutput>> {
-        DETAIL
-            .check_path("EndpointID", &input.endpoint_id)
-            .map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        validate_selection(&evidence, &[&input.endpoint_id]).map_err(failure)?;
-        let base = self.vnetwork_base().map_err(failure)?;
-        let project = self
-            .endpoint_project(ctx, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let (zone, discovered) = self
-            .resolve_zone(ctx, &base, DETAIL, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let body = self
-            .inventory(
-                ctx,
-                &base,
-                DETAIL,
-                Selection::path(&[&zone, &project, &input.endpoint_id]),
-                &mut evidence,
-            )
-            .await;
-        let body =
-            body.map_err(|error| failure(recheck(DETAIL, error, &zone, discovered, &evidence)))?;
-        let text = go_json(&body);
-        let fields = envelope(DETAIL, &text, &evidence).map_err(failure)?;
-        let endpoint: Endpoint = member(&fields, "data", DETAIL, &evidence).map_err(failure)?;
-        validate_endpoint_ids(&evidence, &endpoint)
-            .map_err(|()| failure(DETAIL.refused(&evidence)))?;
-        let endpoint = DETAIL.retain(endpoint, &evidence).map_err(failure)?;
-        Ok(GetEndpointOutput { endpoint })
+        crate::wire::product::exit::finish!(async {
+            DETAIL
+                .check_path("EndpointID", &input.endpoint_id)
+                .map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            validate_selection(&evidence, &[&input.endpoint_id]).map_err(failure)?;
+            let base = self.vnetwork_base().map_err(failure)?;
+            let project = self
+                .endpoint_project(ctx, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let (zone, discovered) = self
+                .resolve_zone(ctx, &base, DETAIL, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let body = self
+                .inventory(
+                    ctx,
+                    &base,
+                    DETAIL,
+                    Selection::path(&[&zone, &project, &input.endpoint_id]),
+                    &mut evidence,
+                )
+                .await;
+            let body = body
+                .map_err(|error| failure(recheck(DETAIL, error, &zone, discovered, &evidence)))?;
+            let text = go_json(&body);
+            let fields = envelope(DETAIL, &text, &evidence).map_err(failure)?;
+            let endpoint: Endpoint = member(&fields, "data", DETAIL, &evidence).map_err(failure)?;
+            validate_endpoint_ids(&evidence, &endpoint)
+                .map_err(|()| failure(DETAIL.refused(&evidence)))?;
+            let endpoint = DETAIL.retain(endpoint, &evidence).map_err(failure)?;
+            Ok(GetEndpointOutput { endpoint })
+        })
     }
 
     /// Lists one page of matching endpoints.
@@ -180,66 +184,68 @@ impl Client {
         ctx: &RequestContext,
         input: ListEndpointsInput,
     ) -> Result<ListEndpointsOutput, Failure<ListEndpointsOutput>> {
-        if !input.zone_id.is_empty() {
-            LIST.check_path("ZoneID", &input.zone_id).map_err(failure)?;
-        }
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        validate_selection(&evidence, &[&input.zone_id, &input.vpc_id, &input.uuid])
-            .map_err(failure)?;
-        let base = self.vnetwork_base().map_err(failure)?;
-        let project = self
-            .endpoint_project(ctx, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let (zone, discovered) = if input.zone_id.is_empty() {
-            self.resolve_zone(ctx, &base, LIST, &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            if !input.zone_id.is_empty() {
+                LIST.check_path("ZoneID", &input.zone_id).map_err(failure)?;
+            }
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            validate_selection(&evidence, &[&input.zone_id, &input.vpc_id, &input.uuid])
+                .map_err(failure)?;
+            let base = self.vnetwork_base().map_err(failure)?;
+            let project = self
+                .endpoint_project(ctx, &mut evidence)
                 .await
-                .map_err(failure)?
-        } else {
-            (input.zone_id, false)
-        };
-        let params = Params {
-            page: input.page.max(1),
-            search: [
-                ("vpcId", input.vpc_id.as_str()),
-                ("uuid", input.uuid.as_str()),
-            ]
-            .into_iter()
-            .filter(|(_, value)| !value.is_empty())
-            .map(|(field, value)| Filter { field, value })
-            .collect(),
-            size: if input.size > 0 { input.size } else { 10_000 },
-        };
-        let params = serde_json::to_string(&params)
-            .map_err(|_| failure(Error::new(ErrorClass::InvalidInput)))?;
-        let body = self
-            .inventory(
-                ctx,
-                &base,
-                LIST,
-                Selection {
-                    path: &[&zone, &project],
-                    query: &[("params", &params)],
-                    headers: &[],
-                },
-                &mut evidence,
-            )
-            .await;
-        let body =
-            body.map_err(|error| failure(recheck(LIST, error, &zone, discovered, &evidence)))?;
-        let text = go_json(&body);
-        let fields = envelope(LIST, &text, &evidence).map_err(failure)?;
-        let items: Vec<Endpoint> = member(&fields, "data", LIST, &evidence).map_err(failure)?;
-        for item in &items {
-            validate_endpoint_ids(&evidence, item)
-                .map_err(|()| failure(LIST.refused(&evidence)))?;
-        }
-        Ok(PagedList {
-            items: LIST.retain(items, &evidence).map_err(failure)?,
-            page: scalar(&fields, "page", LIST, &evidence).map_err(failure)?,
-            page_size: scalar(&fields, "size", LIST, &evidence).map_err(failure)?,
-            total_page: scalar(&fields, "totalPage", LIST, &evidence).map_err(failure)?,
-            total_item: scalar(&fields, "total", LIST, &evidence).map_err(failure)?,
+                .map_err(failure)?;
+            let (zone, discovered) = if input.zone_id.is_empty() {
+                self.resolve_zone(ctx, &base, LIST, &mut evidence)
+                    .await
+                    .map_err(failure)?
+            } else {
+                (input.zone_id, false)
+            };
+            let params = Params {
+                page: input.page.max(1),
+                search: [
+                    ("vpcId", input.vpc_id.as_str()),
+                    ("uuid", input.uuid.as_str()),
+                ]
+                .into_iter()
+                .filter(|(_, value)| !value.is_empty())
+                .map(|(field, value)| Filter { field, value })
+                .collect(),
+                size: if input.size > 0 { input.size } else { 10_000 },
+            };
+            let params = serde_json::to_string(&params)
+                .map_err(|_| failure(Error::new(ErrorClass::InvalidInput)))?;
+            let body = self
+                .inventory(
+                    ctx,
+                    &base,
+                    LIST,
+                    Selection {
+                        path: &[&zone, &project],
+                        query: &[("params", &params)],
+                        headers: &[],
+                    },
+                    &mut evidence,
+                )
+                .await;
+            let body =
+                body.map_err(|error| failure(recheck(LIST, error, &zone, discovered, &evidence)))?;
+            let text = go_json(&body);
+            let fields = envelope(LIST, &text, &evidence).map_err(failure)?;
+            let items: Vec<Endpoint> = member(&fields, "data", LIST, &evidence).map_err(failure)?;
+            for item in &items {
+                validate_endpoint_ids(&evidence, item)
+                    .map_err(|()| failure(LIST.refused(&evidence)))?;
+            }
+            Ok(PagedList {
+                items: LIST.retain(items, &evidence).map_err(failure)?,
+                page: scalar(&fields, "page", LIST, &evidence).map_err(failure)?,
+                page_size: scalar(&fields, "size", LIST, &evidence).map_err(failure)?,
+                total_page: scalar(&fields, "totalPage", LIST, &evidence).map_err(failure)?,
+                total_item: scalar(&fields, "total", LIST, &evidence).map_err(failure)?,
+            })
         })
     }
 
@@ -249,51 +255,54 @@ impl Client {
         ctx: &RequestContext,
         input: ListEndpointTagsInput,
     ) -> Result<ListEndpointTagsOutput, Failure<ListEndpointTagsOutput>> {
-        if input.endpoint_id.is_empty() {
-            TAGS.check_path("EndpointID", "").map_err(failure)?;
-        }
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        validate_selection(&evidence, &[&input.endpoint_id]).map_err(failure)?;
-        let base = self.vnetwork_base().map_err(failure)?;
-        let project = self
-            .session
-            .require_project_with_evidence(ctx, &mut evidence)
-            .await
-            .map_err(|error| failure(screen(*error, &evidence)))?;
-        validate_selection(&evidence, &[&project.id, &input.endpoint_id]).map_err(failure)?;
-        let user_id = project.user_id.to_string();
-        if project.user_id > 0 && evidence.id_reflects(&user_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
-        }
-        let portal = [("portal-user-id", user_id.as_str())];
-        let headers = if project.user_id > 0 {
-            portal.as_slice()
-        } else {
-            &[]
-        };
-        let body = self
-            .inventory(
-                ctx,
-                &base,
-                TAGS,
-                Selection {
-                    path: &[&project.id],
-                    query: &[("resourceUuid", &input.endpoint_id)],
-                    headers,
-                },
-                &mut evidence,
-            )
-            .await
-            .map_err(failure)?;
-        let text = go_json(&body);
-        let fields = envelope(TAGS, &text, &evidence).map_err(failure)?;
-        let tags: Vec<EndpointTag> = member(&fields, "data", TAGS, &evidence).map_err(failure)?;
-        for tag in &tags {
-            validate_returned_ids(&evidence, [&tag.uuid, &tag.resource_uuid])
-                .map_err(|()| failure(TAGS.refused(&evidence)))?;
-        }
-        let items = TAGS.retain(tags, &evidence).map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            if input.endpoint_id.is_empty() {
+                TAGS.check_path("EndpointID", "").map_err(failure)?;
+            }
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            validate_selection(&evidence, &[&input.endpoint_id]).map_err(failure)?;
+            let base = self.vnetwork_base().map_err(failure)?;
+            let project = self
+                .session
+                .require_project_with_evidence(ctx, &mut evidence)
+                .await
+                .map_err(|error| failure(screen(*error, &evidence)))?;
+            validate_selection(&evidence, &[&project.id, &input.endpoint_id]).map_err(failure)?;
+            let user_id = project.user_id.to_string();
+            if project.user_id > 0 && evidence.id_reflects(&user_id) {
+                return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            }
+            let portal = [("portal-user-id", user_id.as_str())];
+            let headers = if project.user_id > 0 {
+                portal.as_slice()
+            } else {
+                &[]
+            };
+            let body = self
+                .inventory(
+                    ctx,
+                    &base,
+                    TAGS,
+                    Selection {
+                        path: &[&project.id],
+                        query: &[("resourceUuid", &input.endpoint_id)],
+                        headers,
+                    },
+                    &mut evidence,
+                )
+                .await
+                .map_err(failure)?;
+            let text = go_json(&body);
+            let fields = envelope(TAGS, &text, &evidence).map_err(failure)?;
+            let tags: Vec<EndpointTag> =
+                member(&fields, "data", TAGS, &evidence).map_err(failure)?;
+            for tag in &tags {
+                validate_returned_ids(&evidence, [&tag.uuid, &tag.resource_uuid])
+                    .map_err(|()| failure(TAGS.refused(&evidence)))?;
+            }
+            let items = TAGS.retain(tags, &evidence).map_err(failure)?;
+            Ok(List { items })
+        })
     }
 
     fn vnetwork_base(&self) -> Result<Base, Error> {

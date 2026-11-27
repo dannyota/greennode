@@ -183,3 +183,16 @@ async fn dns_redacts_encoded_descriptions() {
     assert!(entry.hosted_zone.description != "<redacted>");
     assert_eq!(server.requests(), 2);
 }
+
+#[tokio::test]
+async fn dns_exit_refuses_a_short_encoding_in_a_projected_id() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"hostedZoneId":"pre6A6B6Cpost"}}"#,
+    )]);
+    let result = client(&server, "jkl")
+        .get_hosted_zone(&RequestContext::new().0, GetHostedZoneInput::new("zone-1"))
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}

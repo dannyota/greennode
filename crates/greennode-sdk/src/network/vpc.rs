@@ -33,16 +33,18 @@ impl Client {
         ctx: &RequestContext,
         input: GetDhcpOptionsInput,
     ) -> Result<GetDhcpOptionsOutput, Failure<GetDhcpOptionsOutput>> {
-        GET_DHCP
-            .path("DHCPOptionsID", &input.dhcp_options_id)
-            .map_err(failure)?;
-        let mut reads = Reads::new(self, ctx).map_err(failure)?;
-        let options = reads
-            .get(GET_DHCP, &[&input.dhcp_options_id])
-            .await
-            .map_err(failure)?;
-        let dhcp_options = reads.sanitize(GET_DHCP, options).map_err(failure)?;
-        Ok(GetDhcpOptionsOutput { dhcp_options })
+        crate::wire::product::exit::finish!(async {
+            GET_DHCP
+                .path("DHCPOptionsID", &input.dhcp_options_id)
+                .map_err(failure)?;
+            let mut reads = Reads::new(self, ctx).map_err(failure)?;
+            let options = reads
+                .get(GET_DHCP, &[&input.dhcp_options_id])
+                .await
+                .map_err(failure)?;
+            let dhcp_options = reads.sanitize(GET_DHCP, options).map_err(failure)?;
+            Ok(GetDhcpOptionsOutput { dhcp_options })
+        })
     }
 
     /// Reads a page of DHCP options sets, with an optional name filter.
@@ -51,11 +53,13 @@ impl Client {
         ctx: &RequestContext,
         input: ListDhcpOptionsInput,
     ) -> Result<ListDhcpOptionsOutput, Failure<ListDhcpOptionsOutput>> {
-        let mut reads = Reads::new(self, ctx).map_err(failure)?;
-        let page = reads
-            .page(LIST_DHCP, &input.name, input.page, input.size)
-            .await
-            .map_err(failure)?;
-        reads.sanitize_page(LIST_DHCP, page).map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            let mut reads = Reads::new(self, ctx).map_err(failure)?;
+            let page = reads
+                .page(LIST_DHCP, &input.name, input.page, input.size)
+                .await
+                .map_err(failure)?;
+            reads.sanitize_page(LIST_DHCP, page).map_err(failure)
+        })
     }
 }

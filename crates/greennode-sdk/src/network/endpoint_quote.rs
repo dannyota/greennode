@@ -75,23 +75,25 @@ impl Client {
         ctx: &RequestContext,
         input: QuoteCreateEndpointInput,
     ) -> Result<QuoteCreateEndpointOutput, Failure<QuoteCreateEndpointOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
-        let mut quote = EndpointQuote::new(self, ctx, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let offer = quote
-            .offer(&input)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))?;
-        quote
-            .check_placement(&input, &offer)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))?;
-        quote
-            .endpoint_price(&input, &offer)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
+            let mut quote = EndpointQuote::new(self, ctx, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let offer = quote
+                .offer(&input)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))?;
+            quote
+                .check_placement(&input, &offer)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))?;
+            quote
+                .endpoint_price(&input, &offer)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))
+        })
     }
 }
 

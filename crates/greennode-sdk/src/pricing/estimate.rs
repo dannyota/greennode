@@ -99,58 +99,65 @@ impl Client {
         ctx: &RequestContext,
         input: EstimateInput,
     ) -> Result<EstimateOutput, Failure<EstimateOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        super::validate::setup(&input, &self.region)
-            .map_err(|field| failure(invalid_input(field)))?;
-        let catalog = Catalog::new(&self.session, ctx, input.max_requests);
-        let mut run = Run {
-            input: &input,
-            catalog,
-            region: &self.region,
-            memo: Memo::default(),
-            output: accounting::initialize(&input, &self.region, self.session.clock().utc_now()),
-            errors: Vec::new(),
-            stopped: false,
-        };
-        let outcome = run.quote().await.and_then(|()| run.finish());
-        let Run {
-            output,
-            errors,
-            catalog,
-            memo,
-            ..
-        } = run;
-        drop(memo);
-        let evidence = &catalog.evidence;
-        if let Err(error) = outcome {
-            drop(errors);
-            return Err(failure(safe_error(recover(error), evidence)));
-        }
-        if let Some(first) = errors.first()
-            && output
-                .items
-                .iter()
-                .all(|item| item.price.status == "failed")
-        {
-            let error = Arc::clone(first);
-            drop(errors);
-            return Err(failure(safe_error(recover(error), evidence)));
-        }
-        if serde_json::to_value(&output).map_or(true, |value| evidence.output_reflects(&value))
-            || accounting::table_amounts(&output).any(|amount| evidence.reflects_fixed_two(amount))
-        {
-            return Err(failure(safe_error(*request::invalid(OP, 200), evidence)));
-        }
-        if errors.is_empty() {
-            return Ok(output);
-        }
-        let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
-        for cause in errors {
-            if let Some(cause) = Arc::into_inner(cause) {
-                error = error.with_cause(safe_error(cause, evidence));
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            super::validate::setup(&input, &self.region)
+                .map_err(|field| failure(invalid_input(field)))?;
+            let catalog = Catalog::new(&self.session, ctx, input.max_requests);
+            let mut run = Run {
+                input: &input,
+                catalog,
+                region: &self.region,
+                memo: Memo::default(),
+                output: accounting::initialize(
+                    &input,
+                    &self.region,
+                    self.session.clock().utc_now(),
+                ),
+                errors: Vec::new(),
+                stopped: false,
+            };
+            let outcome = run.quote().await.and_then(|()| run.finish());
+            let Run {
+                output,
+                errors,
+                catalog,
+                memo,
+                ..
+            } = run;
+            drop(memo);
+            let evidence = &catalog.evidence;
+            if let Err(error) = outcome {
+                drop(errors);
+                return Err(failure(safe_error(recover(error), evidence)));
             }
-        }
-        Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
+            if let Some(first) = errors.first()
+                && output
+                    .items
+                    .iter()
+                    .all(|item| item.price.status == "failed")
+            {
+                let error = Arc::clone(first);
+                drop(errors);
+                return Err(failure(safe_error(recover(error), evidence)));
+            }
+            if serde_json::to_value(&output).map_or(true, |value| evidence.output_reflects(&value))
+                || accounting::table_amounts(&output)
+                    .any(|amount| evidence.reflects_fixed_two(amount))
+            {
+                return Err(failure(safe_error(*request::invalid(OP, 200), evidence)));
+            }
+            if errors.is_empty() {
+                return Ok(output);
+            }
+            let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
+            for cause in errors {
+                if let Some(cause) = Arc::into_inner(cause) {
+                    error = error.with_cause(safe_error(cause, evidence));
+                }
+            }
+            Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
+        })
     }
 }
 

@@ -126,16 +126,18 @@ impl Client {
         ctx: &RequestContext,
         input: AttachVolumeInput,
     ) -> Result<AttachVolumeOutput, Failure<AttachVolumeOutput>> {
-        self.change_attachment(
-            ctx,
-            Attachment {
-                volume: &input.volume_id,
-                server: &input.server_id,
-                no_wait: input.no_wait,
-                mode: AttachmentMode::Attach,
-            },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.change_attachment(
+                ctx,
+                Attachment {
+                    volume: &input.volume_id,
+                    server: &input.server_id,
+                    no_wait: input.no_wait,
+                    mode: AttachmentMode::Attach,
+                },
+            )
+            .await
+        })
     }
 
     /// Detaches a non-boot volume after confirming the server is stopped or the caller opted in.
@@ -144,18 +146,20 @@ impl Client {
         ctx: &RequestContext,
         input: DetachVolumeInput,
     ) -> Result<DetachVolumeOutput, Failure<DetachVolumeOutput>> {
-        self.change_attachment(
-            ctx,
-            Attachment {
-                volume: &input.volume_id,
-                server: &input.server_id,
-                no_wait: input.no_wait,
-                mode: AttachmentMode::Detach {
-                    allow_running: input.allow_running,
+        crate::wire::product::exit::finish!(async {
+            self.change_attachment(
+                ctx,
+                Attachment {
+                    volume: &input.volume_id,
+                    server: &input.server_id,
+                    no_wait: input.no_wait,
+                    mode: AttachmentMode::Detach {
+                        allow_running: input.allow_running,
+                    },
                 },
-            },
-        )
-        .await
+            )
+            .await
+        })
     }
 
     async fn change_attachment(
@@ -296,53 +300,55 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteVolumeInput,
     ) -> Result<DeleteVolumeOutput, Failure<DeleteVolumeOutput>> {
-        let mut evidence = Evidence::new();
-        let id = &input.volume_id;
-        path_id(DELETE.id, "VolumeID", id).map_err(not_sent)?;
-        self.guard_inputs(ctx, &mut evidence, &[id], None)
-            .map_err(not_sent)?;
-        let (mut volume, attachment_known) = self
-            .volume_detail(ctx, id, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        screen_state(&evidence, &volume).map_err(not_sent)?;
-        if in_use(&volume)
-            || !volume.server_id.is_empty()
-            || volume
-                .server_id_list
-                .as_ref()
-                .is_some_and(|servers| !servers.is_empty())
-        {
-            return Err(not_sent(refusal(
-                WriteRefusal::VolumeInUse,
-                &format!(
-                    "volume: volume in use: volume.DeleteVolume: volume {} is attached to a server; detach it first",
-                    safe_label(id, &evidence)
-                ),
-            )));
-        }
-        if !attachment_known
-            || (!available(&volume) && !volume.status.eq_ignore_ascii_case("ERROR"))
-        {
-            return Err(not_sent(shape(DELETE.id, DETAIL_SHAPE)));
-        }
-        let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
-        self.send_write(ctx, &DELETE, &[&project, id], None, &mut evidence)
-            .await?;
-        let result = if input.no_wait {
-            Ok(())
-        } else {
-            self.settle(ctx, id, Settlement::Deleted, &mut volume, &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let id = &input.volume_id;
+            path_id(DELETE.id, "VolumeID", id).map_err(not_sent)?;
+            self.guard_inputs(ctx, &mut evidence, &[id], None)
+                .map_err(not_sent)?;
+            let (mut volume, attachment_known) = self
+                .volume_detail(ctx, id, &mut evidence)
                 .await
-        };
-        finish(
-            DeleteVolumeOutput {},
-            result,
-            &evidence,
-            &DELETE,
-            "delete was sent and a rerun is safe",
-            WriteDispatch::MayHaveBeenSent,
-        )
+                .map_err(not_sent)?;
+            screen_state(&evidence, &volume).map_err(not_sent)?;
+            if in_use(&volume)
+                || !volume.server_id.is_empty()
+                || volume
+                    .server_id_list
+                    .as_ref()
+                    .is_some_and(|servers| !servers.is_empty())
+            {
+                return Err(not_sent(refusal(
+                    WriteRefusal::VolumeInUse,
+                    &format!(
+                        "volume: volume in use: volume.DeleteVolume: volume {} is attached to a server; detach it first",
+                        safe_label(id, &evidence)
+                    ),
+                )));
+            }
+            if !attachment_known
+                || (!available(&volume) && !volume.status.eq_ignore_ascii_case("ERROR"))
+            {
+                return Err(not_sent(shape(DELETE.id, DETAIL_SHAPE)));
+            }
+            let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
+            self.send_write(ctx, &DELETE, &[&project, id], None, &mut evidence)
+                .await?;
+            let result = if input.no_wait {
+                Ok(())
+            } else {
+                self.settle(ctx, id, Settlement::Deleted, &mut volume, &mut evidence)
+                    .await
+            };
+            finish(
+                DeleteVolumeOutput {},
+                result,
+                &evidence,
+                &DELETE,
+                "delete was sent and a rerun is safe",
+                WriteDispatch::MayHaveBeenSent,
+            )
+        })
     }
 }
 

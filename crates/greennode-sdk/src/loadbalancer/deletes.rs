@@ -81,104 +81,107 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteLoadBalancerInput,
     ) -> Result<DeleteLoadBalancerOutput, Failure<DeleteLoadBalancerOutput>> {
-        let id = input.load_balancer_id.as_str();
-        let ids = [("LoadBalancerID", id)];
-        validate_ids(DELETE_LB, &ids, PathIds::Strict).map_err(|error| not_sent(*error))?;
-        let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
-        let mut evidence = Evidence::new();
-        let current = self
-            .load_balancer_progress(ctx, id, &mut evidence)
-            .await
-            .map_err(|error| not_sent(*error))?;
-        let dispatch = if current == "DELETING" {
-            WriteDispatch::NotSent
-        } else {
-            self.send_delete(
-                ctx,
-                DELETE_LB,
-                LB_ROUTE,
-                id,
-                &[StatusCode::OK, StatusCode::ACCEPTED],
-                &mut evidence,
-            )
-            .await?;
-            WriteDispatch::MayHaveBeenSent
-        };
-        if input.no_wait {
-            return Ok(DeleteLoadBalancerOutput {});
-        }
+        crate::wire::product::exit::finish!(async {
+            let id = input.load_balancer_id.as_str();
+            let ids = [("LoadBalancerID", id)];
+            validate_ids(DELETE_LB, &ids, PathIds::Strict).map_err(|error| not_sent(*error))?;
+            let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
+            let mut evidence = Evidence::new();
+            let current = self
+                .load_balancer_progress(ctx, id, &mut evidence)
+                .await
+                .map_err(|error| not_sent(*error))?;
+            let dispatch = if current == "DELETING" {
+                WriteDispatch::NotSent
+            } else {
+                self.send_delete(
+                    ctx,
+                    DELETE_LB,
+                    LB_ROUTE,
+                    id,
+                    &[StatusCode::OK, StatusCode::ACCEPTED],
+                    &mut evidence,
+                )
+                .await?;
+                WriteDispatch::MayHaveBeenSent
+            };
+            if input.no_wait {
+                return Ok(DeleteLoadBalancerOutput {});
+            }
 
-        let clock = self.session.clock();
-        let settlement_deadline = clock.monotonic_now() + DELETE_BOUND;
-        let wait = ctx.child_with_deadline(settlement_deadline);
-        let was_error = current == "ERROR";
-        let (class, reason, cause) = loop {
-            let poll = self.load_balancer_progress(&wait, id, &mut evidence).await;
-            if let Some(end) = wait.check(clock) {
-                let reason = match end {
-                    ContextEnd::Cancelled => "confirmation cancelled by caller",
-                    ContextEnd::DeadlineExceeded
-                        if ctx
-                            .deadline()
-                            .is_some_and(|deadline| deadline <= settlement_deadline) =>
-                    {
-                        "confirmation stopped at the caller's deadline"
+            let clock = self.session.clock();
+            let settlement_deadline = clock.monotonic_now() + DELETE_BOUND;
+            let wait = ctx.child_with_deadline(settlement_deadline);
+            let was_error = current == "ERROR";
+            let (class, reason, cause) = loop {
+                let poll = self.load_balancer_progress(&wait, id, &mut evidence).await;
+                if let Some(end) = wait.check(clock) {
+                    let reason = match end {
+                        ContextEnd::Cancelled => "confirmation cancelled by caller",
+                        ContextEnd::DeadlineExceeded
+                            if ctx
+                                .deadline()
+                                .is_some_and(|deadline| deadline <= settlement_deadline) =>
+                        {
+                            "confirmation stopped at the caller's deadline"
+                        }
+                        ContextEnd::DeadlineExceeded => "did not reach 404 within 15m0s",
+                    };
+                    break (
+                        ErrorClass::NotSettled,
+                        reason.into(),
+                        Some(context_error(end)),
+                    );
+                }
+                match poll {
+                    Err(error) if error.detail::<CompleteNotFound>().is_some() => {
+                        return Ok(DeleteLoadBalancerOutput {});
                     }
-                    ContextEnd::DeadlineExceeded => "did not reach 404 within 15m0s",
-                };
-                break (
-                    ErrorClass::NotSettled,
-                    reason.into(),
-                    Some(context_error(end)),
-                );
-            }
-            match poll {
-                Err(error) if error.detail::<CompleteNotFound>().is_some() => {
-                    return Ok(DeleteLoadBalancerOutput {});
+                    Ok(progress) if progress == "ERROR" && !was_error => {
+                        break (ErrorClass::Failed, "is ERROR".into(), None);
+                    }
+                    Err(error) => {
+                        let reason = error
+                            .api_error()
+                            .map(|api| api.message())
+                            .filter(|message| !message.is_empty())
+                            .map_or_else(
+                                || "confirmation read failed".into(),
+                                |message| format!("confirmation read failed: {message}"),
+                            );
+                        break (ErrorClass::NotSettled, reason, Some(*error));
+                    }
+                    Ok(_) => {
+                        wait.child_with_deadline(clock.monotonic_now() + POLL_INTERVAL)
+                            .wait(clock)
+                            .await;
+                    }
                 }
-                Ok(progress) if progress == "ERROR" && !was_error => {
-                    break (ErrorClass::Failed, "is ERROR".into(), None);
-                }
-                Err(error) => {
-                    let reason = error
-                        .api_error()
-                        .map(|api| api.message())
-                        .filter(|message| !message.is_empty())
-                        .map_or_else(
-                            || "confirmation read failed".into(),
-                            |message| format!("confirmation read failed: {message}"),
-                        );
-                    break (ErrorClass::NotSettled, reason, Some(*error));
-                }
-                Ok(_) => {
-                    wait.child_with_deadline(clock.monotonic_now() + POLL_INTERVAL)
-                        .wait(clock)
-                        .await;
-                }
-            }
-        };
-        let (prefix, advice) = match (class, dispatch) {
-            (ErrorClass::Failed, _) => ("vngcloud: write failed", ""),
-            (_, WriteDispatch::NotSent) => (
-                "vngcloud: write outcome not confirmed",
-                "; delete was already in progress and a rerun is safe",
-            ),
-            _ => (
-                "vngcloud: write outcome not confirmed",
-                "; delete was sent and a rerun is safe",
-            ),
-        };
-        let safe_id = safe_text(id, &evidence);
-        let message = format!("{prefix}: {DELETE_LB}: load balancer {safe_id} {reason}{advice}");
-        let error = local(class, &message, &evidence);
-        let error = match cause {
-            Some(cause) => error.with_cause(cause),
-            None => error,
-        };
-        let partial = evidence
-            .can_retain_partial()
-            .then_some(DeleteLoadBalancerOutput {});
-        Err(Failure::new(error, partial, dispatch))
+            };
+            let (prefix, advice) = match (class, dispatch) {
+                (ErrorClass::Failed, _) => ("vngcloud: write failed", ""),
+                (_, WriteDispatch::NotSent) => (
+                    "vngcloud: write outcome not confirmed",
+                    "; delete was already in progress and a rerun is safe",
+                ),
+                _ => (
+                    "vngcloud: write outcome not confirmed",
+                    "; delete was sent and a rerun is safe",
+                ),
+            };
+            let safe_id = safe_text(id, &evidence);
+            let message =
+                format!("{prefix}: {DELETE_LB}: load balancer {safe_id} {reason}{advice}");
+            let error = local(class, &message, &evidence);
+            let error = match cause {
+                Some(cause) => error.with_cause(cause),
+                None => error,
+            };
+            let partial = evidence
+                .can_retain_partial()
+                .then_some(DeleteLoadBalancerOutput {});
+            Err(Failure::new(error, partial, dispatch))
+        })
     }
 
     /// Deletes an unused certificate and requires a complete HTTP 204 response.
@@ -187,54 +190,56 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteCertificateInput,
     ) -> Result<DeleteCertificateOutput, Failure<DeleteCertificateOutput>> {
-        let id = input.certificate_id.as_str();
-        validate_ids(DELETE_CERT, &[("CertificateID", id)], PathIds::Strict)
-            .map_err(|error| not_sent(*error))?;
-        let mut evidence = Evidence::new();
-        if let Err(error) = self.check_certificate(ctx, id, &mut evidence).await {
-            let error = if error.detail::<WriteError>().is_some() {
-                *error
-            } else {
-                self.certificate_not_found(ctx, id, *error, &mut evidence)
-                    .await
-            };
-            return Err(not_sent(error));
-        }
-        let result = self
-            .send_delete::<()>(
-                ctx,
-                DELETE_CERT,
-                CERT_ROUTE,
-                id,
-                &[StatusCode::NO_CONTENT],
-                &mut evidence,
-            )
-            .await;
-        let Err(failure) = result else {
-            return Ok(DeleteCertificateOutput {});
-        };
-        let (error, _, dispatch) = failure.into_parts();
-        if error.detail::<WriteError>() == Some(&WriteError::ResourceInUse) {
-            let mut detail = format!(
-                "loadbalancer: certificate in use: {DELETE_CERT}: certificate {}",
-                safe_text(id, &evidence),
-            );
-            if let Some(api) = error.api_error() {
-                use std::fmt::Write as _;
-                if !api.message().is_empty() {
-                    let _ = write!(detail, ": {DELETE_CERT}: {}", api.message());
-                }
-                if let Some(status) = api.status() {
-                    let _ = write!(detail, " (status {status})");
-                }
+        crate::wire::product::exit::finish!(async {
+            let id = input.certificate_id.as_str();
+            validate_ids(DELETE_CERT, &[("CertificateID", id)], PathIds::Strict)
+                .map_err(|error| not_sent(*error))?;
+            let mut evidence = Evidence::new();
+            if let Err(error) = self.check_certificate(ctx, id, &mut evidence).await {
+                let error = if error.detail::<WriteError>().is_some() {
+                    *error
+                } else {
+                    self.certificate_not_found(ctx, id, *error, &mut evidence)
+                        .await
+                };
+                return Err(not_sent(error));
             }
-            let error = local(ErrorClass::Api, &detail, &evidence).with_cause(error);
-            return Err(Failure::new(error, None, dispatch));
-        }
-        let error = self
-            .certificate_not_found(ctx, id, error, &mut evidence)
-            .await;
-        Err(Failure::new(error, None, dispatch))
+            let result = self
+                .send_delete::<()>(
+                    ctx,
+                    DELETE_CERT,
+                    CERT_ROUTE,
+                    id,
+                    &[StatusCode::NO_CONTENT],
+                    &mut evidence,
+                )
+                .await;
+            let Err(failure) = result else {
+                return Ok(DeleteCertificateOutput {});
+            };
+            let (error, _, dispatch) = failure.into_parts();
+            if error.detail::<WriteError>() == Some(&WriteError::ResourceInUse) {
+                let mut detail = format!(
+                    "loadbalancer: certificate in use: {DELETE_CERT}: certificate {}",
+                    safe_text(id, &evidence),
+                );
+                if let Some(api) = error.api_error() {
+                    use std::fmt::Write as _;
+                    if !api.message().is_empty() {
+                        let _ = write!(detail, ": {DELETE_CERT}: {}", api.message());
+                    }
+                    if let Some(status) = api.status() {
+                        let _ = write!(detail, " (status {status})");
+                    }
+                }
+                let error = local(ErrorClass::Api, &detail, &evidence).with_cause(error);
+                return Err(Failure::new(error, None, dispatch));
+            }
+            let error = self
+                .certificate_not_found(ctx, id, error, &mut evidence)
+                .await;
+            Err(Failure::new(error, None, dispatch))
+        })
     }
 
     pub(super) async fn lock_load_balancer(
@@ -462,7 +467,11 @@ impl Client {
         let status = reply.status;
         let in_use = id == DELETE_CERT
             && status != StatusCode::NO_CONTENT
-            && response::error_message_matches(&reply.body, certificate_in_use);
+            && response::error_message_matches(&reply.body, |message| {
+                certificate_in_use(
+                    response::sanitize_error_text(message, evidence.credentials()).as_str(),
+                )
+            });
         response::classify(
             id,
             status,

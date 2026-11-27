@@ -73,13 +73,15 @@ impl Client {
         ctx: &RequestContext,
         _: GetCallerIdentityInput,
     ) -> Result<GetCallerIdentityOutput, Failure<GetCallerIdentityOutput>> {
-        let operation = read_operation(
-            "iam.GetCallerIdentity",
-            "accounts-api/v1/auth/userinfo",
-            OBJECT_CAP,
-            false,
-        );
-        self.read(ctx, Api::Accounts, &operation, &[], &[]).await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.GetCallerIdentity",
+                "accounts-api/v1/auth/userinfo",
+                OBJECT_CAP,
+                false,
+            );
+            self.read(ctx, Api::Accounts, &operation, &[], &[]).await
+        })
     }
 
     /// Reads one IAM user, retaining MFA state and withholding enrollment material.
@@ -88,31 +90,34 @@ impl Client {
         ctx: &RequestContext,
         input: GetUserInput,
     ) -> Result<GetUserOutput, Failure<GetUserOutput>> {
-        let operation = super::Operation {
-            sensitive: true,
-            ..read_operation(
-                "iam.GetUser",
-                "accounts-api/v1/iam-users/{}",
-                OBJECT_CAP,
-                false,
-            )
-        };
-        let (id, mut evidence) = (input.user_id.as_str(), Evidence::new());
-        let user: Option<UserDetail> = self
-            .fetch(
-                ctx,
-                Api::Accounts,
-                &operation,
-                &[("UserID", id)],
-                &[],
-                &mut evidence,
-            )
-            .await?;
-        let mut user = user
-            .ok_or_else(|| refusal(ErrorClass::Api, "", "iam: iam.GetUser: missing user object"))?;
-        user.screen(&evidence);
-        super::screened_output(GetUserOutput { user }, &evidence)
-            .map_err(|error| super::failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let operation = super::Operation {
+                sensitive: true,
+                ..read_operation(
+                    "iam.GetUser",
+                    "accounts-api/v1/iam-users/{}",
+                    OBJECT_CAP,
+                    false,
+                )
+            };
+            let (id, mut evidence) = (input.user_id.as_str(), Evidence::new());
+            let user: Option<UserDetail> = self
+                .fetch(
+                    ctx,
+                    Api::Accounts,
+                    &operation,
+                    &[("UserID", id)],
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            let mut user = user.ok_or_else(|| {
+                refusal(ErrorClass::Api, "", "iam: iam.GetUser: missing user object")
+            })?;
+            user.screen(&evidence);
+            super::screened_output(GetUserOutput { user }, &evidence)
+                .map_err(|error| super::failure(*error))
+        })
     }
 
     /// Lists one zero-based page of IAM users and optionally filters by name.
@@ -121,36 +126,38 @@ impl Client {
         ctx: &RequestContext,
         input: ListUsersInput,
     ) -> Result<ListUsersOutput, Failure<ListUsersOutput>> {
-        const OP: &str = "iam.ListUsers";
-        if input.name.len() > 4096 {
-            return Err(invalid_input(format!(
-                "{OP}: Name must be valid UTF-8 and at most 4096 bytes"
-            )));
-        }
-        if input
-            .name
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch.is_control())
-        {
-            return Err(invalid_input(format!(
-                "{OP}: Name must not contain whitespace or controls"
-            )));
-        }
-        let operation = read_operation(
-            OP,
-            "accounts-api/v1/iam-users",
-            LIST_CAP,
-            input.name.is_empty(),
-        );
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Accounts,
-            &operation,
-            &[],
-            &page.pairs(&input.name),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "iam.ListUsers";
+            if input.name.len() > 4096 {
+                return Err(invalid_input(format!(
+                    "{OP}: Name must be valid UTF-8 and at most 4096 bytes"
+                )));
+            }
+            if input
+                .name
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control())
+            {
+                return Err(invalid_input(format!(
+                    "{OP}: Name must not contain whitespace or controls"
+                )));
+            }
+            let operation = read_operation(
+                OP,
+                "accounts-api/v1/iam-users",
+                LIST_CAP,
+                input.name.is_empty(),
+            );
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Accounts,
+                &operation,
+                &[],
+                &page.pairs(&input.name),
+            )
+            .await
+        })
     }
 
     /// Reads and verifies the identity of one service account.
@@ -159,39 +166,41 @@ impl Client {
         ctx: &RequestContext,
         input: GetServiceAccountInput,
     ) -> Result<GetServiceAccountOutput, Failure<GetServiceAccountOutput>> {
-        let operation = super::Operation {
-            sensitive: true,
-            ..read_operation(
-                "iam.GetServiceAccount",
-                "accounts-api/v1/service-accounts/{}",
-                OBJECT_CAP,
-                false,
+        crate::wire::product::exit::finish!(async {
+            let operation = super::Operation {
+                sensitive: true,
+                ..read_operation(
+                    "iam.GetServiceAccount",
+                    "accounts-api/v1/service-accounts/{}",
+                    OBJECT_CAP,
+                    false,
+                )
+            };
+            let (id, mut evidence) = (input.service_account_id.as_str(), Evidence::new());
+            let mut account: ServiceAccount = self
+                .fetch(
+                    ctx,
+                    Api::Accounts,
+                    &operation,
+                    &[("ServiceAccountID", id)],
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            require_identity(
+                &account.id,
+                id,
+                "iam.GetServiceAccount: service account identity is unproven",
+            )?;
+            account.screen(&evidence);
+            super::screened_output(
+                GetServiceAccountOutput {
+                    service_account: account,
+                },
+                &evidence,
             )
-        };
-        let (id, mut evidence) = (input.service_account_id.as_str(), Evidence::new());
-        let mut account: ServiceAccount = self
-            .fetch(
-                ctx,
-                Api::Accounts,
-                &operation,
-                &[("ServiceAccountID", id)],
-                &[],
-                &mut evidence,
-            )
-            .await?;
-        require_identity(
-            &account.id,
-            id,
-            "iam.GetServiceAccount: service account identity is unproven",
-        )?;
-        account.screen(&evidence);
-        super::screened_output(
-            GetServiceAccountOutput {
-                service_account: account,
-            },
-            &evidence,
-        )
-        .map_err(|error| super::failure(*error))
+            .map_err(|error| super::failure(*error))
+        })
     }
 
     /// Lists one zero-based page of service accounts and optionally filters by name.
@@ -200,23 +209,25 @@ impl Client {
         ctx: &RequestContext,
         input: ListServiceAccountsInput,
     ) -> Result<ListServiceAccountsOutput, Failure<ListServiceAccountsOutput>> {
-        let operation = super::Operation {
-            sensitive: true,
-            ..read_operation(
-                "iam.ListServiceAccounts",
-                "accounts-api/v1/service-accounts",
-                LIST_CAP,
-                false,
+        crate::wire::product::exit::finish!(async {
+            let operation = super::Operation {
+                sensitive: true,
+                ..read_operation(
+                    "iam.ListServiceAccounts",
+                    "accounts-api/v1/service-accounts",
+                    LIST_CAP,
+                    false,
+                )
+            };
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Accounts,
+                &operation,
+                &[],
+                &page.pairs(&input.name),
             )
-        };
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Accounts,
-            &operation,
-            &[],
-            &page.pairs(&input.name),
-        )
-        .await
+            .await
+        })
     }
 }

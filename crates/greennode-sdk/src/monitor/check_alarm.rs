@@ -163,45 +163,48 @@ impl Client {
         ctx: &RequestContext,
         input: GetCheckAlarmInput,
     ) -> Result<GetCheckAlarmOutput, Failure<GetCheckAlarmOutput>> {
-        check_path_id(UPTIME.id, "CheckID", &input.check_id)?;
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &UPTIME, &[&input.check_id], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let snapshot: Snapshot = decode(&raw, &SNAPSHOT, &UPTIME, &evidence).map_err(failure)?;
-        if snapshot.id != input.check_id
-            || evidence.id_reflects(&snapshot.id)
-            || !integer(&snapshot.options.test_frequency).is_some_and(|value| value > 0)
-        {
-            return Err(failure(UPTIME.invalid(&evidence)));
-        }
-        let reference = snapshot.history_alarm;
-        if reference.is_empty() {
-            return Err(failure(Error::new(ErrorClass::NotFound).with_cause(
-                UPTIME.error(
-                    None,
-                    "NotFound",
-                    "check has no alarm reference",
-                    false,
-                    &evidence,
-                ),
-            )));
-        }
-        if !safe_id(&reference, &evidence) {
-            return Err(failure(UPTIME.invalid(&evidence)));
-        }
-        let raw = self
-            .read(ctx, &DEFINITION, &[&reference], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let envelope: Envelope =
-            decode(&raw, &ENVELOPE, &DEFINITION, &evidence).map_err(failure)?;
-        if !safe_id(&reference, &evidence) || evidence.id_reflects(&snapshot.id) {
-            return Err(failure(DEFINITION.invalid(&evidence)));
-        }
-        let alarm = project_alarm(envelope.data, &evidence).map_err(failure)?;
-        Ok(GetCheckAlarmOutput { alarm })
+        crate::wire::product::exit::finish!(async {
+            check_path_id(UPTIME.id, "CheckID", &input.check_id)?;
+            let mut evidence = Evidence::new();
+            let raw = self
+                .read(ctx, &UPTIME, &[&input.check_id], &[], &mut evidence)
+                .await
+                .map_err(failure)?;
+            let snapshot: Snapshot =
+                decode(&raw, &SNAPSHOT, &UPTIME, &evidence).map_err(failure)?;
+            if snapshot.id != input.check_id
+                || evidence.id_reflects(&snapshot.id)
+                || !integer(&snapshot.options.test_frequency).is_some_and(|value| value > 0)
+            {
+                return Err(failure(UPTIME.invalid(&evidence)));
+            }
+            let reference = snapshot.history_alarm;
+            if reference.is_empty() {
+                return Err(failure(Error::new(ErrorClass::NotFound).with_cause(
+                    UPTIME.error(
+                        None,
+                        "NotFound",
+                        "check has no alarm reference",
+                        false,
+                        &evidence,
+                    ),
+                )));
+            }
+            if !safe_id(&reference, &evidence) {
+                return Err(failure(UPTIME.invalid(&evidence)));
+            }
+            let raw = self
+                .read(ctx, &DEFINITION, &[&reference], &[], &mut evidence)
+                .await
+                .map_err(failure)?;
+            let envelope: Envelope =
+                decode(&raw, &ENVELOPE, &DEFINITION, &evidence).map_err(failure)?;
+            if !safe_id(&reference, &evidence) || evidence.id_reflects(&snapshot.id) {
+                return Err(failure(DEFINITION.invalid(&evidence)));
+            }
+            let alarm = project_alarm(envelope.data, &evidence).map_err(failure)?;
+            Ok(GetCheckAlarmOutput { alarm })
+        })
     }
 }
 

@@ -242,89 +242,92 @@ impl Client {
         ctx: &RequestContext,
         input: CreateListenerInput,
     ) -> WriteResult<CreateListenerOutput> {
-        let ids = [("LoadBalancerID", input.load_balancer_id.as_str())];
-        let mut write =
-            ChildWriter::new(self, ctx, CREATE, &input.load_balancer_id, &ids).map_err(not_sent)?;
-        encode_body(&input, &write.evidence).map_err(not_sent)?;
-        for (field, missing) in [
-            ("Name", input.name.is_empty()),
-            ("Protocol", input.protocol.is_empty()),
-            ("Port", input.port == 0),
-        ] {
-            if missing {
+        crate::wire::product::exit::finish!(async {
+            let ids = [("LoadBalancerID", input.load_balancer_id.as_str())];
+            let mut write = ChildWriter::new(self, ctx, CREATE, &input.load_balancer_id, &ids)
+                .map_err(not_sent)?;
+            encode_body(&input, &write.evidence).map_err(not_sent)?;
+            for (field, missing) in [
+                ("Name", input.name.is_empty()),
+                ("Protocol", input.protocol.is_empty()),
+                ("Port", input.port == 0),
+            ] {
+                if missing {
+                    return Err(not_sent(invalid_input(&format!(
+                        "{CREATE} requires {field}"
+                    ))));
+                }
+            }
+            validate_optional_id(CREATE, "DefaultPoolID", &input.default_pool_id)
+                .map_err(not_sent)?;
+            check_cidrs(CREATE, &input.allowed_cidrs).map_err(not_sent)?;
+            let body = CreateBody {
+                listener_name: &input.name,
+                listener_protocol: &input.protocol,
+                listener_protocol_port: input.port,
+                settings: ListenerBody {
+                    timeout_client: default_timeout(input.timeout_client, 50),
+                    timeout_member: default_timeout(input.timeout_member, 50),
+                    timeout_connection: default_timeout(input.timeout_connection, 5),
+                    default_pool_id: &input.default_pool_id,
+                    allowed_cidrs: input.allowed_cidrs.join(","),
+                    certificate_authorities: &input.certificate_ids,
+                    default_certificate_authority: &input.default_certificate_id,
+                    client_certificate: &input.client_certificate_id,
+                    insert_headers: header_body(&input.insert_headers),
+                },
+            };
+            body.settings
+                .check_certificates(CREATE, &input.protocol)
+                .map_err(not_sent)?;
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            let _lock = self
+                .lock_load_balancer(ctx, &input.load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            let ready = write.ready(ctx, None).await.map_err(not_sent)?;
+            screen_input(&write.evidence, [input.protocol.as_str()]).map_err(not_sent)?;
+            if ready.lb_type == "Layer 7" && !matches!(input.protocol.as_str(), "HTTP" | "HTTPS") {
                 return Err(not_sent(invalid_input(&format!(
-                    "{CREATE} requires {field}"
+                    "{CREATE}: a Layer 7 load balancer accepts only HTTP and HTTPS listeners, got {:?}",
+                    input.protocol
                 ))));
             }
-        }
-        validate_optional_id(CREATE, "DefaultPoolID", &input.default_pool_id).map_err(not_sent)?;
-        check_cidrs(CREATE, &input.allowed_cidrs).map_err(not_sent)?;
-        let body = CreateBody {
-            listener_name: &input.name,
-            listener_protocol: &input.protocol,
-            listener_protocol_port: input.port,
-            settings: ListenerBody {
-                timeout_client: default_timeout(input.timeout_client, 50),
-                timeout_member: default_timeout(input.timeout_member, 50),
-                timeout_connection: default_timeout(input.timeout_connection, 5),
-                default_pool_id: &input.default_pool_id,
-                allowed_cidrs: input.allowed_cidrs.join(","),
-                certificate_authorities: &input.certificate_ids,
-                default_certificate_authority: &input.default_certificate_id,
-                client_certificate: &input.client_certificate_id,
-                insert_headers: header_body(&input.insert_headers),
-            },
-        };
-        body.settings
-            .check_certificates(CREATE, &input.protocol)
-            .map_err(not_sent)?;
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        let _lock = self
-            .lock_load_balancer(ctx, &input.load_balancer_id)
+            let target = ChildTarget {
+                read: &LISTENERS,
+                ..listener_target("", &ids)
+            };
+            let (status, response) = write
+                .send(ctx, Method::POST, &target, bytes, None)
+                .await
+                .map_err(|failure| write.create_failure(failure, "list-listeners"))?;
+            let uuid = write.acknowledged_id(status, &response, "list-listeners", input.no_wait)?;
+            let fallback = body.settings.submitted(Listener {
+                uuid: uuid.clone(),
+                name: body.listener_name.to_owned(),
+                protocol: body.listener_protocol.to_owned(),
+                protocol_port: input.port,
+                ..Listener::default()
+            });
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("ListenerID", uuid.as_str()),
+            ];
+            let target = listener_target(&uuid, &ids);
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                input.no_wait,
+                true,
+                fallback,
+                |listener, projection| CreateListenerOutput {
+                    listener,
+                    projection,
+                },
+            )
             .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        let ready = write.ready(ctx, None).await.map_err(not_sent)?;
-        screen_input(&write.evidence, [input.protocol.as_str()]).map_err(not_sent)?;
-        if ready.lb_type == "Layer 7" && !matches!(input.protocol.as_str(), "HTTP" | "HTTPS") {
-            return Err(not_sent(invalid_input(&format!(
-                "{CREATE}: a Layer 7 load balancer accepts only HTTP and HTTPS listeners, got {:?}",
-                input.protocol
-            ))));
-        }
-        let target = ChildTarget {
-            read: &LISTENERS,
-            ..listener_target("", &ids)
-        };
-        let (status, response) = write
-            .send(ctx, Method::POST, &target, bytes, None)
-            .await
-            .map_err(|failure| write.create_failure(failure, "list-listeners"))?;
-        let uuid = write.acknowledged_id(status, &response, "list-listeners", input.no_wait)?;
-        let fallback = body.settings.submitted(Listener {
-            uuid: uuid.clone(),
-            name: body.listener_name.to_owned(),
-            protocol: body.listener_protocol.to_owned(),
-            protocol_port: input.port,
-            ..Listener::default()
-        });
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("ListenerID", uuid.as_str()),
-        ];
-        let target = listener_target(&uuid, &ids);
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            input.no_wait,
-            true,
-            fallback,
-            |listener, projection| CreateListenerOutput {
-                listener,
-                projection,
-            },
-        )
-        .await
+        })
     }
 
     /// Updates a listener using its current settings for fields left unset.
@@ -333,77 +336,79 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateListenerInput,
     ) -> WriteResult<UpdateListenerOutput> {
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("ListenerID", input.listener_id.as_str()),
-        ];
-        let mut write =
-            ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids).map_err(not_sent)?;
-        if encode_body(&input, &write.evidence)
-            .map_err(not_sent)?
-            .as_ref()
-            == b"{}"
-        {
-            return Err(not_sent(invalid_input(&format!(
-                "{UPDATE} requires at least one field to change"
-            ))));
-        }
-        validate_optional_id(
-            UPDATE,
-            "DefaultPoolID",
-            input.default_pool_id.as_deref().unwrap_or_default(),
-        )
-        .map_err(not_sent)?;
-        if let Some(cidrs) = &input.allowed_cidrs {
-            check_cidrs(UPDATE, cidrs).map_err(not_sent)?;
-        }
-        check_certificate_ids(
-            UPDATE,
-            input.certificate_ids.as_deref().unwrap_or_default(),
-            input.default_certificate_id.as_deref().unwrap_or_default(),
-            input.client_certificate_id.as_deref().unwrap_or_default(),
-        )
-        .map_err(not_sent)?;
-        let _lock = self
-            .lock_load_balancer(ctx, &input.load_balancer_id)
+        crate::wire::product::exit::finish!(async {
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("ListenerID", input.listener_id.as_str()),
+            ];
+            let mut write = ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids)
+                .map_err(not_sent)?;
+            if encode_body(&input, &write.evidence)
+                .map_err(not_sent)?
+                .as_ref()
+                == b"{}"
+            {
+                return Err(not_sent(invalid_input(&format!(
+                    "{UPDATE} requires at least one field to change"
+                ))));
+            }
+            validate_optional_id(
+                UPDATE,
+                "DefaultPoolID",
+                input.default_pool_id.as_deref().unwrap_or_default(),
+            )
+            .map_err(not_sent)?;
+            if let Some(cidrs) = &input.allowed_cidrs {
+                check_cidrs(UPDATE, cidrs).map_err(not_sent)?;
+            }
+            check_certificate_ids(
+                UPDATE,
+                input.certificate_ids.as_deref().unwrap_or_default(),
+                input.default_certificate_id.as_deref().unwrap_or_default(),
+                input.client_certificate_id.as_deref().unwrap_or_default(),
+            )
+            .map_err(not_sent)?;
+            let _lock = self
+                .lock_load_balancer(ctx, &input.load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            let target = listener_target(&input.listener_id, &ids);
+            let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
+            let listener: Listener = GET_LISTENER
+                .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
+                .map_err(not_sent)?;
+            let body = merged(&input, &listener);
+            if body.allowed_cidrs.is_empty() {
+                return Err(not_sent(invalid_input(&format!(
+                    "{UPDATE}: the listener's own AllowedCIDRs read back empty; set AllowedCIDRs explicitly"
+                ))));
+            }
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            screen_input(&write.evidence, [listener.protocol.as_str()]).map_err(not_sent)?;
+            body.check_certificates(UPDATE, &listener.protocol)
+                .map_err(not_sent)?;
+            write
+                .send(ctx, Method::PUT, &target, bytes, Some(&target))
+                .await?;
+            let fallback = if input.no_wait {
+                body.submitted(listener.clone())
+            } else {
+                listener
+            };
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                input.no_wait,
+                false,
+                fallback,
+                |listener, projection| UpdateListenerOutput {
+                    listener,
+                    projection,
+                },
+            )
             .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        let target = listener_target(&input.listener_id, &ids);
-        let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
-        let listener: Listener = GET_LISTENER
-            .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
-            .map_err(not_sent)?;
-        let body = merged(&input, &listener);
-        if body.allowed_cidrs.is_empty() {
-            return Err(not_sent(invalid_input(&format!(
-                "{UPDATE}: the listener's own AllowedCIDRs read back empty; set AllowedCIDRs explicitly"
-            ))));
-        }
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        screen_input(&write.evidence, [listener.protocol.as_str()]).map_err(not_sent)?;
-        body.check_certificates(UPDATE, &listener.protocol)
-            .map_err(not_sent)?;
-        write
-            .send(ctx, Method::PUT, &target, bytes, Some(&target))
-            .await?;
-        let fallback = if input.no_wait {
-            body.submitted(listener.clone())
-        } else {
-            listener
-        };
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            input.no_wait,
-            false,
-            fallback,
-            |listener, projection| UpdateListenerOutput {
-                listener,
-                projection,
-            },
-        )
-        .await
+        })
     }
 }
 

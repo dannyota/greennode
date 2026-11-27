@@ -134,81 +134,85 @@ impl Client {
         ctx: &RequestContext,
         input: CreateLoadBalancerInput,
     ) -> Result<CreateLoadBalancerOutput, Failure<CreateLoadBalancerOutput>> {
-        for (field, value) in [("Name", &input.name), ("PackageID", &input.package_id)] {
-            if value.is_empty() {
-                return Err(not_sent(invalid_input(format!(
-                    "{CREATE} requires {field}"
-                ))));
-            }
-        }
-        let operation = write_operation(CREATE, COLLECTION, Method::POST);
-        let mut write = self.start_write(CREATE)?;
-        let mut body = json!({"name": input.name, "package": input.package_id, "paymentFlow": "automated", "type": LAYER_FOUR});
-        if !input.description.is_empty() {
-            body["description"] = Value::String(input.description);
-        }
-        let reply = write
-            .request(ctx, &operation, &[], Some(&body))
-            .await
-            .map_err(|failure| write.rejection(failure, None, "create request unconfirmed"))?;
-        let id = if operation.success.contains(&reply.status) {
-            let accepted: Accepted =
-                decode(&operation, &reply.body, &ACCEPTED_SHAPE).map_err(|_| {
-                    write.finish(Settlement::Unknown("create request unconfirmed"), None)
-                })?;
-            accepted.load_balancer.0.id
-        } else if reply.status.is_client_error() {
-            return Err(Failure::new(
-                rejected_response(&operation, &reply, Some(&body), None),
-                None,
-                crate::WriteDispatch::MayHaveBeenSent,
-            ));
-        } else {
-            return Err(write.finish(Settlement::Unknown("create request unconfirmed"), None));
-        };
-        if !Options::DEFAULT.path_ids.allows(&id) || write.evidence.text_reflects(&id) {
-            return Err(write.finish(
-                Settlement::Unknown("create response lacks a valid ID"),
-                None,
-            ));
-        }
-        let wait = write.wait_context(ctx, CREATE_TIMEOUT);
-        let mut observed = LoadBalancer {
-            id: id.clone(),
-            ..Default::default()
-        };
-        let reason = loop {
-            if write.interrupted(&wait) {
-                break Settlement::Unknown("create confirmation interrupted");
-            }
-            let Ok(detail) = write.load_balancer_detail(&wait, &id).await else {
-                break Settlement::Unknown("create confirmation interrupted");
-            };
-            if write.interrupted(&wait) {
-                break Settlement::Unknown("create confirmation interrupted");
-            }
-            if detail.id.0 != id
-                || detail.name.0 != input.name
-                || detail.package.0 != input.package_id
-                || detail.kind.0 != LAYER_FOUR
-            {
-                break Settlement::Unknown("create detail does not match");
-            }
-            match detail.status.0.to_ascii_uppercase().as_str() {
-                "ACTIVE" => {
-                    let output = create_output(detail.into(), &write.evidence);
-                    if write.safe_output(&output) {
-                        return Ok(output);
-                    }
-                    break Settlement::Unknown("output withheld");
+        crate::wire::product::exit::finish!(async {
+            for (field, value) in [("Name", &input.name), ("PackageID", &input.package_id)] {
+                if value.is_empty() {
+                    return Err(not_sent(invalid_input(format!(
+                        "{CREATE} requires {field}"
+                    ))));
                 }
-                "ERROR" => break Settlement::Failed,
-                "CREATING" | "PENDING" | "PROVISIONING" | "UPDATING" => observed = detail.into(),
-                _ => break Settlement::Unknown("create status unrecognized"),
             }
-            write.pause(&wait).await;
-        };
-        Err(write.finish(reason, Some(create_output(observed, &write.evidence))))
+            let operation = write_operation(CREATE, COLLECTION, Method::POST);
+            let mut write = self.start_write(CREATE)?;
+            let mut body = json!({"name": input.name, "package": input.package_id, "paymentFlow": "automated", "type": LAYER_FOUR});
+            if !input.description.is_empty() {
+                body["description"] = Value::String(input.description);
+            }
+            let reply = write
+                .request(ctx, &operation, &[], Some(&body))
+                .await
+                .map_err(|failure| write.rejection(failure, None, "create request unconfirmed"))?;
+            let id = if operation.success.contains(&reply.status) {
+                let accepted: Accepted =
+                    decode(&operation, &reply.body, &ACCEPTED_SHAPE).map_err(|_| {
+                        write.finish(Settlement::Unknown("create request unconfirmed"), None)
+                    })?;
+                accepted.load_balancer.0.id
+            } else if reply.status.is_client_error() {
+                return Err(Failure::new(
+                    rejected_response(&operation, &reply, Some(&body), None),
+                    None,
+                    crate::WriteDispatch::MayHaveBeenSent,
+                ));
+            } else {
+                return Err(write.finish(Settlement::Unknown("create request unconfirmed"), None));
+            };
+            if !Options::DEFAULT.path_ids.allows(&id) || write.evidence.text_reflects(&id) {
+                return Err(write.finish(
+                    Settlement::Unknown("create response lacks a valid ID"),
+                    None,
+                ));
+            }
+            let wait = write.wait_context(ctx, CREATE_TIMEOUT);
+            let mut observed = LoadBalancer {
+                id: id.clone(),
+                ..Default::default()
+            };
+            let reason = loop {
+                if write.interrupted(&wait) {
+                    break Settlement::Unknown("create confirmation interrupted");
+                }
+                let Ok(detail) = write.load_balancer_detail(&wait, &id).await else {
+                    break Settlement::Unknown("create confirmation interrupted");
+                };
+                if write.interrupted(&wait) {
+                    break Settlement::Unknown("create confirmation interrupted");
+                }
+                if detail.id.0 != id
+                    || detail.name.0 != input.name
+                    || detail.package.0 != input.package_id
+                    || detail.kind.0 != LAYER_FOUR
+                {
+                    break Settlement::Unknown("create detail does not match");
+                }
+                match detail.status.0.to_ascii_uppercase().as_str() {
+                    "ACTIVE" => {
+                        let output = create_output(detail.into(), &write.evidence);
+                        if write.safe_output(&output) {
+                            return Ok(output);
+                        }
+                        break Settlement::Unknown("output withheld");
+                    }
+                    "ERROR" => break Settlement::Failed,
+                    "CREATING" | "PENDING" | "PROVISIONING" | "UPDATING" => {
+                        observed = detail.into()
+                    }
+                    _ => break Settlement::Unknown("create status unrecognized"),
+                }
+                write.pause(&wait).await;
+            };
+            Err(write.finish(reason, Some(create_output(observed, &write.evidence))))
+        })
     }
 
     /// Deletes the exact Layer 4 load balancer after preflight and confirms its absence.
@@ -217,75 +221,77 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteLoadBalancerInput,
     ) -> Result<DeleteLoadBalancerOutput, Failure<DeleteLoadBalancerOutput>> {
-        let operation = write_operation(DELETE, RESOURCE, Method::DELETE);
-        let id = &input.load_balancer_id;
-        let path = path_ids(&operation, &[("LoadBalancerID", id)])
-            .map_err(|message| not_sent(invalid_input(message)))?;
-        let mut write = self.start_write(DELETE)?;
-        let detail = write
-            .load_balancer_detail(ctx, id)
-            .await
-            .map_err(|error| not_sent(*error))?;
-        if detail.id.0 != *id
-            || detail.kind.0 != LAYER_FOUR
-            || !matches!(
-                detail.status.0.to_ascii_uppercase().as_str(),
-                "ACTIVE" | "ERROR"
-            )
-        {
-            return Err(not_sent(invalid_input(
-                "preflight resource is not eligible for deletion".into(),
-            )));
-        }
-        let output = |write: &Write<'_>, deleted| delete_output(id, deleted, &write.evidence);
-        let reply = match write.request(ctx, &operation, &path, None).await {
-            Ok(reply) => reply,
-            Err(failure) => {
-                return Err(write.rejection(
-                    failure,
-                    Some(output(&write, false)),
-                    "delete request unconfirmed",
+        crate::wire::product::exit::finish!(async {
+            let operation = write_operation(DELETE, RESOURCE, Method::DELETE);
+            let id = &input.load_balancer_id;
+            let path = path_ids(&operation, &[("LoadBalancerID", id)])
+                .map_err(|message| not_sent(invalid_input(message)))?;
+            let mut write = self.start_write(DELETE)?;
+            let detail = write
+                .load_balancer_detail(ctx, id)
+                .await
+                .map_err(|error| not_sent(*error))?;
+            if detail.id.0 != *id
+                || detail.kind.0 != LAYER_FOUR
+                || !matches!(
+                    detail.status.0.to_ascii_uppercase().as_str(),
+                    "ACTIVE" | "ERROR"
+                )
+            {
+                return Err(not_sent(invalid_input(
+                    "preflight resource is not eligible for deletion".into(),
+                )));
+            }
+            let output = |write: &Write<'_>, deleted| delete_output(id, deleted, &write.evidence);
+            let reply = match write.request(ctx, &operation, &path, None).await {
+                Ok(reply) => reply,
+                Err(failure) => {
+                    return Err(write.rejection(
+                        failure,
+                        Some(output(&write, false)),
+                        "delete request unconfirmed",
+                    ));
+                }
+            };
+            if reply.status.is_client_error() {
+                return Err(Failure::new(
+                    rejected_response(&operation, &reply, None, None),
+                    None,
+                    crate::WriteDispatch::MayHaveBeenSent,
                 ));
             }
-        };
-        if reply.status.is_client_error() {
-            return Err(Failure::new(
-                rejected_response(&operation, &reply, None, None),
-                None,
-                crate::WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        if !operation.success.contains(&reply.status) {
-            return Err(write.finish(
-                Settlement::Unknown("delete request unconfirmed"),
-                Some(output(&write, false)),
-            ));
-        }
-        let wait = write.wait_context(ctx, DELETE_TIMEOUT);
-        let reason = loop {
-            if write.interrupted(&wait) {
-                break Settlement::Unknown("delete confirmation interrupted");
+            if !operation.success.contains(&reply.status) {
+                return Err(write.finish(
+                    Settlement::Unknown("delete request unconfirmed"),
+                    Some(output(&write, false)),
+                ));
             }
-            let current = write.load_balancer_detail(&wait, id).await;
-            if write.interrupted(&wait) {
-                break Settlement::Unknown("delete confirmation interrupted");
-            }
-            match current {
-                Err(error) if error.detail::<ConfirmedAbsence>().is_some() => {
-                    let output = output(&write, true);
-                    if write.safe_output(&output) {
-                        return Ok(output);
+            let wait = write.wait_context(ctx, DELETE_TIMEOUT);
+            let reason = loop {
+                if write.interrupted(&wait) {
+                    break Settlement::Unknown("delete confirmation interrupted");
+                }
+                let current = write.load_balancer_detail(&wait, id).await;
+                if write.interrupted(&wait) {
+                    break Settlement::Unknown("delete confirmation interrupted");
+                }
+                match current {
+                    Err(error) if error.detail::<ConfirmedAbsence>().is_some() => {
+                        let output = output(&write, true);
+                        if write.safe_output(&output) {
+                            return Ok(output);
+                        }
+                        break Settlement::Unknown("output withheld");
                     }
-                    break Settlement::Unknown("output withheld");
+                    Ok(detail) if detail.id.0 != *id => {
+                        break Settlement::Unknown("delete detail ID mismatch");
+                    }
+                    Ok(_) => write.pause(&wait).await,
+                    Err(_) => break Settlement::Unknown("delete confirmation interrupted"),
                 }
-                Ok(detail) if detail.id.0 != *id => {
-                    break Settlement::Unknown("delete detail ID mismatch");
-                }
-                Ok(_) => write.pause(&wait).await,
-                Err(_) => break Settlement::Unknown("delete confirmation interrupted"),
-            }
-        };
-        Err(write.finish(reason, Some(output(&write, false))))
+            };
+            Err(write.finish(reason, Some(output(&write, false))))
+        })
     }
 }
 

@@ -152,15 +152,18 @@ impl Client {
         ctx: &RequestContext,
         input: ListHostedZonesInput,
     ) -> Result<ListHostedZonesOutput, Failure<ListHostedZonesOutput>> {
-        let page = page_value(input.page, DEFAULT_PAGE);
-        let size = page_value(input.size, DEFAULT_PAGE_SIZE);
-        let mut query = vec![("page", page.as_str()), ("size", size.as_str())];
-        if !input.name.is_empty() {
-            query.push(("name", &input.name));
-        }
-        let operation = read_operation(LIST_ZONES, "v1/dns/hosted-zone");
-        let response: PageResponse<HostedZone> = self.read(ctx, &operation, &[], &query).await?;
-        Ok(response.page)
+        crate::wire::product::exit::finish!(async {
+            let page = page_value(input.page, DEFAULT_PAGE);
+            let size = page_value(input.size, DEFAULT_PAGE_SIZE);
+            let mut query = vec![("page", page.as_str()), ("size", size.as_str())];
+            if !input.name.is_empty() {
+                query.push(("name", &input.name));
+            }
+            let operation = read_operation(LIST_ZONES, "v1/dns/hosted-zone");
+            let response: PageResponse<HostedZone> =
+                self.read(ctx, &operation, &[], &query).await?;
+            Ok(response.page)
+        })
     }
 
     /// Reads a hosted zone by identifier.
@@ -169,13 +172,15 @@ impl Client {
         ctx: &RequestContext,
         input: GetHostedZoneInput,
     ) -> Result<GetHostedZoneOutput, Failure<GetHostedZoneOutput>> {
-        check_ids(GET_ZONE, &[("HostedZoneID", &input.hosted_zone_id)])?;
-        let operation = read_operation(GET_ZONE, "v1/dns/hosted-zone/{}");
-        let response: Detail<HostedZone> = self
-            .read(ctx, &operation, &[&input.hosted_zone_id], &[])
-            .await?;
-        Ok(GetHostedZoneOutput {
-            hosted_zone: response.data,
+        crate::wire::product::exit::finish!(async {
+            check_ids(GET_ZONE, &[("HostedZoneID", &input.hosted_zone_id)])?;
+            let operation = read_operation(GET_ZONE, "v1/dns/hosted-zone/{}");
+            let response: Detail<HostedZone> = self
+                .read(ctx, &operation, &[&input.hosted_zone_id], &[])
+                .await?;
+            Ok(GetHostedZoneOutput {
+                hosted_zone: response.data,
+            })
         })
     }
 
@@ -185,29 +190,31 @@ impl Client {
         ctx: &RequestContext,
         input: ListRecordsInput,
     ) -> Result<ListRecordsOutput, Failure<ListRecordsOutput>> {
-        check_ids(LIST_RECORDS, &[("HostedZoneID", &input.hosted_zone_id)])?;
-        let filter = [("name", input.name.as_str())];
-        let query = if input.name.is_empty() {
-            &[][..]
-        } else {
-            &filter
-        };
-        let operation = read_operation(LIST_RECORDS, "v1/dns/hosted-zone/{}/record");
-        let response: PageResponse<Record> = self
-            .read(ctx, &operation, &[&input.hosted_zone_id], query)
-            .await?;
-        if response.incomplete {
-            return Err(Failure::new(
-                api_error(
-                    "",
-                    "",
-                    "dns.ListRecords: incomplete record list; continuation parameters are unverified",
-                ),
-                Some(response.page),
-                WriteDispatch::NotAWrite,
-            ));
-        }
-        Ok(response.page)
+        crate::wire::product::exit::finish!(async {
+            check_ids(LIST_RECORDS, &[("HostedZoneID", &input.hosted_zone_id)])?;
+            let filter = [("name", input.name.as_str())];
+            let query = if input.name.is_empty() {
+                &[][..]
+            } else {
+                &filter
+            };
+            let operation = read_operation(LIST_RECORDS, "v1/dns/hosted-zone/{}/record");
+            let response: PageResponse<Record> = self
+                .read(ctx, &operation, &[&input.hosted_zone_id], query)
+                .await?;
+            if response.incomplete {
+                return Err(Failure::new(
+                    api_error(
+                        "",
+                        "",
+                        "dns.ListRecords: incomplete record list; continuation parameters are unverified",
+                    ),
+                    Some(response.page),
+                    WriteDispatch::NotAWrite,
+                ));
+            }
+            Ok(response.page)
+        })
     }
 
     /// Reads one record by identifier from the given hosted zone.
@@ -216,24 +223,26 @@ impl Client {
         ctx: &RequestContext,
         input: GetRecordInput,
     ) -> Result<GetRecordOutput, Failure<GetRecordOutput>> {
-        check_ids(
-            GET_RECORD,
-            &[
-                ("HostedZoneID", &input.hosted_zone_id),
-                ("RecordID", &input.record_id),
-            ],
-        )?;
-        let operation = read_operation(GET_RECORD, "v1/dns/hosted-zone/{}/record/{}");
-        let response: Detail<Record> = self
-            .read(
-                ctx,
-                &operation,
-                &[&input.hosted_zone_id, &input.record_id],
-                &[],
-            )
-            .await?;
-        Ok(GetRecordOutput {
-            record: response.data,
+        crate::wire::product::exit::finish!(async {
+            check_ids(
+                GET_RECORD,
+                &[
+                    ("HostedZoneID", &input.hosted_zone_id),
+                    ("RecordID", &input.record_id),
+                ],
+            )?;
+            let operation = read_operation(GET_RECORD, "v1/dns/hosted-zone/{}/record/{}");
+            let response: Detail<Record> = self
+                .read(
+                    ctx,
+                    &operation,
+                    &[&input.hosted_zone_id, &input.record_id],
+                    &[],
+                )
+                .await?;
+            Ok(GetRecordOutput {
+                record: response.data,
+            })
         })
     }
 

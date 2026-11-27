@@ -137,41 +137,43 @@ impl Client {
         ctx: &RequestContext,
         input: QuoteCreateNatInstanceInput,
     ) -> Result<QuoteCreateNatInstanceOutput, Failure<QuoteCreateNatInstanceOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
-        let scope = self
-            .nat_scope(ctx, PRICE, input.zone_id.clone(), &mut evidence, false)
-            .await
-            .map_err(|error| failure(screen(error, &evidence)))?;
-        self.check_nat_placement(ctx, &scope, &input, &mut evidence)
-            .await
-            .map_err(|error| failure(screen(error, &evidence)))?;
-        let body = json!({"resourceType":"nat","action":"create","resourceInfo":{
-            "isPoc": false, "isEnableAutoRenew": false, "isBuyMorePoc": false,
-            "natName": input.name, "packageUuid": input.package_id, "vpcUuid": input.vpc_id,
-            "regionUuid": scope.zone, "projectUuid": scope.project,
-        }});
-        if evidence.output_reflects(&body) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
-        }
-        let result = request::exchange(
-            &self.session,
-            ctx,
-            &mut evidence,
-            Request {
-                operation: OP,
-                template: PRICE.template,
-                product: Product::Vnetwork(&scope.base),
-                path: &[&scope.zone, &scope.project],
-                query: &[],
-                body: Some(&body),
-            },
-            None,
-        )
-        .await;
-        let raw = result.map_err(|error| failure(quote_error(*error, &evidence)))?;
-        decode_quote(&go_json(raw.get().as_bytes()), &evidence)
-            .map_err(|error| failure(screen(error, &evidence)))
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
+            let scope = self
+                .nat_scope(ctx, PRICE, input.zone_id.clone(), &mut evidence, false)
+                .await
+                .map_err(|error| failure(screen(error, &evidence)))?;
+            self.check_nat_placement(ctx, &scope, &input, &mut evidence)
+                .await
+                .map_err(|error| failure(screen(error, &evidence)))?;
+            let body = json!({"resourceType":"nat","action":"create","resourceInfo":{
+                "isPoc": false, "isEnableAutoRenew": false, "isBuyMorePoc": false,
+                "natName": input.name, "packageUuid": input.package_id, "vpcUuid": input.vpc_id,
+                "regionUuid": scope.zone, "projectUuid": scope.project,
+            }});
+            if evidence.output_reflects(&body) {
+                return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            }
+            let result = request::exchange(
+                &self.session,
+                ctx,
+                &mut evidence,
+                Request {
+                    operation: OP,
+                    template: PRICE.template,
+                    product: Product::Vnetwork(&scope.base),
+                    path: &[&scope.zone, &scope.project],
+                    query: &[],
+                    body: Some(&body),
+                },
+                None,
+            )
+            .await;
+            let raw = result.map_err(|error| failure(quote_error(*error, &evidence)))?;
+            decode_quote(&go_json(raw.get().as_bytes()), &evidence)
+                .map_err(|error| failure(screen(error, &evidence)))
+        })
     }
 
     async fn check_nat_placement(

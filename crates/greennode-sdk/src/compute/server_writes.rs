@@ -81,96 +81,98 @@ impl Client {
         ctx: &RequestContext,
         input: CreateServerInput,
     ) -> Result<CreateServerOutput, Failure<CreateServerOutput>> {
-        let mut evidence = Evidence::new();
-        required(
-            CREATE.id,
-            &[
-                ("Name", !input.name.is_empty()),
-                ("ZoneID", !input.zone_id.is_empty()),
-                ("FlavorID", !input.flavor_id.is_empty()),
-                ("ImageID", !input.image_id.is_empty()),
-                ("VPCID", !input.vpc_id.is_empty()),
-                ("SubnetID", !input.subnet_id.is_empty()),
-                ("SecurityGroupIDs", !input.security_group_ids.is_empty()),
-                ("RootDiskSize", input.root_disk_size != 0),
-                ("RootDiskTypeID", !input.root_disk_type_id.is_empty()),
-            ],
-        )
-        .map_err(|error| not_sent(*error))?;
-        if !input.max_price.is_finite() || input.max_price < 0.0 {
-            return Err(not_sent(invalid_input(
-                "compute.CreateServer: MaxPrice must be finite and non-negative",
-            )));
-        }
-        let info = server_info(CREATE.id, &input).map_err(|error| not_sent(*error))?;
-        let body = create_body(&input).map_err(|error| not_sent(*error))?;
-        self.guard_write(
-            ctx,
-            &json!([
-                body,
-                input.max_price,
-                input.user_data.as_ref().map(|data| data.expose_secret())
-            ]),
-            &mut evidence,
-        )
-        .map_err(|error| not_sent(*error))?;
-        add_user_data(&input, &mut evidence);
-        self.refuse_server_name(ctx, &input.name, &mut evidence)
-            .await?;
-        let quote = self
-            .create_quote(ctx, &input, info, &mut evidence)
-            .await
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            required(
+                CREATE.id,
+                &[
+                    ("Name", !input.name.is_empty()),
+                    ("ZoneID", !input.zone_id.is_empty()),
+                    ("FlavorID", !input.flavor_id.is_empty()),
+                    ("ImageID", !input.image_id.is_empty()),
+                    ("VPCID", !input.vpc_id.is_empty()),
+                    ("SubnetID", !input.subnet_id.is_empty()),
+                    ("SecurityGroupIDs", !input.security_group_ids.is_empty()),
+                    ("RootDiskSize", input.root_disk_size != 0),
+                    ("RootDiskTypeID", !input.root_disk_type_id.is_empty()),
+                ],
+            )
             .map_err(|error| not_sent(*error))?;
-        check_price(CREATE.id, quote.optimum_price, input.max_price, &evidence)
+            if !input.max_price.is_finite() || input.max_price < 0.0 {
+                return Err(not_sent(invalid_input(
+                    "compute.CreateServer: MaxPrice must be finite and non-negative",
+                )));
+            }
+            let info = server_info(CREATE.id, &input).map_err(|error| not_sent(*error))?;
+            let body = create_body(&input).map_err(|error| not_sent(*error))?;
+            self.guard_write(
+                ctx,
+                &json!([
+                    body,
+                    input.max_price,
+                    input.user_data.as_ref().map(|data| data.expose_secret())
+                ]),
+                &mut evidence,
+            )
             .map_err(|error| not_sent(*error))?;
-        let sensitive = input
-            .user_data
-            .as_ref()
-            .is_some_and(|data| !data.expose_secret().is_empty());
-        let body = self
-            .send_mutation(ctx, &CREATE, &[], Some(&body), sensitive, &mut evidence)
-            .await
-            .map_err(|failed| create_error(failed, sensitive, &evidence))?;
-        let id = create_id(&body, &evidence)
-            .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
-        let mut server = Server {
-            uuid: id.clone(),
-            name: input.name,
-            ..Server::default()
-        };
-        let settlement = if input.no_wait {
-            Ok(())
-        } else {
-            self.settle_server(ctx, &id, Settlement::Created, &mut server, &mut evidence)
+            add_user_data(&input, &mut evidence);
+            self.refuse_server_name(ctx, &input.name, &mut evidence)
+                .await?;
+            let quote = self
+                .create_quote(ctx, &input, info, &mut evidence)
                 .await
-        };
-        let output = safe_server(server, &evidence)
-            .filter(|_| {
-                !evidence.output_reflects(&json!(quote.optimum_price))
-                    && !evidence.reflects_fixed_two(quote.optimum_price)
-            })
-            .map(|server| CreateServerOutput {
-                server,
-                monthly_price: quote.optimum_price,
-            });
-        match (settlement, output) {
-            (Ok(()), Some(output)) => Ok(output),
-            (Ok(()), None) => Err(Failure::new(
-                invalid_response(&evidence),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            )),
-            (Err(error), output) => Err(Failure::new(
-                settlement_error(
-                    CREATE.id,
-                    *error,
-                    "inspect get-server or list-servers before creating again",
-                    &evidence,
-                ),
-                output,
-                WriteDispatch::MayHaveBeenSent,
-            )),
-        }
+                .map_err(|error| not_sent(*error))?;
+            check_price(CREATE.id, quote.optimum_price, input.max_price, &evidence)
+                .map_err(|error| not_sent(*error))?;
+            let sensitive = input
+                .user_data
+                .as_ref()
+                .is_some_and(|data| !data.expose_secret().is_empty());
+            let body = self
+                .send_mutation(ctx, &CREATE, &[], Some(&body), sensitive, &mut evidence)
+                .await
+                .map_err(|failed| create_error(failed, sensitive, &evidence))?;
+            let id = create_id(&body, &evidence)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
+            let mut server = Server {
+                uuid: id.clone(),
+                name: input.name,
+                ..Server::default()
+            };
+            let settlement = if input.no_wait {
+                Ok(())
+            } else {
+                self.settle_server(ctx, &id, Settlement::Created, &mut server, &mut evidence)
+                    .await
+            };
+            let output = safe_server(server, &evidence)
+                .filter(|_| {
+                    !evidence.output_reflects(&json!(quote.optimum_price))
+                        && !evidence.reflects_fixed_two(quote.optimum_price)
+                })
+                .map(|server| CreateServerOutput {
+                    server,
+                    monthly_price: quote.optimum_price,
+                });
+            match (settlement, output) {
+                (Ok(()), Some(output)) => Ok(output),
+                (Ok(()), None) => Err(Failure::new(
+                    invalid_response(&evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )),
+                (Err(error), output) => Err(Failure::new(
+                    settlement_error(
+                        CREATE.id,
+                        *error,
+                        "inspect get-server or list-servers before creating again",
+                        &evidence,
+                    ),
+                    output,
+                    WriteDispatch::MayHaveBeenSent,
+                )),
+            }
+        })
     }
 
     /// Deletes a server and reports attached volumes, with optional reconciliation after confirmation.
@@ -179,86 +181,89 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteServerInput,
     ) -> Result<DeleteServerOutput, Failure<DeleteServerOutput>> {
-        let id = &input.server_id;
-        path_id(DELETE.id, "ServerID", id).map_err(|error| not_sent(*error))?;
-        let mut evidence = Evidence::new();
-        let body = json!({"deleteAllVolume": input.delete_volumes});
-        self.guard_write(ctx, &json!([id, body]), &mut evidence)
-            .map_err(|error| not_sent(*error))?;
-        let mut server = self
-            .server_detail_checked::<()>(ctx, id, &mut evidence, true)
-            .await
-            .map_err(|error| not_sent(error.into_parts().0))?;
-        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
-            return Err(not_sent(delete_inventory_error(&evidence)));
-        }
-        let volumes = self
-            .volume
-            .list_volumes_by_server_with_evidence(ctx, id, &mut evidence)
-            .await
-            .map_err(|error| not_sent(*error))?;
-        let boot = &server.boot_volume_id;
-        let mut ids = Vec::with_capacity(volumes.items.len());
-        let mut unique = HashSet::new();
-        if evidence.text_reflects(boot) {
-            return Err(not_sent(delete_inventory_error(&evidence)));
-        }
-        for volume in volumes.items {
-            let id = volume.uuid;
-            if id.is_empty()
-                || !id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-                || evidence.text_reflects(&id)
-                || !unique.insert(id.clone())
+        crate::wire::product::exit::finish!(async {
+            let id = &input.server_id;
+            path_id(DELETE.id, "ServerID", id).map_err(|error| not_sent(*error))?;
+            let mut evidence = Evidence::new();
+            let body = json!({"deleteAllVolume": input.delete_volumes});
+            self.guard_write(ctx, &json!([id, body]), &mut evidence)
+                .map_err(|error| not_sent(*error))?;
+            let mut server = self
+                .server_detail_checked::<()>(ctx, id, &mut evidence, true)
+                .await
+                .map_err(|error| not_sent(error.into_parts().0))?;
+            if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value))
             {
                 return Err(not_sent(delete_inventory_error(&evidence)));
             }
-            if input.delete_volumes || id != *boot {
-                ids.push(id);
-            }
-        }
-        self.send_mutation(ctx, &DELETE, &[id], Some(&body), false, &mut evidence)
-            .await?;
-        if !input.no_wait {
-            if let Err(error) = self
-                .settle_server(ctx, id, Settlement::Deleted, &mut server, &mut evidence)
+            let volumes = self
+                .volume
+                .list_volumes_by_server_with_evidence(ctx, id, &mut evidence)
                 .await
-            {
-                let partial = delete_output(ids, input.delete_volumes, &evidence);
-                return Err(Failure::new(
-                    settlement_error(
-                        DELETE.id,
-                        *error,
-                        "call GetServer to check its status",
-                        &evidence,
-                    ),
-                    partial,
-                    WriteDispatch::MayHaveBeenSent,
-                ));
+                .map_err(|error| not_sent(*error))?;
+            let boot = &server.boot_volume_id;
+            let mut ids = Vec::with_capacity(volumes.items.len());
+            let mut unique = HashSet::new();
+            if evidence.text_reflects(boot) {
+                return Err(not_sent(delete_inventory_error(&evidence)));
             }
-            if !input.delete_volumes {
-                let mut kept = Vec::with_capacity(ids.len());
-                for volume_id in ids {
-                    let result = self
-                        .volume
-                        .get_volume_with_evidence(ctx, &volume_id, &mut evidence)
-                        .await;
-                    if result.is_ok()
-                        || result.is_err_and(|error| !error.has_class(ErrorClass::NotFound))
-                    {
-                        kept.push(volume_id);
-                    }
+            for volume in volumes.items {
+                let id = volume.uuid;
+                if id.is_empty()
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                    || evidence.text_reflects(&id)
+                    || !unique.insert(id.clone())
+                {
+                    return Err(not_sent(delete_inventory_error(&evidence)));
                 }
-                ids = kept;
+                if input.delete_volumes || id != *boot {
+                    ids.push(id);
+                }
             }
-        }
-        delete_output(ids, input.delete_volumes, &evidence).ok_or_else(|| {
-            Failure::new(
-                delete_inventory_error(&evidence),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            )
+            self.send_mutation(ctx, &DELETE, &[id], Some(&body), false, &mut evidence)
+                .await?;
+            if !input.no_wait {
+                if let Err(error) = self
+                    .settle_server(ctx, id, Settlement::Deleted, &mut server, &mut evidence)
+                    .await
+                {
+                    let partial = delete_output(ids, input.delete_volumes, &evidence);
+                    return Err(Failure::new(
+                        settlement_error(
+                            DELETE.id,
+                            *error,
+                            "call GetServer to check its status",
+                            &evidence,
+                        ),
+                        partial,
+                        WriteDispatch::MayHaveBeenSent,
+                    ));
+                }
+                if !input.delete_volumes {
+                    let mut kept = Vec::with_capacity(ids.len());
+                    for volume_id in ids {
+                        let result = self
+                            .volume
+                            .get_volume_with_evidence(ctx, &volume_id, &mut evidence)
+                            .await;
+                        if result.is_ok()
+                            || result.is_err_and(|error| !error.has_class(ErrorClass::NotFound))
+                        {
+                            kept.push(volume_id);
+                        }
+                    }
+                    ids = kept;
+                }
+            }
+            delete_output(ids, input.delete_volumes, &evidence).ok_or_else(|| {
+                Failure::new(
+                    delete_inventory_error(&evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })
         })
     }
 

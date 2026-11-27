@@ -159,90 +159,92 @@ impl Client {
         ctx: &RequestContext,
         input: ListCheckResponseTimesInput,
     ) -> Result<ListCheckResponseTimesOutput, Failure<ListCheckResponseTimesOutput>> {
-        check_path_id(CHECK.id, "CheckID", &input.check_id)?;
-        let mut evidence = Evidence::new();
-        let Some(window) = Window::parse(&input, self.session.clock().utc_now()) else {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
-                CHECK.error(
-                    None,
-                    "InvalidInput",
-                    "Start and End must form a nonempty RFC 3339 range at millisecond precision",
-                    false,
-                    &evidence,
-                ),
-            )));
-        };
-        let raw = self
-            .read(ctx, &CHECK, &[&input.check_id], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let snapshot: Snapshot = decode(&raw, &SNAPSHOT, &CHECK, &evidence).map_err(failure)?;
-        let locations = snapshot
-            .locations
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>();
-        if snapshot.id != input.check_id
-            || snapshot.subtype.is_empty()
-            || locations.len() != snapshot.locations.len()
-            || locations
+        crate::wire::product::exit::finish!(async {
+            check_path_id(CHECK.id, "CheckID", &input.check_id)?;
+            let mut evidence = Evidence::new();
+            let Some(window) = Window::parse(&input, self.session.clock().utc_now()) else {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
+                    CHECK.error(
+                        None,
+                        "InvalidInput",
+                        "Start and End must form a nonempty RFC 3339 range at millisecond precision",
+                        false,
+                        &evidence,
+                    ),
+                )));
+            };
+            let raw = self
+                .read(ctx, &CHECK, &[&input.check_id], &[], &mut evidence)
+                .await
+                .map_err(failure)?;
+            let snapshot: Snapshot = decode(&raw, &SNAPSHOT, &CHECK, &evidence).map_err(failure)?;
+            let locations = snapshot
+                .locations
                 .iter()
-                .any(|location| !PathIds::Strict.allows(location))
-            || (!snapshot.history_alarm.is_empty()
-                && !PathIds::Strict.allows(&snapshot.history_alarm))
-            || snapshot.decision_reflects(&evidence)
-        {
-            return Err(failure(CHECK.invalid(&evidence)));
-        }
-        if snapshot.subtype != "HTTP" {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
-                CHECK.error(
-                    None,
-                    "InvalidInput",
-                    "check subtype must be HTTP",
-                    false,
-                    &evidence,
-                ),
-            )));
-        }
-        if snapshot.history_alarm.is_empty() {
-            return Err(failure(Error::new(ErrorClass::NotFound).with_cause(
-                CHECK.error(
-                    None,
-                    "NotFound",
-                    "check has no alarm reference",
-                    false,
-                    &evidence,
-                ),
-            )));
-        }
-        let query = [
-            ("alarm", snapshot.history_alarm.as_str()),
-            ("dimensions", &format!("syntt_id:{}", input.check_id)),
-            ("end_time", &milliseconds(window.end).to_string()),
-            ("group_by", "location_id"),
-            ("name", METRIC),
-            ("start_time", &milliseconds(window.start).to_string()),
-            ("statistics", "avg"),
-        ];
-        let raw = self
-            .read(ctx, &STATISTICS, &[], &query, &mut evidence)
-            .await
-            .map_err(failure)?;
-        if snapshot.decision_reflects(&evidence)
-            || !safe_time(window.start, &evidence)
-            || !safe_time(window.end, &evidence)
-        {
-            return Err(failure(CHECK.invalid(&evidence)));
-        }
-        check_limits(&raw, &evidence).map_err(failure)?;
-        let groups =
-            decode(&raw, &Shape::Array(&GROUP), &STATISTICS, &evidence).map_err(failure)?;
-        let items = series(groups, locations, &window, &evidence).map_err(failure)?;
-        Ok(ListCheckResponseTimesOutput {
-            items,
-            start: window.start,
-            end: window.end,
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            if snapshot.id != input.check_id
+                || snapshot.subtype.is_empty()
+                || locations.len() != snapshot.locations.len()
+                || locations
+                    .iter()
+                    .any(|location| !PathIds::Strict.allows(location))
+                || (!snapshot.history_alarm.is_empty()
+                    && !PathIds::Strict.allows(&snapshot.history_alarm))
+                || snapshot.decision_reflects(&evidence)
+            {
+                return Err(failure(CHECK.invalid(&evidence)));
+            }
+            if snapshot.subtype != "HTTP" {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
+                    CHECK.error(
+                        None,
+                        "InvalidInput",
+                        "check subtype must be HTTP",
+                        false,
+                        &evidence,
+                    ),
+                )));
+            }
+            if snapshot.history_alarm.is_empty() {
+                return Err(failure(Error::new(ErrorClass::NotFound).with_cause(
+                    CHECK.error(
+                        None,
+                        "NotFound",
+                        "check has no alarm reference",
+                        false,
+                        &evidence,
+                    ),
+                )));
+            }
+            let query = [
+                ("alarm", snapshot.history_alarm.as_str()),
+                ("dimensions", &format!("syntt_id:{}", input.check_id)),
+                ("end_time", &milliseconds(window.end).to_string()),
+                ("group_by", "location_id"),
+                ("name", METRIC),
+                ("start_time", &milliseconds(window.start).to_string()),
+                ("statistics", "avg"),
+            ];
+            let raw = self
+                .read(ctx, &STATISTICS, &[], &query, &mut evidence)
+                .await
+                .map_err(failure)?;
+            if snapshot.decision_reflects(&evidence)
+                || !safe_time(window.start, &evidence)
+                || !safe_time(window.end, &evidence)
+            {
+                return Err(failure(CHECK.invalid(&evidence)));
+            }
+            check_limits(&raw, &evidence).map_err(failure)?;
+            let groups =
+                decode(&raw, &Shape::Array(&GROUP), &STATISTICS, &evidence).map_err(failure)?;
+            let items = series(groups, locations, &window, &evidence).map_err(failure)?;
+            Ok(ListCheckResponseTimesOutput {
+                items,
+                start: window.start,
+                end: window.end,
+            })
         })
     }
 }

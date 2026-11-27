@@ -69,164 +69,166 @@ impl Client {
         ctx: &RequestContext,
         input: ListNetworkPricesInput,
     ) -> Result<ListNetworkPricesOutput, Failure<ListNetworkPricesOutput>> {
-        if !(0..=2000).contains(&input.max_requests) {
-            let api = request::api(
-                "",
-                None,
-                "InvalidUsage",
-                "vngcloud: invalid input: discovery: max requests must be between 1 and 2000",
-                false,
-            );
-            return Err(failure(
-                Error::new(ErrorClass::InvalidInput).with_cause(api),
-            ));
-        }
-        let mut catalog = Catalog::new(&self.session, ctx, input.max_requests);
-        catalog
-            .project()
-            .await
-            .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
-        catalog
-            .preflight(3)
-            .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
-        let mut items = Vec::new();
-        let mut failures = Vec::new();
-        let mut first_error = None;
-        let mut usable = false;
-        for kind in ["public", "public-vm", "public-mkp"] {
-            let body = input::public_ip(kind);
-            let price = public_ip_price(&mut catalog, &body).await;
-            let (price, stop) = match price {
-                Ok(price) => {
-                    usable = true;
-                    (price, false)
-                }
-                Err(error) => {
-                    let error = screen(*error, &catalog.evidence);
-                    if !input.allow_partial {
-                        return Err(failure(error));
-                    }
-                    let stop = [
-                        ErrorClass::Auth,
-                        ErrorClass::RateLimited,
-                        ErrorClass::NoCredentials,
-                        ErrorClass::CredentialsFile,
-                        ErrorClass::Cancelled,
-                        ErrorClass::DeadlineExceeded,
-                        ErrorClass::EstimateLimit,
-                    ]
-                    .into_iter()
-                    .any(|class| error.has_class(class));
-                    let api = error.api_error();
-                    let status = api.and_then(ApiError::status);
-                    let code = if api.is_some_and(|api| api.code() == "InvalidResponse") {
-                        "InvalidResponse".into()
-                    } else if api.is_some() {
-                        ApiError::new(
-                            QUOTE,
-                            status,
-                            crate::error::SafeText::new("", &[]),
-                            crate::error::SafeText::new("", &[]),
-                            false,
-                        )
-                        .code()
-                        .to_owned()
-                    } else {
-                        "DiscoveryIncomplete".into()
-                    };
-                    failures.push(DiscoveryFailure {
-                        operation: QUOTE.into(),
-                        item_key: kind.into(),
-                        status: i64::from(status.unwrap_or(0)),
-                        code,
-                    });
-                    first_error.get_or_insert(error);
-                    (
-                        DiscoveryPrice {
-                            status: "failed".into(),
-                            source: QUOTE.into(),
-                            ..DiscoveryPrice::default()
-                        },
-                        stop,
-                    )
-                }
-            };
-            items.push(NetworkPrice {
-                kind: "public-vip".into(),
-                name: format!("Public Virtual IP ({kind})"),
-                r#type: kind.into(),
-                scope: self.region.clone(),
-                unit: "IP-month".into(),
-                price,
-            });
-            if stop {
-                break;
+        crate::wire::product::exit::finish!(async {
+            if !(0..=2000).contains(&input.max_requests) {
+                let api = request::api(
+                    "",
+                    None,
+                    "InvalidUsage",
+                    "vngcloud: invalid input: discovery: max requests must be between 1 and 2000",
+                    false,
+                );
+                return Err(failure(
+                    Error::new(ErrorClass::InvalidInput).with_cause(api),
+                ));
             }
-        }
-        if !usable && let Some(error) = first_error {
-            return Err(failure(screen(error, &catalog.evidence)));
-        }
-        for (kind, name, source) in [
-            ("floating-ip", "Floating IP", FLOATING),
-            ("external-interface", "External Interface", EXTERNAL),
-            ("reservation", "Floating IP reservation", FLOATING),
-        ] {
-            items.push(NetworkPrice {
-                kind: kind.into(),
-                name: name.into(),
-                r#type: String::new(),
-                scope: self.region.clone(),
-                unit: "IP-month".into(),
-                price: DiscoveryPrice {
-                    status: "unknown".into(),
-                    source: source.into(),
-                    ..DiscoveryPrice::default()
+            let mut catalog = Catalog::new(&self.session, ctx, input.max_requests);
+            catalog
+                .project()
+                .await
+                .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
+            catalog
+                .preflight(3)
+                .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
+            let mut items = Vec::new();
+            let mut failures = Vec::new();
+            let mut first_error = None;
+            let mut usable = false;
+            for kind in ["public", "public-vm", "public-mkp"] {
+                let body = input::public_ip(kind);
+                let price = public_ip_price(&mut catalog, &body).await;
+                let (price, stop) = match price {
+                    Ok(price) => {
+                        usable = true;
+                        (price, false)
+                    }
+                    Err(error) => {
+                        let error = screen(*error, &catalog.evidence);
+                        if !input.allow_partial {
+                            return Err(failure(error));
+                        }
+                        let stop = [
+                            ErrorClass::Auth,
+                            ErrorClass::RateLimited,
+                            ErrorClass::NoCredentials,
+                            ErrorClass::CredentialsFile,
+                            ErrorClass::Cancelled,
+                            ErrorClass::DeadlineExceeded,
+                            ErrorClass::EstimateLimit,
+                        ]
+                        .into_iter()
+                        .any(|class| error.has_class(class));
+                        let api = error.api_error();
+                        let status = api.and_then(ApiError::status);
+                        let code = if api.is_some_and(|api| api.code() == "InvalidResponse") {
+                            "InvalidResponse".into()
+                        } else if api.is_some() {
+                            ApiError::new(
+                                QUOTE,
+                                status,
+                                crate::error::SafeText::new("", &[]),
+                                crate::error::SafeText::new("", &[]),
+                                false,
+                            )
+                            .code()
+                            .to_owned()
+                        } else {
+                            "DiscoveryIncomplete".into()
+                        };
+                        failures.push(DiscoveryFailure {
+                            operation: QUOTE.into(),
+                            item_key: kind.into(),
+                            status: i64::from(status.unwrap_or(0)),
+                            code,
+                        });
+                        first_error.get_or_insert(error);
+                        (
+                            DiscoveryPrice {
+                                status: "failed".into(),
+                                source: QUOTE.into(),
+                                ..DiscoveryPrice::default()
+                            },
+                            stop,
+                        )
+                    }
+                };
+                items.push(NetworkPrice {
+                    kind: "public-vip".into(),
+                    name: format!("Public Virtual IP ({kind})"),
+                    r#type: kind.into(),
+                    scope: self.region.clone(),
+                    unit: "IP-month".into(),
+                    price,
+                });
+                if stop {
+                    break;
+                }
+            }
+            if !usable && let Some(error) = first_error {
+                return Err(failure(screen(error, &catalog.evidence)));
+            }
+            for (kind, name, source) in [
+                ("floating-ip", "Floating IP", FLOATING),
+                ("external-interface", "External Interface", EXTERNAL),
+                ("reservation", "Floating IP reservation", FLOATING),
+            ] {
+                items.push(NetworkPrice {
+                    kind: kind.into(),
+                    name: name.into(),
+                    r#type: String::new(),
+                    scope: self.region.clone(),
+                    unit: "IP-month".into(),
+                    price: DiscoveryPrice {
+                        status: "unknown".into(),
+                        source: source.into(),
+                        ..DiscoveryPrice::default()
+                    },
+                });
+            }
+            items.sort_by(|a, b| a.r#type.cmp(&b.r#type));
+            let output = ListNetworkPricesOutput {
+                items,
+                metadata: DiscoveryMetadata {
+                    region: self.region.clone(),
+                    complete: failures.is_empty(),
+                    requests: i64::try_from(catalog.requests()).unwrap_or_default(),
+                    quoted_at: self.session.clock().utc_now(),
+                    failures,
+                    notes: notes(),
+                    excluded_groups: None,
                 },
+            };
+            let reflected_amount = output.items.iter().any(|item| {
+                [
+                    item.price.monthly_price,
+                    item.price.original_price,
+                    item.price.discount_price,
+                    item.price.discount_percent,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|amount| catalog.evidence.reflects_fixed_two(amount))
             });
-        }
-        items.sort_by(|a, b| a.r#type.cmp(&b.r#type));
-        let output = ListNetworkPricesOutput {
-            items,
-            metadata: DiscoveryMetadata {
-                region: self.region.clone(),
-                complete: failures.is_empty(),
-                requests: i64::try_from(catalog.requests()).unwrap_or_default(),
-                quoted_at: self.session.clock().utc_now(),
-                failures,
-                notes: notes(),
-                excluded_groups: None,
-            },
-        };
-        let reflected_amount = output.items.iter().any(|item| {
-            [
-                item.price.monthly_price,
-                item.price.original_price,
-                item.price.discount_price,
-                item.price.discount_percent,
-            ]
-            .into_iter()
-            .flatten()
-            .any(|amount| catalog.evidence.reflects_fixed_two(amount))
-        });
-        if reflected_amount
-            || !serde_json::to_value(&output)
-                .is_ok_and(|value| !catalog.evidence.output_reflects(&value))
-        {
-            return Err(failure(screen(
-                *request::invalid(QUOTE, 200),
-                &catalog.evidence,
-            )));
-        }
-        if output.metadata.complete {
-            Ok(output)
-        } else {
-            let error = Error::new(ErrorClass::DiscoveryIncomplete);
-            let error = first_error.map_or_else(
-                || Error::new(ErrorClass::DiscoveryIncomplete),
-                |cause| error.with_cause(screen(cause, &catalog.evidence)),
-            );
-            Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
-        }
+            if reflected_amount
+                || !serde_json::to_value(&output)
+                    .is_ok_and(|value| !catalog.evidence.output_reflects(&value))
+            {
+                return Err(failure(screen(
+                    *request::invalid(QUOTE, 200),
+                    &catalog.evidence,
+                )));
+            }
+            if output.metadata.complete {
+                Ok(output)
+            } else {
+                let error = Error::new(ErrorClass::DiscoveryIncomplete);
+                let error = first_error.map_or_else(
+                    || Error::new(ErrorClass::DiscoveryIncomplete),
+                    |cause| error.with_cause(screen(cause, &catalog.evidence)),
+                );
+                Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
+            }
+        })
     }
 }
 

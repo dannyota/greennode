@@ -201,18 +201,20 @@ impl Client {
         ctx: &RequestContext,
         _input: GetCurrentPeriodCostInput,
     ) -> Result<GetCurrentPeriodCostOutput, Failure<GetCurrentPeriodCostOutput>> {
-        let period_cost = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.GetCurrentPeriodCost",
-                    "gateway/api/v1/budgets/cost/overview",
-                ),
-                &[],
-                &[],
-            )
-            .await?;
-        Ok(GetCurrentPeriodCostOutput { period_cost })
+        crate::wire::product::exit::finish!(async {
+            let period_cost = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.GetCurrentPeriodCost",
+                        "gateway/api/v1/budgets/cost/overview",
+                    ),
+                    &[],
+                    &[],
+                )
+                .await?;
+            Ok(GetCurrentPeriodCostOutput { period_cost })
+        })
     }
 
     /// Reads a budget's thresholds. An invalid UUID fails before authentication.
@@ -221,18 +223,20 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetThresholdsInput,
     ) -> Result<ListBudgetThresholdsOutput, Failure<ListBudgetThresholdsOutput>> {
-        let items = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.ListBudgetThresholds",
-                    "gateway/api/v1/budgets/{}/thresholds",
-                ),
-                &[&input.budget_uuid],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.ListBudgetThresholds",
+                        "gateway/api/v1/budgets/{}/thresholds",
+                    ),
+                    &[&input.budget_uuid],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads a budget's alerts for the selected period or all periods.
@@ -241,24 +245,26 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetAlertsInput,
     ) -> Result<ListBudgetAlertsOutput, Failure<ListBudgetAlertsOutput>> {
-        let query = [("periodKey", input.period_key.as_str())];
-        let query: &[_] = if input.period_key.is_empty() {
-            &[]
-        } else {
-            &query
-        };
-        let items = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.ListBudgetAlerts",
-                    "gateway/api/v1/budgets/{}/alerts",
-                ),
-                &[&input.budget_uuid],
-                query,
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let query = [("periodKey", input.period_key.as_str())];
+            let query: &[_] = if input.period_key.is_empty() {
+                &[]
+            } else {
+                &query
+            };
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.ListBudgetAlerts",
+                        "gateway/api/v1/budgets/{}/alerts",
+                    ),
+                    &[&input.budget_uuid],
+                    query,
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 }
 

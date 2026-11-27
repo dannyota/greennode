@@ -67,36 +67,40 @@ impl Client {
         ctx: &RequestContext,
         input: ListServersBySecurityGroupInput,
     ) -> Result<ListServersBySecurityGroupOutput, Failure<ListServersBySecurityGroupOutput>> {
-        BY_GROUP
-            .check_path("SecurityGroupID", &input.security_group_id)
-            .map_err(failure)?;
-        let ctx =
-            ctx.child_with_deadline(self.session.clock().monotonic_now() + Duration::from_secs(30));
-        let mut evidence = self.request_evidence(&ctx).map_err(failure)?;
-        let body = self
-            .server_inventory(&ctx, BY_GROUP, &input.security_group_id, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&body);
-        let fields: Option<Fields<'_>> = BY_GROUP
-            .decode(if text.is_empty() { "null" } else { &text }, &evidence)
-            .map_err(failure)?;
-        let items = fields
-            .map(|fields| {
-                decode_lenient(|| {
-                    fields.output_raw("data").and_then(|raw| {
-                        raw.map(|raw| {
-                            serde_json::from_str::<Field<Vec<Server>>>(raw.get()).map_err(|_| ())
+        crate::wire::product::exit::finish!(async {
+            BY_GROUP
+                .check_path("SecurityGroupID", &input.security_group_id)
+                .map_err(failure)?;
+            let ctx = ctx.child_with_deadline(
+                self.session.clock().monotonic_now() + Duration::from_secs(30),
+            );
+            let mut evidence = self.request_evidence(&ctx).map_err(failure)?;
+            let body = self
+                .server_inventory(&ctx, BY_GROUP, &input.security_group_id, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&body);
+            let fields: Option<Fields<'_>> = BY_GROUP
+                .decode(if text.is_empty() { "null" } else { &text }, &evidence)
+                .map_err(failure)?;
+            let items = fields
+                .map(|fields| {
+                    decode_lenient(|| {
+                        fields.output_raw("data").and_then(|raw| {
+                            raw.map(|raw| {
+                                serde_json::from_str::<Field<Vec<Server>>>(raw.get())
+                                    .map_err(|_| ())
+                            })
+                            .transpose()
                         })
-                        .transpose()
                     })
                 })
-            })
-            .transpose()
-            .map_err(|()| failure(BY_GROUP.shape(&evidence)))?
-            .flatten()
-            .map_or_else(Vec::new, |field| field.0);
-        finish(BY_GROUP, items, &evidence)
+                .transpose()
+                .map_err(|()| failure(BY_GROUP.shape(&evidence)))?
+                .flatten()
+                .map_or_else(Vec::new, |field| field.0);
+            finish(BY_GROUP, items, &evidence)
+        })
     }
 
     /// Lists servers attached to a subnet in the selected project.
@@ -105,20 +109,22 @@ impl Client {
         ctx: &RequestContext,
         input: ListServersBySubnetInput,
     ) -> Result<ListServersBySubnetOutput, Failure<ListServersBySubnetOutput>> {
-        BY_SUBNET
-            .check_path("SubnetID", &input.subnet_id)
+        crate::wire::product::exit::finish!(async {
+            BY_SUBNET
+                .check_path("SubnetID", &input.subnet_id)
+                .map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let body = self
+                .server_inventory(ctx, BY_SUBNET, &input.subnet_id, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&body);
+            let items: Field<Vec<Server>> = decode_lenient(|| {
+                BY_SUBNET.decode(if text.is_empty() { "null" } else { &text }, &evidence)
+            })
             .map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let body = self
-            .server_inventory(ctx, BY_SUBNET, &input.subnet_id, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&body);
-        let items: Field<Vec<Server>> = decode_lenient(|| {
-            BY_SUBNET.decode(if text.is_empty() { "null" } else { &text }, &evidence)
+            finish(BY_SUBNET, items.0, &evidence)
         })
-        .map_err(failure)?;
-        finish(BY_SUBNET, items.0, &evidence)
     }
 
     async fn server_inventory(

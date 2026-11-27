@@ -84,7 +84,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumesInput,
     ) -> Result<ListVolumesOutput, Failure<ListVolumesOutput>> {
-        output(self.volumes(ctx, &input, &mut Evidence::new()).await)
+        crate::wire::product::exit::finish!(async {
+            output(self.volumes(ctx, &input, &mut Evidence::new()).await)
+        })
     }
 
     pub(super) async fn volumes(
@@ -112,10 +114,12 @@ impl Client {
         ctx: &RequestContext,
         input: GetVolumeInput,
     ) -> Result<GetVolumeOutput, Failure<GetVolumeOutput>> {
-        output(
-            self.get_volume_with_evidence(ctx, &input.volume_id, &mut Evidence::new())
-                .await,
-        )
+        crate::wire::product::exit::finish!(async {
+            output(
+                self.get_volume_with_evidence(ctx, &input.volume_id, &mut Evidence::new())
+                    .await,
+            )
+        })
     }
 
     pub(crate) async fn get_volume_with_evidence(
@@ -183,26 +187,28 @@ impl Client {
         ctx: &RequestContext,
         input: GetUnderlyingVolumeInput,
     ) -> Result<GetUnderlyingVolumeOutput, Failure<GetUnderlyingVolumeOutput>> {
-        output(
-            async {
-                path_id(UNDERLYING.id, "VolumeID", &input.volume_id)?;
-                let mut evidence = Evidence::new();
-                let project = self.project(ctx, &mut evidence).await?;
-                let mut volume = self
-                    .read_value(
-                        ctx,
-                        UNDERLYING,
-                        &[&project, &input.volume_id],
-                        &[],
-                        &mut evidence,
-                        Volume::from_wire,
-                    )
-                    .await?;
-                volume.redact(&evidence);
-                screen(&evidence, GetVolumeOutput { volume }, UNDERLYING.id)
-            }
-            .await,
-        )
+        crate::wire::product::exit::finish!(async {
+            output(
+                async {
+                    path_id(UNDERLYING.id, "VolumeID", &input.volume_id)?;
+                    let mut evidence = Evidence::new();
+                    let project = self.project(ctx, &mut evidence).await?;
+                    let mut volume = self
+                        .read_value(
+                            ctx,
+                            UNDERLYING,
+                            &[&project, &input.volume_id],
+                            &[],
+                            &mut evidence,
+                            Volume::from_wire,
+                        )
+                        .await?;
+                    volume.redact(&evidence);
+                    screen(&evidence, GetVolumeOutput { volume }, UNDERLYING.id)
+                }
+                .await,
+            )
+        })
     }
 
     /// Lists the volumes attached to the specified server, including its boot volume.
@@ -211,10 +217,16 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumesByServerInput,
     ) -> Result<ListVolumesByServerOutput, Failure<ListVolumesByServerOutput>> {
-        output(
-            self.list_volumes_by_server_with_evidence(ctx, &input.server_id, &mut Evidence::new())
+        crate::wire::product::exit::finish!(async {
+            output(
+                self.list_volumes_by_server_with_evidence(
+                    ctx,
+                    &input.server_id,
+                    &mut Evidence::new(),
+                )
                 .await,
-        )
+            )
+        })
     }
 
     pub(crate) async fn list_volumes_by_server_with_evidence(

@@ -135,7 +135,9 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseEngineVersionsInput,
     ) -> Result<ListDatabaseEngineVersionsOutput, Failure<ListDatabaseEngineVersionsOutput>> {
-        self.engine_versions(ctx, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.engine_versions(ctx, &mut Evidence::new()).await
+        })
     }
 
     async fn engine_versions(
@@ -164,7 +166,7 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseZonesInput,
     ) -> Result<ListDatabaseZonesOutput, Failure<ListDatabaseZonesOutput>> {
-        self.zones(ctx, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async { self.zones(ctx, &mut Evidence::new()).await })
     }
 
     async fn zones(
@@ -193,7 +195,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseFlavorsInput,
     ) -> Result<ListDatabaseFlavorsOutput, Failure<ListDatabaseFlavorsOutput>> {
-        self.flavors(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.flavors(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn flavors(
@@ -232,7 +236,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseStorageTypesInput,
     ) -> Result<ListDatabaseStorageTypesOutput, Failure<ListDatabaseStorageTypesOutput>> {
-        self.storage_types(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.storage_types(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn storage_types(
@@ -267,7 +273,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseNetworksInput,
     ) -> Result<ListDatabaseNetworksOutput, Failure<ListDatabaseNetworksOutput>> {
-        self.networks(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.networks(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn networks(
@@ -300,7 +308,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseInstancesInput,
     ) -> Result<ListDatabaseInstancesOutput, Failure<ListDatabaseInstancesOutput>> {
-        self.instances(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.instances(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn instances(
@@ -343,10 +353,12 @@ impl Client {
         ctx: &RequestContext,
         input: GetDatabaseInstanceInput,
     ) -> Result<GetDatabaseInstanceOutput, Failure<GetDatabaseInstanceOutput>> {
-        let instance = self
-            .get_instance(ctx, &input.id, &mut Evidence::new())
-            .await?;
-        Ok(GetDatabaseInstanceOutput { instance })
+        crate::wire::product::exit::finish!(async {
+            let instance = self
+                .get_instance(ctx, &input.id, &mut Evidence::new())
+                .await?;
+            Ok(GetDatabaseInstanceOutput { instance })
+        })
     }
 
     async fn get_instance<O>(

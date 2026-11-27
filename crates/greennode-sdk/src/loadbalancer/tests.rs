@@ -508,7 +508,7 @@ async fn waiting_for_an_existing_delete_preserves_this_calls_dispatch_state() {
 }
 
 #[tokio::test]
-async fn complete_response_classification_precedes_public_redaction() {
+async fn certificate_rejection_uses_only_screened_message() {
     let lb = Server::start(vec![
         lb_status("CREATED"),
         response("202 Accepted", ""),
@@ -534,18 +534,10 @@ async fn complete_response_classification_precedes_public_redaction() {
         )
         .await
         .unwrap_err();
-    assert_eq!(
-        error.error().detail::<WriteError>(),
-        Some(&WriteError::ResourceInUse)
-    );
-    assert!(
-        !error
-            .error()
-            .detail::<crate::RecoveryAdvice>()
-            .unwrap()
-            .message()
-            .contains("toy%2Dsecret")
-    );
+    assert_eq!(error.error().detail::<WriteError>(), None);
+    let api = error.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(409));
+    assert!(!api.message().contains("toy%2Dsecret"));
     assert!(deleted.is_ok());
     assert_eq!(lb.requests(), 3);
     assert_eq!(cert.requests(), 2);

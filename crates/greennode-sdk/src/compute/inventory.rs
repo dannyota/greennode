@@ -57,11 +57,13 @@ impl Client {
         ctx: &RequestContext,
         input: ListServersInput,
     ) -> Result<ListServersOutput, Failure<ListServersOutput>> {
-        let mut evidence = Evidence::new();
-        let page = self
-            .server_page(ctx, input.page, input.size, &mut evidence)
-            .await?;
-        retain_page(page, &LIST_SERVERS, &evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let page = self
+                .server_page(ctx, input.page, input.size, &mut evidence)
+                .await?;
+            retain_page(page, &LIST_SERVERS, &evidence)
+        })
     }
 
     pub(super) async fn server_page<O>(
@@ -91,12 +93,14 @@ impl Client {
         ctx: &RequestContext,
         input: GetServerInput,
     ) -> Result<GetServerOutput, Failure<GetServerOutput>> {
-        let mut evidence = Evidence::new();
-        let server = self
-            .server_detail(ctx, &input.server_id, &mut evidence)
-            .await?;
-        Ok(GetServerOutput {
-            server: GET_SERVER.retain(server, &evidence)?,
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let server = self
+                .server_detail(ctx, &input.server_id, &mut evidence)
+                .await?;
+            Ok(GetServerOutput {
+                server: GET_SERVER.retain(server, &evidence)?,
+            })
         })
     }
 
@@ -135,17 +139,19 @@ impl Client {
         ctx: &RequestContext,
         input: GetServerConsoleLogInput,
     ) -> Result<GetServerConsoleLogOutput, Failure<GetServerConsoleLogOutput>> {
-        CONSOLE
-            .path("ServerID", &input.server_id)
-            .map_err(failure)?;
-        let mut evidence = Evidence::new();
-        let envelope = self
-            .read(ctx, &CONSOLE, &[&input.server_id], &[], &mut evidence)
-            .await?;
-        let log: Option<String> = envelope.field("data", &CONSOLE, &evidence)?;
-        let log = log.ok_or_else(|| failure(CONSOLE.invalid(&evidence)))?;
-        Ok(GetServerConsoleLogOutput {
-            log: Secret::new(CONSOLE.retain(log, &evidence)?),
+        crate::wire::product::exit::finish!(async {
+            CONSOLE
+                .path("ServerID", &input.server_id)
+                .map_err(failure)?;
+            let mut evidence = Evidence::new();
+            let envelope = self
+                .read(ctx, &CONSOLE, &[&input.server_id], &[], &mut evidence)
+                .await?;
+            let log: Option<String> = envelope.field("data", &CONSOLE, &evidence)?;
+            let log = log.ok_or_else(|| failure(CONSOLE.invalid(&evidence)))?;
+            Ok(GetServerConsoleLogOutput {
+                log: Secret::new(CONSOLE.retain(log, &evidence)?),
+            })
         })
     }
 
@@ -155,19 +161,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListSshKeysInput,
     ) -> Result<ListSshKeysOutput, Failure<ListSshKeysOutput>> {
-        let [page, size] = page_query(input.page, input.size);
-        let mut evidence = Evidence::new();
-        let envelope = self
-            .read(
-                ctx,
-                &LIST_KEYS,
-                &[],
-                &[("name", &input.name), ("page", &page), ("size", &size)],
-                &mut evidence,
-            )
-            .await?;
-        let page = parse_page(envelope, &LIST_KEYS, &evidence, false)?;
-        retain_page(page, &LIST_KEYS, &evidence)
+        crate::wire::product::exit::finish!(async {
+            let [page, size] = page_query(input.page, input.size);
+            let mut evidence = Evidence::new();
+            let envelope = self
+                .read(
+                    ctx,
+                    &LIST_KEYS,
+                    &[],
+                    &[("name", &input.name), ("page", &page), ("size", &size)],
+                    &mut evidence,
+                )
+                .await?;
+            let page = parse_page(envelope, &LIST_KEYS, &evidence, false)?;
+            retain_page(page, &LIST_KEYS, &evidence)
+        })
     }
 
     /// Reads the public SSH key identified by the input.
@@ -176,24 +184,26 @@ impl Client {
         ctx: &RequestContext,
         input: GetSshKeyInput,
     ) -> Result<GetSshKeyOutput, Failure<GetSshKeyOutput>> {
-        GET_KEY
-            .path("SSHKeyID", &input.ssh_key_id)
-            .map_err(failure)?;
-        let mut evidence = Evidence::new();
-        let envelope = self
-            .read(ctx, &GET_KEY, &[&input.ssh_key_id], &[], &mut evidence)
-            .await?;
-        let ssh_key: SshKey = envelope.field("data", &GET_KEY, &evidence)?;
-        if ssh_key.id.is_empty() {
-            return Err(failure(not_found(
-                &GET_KEY,
-                "ssh key",
-                &input.ssh_key_id,
-                &evidence,
-            )));
-        }
-        Ok(GetSshKeyOutput {
-            ssh_key: GET_KEY.retain(ssh_key, &evidence)?,
+        crate::wire::product::exit::finish!(async {
+            GET_KEY
+                .path("SSHKeyID", &input.ssh_key_id)
+                .map_err(failure)?;
+            let mut evidence = Evidence::new();
+            let envelope = self
+                .read(ctx, &GET_KEY, &[&input.ssh_key_id], &[], &mut evidence)
+                .await?;
+            let ssh_key: SshKey = envelope.field("data", &GET_KEY, &evidence)?;
+            if ssh_key.id.is_empty() {
+                return Err(failure(not_found(
+                    &GET_KEY,
+                    "ssh key",
+                    &input.ssh_key_id,
+                    &evidence,
+                )));
+            }
+            Ok(GetSshKeyOutput {
+                ssh_key: GET_KEY.retain(ssh_key, &evidence)?,
+            })
         })
     }
 
@@ -203,9 +213,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListServerGroupsInput,
     ) -> Result<ListServerGroupsOutput, Failure<ListServerGroupsOutput>> {
-        let mut evidence = Evidence::new();
-        let page = self.group_page(ctx, &input, &mut evidence).await?;
-        retain_page(page, &LIST_GROUPS, &evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let page = self.group_page(ctx, &input, &mut evidence).await?;
+            retain_page(page, &LIST_GROUPS, &evidence)
+        })
     }
 
     pub(super) async fn group_page<O>(
@@ -251,12 +263,14 @@ impl Client {
         ctx: &RequestContext,
         input: GetServerGroupInput,
     ) -> Result<GetServerGroupOutput, Failure<GetServerGroupOutput>> {
-        let mut evidence = Evidence::new();
-        let group = self
-            .group_detail(ctx, &input.server_group_id, &mut evidence)
-            .await?;
-        Ok(GetServerGroupOutput {
-            server_group: GET_GROUP.retain(group, &evidence)?,
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let group = self
+                .group_detail(ctx, &input.server_group_id, &mut evidence)
+                .await?;
+            Ok(GetServerGroupOutput {
+                server_group: GET_GROUP.retain(group, &evidence)?,
+            })
         })
     }
 
@@ -294,28 +308,30 @@ impl Client {
         ctx: &RequestContext,
         _: ListServerGroupPoliciesInput,
     ) -> Result<ListServerGroupPoliciesOutput, Failure<ListServerGroupPoliciesOutput>> {
-        let mut evidence = Evidence::new();
-        let envelope = self
-            .read(ctx, &LIST_POLICIES, &[], &[], &mut evidence)
-            .await?;
-        let rows: Vec<Policy> = envelope.field("data", &LIST_POLICIES, &evidence)?;
-        let rows = LIST_POLICIES.retain(rows, &evidence)?;
-        let items = rows
-            .into_iter()
-            .map(|row| ServerGroupPolicy {
-                name: row.name,
-                uuid: row.uuid,
-                status: row.status,
-                description: String::new(),
-                description_vi: String::new(),
-                descriptions: [("en", row.description), ("vi", row.description_vi)]
-                    .into_iter()
-                    .filter(|(key, _)| !evidence.text_reflects(key))
-                    .map(|(key, value)| (key.into(), value))
-                    .collect(),
-            })
-            .collect();
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let envelope = self
+                .read(ctx, &LIST_POLICIES, &[], &[], &mut evidence)
+                .await?;
+            let rows: Vec<Policy> = envelope.field("data", &LIST_POLICIES, &evidence)?;
+            let rows = LIST_POLICIES.retain(rows, &evidence)?;
+            let items = rows
+                .into_iter()
+                .map(|row| ServerGroupPolicy {
+                    name: row.name,
+                    uuid: row.uuid,
+                    status: row.status,
+                    description: String::new(),
+                    description_vi: String::new(),
+                    descriptions: [("en", row.description), ("vi", row.description_vi)]
+                        .into_iter()
+                        .filter(|(key, _)| !evidence.text_reflects(key))
+                        .map(|(key, value)| (key.into(), value))
+                        .collect(),
+                })
+                .collect();
+            Ok(List { items })
+        })
     }
 
     /// Lists operating system images, optionally filtered by network zone.
@@ -324,17 +340,19 @@ impl Client {
         ctx: &RequestContext,
         input: ListOsImagesInput,
     ) -> Result<ListOsImagesOutput, Failure<ListOsImagesOutput>> {
-        let query = [("zoneId", input.zone_id.as_str())];
-        self.images(
-            ctx,
-            &LIST_OS_IMAGES,
-            if input.zone_id.is_empty() {
-                &[]
-            } else {
-                &query
-            },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let query = [("zoneId", input.zone_id.as_str())];
+            self.images(
+                ctx,
+                &LIST_OS_IMAGES,
+                if input.zone_id.is_empty() {
+                    &[]
+                } else {
+                    &query
+                },
+            )
+            .await
+        })
     }
 
     /// Lists GPU images in the selected project.
@@ -343,7 +361,7 @@ impl Client {
         ctx: &RequestContext,
         _: ListGpuImagesInput,
     ) -> Result<ListGpuImagesOutput, Failure<ListGpuImagesOutput>> {
-        self.images(ctx, &LIST_GPU_IMAGES, &[]).await
+        crate::wire::product::exit::finish!(async { self.images(ctx, &LIST_GPU_IMAGES, &[]).await })
     }
 
     async fn images(
@@ -366,19 +384,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListUserImagesInput,
     ) -> Result<ListUserImagesOutput, Failure<ListUserImagesOutput>> {
-        let [page, size] = page_query(input.page, input.size);
-        let mut evidence = Evidence::new();
-        let envelope = self
-            .read(
-                ctx,
-                &LIST_USER_IMAGES,
-                &[],
-                &[("page", &page), ("size", &size)],
-                &mut evidence,
-            )
-            .await?;
-        let page = parse_page(envelope, &LIST_USER_IMAGES, &evidence, false)?;
-        retain_page(page, &LIST_USER_IMAGES, &evidence)
+        crate::wire::product::exit::finish!(async {
+            let [page, size] = page_query(input.page, input.size);
+            let mut evidence = Evidence::new();
+            let envelope = self
+                .read(
+                    ctx,
+                    &LIST_USER_IMAGES,
+                    &[],
+                    &[("page", &page), ("size", &size)],
+                    &mut evidence,
+                )
+                .await?;
+            let page = parse_page(envelope, &LIST_USER_IMAGES, &evidence, false)?;
+            retain_page(page, &LIST_USER_IMAGES, &evidence)
+        })
     }
 }
 

@@ -245,72 +245,74 @@ impl Client {
         ctx: &RequestContext,
         input: CreatePolicyInput,
     ) -> WriteResult<CreatePolicyOutput> {
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("ListenerID", input.listener_id.as_str()),
-        ];
-        let mut write =
-            ChildWriter::new(self, ctx, CREATE, &input.load_balancer_id, &ids).map_err(not_sent)?;
-        encode_body(&input, &write.evidence).map_err(not_sent)?;
-        for (field, value) in [
-            ("Name", input.name.as_str()),
-            ("Action", input.action.as_str()),
-        ] {
-            if value.is_empty() {
-                return Err(not_sent(invalid_input(&format!(
-                    "{CREATE} requires {field}"
-                ))));
+        crate::wire::product::exit::finish!(async {
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("ListenerID", input.listener_id.as_str()),
+            ];
+            let mut write = ChildWriter::new(self, ctx, CREATE, &input.load_balancer_id, &ids)
+                .map_err(not_sent)?;
+            encode_body(&input, &write.evidence).map_err(not_sent)?;
+            for (field, value) in [
+                ("Name", input.name.as_str()),
+                ("Action", input.action.as_str()),
+            ] {
+                if value.is_empty() {
+                    return Err(not_sent(invalid_input(&format!(
+                        "{CREATE} requires {field}"
+                    ))));
+                }
             }
-        }
-        check_pool_id(CREATE, &input.redirect_pool_id).map_err(not_sent)?;
-        let redirect = Redirect {
-            pool: &input.redirect_pool_id,
-            url: &input.redirect_url,
-            status: input.redirect_http_code,
-            keep_query: input.keep_query_string,
-        };
-        redirect.check(CREATE, &input.action).map_err(not_sent)?;
-        let rules = encode_rules(CREATE, &input.rules).map_err(not_sent)?;
-        let body = redirect.into_body(&input.name, &input.action, rules);
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        let _lock = self
-            .lock_load_balancer(ctx, &input.load_balancer_id)
+            check_pool_id(CREATE, &input.redirect_pool_id).map_err(not_sent)?;
+            let redirect = Redirect {
+                pool: &input.redirect_pool_id,
+                url: &input.redirect_url,
+                status: input.redirect_http_code,
+                keep_query: input.keep_query_string,
+            };
+            redirect.check(CREATE, &input.action).map_err(not_sent)?;
+            let rules = encode_rules(CREATE, &input.rules).map_err(not_sent)?;
+            let body = redirect.into_body(&input.name, &input.action, rules);
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            let _lock = self
+                .lock_load_balancer(ctx, &input.load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            write.ready(ctx, None).await.map_err(not_sent)?;
+            let target = ChildTarget {
+                read: &LIST_POLICIES,
+                ..policy_target("", &ids)
+            };
+            let (status, response) = write
+                .send(ctx, Method::POST, &target, bytes, None)
+                .await
+                .map_err(|failure| write.create_failure(failure, "list-policies"))?;
+            let uuid = write.acknowledged_id(status, &response, "list-policies", input.no_wait)?;
+            let fallback = body.submitted(
+                Policy {
+                    uuid: uuid.clone(),
+                    name: input.name.clone(),
+                    ..Policy::default()
+                },
+                true,
+            );
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("ListenerID", input.listener_id.as_str()),
+                ("PolicyID", uuid.as_str()),
+            ];
+            let target = policy_target(&uuid, &ids);
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                input.no_wait,
+                true,
+                fallback,
+                |policy, projection| CreatePolicyOutput { policy, projection },
+            )
             .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        write.ready(ctx, None).await.map_err(not_sent)?;
-        let target = ChildTarget {
-            read: &LIST_POLICIES,
-            ..policy_target("", &ids)
-        };
-        let (status, response) = write
-            .send(ctx, Method::POST, &target, bytes, None)
-            .await
-            .map_err(|failure| write.create_failure(failure, "list-policies"))?;
-        let uuid = write.acknowledged_id(status, &response, "list-policies", input.no_wait)?;
-        let fallback = body.submitted(
-            Policy {
-                uuid: uuid.clone(),
-                name: input.name.clone(),
-                ..Policy::default()
-            },
-            true,
-        );
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("ListenerID", input.listener_id.as_str()),
-            ("PolicyID", uuid.as_str()),
-        ];
-        let target = policy_target(&uuid, &ids);
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            input.no_wait,
-            true,
-            fallback,
-            |policy, projection| CreatePolicyOutput { policy, projection },
-        )
-        .await
+        })
     }
 
     /// Updates a policy including its action, redirect settings, and match rules.
@@ -319,90 +321,92 @@ impl Client {
         ctx: &RequestContext,
         input: UpdatePolicyInput,
     ) -> WriteResult<UpdatePolicyOutput> {
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("ListenerID", input.listener_id.as_str()),
-            ("PolicyID", input.policy_id.as_str()),
-        ];
-        let mut write =
-            ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids).map_err(not_sent)?;
-        if encode_body(&input, &write.evidence)
-            .map_err(not_sent)?
-            .as_ref()
-            == b"{}"
-        {
-            return Err(not_sent(invalid_input(&format!(
-                "{UPDATE} requires at least one field to change"
-            ))));
-        }
-        check_pool_id(
-            UPDATE,
-            input.redirect_pool_id.as_deref().unwrap_or_default(),
-        )
-        .map_err(not_sent)?;
-        let requested_rules = input
-            .rules
-            .as_deref()
-            .map(|rules| encode_rules(UPDATE, rules))
-            .transpose()
+        crate::wire::product::exit::finish!(async {
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("ListenerID", input.listener_id.as_str()),
+                ("PolicyID", input.policy_id.as_str()),
+            ];
+            let mut write = ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids)
+                .map_err(not_sent)?;
+            if encode_body(&input, &write.evidence)
+                .map_err(not_sent)?
+                .as_ref()
+                == b"{}"
+            {
+                return Err(not_sent(invalid_input(&format!(
+                    "{UPDATE} requires at least one field to change"
+                ))));
+            }
+            check_pool_id(
+                UPDATE,
+                input.redirect_pool_id.as_deref().unwrap_or_default(),
+            )
             .map_err(not_sent)?;
-        let _lock = self
-            .lock_load_balancer(ctx, &input.load_balancer_id)
+            let requested_rules = input
+                .rules
+                .as_deref()
+                .map(|rules| encode_rules(UPDATE, rules))
+                .transpose()
+                .map_err(not_sent)?;
+            let _lock = self
+                .lock_load_balancer(ctx, &input.load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            let target = policy_target(&input.policy_id, &ids);
+            let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
+            let policy: Policy = GET_POLICY
+                .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
+                .map_err(not_sent)?;
+            let action = input.action.as_deref().unwrap_or(&policy.action);
+            let redirect = Redirect {
+                pool: merge_redirect(
+                    action != TO_URL,
+                    input.redirect_pool_id.as_deref(),
+                    policy.redirect_pool_id.as_str(),
+                ),
+                url: merge_redirect(
+                    action != TO_POOL,
+                    input.redirect_url.as_deref(),
+                    policy.redirect_url.as_str(),
+                ),
+                status: merge_redirect(
+                    action != TO_POOL,
+                    input.redirect_http_code,
+                    policy.redirect_http_code,
+                ),
+                keep_query: merge_redirect(
+                    action != TO_POOL,
+                    input.keep_query_string,
+                    policy.keep_query_string,
+                ),
+            };
+            redirect.check(UPDATE, action).map_err(not_sent)?;
+            let rules = match requested_rules {
+                Some(rules) => rules,
+                None => rules_from_read(&policy, &write).map_err(not_sent)?,
+            };
+            let body = redirect.into_body("", action, rules);
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            write
+                .send(ctx, Method::PUT, &target, bytes, Some(&target))
+                .await?;
+            let fallback = if input.no_wait {
+                body.submitted(policy.clone(), input.rules.is_some())
+            } else {
+                policy
+            };
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                input.no_wait,
+                false,
+                fallback,
+                |policy, projection| UpdatePolicyOutput { policy, projection },
+            )
             .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        let target = policy_target(&input.policy_id, &ids);
-        let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
-        let policy: Policy = GET_POLICY
-            .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
-            .map_err(not_sent)?;
-        let action = input.action.as_deref().unwrap_or(&policy.action);
-        let redirect = Redirect {
-            pool: merge_redirect(
-                action != TO_URL,
-                input.redirect_pool_id.as_deref(),
-                policy.redirect_pool_id.as_str(),
-            ),
-            url: merge_redirect(
-                action != TO_POOL,
-                input.redirect_url.as_deref(),
-                policy.redirect_url.as_str(),
-            ),
-            status: merge_redirect(
-                action != TO_POOL,
-                input.redirect_http_code,
-                policy.redirect_http_code,
-            ),
-            keep_query: merge_redirect(
-                action != TO_POOL,
-                input.keep_query_string,
-                policy.keep_query_string,
-            ),
-        };
-        redirect.check(UPDATE, action).map_err(not_sent)?;
-        let rules = match requested_rules {
-            Some(rules) => rules,
-            None => rules_from_read(&policy, &write).map_err(not_sent)?,
-        };
-        let body = redirect.into_body("", action, rules);
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        write
-            .send(ctx, Method::PUT, &target, bytes, Some(&target))
-            .await?;
-        let fallback = if input.no_wait {
-            body.submitted(policy.clone(), input.rules.is_some())
-        } else {
-            policy
-        };
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            input.no_wait,
-            false,
-            fallback,
-            |policy, projection| UpdatePolicyOutput { policy, projection },
-        )
-        .await
+        })
     }
 }
 

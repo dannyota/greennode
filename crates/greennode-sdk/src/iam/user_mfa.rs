@@ -68,8 +68,10 @@ impl Client {
         ctx: &RequestContext,
         input: EnableUserMfaInput,
     ) -> Result<EnableUserMfaOutput, Failure<EnableUserMfaOutput>> {
-        self.change_user_mfa(ctx, ENABLE, &input.user_id, &input.method, true)
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.change_user_mfa(ctx, ENABLE, &input.user_id, &input.method, true)
+                .await
+        })
     }
 
     /// Disables a Google factor once and confirms the resulting state.
@@ -78,8 +80,10 @@ impl Client {
         ctx: &RequestContext,
         input: DisableUserMfaInput,
     ) -> Result<DisableUserMfaOutput, Failure<DisableUserMfaOutput>> {
-        self.change_user_mfa(ctx, DISABLE, &input.user_id, &input.method, false)
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.change_user_mfa(ctx, DISABLE, &input.user_id, &input.method, false)
+                .await
+        })
     }
 
     async fn change_user_mfa(

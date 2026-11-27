@@ -462,3 +462,35 @@ async fn purge_rejects_triply_percent_encoded_management_bearer() {
     assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
 }
+
+#[tokio::test]
+async fn cdn_settlement_exit_refuses_a_reflected_redaction_marker() {
+    let latest = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"domainName":"redacted"}}"#;
+    let server = Server::start(vec![reply(DISABLED), reply(TOGGLED), reply(latest)]);
+    let result = client(&server, Some("redacted"))
+        .enable_web_accelerator(
+            &RequestContext::new().0,
+            EnableWebAcceleratorInput::new("cdn-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
+async fn cdn_settlement_exit_refuses_reflection_created_by_reserializing_rules() {
+    let latest = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"childrenRule":{"left" : "safe","other":"left%22%3A%22"}}}"#;
+    let server = Server::start(vec![reply(DISABLED), reply(TOGGLED), reply(latest)]);
+    let result = client(&server, Some(r#"left":""#))
+        .enable_web_accelerator(
+            &RequestContext::new().0,
+            EnableWebAcceleratorInput::new("cdn-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+}

@@ -121,40 +121,42 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumePricesInput,
     ) -> Result<ListVolumePricesOutput, Failure<ListVolumePricesOutput>> {
-        validate(&input).map_err(failure)?;
-        let mut notes = discovery_notes();
-        notes.retain(|note| {
-            !matches!(
-                note.scope.as_str(),
-                "compute" | "network" | "object-storage"
-            )
-        });
-        notes.push(note(
-            "exclusions",
-            "volume",
-            "Provisioned volume quotes exclude snapshots, backups, and server CES.",
-            "",
-            "observed",
-        ));
-        let mut run = Discovery {
-            catalog: Catalog::new(&self.session, ctx, input.max_requests),
-            out: ListVolumePricesOutput {
-                items: Vec::new(),
-                metadata: DiscoveryMetadata {
-                    region: self.region.clone(),
-                    complete: true,
-                    requests: 0,
-                    quoted_at: self.session.clock().utc_now(),
-                    failures: Vec::new(),
-                    notes,
-                    excluded_groups: None,
+        crate::wire::product::exit::finish!(async {
+            validate(&input).map_err(failure)?;
+            let mut notes = discovery_notes();
+            notes.retain(|note| {
+                !matches!(
+                    note.scope.as_str(),
+                    "compute" | "network" | "object-storage"
+                )
+            });
+            notes.push(note(
+                "exclusions",
+                "volume",
+                "Provisioned volume quotes exclude snapshots, backups, and server CES.",
+                "",
+                "observed",
+            ));
+            let mut run = Discovery {
+                catalog: Catalog::new(&self.session, ctx, input.max_requests),
+                out: ListVolumePricesOutput {
+                    items: Vec::new(),
+                    metadata: DiscoveryMetadata {
+                        region: self.region.clone(),
+                        complete: true,
+                        requests: 0,
+                        quoted_at: self.session.clock().utc_now(),
+                        failures: Vec::new(),
+                        notes,
+                        excluded_groups: None,
+                    },
                 },
-            },
-            errors: Vec::new(),
-            allow_partial: input.allow_partial,
-        };
-        run.discover(&input).await.map_err(failure)?;
-        run.finish()
+                errors: Vec::new(),
+                allow_partial: input.allow_partial,
+            };
+            run.discover(&input).await.map_err(failure)?;
+            run.finish()
+        })
     }
 }
 

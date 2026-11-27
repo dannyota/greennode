@@ -159,57 +159,58 @@ impl Client {
         ctx: &RequestContext,
         input: CreateRepositoryInput,
     ) -> Result<CreateRepositoryOutput, Failure<CreateRepositoryOutput>> {
-        if input.name.is_empty() {
-            return Err(invalid_input(
-                "containerregistry.CreateRepository requires Name",
-            ));
-        }
-        if input.quota_limit_gb < 1 {
-            return Err(invalid_input(
-                "containerregistry.CreateRepository requires QuotaLimitGB to be at least 1",
-            ));
-        }
-        let body =
-            json!({"repoName": input.name, "quotaLimit": input.quota_limit_gb, "isPublic": false});
-        let mut evidence = Evidence::new();
-        let RepositoryWrite(repo) = self.request(
-            ctx, &Operation { allow_empty: true, reflection: crate::wire::product::operation::Reflection::Redact, ..write_operation(
-                CREATE, Method::POST, "v1/repository", &[StatusCode::ACCEPTED],
-            ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
-        ).await.map_err(|failure| create_failure(failure, concat!(
-            "containerregistry.CreateRepository: create may have already reached the server; ",
-            "list-repositories --name <name> and match the exact name before creating again",
-        )))?;
-        if !valid_id(&repo.id) || evidence.credentials().reflects(repo.id.as_bytes()) {
-            let message = if repo.id.is_empty() {
-                format!("create response had no id; {RECONCILE}")
-            } else {
-                format!("create response had no usable id; {RECONCILE}")
-            };
-            return Err(Failure::new(
-                registry_error(CREATE, Some(202), "", &message),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        if input.no_wait {
-            return Ok(CreateRepositoryOutput::new(repo, &evidence));
-        }
-        match self
-            .wait_repository(ctx, &repo.id, false, &mut evidence)
-            .await
-        {
-            Ok(Some(read)) => Ok(CreateRepositoryOutput::new(read, &evidence)),
-            result => {
-                let output = CreateRepositoryOutput::new(repo, &evidence);
-                Err(settlement_failure(
-                    result.err(),
-                    output,
-                    CREATE_WAIT,
-                    &evidence,
-                ))
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty() {
+                return Err(invalid_input(
+                    "containerregistry.CreateRepository requires Name",
+                ));
             }
-        }
+            if input.quota_limit_gb < 1 {
+                return Err(invalid_input(
+                    "containerregistry.CreateRepository requires QuotaLimitGB to be at least 1",
+                ));
+            }
+            let body = json!({"repoName": input.name, "quotaLimit": input.quota_limit_gb, "isPublic": false});
+            let mut evidence = Evidence::new();
+            let RepositoryWrite(repo) = self.request(
+                ctx, &Operation { allow_empty: true, reflection: crate::wire::product::operation::Reflection::Redact, ..write_operation(
+                    CREATE, Method::POST, "v1/repository", &[StatusCode::ACCEPTED],
+                ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
+            ).await.map_err(|failure| create_failure(failure, concat!(
+                "containerregistry.CreateRepository: create may have already reached the server; ",
+                "list-repositories --name <name> and match the exact name before creating again",
+            )))?;
+            if !valid_id(&repo.id) || evidence.credentials().reflects(repo.id.as_bytes()) {
+                let message = if repo.id.is_empty() {
+                    format!("create response had no id; {RECONCILE}")
+                } else {
+                    format!("create response had no usable id; {RECONCILE}")
+                };
+                return Err(Failure::new(
+                    registry_error(CREATE, Some(202), "", &message),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            if input.no_wait {
+                return Ok(CreateRepositoryOutput::new(repo, &evidence));
+            }
+            match self
+                .wait_repository(ctx, &repo.id, false, &mut evidence)
+                .await
+            {
+                Ok(Some(read)) => Ok(CreateRepositoryOutput::new(read, &evidence)),
+                result => {
+                    let output = CreateRepositoryOutput::new(repo, &evidence);
+                    Err(settlement_failure(
+                        result.err(),
+                        output,
+                        CREATE_WAIT,
+                        &evidence,
+                    ))
+                }
+            }
+        })
     }
 
     /// Reads the repository and sends one delete only after it reports zero images.
@@ -219,56 +220,58 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteRepositoryInput,
     ) -> Result<DeleteRepositoryOutput, Failure<DeleteRepositoryOutput>> {
-        let id = &input.repository_id;
-        if !valid_id(id) {
-            return Err(invalid_input(
-                "containerregistry.DeleteRepository requires a valid RepositoryID",
-            ));
-        }
-        let mut evidence = Evidence::new();
-        let current = self
-            .get_repository_evidenced::<()>(ctx, id, &mut evidence)
-            .await
-            .map_err(before_write)?;
-        match (current.image_count_known, current.repository.image_count) {
-            (true, 0) => (),
-            (true, count) if count > 0 => return Err(not_sent(registry_error(
-                "", None, "", &format!("containerregistry: repository holds images: {DELETE}: repository {id} has {count} image(s); delete them first"),
-            ).with_detail(ErrorDetail::RepositoryNotEmpty))),
-            _ => return Err(not_sent(registry_error(
-                "", None, "", "containerregistry.DeleteRepository: the read did not report a valid image count; refusing to delete without confirming it holds no images",
-            ).with_detail(ErrorDetail::ImageCountUnknown))),
-        }
-        self.request::<Repository, _>(
-            ctx,
-            &Operation {
-                allow_empty: true,
-                reflection: crate::wire::product::operation::Reflection::Redact,
-                ..write_operation(
-                    DELETE,
-                    Method::DELETE,
-                    "v1/repository/{}",
-                    &[StatusCode::ACCEPTED],
-                )
-            },
-            &[id],
-            &[],
-            Bytes::new(),
-            &mut evidence,
-        )
-        .await?;
-        let output = DeleteRepositoryOutput {};
-        if !input.no_wait
-            && let Err(error) = self.wait_repository(ctx, id, true, &mut evidence).await
-        {
-            return Err(settlement_failure(
-                Some(error),
-                output,
-                DELETE_WAIT,
-                &evidence,
-            ));
-        }
-        Ok(output)
+        crate::wire::product::exit::finish!(async {
+            let id = &input.repository_id;
+            if !valid_id(id) {
+                return Err(invalid_input(
+                    "containerregistry.DeleteRepository requires a valid RepositoryID",
+                ));
+            }
+            let mut evidence = Evidence::new();
+            let current = self
+                .get_repository_evidenced::<()>(ctx, id, &mut evidence)
+                .await
+                .map_err(before_write)?;
+            match (current.image_count_known, current.repository.image_count) {
+                (true, 0) => (),
+                (true, count) if count > 0 => return Err(not_sent(registry_error(
+                    "", None, "", &format!("containerregistry: repository holds images: {DELETE}: repository {id} has {count} image(s); delete them first"),
+                ).with_detail(ErrorDetail::RepositoryNotEmpty))),
+                _ => return Err(not_sent(registry_error(
+                    "", None, "", "containerregistry.DeleteRepository: the read did not report a valid image count; refusing to delete without confirming it holds no images",
+                ).with_detail(ErrorDetail::ImageCountUnknown))),
+            }
+            self.request::<Repository, _>(
+                ctx,
+                &Operation {
+                    allow_empty: true,
+                    reflection: crate::wire::product::operation::Reflection::Redact,
+                    ..write_operation(
+                        DELETE,
+                        Method::DELETE,
+                        "v1/repository/{}",
+                        &[StatusCode::ACCEPTED],
+                    )
+                },
+                &[id],
+                &[],
+                Bytes::new(),
+                &mut evidence,
+            )
+            .await?;
+            let output = DeleteRepositoryOutput {};
+            if !input.no_wait
+                && let Err(error) = self.wait_repository(ctx, id, true, &mut evidence).await
+            {
+                return Err(settlement_failure(
+                    Some(error),
+                    output,
+                    DELETE_WAIT,
+                    &evidence,
+                ));
+            }
+            Ok(output)
+        })
     }
 
     async fn wait_repository(

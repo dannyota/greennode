@@ -56,7 +56,6 @@ pub enum ErrorClass {
 pub(crate) struct SafeText(String);
 
 impl SafeText {
-    #[allow(dead_code)]
     pub(crate) fn new(text: &str, credentials: &[&crate::Secret]) -> Self {
         let cleaned: String = text.chars().filter(|c| {
             !c.is_control() && !matches!(*c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')
@@ -132,7 +131,6 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    #[allow(dead_code)]
     pub(crate) fn new(
         operation: &'static str,
         status: Option<u16>,
@@ -279,56 +277,12 @@ impl fmt::Debug for ServiceAccountLoginError {
 }
 
 const DIAGNOSTIC_FALLBACK: &str = "request failed";
-const STATIC_DIAGNOSTIC_TEXT: &[&str] = &[
-    "BootVolume",
-    "DiscoveryIncomplete",
-    "EstimateLimit",
-    "EstimateOverflow",
-    "HistoryIncomplete",
-    "InvalidConfig",
-    "InvalidUsage",
-    "LoginFailed",
-    "NoCredentials",
-    "NotFound",
-    "NotSettled",
-    "PageFormat",
-    "PriceAboveMax",
-    "PurgeCooldown",
-    "QuotaChanged",
-    "QuotaStatusIncomplete",
-    "RequestFailed",
-    "ResourceBusy",
-    "ResourceInUse",
-    "ServerGroupInUse",
-    "ServerRunning",
-    "ServiceAccountLoginFailed",
-    "StatusUnconfirmed",
-    "SystemTag",
-    "TokenCacheFailed",
-    "UnexpectedStatus",
-    "Unpriced",
-    "VolumeInUse",
-    "WriteFailed",
-    "ZoneBusy",
-    "cdn: CDN status change not confirmed: the toggle was sent, or may have been sent, but no read showed the CDN changing; read the CDN before doing anything else",
-    "estimate arithmetic overflow",
-    "monitor.GetQuotaStatus",
-    "monitor.GetQuotaStatus: Kind must be synthetic, email, or sms: vngcloud: invalid input",
-    "monitor.QuoteRenewSyntheticQuota: unknown quota status: monitor: unexpected check status",
-    "monitor: quota status incomplete",
-    "no vCDN API key: pipe it to `greennode configure set vcdn_api_key -` or set GREENNODE_VCDN_API_KEY",
-    "pricing discovery incomplete",
-    "quota guard changed",
-    "request failed",
-    "tagging: write outcome is unconfirmed; read tags before retrying",
-    "volume.GetVolume: volume status is missing; body withheld (status 200)",
-];
 
 /// A categorized failure with optional typed details and a cause chain.
 pub struct Error {
     class: ErrorClass,
     identity: bool,
-    diagnostic_reflections: u64,
+    fallback_message_reflected: bool,
     api: Option<ApiError>,
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
@@ -348,7 +302,7 @@ impl Error {
         Self {
             class,
             identity: true,
-            diagnostic_reflections: 0,
+            fallback_message_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -378,7 +332,7 @@ impl Error {
         Self {
             class,
             identity: false,
-            diagnostic_reflections: 0,
+            fallback_message_reflected: false,
             api: Some(api),
             login: None,
             service_login: None,
@@ -429,6 +383,11 @@ impl Error {
             }
         }
         if let Some(detail) = self.detail.as_mut() {
+            if let Some(text) = detail.downcast_mut::<String>()
+                && reflects(text)
+            {
+                text.clear();
+            }
             if let Some(advice) = detail.downcast_mut::<RecoveryAdvice>()
                 && reflects(advice.message())
             {
@@ -458,11 +417,7 @@ impl Error {
     }
 
     pub(crate) fn screen_diagnostic_fallback(mut self, reflects: impl Fn(&str) -> bool) -> Self {
-        for (index, text) in STATIC_DIAGNOSTIC_TEXT.iter().enumerate() {
-            if reflects(text) {
-                self.diagnostic_reflections |= 1 << index;
-            }
-        }
+        self.fallback_message_reflected |= reflects(DIAGNOSTIC_FALLBACK);
         self
     }
 
@@ -473,15 +428,12 @@ impl Error {
 
     /// Withholds a fixed CLI diagnostic that matches evidence recorded for this failure.
     pub fn screened_diagnostic_text<'a>(&self, text: &'a str) -> &'a str {
-        let Some(index) = STATIC_DIAGNOSTIC_TEXT
-            .iter()
-            .position(|candidate| *candidate == text)
-        else {
+        if text != DIAGNOSTIC_FALLBACK {
             return text;
-        };
+        }
         let mut error = Some(self);
         while let Some(node) = error {
-            if node.diagnostic_reflections & (1 << index) != 0 {
+            if node.fallback_message_reflected {
                 return "";
             }
             error = node.cause.as_deref();
@@ -514,7 +466,7 @@ impl Error {
         Self {
             class: self.class,
             identity: false,
-            diagnostic_reflections: 0,
+            fallback_message_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -641,7 +593,6 @@ pub struct Failure<T> {
     private_delivery: Option<Box<crate::Secret>>,
 }
 impl<T> Failure<T> {
-    #[allow(dead_code)]
     pub(crate) fn new(error: Error, partial: Option<T>, dispatch: WriteDispatch) -> Self {
         Self {
             error,
@@ -670,6 +621,25 @@ impl<T> Failure<T> {
             dispatch
         };
         Self::new(error.with_cause(inner.error), partial, dispatch)
+    }
+    pub(crate) fn screen_exit(
+        mut self,
+        screen_error: impl FnOnce(Error) -> Error,
+        reflects: impl FnOnce(&T) -> bool,
+        private_reflects: impl FnOnce(&crate::Secret) -> bool,
+    ) -> Self {
+        self.error = screen_error(self.error);
+        if self.partial.as_ref().is_some_and(reflects) {
+            self.partial = None;
+        }
+        if self
+            .private_delivery
+            .as_deref()
+            .is_some_and(private_reflects)
+        {
+            self.private_delivery = None;
+        }
+        self
     }
     /// Returns the categorized error.
     pub fn error(&self) -> &Error {

@@ -267,15 +267,17 @@ impl Client {
         ctx: &RequestContext,
         input: ListUsersInput,
     ) -> Result<ListUsersOutput, Failure<ListUsersOutput>> {
-        self.users(
-            ctx,
-            "containerregistry.ListUsers",
-            "v1/user",
-            &[],
-            &input.name,
-            (input.page, input.size),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.users(
+                ctx,
+                "containerregistry.ListUsers",
+                "v1/user",
+                &[],
+                &input.name,
+                (input.page, input.size),
+            )
+            .await
+        })
     }
     /// Lists one page of users attached to a repository.
     pub async fn list_repository_users(
@@ -283,18 +285,20 @@ impl Client {
         ctx: &RequestContext,
         input: ListRepositoryUsersInput,
     ) -> Result<ListRepositoryUsersOutput, Failure<ListRepositoryUsersOutput>> {
-        if !valid_id(&input.repository_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.ListRepositoryUsers requires RepositoryID to match ^[A-Za-z0-9-]+$")));
-        }
-        self.users(
-            ctx,
-            "containerregistry.ListRepositoryUsers",
-            "v1/repository/{}/user",
-            &[&input.repository_id],
-            &input.name,
-            (input.page, input.size),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            if !valid_id(&input.repository_id) {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.ListRepositoryUsers requires RepositoryID to match ^[A-Za-z0-9-]+$")));
+            }
+            self.users(
+                ctx,
+                "containerregistry.ListRepositoryUsers",
+                "v1/repository/{}/user",
+                &[&input.repository_id],
+                &input.name,
+                (input.page, input.size),
+            )
+            .await
+        })
     }
     async fn users(
         &self,
@@ -325,11 +329,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetRepositoryInput,
     ) -> Result<GetRepositoryOutput, Failure<GetRepositoryOutput>> {
-        let result = self
-            .get_repository_evidenced(ctx, &input.repository_id, &mut Evidence::new())
-            .await?;
-        Ok(GetRepositoryOutput {
-            repository: result.repository,
+        crate::wire::product::exit::finish!(async {
+            let result = self
+                .get_repository_evidenced(ctx, &input.repository_id, &mut Evidence::new())
+                .await?;
+            Ok(GetRepositoryOutput {
+                repository: result.repository,
+            })
         })
     }
 

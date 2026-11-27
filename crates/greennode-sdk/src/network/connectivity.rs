@@ -53,9 +53,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListWanIpsInput,
     ) -> Result<ListWanIpsOutput, Failure<ListWanIpsOutput>> {
-        self.list_route_inventory(ctx, WAN_IPS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, WAN_IPS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of elastic network interfaces in the selected project.
@@ -64,9 +66,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListNetworkInterfacesInput,
     ) -> Result<ListNetworkInterfacesOutput, Failure<ListNetworkInterfacesOutput>> {
-        self.list_route_inventory(ctx, INTERFACES, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, INTERFACES, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of VPC peerings in the selected project.
@@ -75,9 +79,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListPeeringsInput,
     ) -> Result<ListPeeringsOutput, Failure<ListPeeringsOutput>> {
-        self.list_route_inventory(ctx, PEERINGS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, PEERINGS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of interconnects in the selected project.
@@ -86,9 +92,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListInterconnectsInput,
     ) -> Result<ListInterconnectsOutput, Failure<ListInterconnectsOutput>> {
-        self.list_route_inventory(ctx, INTERCONNECTS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, INTERCONNECTS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 }
 

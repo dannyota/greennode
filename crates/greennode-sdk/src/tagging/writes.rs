@@ -115,14 +115,16 @@ impl Client {
         ctx: &RequestContext,
         input: TagResourceInput,
     ) -> Result<Value, Failure<Value>> {
-        self.replace_tag(
-            ctx,
-            &input.resource_id,
-            &input.resource_type,
-            &input.key,
-            Some(&input.value),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.replace_tag(
+                ctx,
+                &input.resource_id,
+                &input.resource_type,
+                &input.key,
+                Some(&input.value),
+            )
+            .await
+        })
     }
 
     /// Removes a user tag while preserving the resource's other user tags.
@@ -131,14 +133,16 @@ impl Client {
         ctx: &RequestContext,
         input: UntagResourceInput,
     ) -> Result<Value, Failure<Value>> {
-        self.replace_tag(
-            ctx,
-            &input.resource_id,
-            &input.resource_type,
-            &input.key,
-            None,
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.replace_tag(
+                ctx,
+                &input.resource_id,
+                &input.resource_type,
+                &input.key,
+                None,
+            )
+            .await
+        })
     }
 
     #[expect(

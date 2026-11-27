@@ -78,8 +78,10 @@ impl Client {
         ctx: &RequestContext,
         input: GetQuoteInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote_with_evidence(ctx, input, &mut Evidence::new())
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.quote_with_evidence(ctx, input, &mut Evidence::new())
+                .await
+        })
     }
 
     pub(crate) async fn quote_with_evidence(

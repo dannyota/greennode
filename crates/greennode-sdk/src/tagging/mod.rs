@@ -213,63 +213,65 @@ impl Client {
         ctx: &RequestContext,
         input: ListResourceTagsInput,
     ) -> Result<ListResourceTagsOutput, Failure<ListResourceTagsOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        if input.resource_id.is_empty()
-            || !input
-                .resource_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
-        }
-        let project = self
-            .session
-            .require_project_id(ctx)
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            if input.resource_id.is_empty()
+                || !input
+                    .resource_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            }
+            let project = self
+                .session
+                .require_project_id(ctx)
+                .await
+                .map_err(|error| failure(*error))?;
+            let base = self
+                .session
+                .endpoints()
+                .vserver
+                .as_ref()
+                .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let mut jitter = || self.session.retry_jitter();
+            let runtime = self
+                .session
+                .runtime(ctx, &mut jitter)
+                .map_err(|error| failure(*error))?;
+            let op = Operation {
+                id: "tagging.ListResourceTags",
+                template: "v2/{}/tag/resource/{}",
+                method: Method::GET,
+                class: Classification::Read,
+                retry: Retry::Repeatable,
+                success: &[StatusCode::OK],
+                cap: 4 << 20,
+                allow_recovery: true,
+                allow_empty: false,
+                no_output: false,
+                keep_status: false,
+                overflow_overrides_status: true,
+                sensitive: false,
+                reflection: crate::wire::product::operation::Reflection::Redact,
+                no_redirect: false,
+                retry_config: retry::Config::default(),
+            };
+            let (_, snapshot) = operation::execute::<Snapshot>(
+                runtime,
+                base,
+                &op,
+                &[&project, &input.resource_id],
+                &[],
+                self.session.bearer_source(),
+                bytes::Bytes::new(),
+            )
             .await
-            .map_err(|error| failure(*error))?;
-        let base = self
-            .session
-            .endpoints()
-            .vserver
-            .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let mut jitter = || self.session.retry_jitter();
-        let runtime = self
-            .session
-            .runtime(ctx, &mut jitter)
-            .map_err(|error| failure(*error))?;
-        let op = Operation {
-            id: "tagging.ListResourceTags",
-            template: "v2/{}/tag/resource/{}",
-            method: Method::GET,
-            class: Classification::Read,
-            retry: Retry::Repeatable,
-            success: &[StatusCode::OK],
-            cap: 4 << 20,
-            allow_recovery: true,
-            allow_empty: false,
-            no_output: false,
-            keep_status: false,
-            overflow_overrides_status: true,
-            sensitive: false,
-            reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: false,
-            retry_config: retry::Config::default(),
-        };
-        let (_, snapshot) = operation::execute::<Snapshot>(
-            runtime,
-            base,
-            &op,
-            &[&project, &input.resource_id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map_err(|error| {
-            let (error, _, dispatch) = error.into_parts();
-            Failure::new(error, None, dispatch)
-        })?;
-        Ok(List { items: snapshot.0 })
+            .map_err(|error| {
+                let (error, _, dispatch) = error.into_parts();
+                Failure::new(error, None, dispatch)
+            })?;
+            Ok(List { items: snapshot.0 })
+        })
     }
 }

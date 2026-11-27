@@ -175,8 +175,10 @@ impl Client {
         ctx: &RequestContext,
         input: GetTrafficInput,
     ) -> Result<GetTrafficOutput, Failure<GetTrafficOutput>> {
-        let points = self.series(ctx, &TRAFFIC, input).await.map_err(convert)?;
-        Ok(GetTrafficOutput { points })
+        crate::wire::product::exit::finish!(async {
+            let points = self.series(ctx, &TRAFFIC, input).await.map_err(convert)?;
+            Ok(GetTrafficOutput { points })
+        })
     }
 }
 
@@ -198,11 +200,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetRequestRateInput,
     ) -> Result<GetRequestRateOutput, Failure<GetRequestRateOutput>> {
-        let points = self
-            .series(ctx, &REQUEST_RATE, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetRequestRateOutput { points })
+        crate::wire::product::exit::finish!(async {
+            let points = self
+                .series(ctx, &REQUEST_RATE, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetRequestRateOutput { points })
+        })
     }
 }
 
@@ -224,11 +228,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetCacheStatusInput,
     ) -> Result<GetCacheStatusOutput, Failure<GetCacheStatusOutput>> {
-        let counts = self
-            .counts(ctx, &CACHE_STATUS, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetCacheStatusOutput { counts })
+        crate::wire::product::exit::finish!(async {
+            let counts = self
+                .counts(ctx, &CACHE_STATUS, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetCacheStatusOutput { counts })
+        })
     }
 }
 
@@ -250,11 +256,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetHttpCodesInput,
     ) -> Result<GetHttpCodesOutput, Failure<GetHttpCodesOutput>> {
-        let counts = self
-            .counts(ctx, &HTTP_CODES, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetHttpCodesOutput { counts })
+        crate::wire::product::exit::finish!(async {
+            let counts = self
+                .counts(ctx, &HTTP_CODES, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetHttpCodesOutput { counts })
+        })
     }
 }
 
@@ -265,56 +273,58 @@ impl Client {
         ctx: &RequestContext,
         input: GetTrafficReportInput,
     ) -> Result<GetTrafficReportOutput, Failure<GetTrafficReportOutput>> {
-        let range = Range {
-            cdn_domains: input.cdn_domains,
-            from: input.from,
-            to: input.to,
-            period: String::new(),
-        };
-        let body = range.body().ok_or_else(invalid)?;
-        let answer = self
-            .call(ctx, &REPORT, &[], body.to_string().into())
-            .await
-            .map_err(convert)?;
-        if empty_data(answer.data.as_deref()) {
-            return Ok(List { items: Vec::new() });
-        }
-        let malformed = || read_failure(REPORT.unexpected(200));
-        let text = answer.data.as_deref().ok_or_else(malformed)?.get();
-        let rows: Vec<ReportWire> = serde_json::from_str(text).map_err(|_| malformed())?;
-        let evidence = &answer.evidence;
-        let mut items = Vec::with_capacity(rows.len());
-        for mut row in rows {
-            let series = sorted(row.data).ok_or_else(malformed)?;
-            let points = series
-                .into_iter()
-                .map(|(time, value)| {
-                    let mut point = Sample {
-                        time: Field::Value(time),
-                        value: Field::Value(value),
-                    };
-                    point.time.redact(evidence);
-                    point.value.redact(evidence);
-                    point
-                })
-                .collect();
-            for value in [
-                &mut row.domain_name,
-                &mut row.cdn_domain,
-                &mut row.traffic_type,
-                &mut row.group_type,
-            ] {
-                redact_text(value, evidence);
+        crate::wire::product::exit::finish!(async {
+            let range = Range {
+                cdn_domains: input.cdn_domains,
+                from: input.from,
+                to: input.to,
+                period: String::new(),
+            };
+            let body = range.body().ok_or_else(invalid)?;
+            let answer = self
+                .call(ctx, &REPORT, &[], body.to_string().into())
+                .await
+                .map_err(convert)?;
+            if empty_data(answer.data.as_deref()) {
+                return Ok(List { items: Vec::new() });
             }
-            items.push(DomainTraffic {
-                domain_name: row.domain_name,
-                cdn_domain: row.cdn_domain,
-                traffic_type: row.traffic_type,
-                group_type: row.group_type,
-                points,
-            });
-        }
-        Ok(List { items })
+            let malformed = || read_failure(REPORT.unexpected(200));
+            let text = answer.data.as_deref().ok_or_else(malformed)?.get();
+            let rows: Vec<ReportWire> = serde_json::from_str(text).map_err(|_| malformed())?;
+            let evidence = &answer.evidence;
+            let mut items = Vec::with_capacity(rows.len());
+            for mut row in rows {
+                let series = sorted(row.data).ok_or_else(malformed)?;
+                let points = series
+                    .into_iter()
+                    .map(|(time, value)| {
+                        let mut point = Sample {
+                            time: Field::Value(time),
+                            value: Field::Value(value),
+                        };
+                        point.time.redact(evidence);
+                        point.value.redact(evidence);
+                        point
+                    })
+                    .collect();
+                for value in [
+                    &mut row.domain_name,
+                    &mut row.cdn_domain,
+                    &mut row.traffic_type,
+                    &mut row.group_type,
+                ] {
+                    redact_text(value, evidence);
+                }
+                items.push(DomainTraffic {
+                    domain_name: row.domain_name,
+                    cdn_domain: row.cdn_domain,
+                    traffic_type: row.traffic_type,
+                    group_type: row.group_type,
+                    points,
+                });
+            }
+            Ok(List { items })
+        })
     }
 
     async fn series(

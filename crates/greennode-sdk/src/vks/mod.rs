@@ -88,42 +88,44 @@ impl Client {
         ctx: &RequestContext,
         input: ListClustersInput,
     ) -> Result<ListClustersOutput, Failure<ListClustersOutput>> {
-        self.base()?;
-        let max = i64::from(i32::MAX);
-        if !(0..=max).contains(&input.page) {
-            return Err(read_failure(local_error(
-                ErrorClass::InvalidInput,
-                "InvalidUsage",
-                "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
-            )));
-        }
-        if !(0..=max).contains(&input.size) {
-            return Err(read_failure(local_error(
-                ErrorClass::InvalidInput,
-                "InvalidUsage",
-                "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
-            )));
-        }
-        let page = input.page.to_string();
-        let size = if input.size == 0 { 10 } else { input.size }.to_string();
-        let response: ClusterPage = self
-            .read(
-                ctx,
-                &read_operation(CLUSTERS, "v1/clusters"),
-                &[("page", &page), ("pageSize", &size)],
-            )
-            .await?;
-        let page_size = i64::from(response.page_size);
-        if response.page < 0 || page_size <= 0 || response.total < 0 {
-            return Err(read_failure(malformed(CLUSTERS)));
-        }
-        Ok(PagedList {
-            items: response.items,
-            page: i64::from(response.page),
-            page_size,
-            total_page: response.total.div_euclid(page_size)
-                + i64::from(response.total.rem_euclid(page_size) != 0),
-            total_item: response.total,
+        crate::wire::product::exit::finish!(async {
+            self.base()?;
+            let max = i64::from(i32::MAX);
+            if !(0..=max).contains(&input.page) {
+                return Err(read_failure(local_error(
+                    ErrorClass::InvalidInput,
+                    "InvalidUsage",
+                    "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
+                )));
+            }
+            if !(0..=max).contains(&input.size) {
+                return Err(read_failure(local_error(
+                    ErrorClass::InvalidInput,
+                    "InvalidUsage",
+                    "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
+                )));
+            }
+            let page = input.page.to_string();
+            let size = if input.size == 0 { 10 } else { input.size }.to_string();
+            let response: ClusterPage = self
+                .read(
+                    ctx,
+                    &read_operation(CLUSTERS, "v1/clusters"),
+                    &[("page", &page), ("pageSize", &size)],
+                )
+                .await?;
+            let page_size = i64::from(response.page_size);
+            if response.page < 0 || page_size <= 0 || response.total < 0 {
+                return Err(read_failure(malformed(CLUSTERS)));
+            }
+            Ok(PagedList {
+                items: response.items,
+                page: i64::from(response.page),
+                page_size,
+                total_page: response.total.div_euclid(page_size)
+                    + i64::from(response.total.rem_euclid(page_size) != 0),
+                total_item: response.total,
+            })
         })
     }
 
@@ -133,10 +135,12 @@ impl Client {
         ctx: &RequestContext,
         _input: ListClusterVersionsInput,
     ) -> Result<ListClusterVersionsOutput, Failure<ListClusterVersionsOutput>> {
-        let Versions(items) = self
-            .read(ctx, &read_operation(VERSIONS, "v1/cluster-versions"), &[])
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let Versions(items) = self
+                .read(ctx, &read_operation(VERSIONS, "v1/cluster-versions"), &[])
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads the configured region's account quota.
@@ -145,11 +149,13 @@ impl Client {
         ctx: &RequestContext,
         _input: GetQuotaInput,
     ) -> Result<GetQuotaOutput, Failure<GetQuotaOutput>> {
-        let quota: QuotaResponse = self
-            .read(ctx, &read_operation(QUOTA, "v1/quota"), &[])
-            .await?;
-        Ok(GetQuotaOutput {
-            quota: quota.into(),
+        crate::wire::product::exit::finish!(async {
+            let quota: QuotaResponse = self
+                .read(ctx, &read_operation(QUOTA, "v1/quota"), &[])
+                .await?;
+            Ok(GetQuotaOutput {
+                quota: quota.into(),
+            })
         })
     }
 

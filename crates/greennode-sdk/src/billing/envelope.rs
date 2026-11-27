@@ -69,7 +69,7 @@ impl<T: BudgetData> Output for Envelope<T> {
                 .code
                 .is_some_and(|code| success_code(code.get()) == Some(false))
         {
-            return api_error(operation, response, header.not_found());
+            return api_error(operation, response, header.not_found(&response.credentials));
         }
         Box::new(invalid_response(operation, response.status, false))
     }
@@ -79,7 +79,7 @@ impl<T: BudgetData> Output for Envelope<T> {
         let invalid = || Box::new(invalid_response(operation, status, false));
         if status == StatusCode::BAD_REQUEST
             && serde_json::from_slice::<Header<'_>>(&response.body)
-                .is_ok_and(|header| header.not_found())
+                .is_ok_and(|header| header.not_found(&response.credentials))
         {
             return Err(api_error(operation, response, true));
         }
@@ -97,7 +97,11 @@ impl<T: BudgetData> Output for Envelope<T> {
         if !success_code(code).ok_or_else(invalid)? {
             strict_json::validate_shape(&response.body, &HEADER_SCHEMA, operation.cap)
                 .map_err(|_| invalid())?;
-            return Err(api_error(operation, response, header.not_found()));
+            return Err(api_error(
+                operation,
+                response,
+                header.not_found(&response.credentials),
+            ));
         }
         if response.credentials.has_numeric_product_credential() {
             return Err(invalid());
@@ -125,9 +129,10 @@ struct Header<'a> {
 }
 
 impl Header<'_> {
-    fn not_found(&self) -> bool {
+    fn not_found(&self, credentials: &SentCredentials) -> bool {
         self.message.as_deref().is_some_and(|message| {
-            let message = message.trim_start();
+            let safe = response::sanitize_error_text(message, credentials);
+            let message = safe.as_str().trim_start();
             message.starts_with("Budget not found") || message.starts_with("Threshold not found")
         })
     }

@@ -166,32 +166,34 @@ impl Client {
         ctx: &RequestContext,
         input: ListDashboardsInput,
     ) -> Result<ListDashboardsOutput, Failure<ListDashboardsOutput>> {
-        if input.page < 0 || !(0..=100).contains(&input.size) {
-            return Err(failure(input_error(format!(
-                "vngcloud: invalid input: {}: invalid page or size",
-                LIST.id
-            ))));
-        }
-        let page = input.page.max(1);
-        let size = if input.size == 0 { 10 } else { input.size };
-        let filter = if input.system {
-            "systemType:productVng"
-        } else {
-            "system:false"
-        };
-        let query = [
-            ("filter", filter),
-            ("page", &page.to_string()),
-            ("searching-field", ""),
-            ("searching-text", ""),
-            ("size", &size.to_string()),
-        ];
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &LIST, &[], &query, &mut evidence)
-            .await
-            .map_err(failure)?;
-        page_output(&raw, input.system, page, size, &evidence).map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            if input.page < 0 || !(0..=100).contains(&input.size) {
+                return Err(failure(input_error(format!(
+                    "vngcloud: invalid input: {}: invalid page or size",
+                    LIST.id
+                ))));
+            }
+            let page = input.page.max(1);
+            let size = if input.size == 0 { 10 } else { input.size };
+            let filter = if input.system {
+                "systemType:productVng"
+            } else {
+                "system:false"
+            };
+            let query = [
+                ("filter", filter),
+                ("page", &page.to_string()),
+                ("searching-field", ""),
+                ("searching-text", ""),
+                ("size", &size.to_string()),
+            ];
+            let mut evidence = Evidence::new();
+            let raw = self
+                .read(ctx, &LIST, &[], &query, &mut evidence)
+                .await
+                .map_err(failure)?;
+            page_output(&raw, input.system, page, size, &evidence).map_err(failure)
+        })
     }
 
     /// Reads a dashboard by identifier.
@@ -200,20 +202,22 @@ impl Client {
         ctx: &RequestContext,
         input: GetDashboardInput,
     ) -> Result<GetDashboardOutput, Failure<GetDashboardOutput>> {
-        if !PathIds::Strict.allows(&input.dashboard_id) {
-            return Err(path_id_failure(GET.id, "DashboardID"));
-        }
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &GET, &[&input.dashboard_id], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let mut dashboard: Dashboard =
-            decode(&raw, &DASHBOARD, &GET, &evidence).map_err(failure)?;
-        if dashboard.id != input.dashboard_id || !dashboard.redact(&evidence) {
-            return Err(failure(GET.invalid(&evidence)));
-        }
-        Ok(GetDashboardOutput { dashboard })
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.dashboard_id) {
+                return Err(path_id_failure(GET.id, "DashboardID"));
+            }
+            let mut evidence = Evidence::new();
+            let raw = self
+                .read(ctx, &GET, &[&input.dashboard_id], &[], &mut evidence)
+                .await
+                .map_err(failure)?;
+            let mut dashboard: Dashboard =
+                decode(&raw, &DASHBOARD, &GET, &evidence).map_err(failure)?;
+            if dashboard.id != input.dashboard_id || !dashboard.redact(&evidence) {
+                return Err(failure(GET.invalid(&evidence)));
+            }
+            Ok(GetDashboardOutput { dashboard })
+        })
     }
 }
 

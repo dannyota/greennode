@@ -533,3 +533,15 @@ async fn repeated_image_versions_count_against_the_retained_byte_limit() {
     );
     assert_eq!(server.heads().len(), 7);
 }
+
+#[tokio::test]
+async fn compute_exit_refuses_a_short_encoding_in_a_projected_id() {
+    let server = TestServer::start(vec![response(
+        r#"{"listData":[{"uuid":"image-1","projectId":"pre6A6B6Cpost"}],"page":1,"totalPage":1,"totalItem":1}"#,
+    )]);
+    let result = client_with_token(&server, "jkl")
+        .list_user_images(&RequestContext::new().0, ListUserImagesInput::default())
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}

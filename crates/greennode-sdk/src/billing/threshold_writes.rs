@@ -118,41 +118,43 @@ impl Client {
         ctx: &RequestContext,
         input: CreateBudgetThresholdInput,
     ) -> Result<CreateBudgetThresholdOutput, Failure<CreateBudgetThresholdOutput>> {
-        if input.threshold_type.is_empty() || input.threshold_percentage == 0 {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
-        }
-        let max_alerts = match input.max_alerts_per_period {
-            0 => 1,
-            value => value,
-        };
-        let reminder = match input.reminder_interval_hours {
-            0 => 648,
-            value => value,
-        };
-        let body = json!({
-            "thresholdType": input.threshold_type,
-            "thresholdPercentage": input.threshold_percentage,
-            "comparisonOperator": "GTE",
-            "maxAlertsPerPeriod": max_alerts,
-            "reminderIntervalHours": reminder,
-        });
-        let threshold = self
-            .write(
-                ctx,
-                &Operation {
-                    reflection: crate::wire::product::operation::Reflection::Redact,
-                    ..write_operation(
-                        "billing.CreateBudgetThreshold",
-                        Method::POST,
-                        THRESHOLDS,
-                        false,
-                    )
-                },
-                &[&input.budget_uuid],
-                Some(body),
-            )
-            .await?;
-        Ok(CreateBudgetThresholdOutput { threshold })
+        crate::wire::product::exit::finish!(async {
+            if input.threshold_type.is_empty() || input.threshold_percentage == 0 {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
+            }
+            let max_alerts = match input.max_alerts_per_period {
+                0 => 1,
+                value => value,
+            };
+            let reminder = match input.reminder_interval_hours {
+                0 => 648,
+                value => value,
+            };
+            let body = json!({
+                "thresholdType": input.threshold_type,
+                "thresholdPercentage": input.threshold_percentage,
+                "comparisonOperator": "GTE",
+                "maxAlertsPerPeriod": max_alerts,
+                "reminderIntervalHours": reminder,
+            });
+            let threshold = self
+                .write(
+                    ctx,
+                    &Operation {
+                        reflection: crate::wire::product::operation::Reflection::Redact,
+                        ..write_operation(
+                            "billing.CreateBudgetThreshold",
+                            Method::POST,
+                            THRESHOLDS,
+                            false,
+                        )
+                    },
+                    &[&input.budget_uuid],
+                    Some(body),
+                )
+                .await?;
+            Ok(CreateBudgetThresholdOutput { threshold })
+        })
     }
 
     /// Sends only selected fields, once. A request with no changes fails locally.
@@ -161,42 +163,44 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateBudgetThresholdInput,
     ) -> Result<UpdateBudgetThresholdOutput, Failure<UpdateBudgetThresholdOutput>> {
-        let body: Map<_, _> = [
-            (
-                "thresholdPercentage",
-                input.threshold_percentage.map(Value::from),
-            ),
-            ("enabled", input.enabled.map(Value::from)),
-            (
-                "maxAlertsPerPeriod",
-                input.max_alerts_per_period.map(Value::from),
-            ),
-            (
-                "reminderIntervalHours",
-                input.reminder_interval_hours.map(Value::from),
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
-        .collect();
-        if body.is_empty() {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
-                "greennode: invalid input: billing.UpdateBudgetThreshold requires at least one field to change",
-            )));
-        }
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.UpdateBudgetThreshold",
-                Method::PUT,
-                THRESHOLD,
-                true,
-            ),
-            &[&input.budget_uuid, &input.threshold_uuid],
-            Some(Value::Object(body)),
-        )
-        .await?;
-        Ok(UpdateBudgetThresholdOutput {})
+        crate::wire::product::exit::finish!(async {
+            let body: Map<_, _> = [
+                (
+                    "thresholdPercentage",
+                    input.threshold_percentage.map(Value::from),
+                ),
+                ("enabled", input.enabled.map(Value::from)),
+                (
+                    "maxAlertsPerPeriod",
+                    input.max_alerts_per_period.map(Value::from),
+                ),
+                (
+                    "reminderIntervalHours",
+                    input.reminder_interval_hours.map(Value::from),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
+            .collect();
+            if body.is_empty() {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
+                    "greennode: invalid input: billing.UpdateBudgetThreshold requires at least one field to change",
+                )));
+            }
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.UpdateBudgetThreshold",
+                    Method::PUT,
+                    THRESHOLD,
+                    true,
+                ),
+                &[&input.budget_uuid, &input.threshold_uuid],
+                Some(Value::Object(body)),
+            )
+            .await?;
+            Ok(UpdateBudgetThresholdOutput {})
+        })
     }
 
     /// Deletes the threshold in one request.
@@ -205,18 +209,20 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteBudgetThresholdInput,
     ) -> Result<DeleteBudgetThresholdOutput, Failure<DeleteBudgetThresholdOutput>> {
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.DeleteBudgetThreshold",
-                Method::DELETE,
-                THRESHOLD,
-                true,
-            ),
-            &[&input.budget_uuid, &input.threshold_uuid],
-            None,
-        )
-        .await?;
-        Ok(DeleteBudgetThresholdOutput {})
+        crate::wire::product::exit::finish!(async {
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.DeleteBudgetThreshold",
+                    Method::DELETE,
+                    THRESHOLD,
+                    true,
+                ),
+                &[&input.budget_uuid, &input.threshold_uuid],
+                None,
+            )
+            .await?;
+            Ok(DeleteBudgetThresholdOutput {})
+        })
     }
 }
