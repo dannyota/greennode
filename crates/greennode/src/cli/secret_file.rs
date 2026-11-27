@@ -146,6 +146,7 @@ struct Stage<'a> {
     parent: &'a OwnedFd,
     name: String,
     dir: OwnedFd,
+    opened: rustix::fs::Stat,
     file_created: bool,
 }
 
@@ -184,6 +185,7 @@ impl<'a> Stage<'a> {
             parent,
             name,
             dir,
+            opened: stat,
             file_created: false,
         })
     }
@@ -195,7 +197,13 @@ impl Drop for Stage<'_> {
         if self.file_created {
             let _ = unlinkat(&self.dir, Self::FILE, AtFlags::empty());
         }
-        let _ = unlinkat(self.parent, &self.name, AtFlags::REMOVEDIR);
+        let unchanged =
+            statat(self.parent, &self.name, AtFlags::SYMLINK_NOFOLLOW).is_ok_and(|stat| {
+                stat.st_dev == self.opened.st_dev && stat.st_ino == self.opened.st_ino
+            });
+        if unchanged {
+            let _ = unlinkat(self.parent, &self.name, AtFlags::REMOVEDIR);
+        }
     }
 }
 
@@ -321,6 +329,20 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         drop(stage);
         assert!(std::fs::read(&original).is_ok_and(|bytes| bytes == b"existing file"));
+    }
+
+    #[test]
+    fn refuses_to_remove_a_replaced_staging_directory() {
+        let dir = TempDir::new();
+        let destination = Destination::check(&dir.0.join("output")).unwrap();
+        let stage = Stage::new(&destination.parent).unwrap();
+        let staged = dir.0.join(&stage.name);
+        let moved = dir.0.join("moved");
+        std::fs::rename(&staged, &moved).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        drop(stage);
+        assert!(staged.is_dir());
+        assert!(moved.is_dir());
     }
 
     #[test]

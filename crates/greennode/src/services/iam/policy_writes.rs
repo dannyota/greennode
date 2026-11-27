@@ -8,7 +8,7 @@ use serde_json::{Value, value::RawValue};
 
 use super::*;
 use crate::cli::dispatch::LocalError;
-use crate::cli::input::JsonChecks;
+use crate::cli::input::{JsonChecks, document_text};
 use crate::cli::render::decode_string;
 
 const DOCUMENT_FILE: Field = flag("document-file", "string", false);
@@ -284,45 +284,6 @@ fn read_document(path: &str) -> Result<Vec<sdk::Statement>, LocalError> {
     fields
         .get("statements")
         .map_or_else(|| Ok(Vec::new()), |raw| statements(raw).map_err(invalid))
-}
-
-fn document_text(bytes: &[u8]) -> Result<String, ()> {
-    let mut text = String::new();
-    for chunk in bytes.utf8_chunks() {
-        text.push_str(chunk.valid());
-        text.extend(std::iter::repeat_n(
-            char::REPLACEMENT_CHARACTER,
-            chunk.invalid().len(),
-        ));
-    }
-    let mut normalized = String::new();
-    let mut copied = 0;
-    let mut quoted = None;
-    let mut escaped = false;
-    for (index, byte) in text.bytes().enumerate() {
-        if escaped {
-            escaped = false;
-        } else if quoted.is_some() && byte == b'\\' {
-            escaped = true;
-        } else if byte == b'"' {
-            if let Some(start) = quoted.take() {
-                let raw = text.get(start..=index).ok_or(())?;
-                if raw.contains("\\u") {
-                    let value = decode_string(raw).map_err(|_| ())?;
-                    normalized.push_str(text.get(copied..start).ok_or(())?);
-                    normalized.push_str(&serde_json::to_string(&value).map_err(|_| ())?);
-                    copied = index + 1;
-                }
-            } else {
-                quoted = Some(index);
-            }
-        }
-    }
-    if copied == 0 {
-        return Ok(text);
-    }
-    normalized.push_str(text.get(copied..).ok_or(())?);
-    Ok(normalized)
 }
 
 #[cfg(unix)]

@@ -381,6 +381,19 @@ async fn history_refuses_numeric_tokens_and_credential_key_text() {
 }
 
 #[tokio::test]
+async fn history_redacts_superscript_credential_key_text() {
+    let (ctx, _) = RequestContext::new();
+    let row = payment_row(1, "prefix CLIE²NT_SECRET: synthetic-peer-canary");
+    let body = page_body(1, 1, &row);
+    let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+    let output = client(&server, BEARER)
+        .list_payments(&ctx, payments())
+        .await
+        .unwrap();
+    assert!(output.items[0].description.as_deref() == Some("[redacted]"));
+}
+
+#[tokio::test]
 async fn resources_refuse_conflicting_field_casing_and_credential_reflections() {
     for item in [
         r#"{"artifactId":"ordinary","ArtifactId":"synthetic-conflict"}"#,

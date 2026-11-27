@@ -186,19 +186,32 @@ are not known safe; use status fallback and fixed diagnostics. Even a field that
 looks like an identifier can be a reflected credential. When any credential was
 sent, keep only `code` and `message`, and withhold a message with non-ASCII
 text, a credential field marker or a sent credential in any encoding; this is
-stricter than Go, which case-folds Unicode. Withhold any peer `code` or
-`message` containing `/`, `\`, `@`, `www.` in any case, or a colon followed by
-anything but whitespace or the end; this closed rule stands in for URL
-detection. Never expose raw headers, response bodies, unbounded peer text, URLs,
-or decode errors via an error source, capture, or debug event. Keep per-attempt
-credentials available only within the logical request for reflection checks,
-including across retries.
+stricter than Go, which case-folds Unicode. "Any encoding" means the literal,
+percent and JSON-escape forms anywhere at any length, and Base64, Base64URL and
+lowercase-compared hex forms by these rules: a whole encoding of eight or more
+characters, a stable fragment of seven or more (the part of the encoding that
+does not depend on neighbouring bytes, at each of the three alignments), and a
+hex form of seven or more match anywhere; a shorter whole encoding matches only
+when bounded, that is when neither neighbour is an ASCII letter or digit, nor
+`+` or `/` for Base64, nor `-` or `_` for Base64URL. Identifier checks match
+every form anywhere. Withhold any peer `code` or `message` containing `/`, `\`,
+`@`, `www.` in any case, or a colon followed by anything but whitespace or the
+end; this closed rule stands in for URL detection. Never expose raw headers,
+response bodies, unbounded peer text, URLs, or decode errors via an error
+source, capture, or debug event. Keep per-attempt credentials available only
+within the logical request for reflection checks, including across retries.
 
 Success bodies are checked against the operation's output schema before
 decoding: object or array shape at every node, duplicate keys, and keys that
-fold to the same field. Unlike Go, which matches keys to fields
-case-insensitively, decoding is case-sensitive, so a key that differs only in
-case is ignored.
+fold to the same field. A case variant is a key that differs from a known field
+name but equals it under this fold (ASCII case, plus U+017F to `s` and U+212A to
+`k`, as Go folds). Unlike Go, which matches keys to fields case-insensitively,
+decoding is case-sensitive, so on output reads a lone case variant is ignored.
+Guard and safety reads, whose values decide whether a write is sent or a refusal
+is reported, refuse it, because ignoring it could hide a value Go would act on.
+Where Go itself refuses any lone case variant, as the network NAT family's
+field-name check does, refuse it too. A refused case variant is
+`InvalidResponse`.
 
 ### Signed S3
 

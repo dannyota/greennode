@@ -82,7 +82,9 @@ character with `char::to_lowercase` and retain only ASCII letters and digits for
 matching. Keep the original key. Replace sensitive-key values with `<redacted>`;
 recurse through other values, arrays and objects. This drops non-ASCII
 characters Go keeps and can mask additional keys. Do not add a Unicode data
-dependency. Use the baseline's sensitive-name match list.
+dependency. Use the baseline's sensitive-name match list. The SDK's
+credential-marker checks use the same normalization: peer error text, quote line
+names and billing history text.
 
 Requested resource data is not the CLI's own credential material. Keep the
 baseline behavior for the following typed fields; do not run the dynamic-map

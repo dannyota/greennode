@@ -1,5 +1,6 @@
 mod encoded;
 mod full_error;
+mod marker;
 
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
@@ -7,6 +8,7 @@ use encoded::{Base64Alphabet, EncodedNeedle};
 use full_error::full_error;
 pub(crate) use full_error::inspect_error_message;
 use http::StatusCode;
+pub(crate) use marker::has_credential_marker;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
@@ -191,6 +193,7 @@ fn matches_credential_forms(
                     &mut encoded_needles,
                     Zeroizing::new(encoding.encode(value.as_bytes())),
                     alphabet,
+                    false,
                 );
             }
         }
@@ -208,7 +211,7 @@ fn matches_credential_forms(
                 aligned.extend_from_slice(part.as_bytes());
                 let start = (offset * 8).div_ceil(6);
                 let end = offset.saturating_add(part.len()).saturating_mul(8) / 6;
-                if end.saturating_sub(start) >= 8 {
+                if end.saturating_sub(start) >= encoded::STABLE_FLOOR {
                     for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
                         let encoded = Zeroizing::new(encoding.encode(&aligned));
                         if let Some(stable) = encoded.get(start..end) {
@@ -216,6 +219,7 @@ fn matches_credential_forms(
                                 &mut encoded_needles,
                                 Zeroizing::new(stable.to_owned()),
                                 Base64Alphabet::Both,
+                                true,
                             );
                         }
                     }
@@ -310,22 +314,13 @@ fn matches_forms(
         let lower = Zeroizing::new(input.to_ascii_lowercase());
         for index in 0..state.hex_needles.len() {
             if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
-                || encoded::contains_hex(&lower, &state.hex_needles[index])
+                || encoded::contains_hex(&lower, &state.hex_needles[index], state.strict_base64)
             {
                 return true;
             }
         }
-        if state.error_text {
-            let normalized = Zeroizing::new(
-                lower
-                    .iter()
-                    .copied()
-                    .filter(u8::is_ascii_alphanumeric)
-                    .collect::<Vec<_>>(),
-            );
-            if std::str::from_utf8(&normalized).is_ok_and(|text| text.contains("clientsecret")) {
-                return true;
-            }
+        if state.error_text && marker::has_credential_marker_bytes(input) {
+            return true;
         }
         if !needles.is_empty() {
             if state.error_text && std::str::from_utf8(&lower).is_err() {
@@ -1162,10 +1157,68 @@ mod tests {
     }
 
     #[test]
-    fn short_hex_credential_matches_only_as_the_whole_value() {
+    fn short_hex_credential_matches_between_token_boundaries() {
         let credentials = SentCredentials::for_test(vec![crate::Secret::new("jkl")]);
         assert!(reflects_credential("6A6b6C", &credentials));
-        assert!(!reflects_credential("prefix-6A6b6C-suffix", &credentials));
+        assert!(reflects_credential("id=6A6b6C;", &credentials));
+        assert!(reflects_credential("prefix-6A6b6C-suffix", &credentials));
+        assert!(!reflects_credential("prefix6A6b6Csuffix", &credentials));
+        assert!(!reflects_credential("1236A6b6C9", &credentials));
+    }
+
+    #[test]
+    fn padded_whole_value_base64_of_a_short_credential_matches_anywhere() {
+        for secret in ["abcde", "abcd"] {
+            let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+            let whole = data_encoding::BASE64.encode(secret.as_bytes());
+            let embedded = data_encoding::BASE64.encode(format!("xyz{secret}").as_bytes());
+            assert!(embedded.contains(&whole));
+            assert!(reflects_credential(
+                &format!("data {embedded} end"),
+                &credentials
+            ));
+        }
+    }
+
+    #[test]
+    fn dotted_capital_i_client_secret_marker_is_withheld_from_error_text() {
+        let credentials = SentCredentials::default();
+        assert!(reflects_credential_forms(
+            "CL\u{130}ENT_SECRET: x",
+            &credentials
+        ));
+        assert!(reflects_credential_forms(
+            "CLIE\u{b2}NT_SECRET: x",
+            &credentials
+        ));
+        assert!(!reflects_credential_forms("client id", &credentials));
+    }
+
+    #[test]
+    fn identifier_checks_match_short_hex_anywhere() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("jkl")]);
+        assert!(reflects_identifier("prefix6A6b6Csuffix", &credentials));
+        assert!(!reflects_credential("prefix6A6b6Csuffix", &credentials));
+    }
+
+    #[test]
+    fn six_byte_code_is_withheld_at_each_base64_alignment() {
+        let secret = "483920";
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+        for encoding in [data_encoding::BASE64_NOPAD, data_encoding::BASE64URL_NOPAD] {
+            for prefix in ["", "x", "xx"] {
+                let encoded = encoding.encode(format!("{prefix}{secret}").as_bytes());
+                assert!(reflects_credential(
+                    &format!("token={encoded};"),
+                    &credentials
+                ));
+                let embedded = encoding.encode(format!("{prefix}{secret}suffix").as_bytes());
+                assert!(reflects_credential(
+                    &format!("token={embedded};"),
+                    &credentials
+                ));
+            }
+        }
     }
 
     #[test]
