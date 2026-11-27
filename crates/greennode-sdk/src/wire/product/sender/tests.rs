@@ -28,8 +28,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::OffsetDateTime;
-mod empty_bearer;
 mod attempt_check;
+mod empty_bearer;
 mod evidence;
 mod pooling;
 mod reflection;
