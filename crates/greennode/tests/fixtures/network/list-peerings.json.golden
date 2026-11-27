@@ -1,0 +1,20 @@
+{
+  "Items": [
+    {
+      "UUID": "peer-1",
+      "Name": "\u003cname\u003e",
+      "Status": "ACTIVE",
+      "FromVPCID": "vpc-1",
+      "FromVPCUUID": "",
+      "FromCIDR": "\u003ccidr\u003e",
+      "EndVPCID": "vpc-2",
+      "EndVPCUUID": "",
+      "EndCIDR": "\u003ccidr\u003e",
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

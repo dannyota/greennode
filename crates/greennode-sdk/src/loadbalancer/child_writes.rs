@@ -51,6 +51,7 @@ pub(super) struct ChildWriter<'a> {
     pub(super) operation: &'static str,
     pub(super) lb_id: &'a str,
     pub(super) evidence: Evidence,
+    pub(super) report_redirect: bool,
 }
 
 pub(super) struct Ready {
@@ -83,6 +84,7 @@ impl<'a> ChildWriter<'a> {
             operation,
             lb_id,
             evidence,
+            report_redirect: false,
         })
     }
 
@@ -283,7 +285,10 @@ impl<'a> ChildWriter<'a> {
             runtime,
             base,
             &op,
-            &Options::DEFAULT,
+            &Options {
+                report_redirect: self.report_redirect,
+                ..Options::DEFAULT
+            },
             &path,
             &[],
             RouteAuth::Bearer(session.bearer_source()),

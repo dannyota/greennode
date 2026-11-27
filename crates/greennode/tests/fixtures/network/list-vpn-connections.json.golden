@@ -1,0 +1,324 @@
+{
+  "Items": [
+    {
+      "UUID": "vpn-example",
+      "VPNName": "vpn-example",
+      "PackageUUID": "package-example",
+      "LocalNetworkCIDR": "192.0.2.0/24",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "Status": "ACTIVE",
+      "BillingStatus": "active",
+      "ZoneUUID": "zone-example",
+      "LocalGatewayIP": "192.0.2.10",
+      "VPNGatewayIP": "198.51.100.10",
+      "SubnetDetailModel": {
+        "UUID": "subnet-example",
+        "Name": "subnet-example",
+        "Status": "ACTIVE",
+        "CIDR": "192.0.2.0/24",
+        "SubnetType": "example",
+        "UpdatedAt": "2026-01-02T00:00:00Z",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "ZoneID": "zone-example"
+      },
+      "VPCDetailModel": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "192.0.2.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      },
+      "ProjectDetailModel": {
+        "ID": "project-1",
+        "BackendProjectID": "backend-example",
+        "VServerProjectID": "vserver-example"
+      },
+      "PackageModel": {
+        "UUID": "package-example",
+        "Name": "package-example",
+        "PackageID": "vpn-package-example",
+        "TunnelLimit": 3,
+        "Default": true
+      },
+      "VPNSites": [
+        {
+          "RemoteGatewayIP": "203.0.113.10",
+          "UUID": "site-example",
+          "Status": "ACTIVE",
+          "SiteName": "site-example",
+          "CreatedAt": "2026-01-01T00:00:00Z",
+          "Phase1Configs": [
+            {
+              "Phase1Algorithm": "algorithm-example",
+              "Phase1Hash": "hash-example",
+              "Phase1DHGroup": "group-example",
+              "Phase1IKELifetime": "12345"
+            }
+          ],
+          "Tunnels": [
+            {
+              "SiteUUID": "site-example",
+              "TunnelName": "tunnel-example",
+              "RemoteNetworkCIDR": "203.0.113.0/24",
+              "UUID": "tunnel-example",
+              "Status": "ACTIVE",
+              "CreatedAt": "2026-01-01T00:00:00Z",
+              "Phase2Configs": [
+                {
+                  "Phase2Algorithm": "algorithm-example",
+                  "Phase2Hash": "hash-example",
+                  "Phase2DHGroup": "group-example",
+                  "Phase2IKELifetime": "67890"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "UUID": "vpn-provisioning",
+      "VPNName": "vpn-example",
+      "PackageUUID": "package-example",
+      "LocalNetworkCIDR": "192.0.2.0/24",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "Status": "PROVISIONING",
+      "BillingStatus": "active",
+      "ZoneUUID": "zone-example",
+      "LocalGatewayIP": null,
+      "VPNGatewayIP": null,
+      "SubnetDetailModel": {
+        "UUID": "subnet-example",
+        "Name": "subnet-example",
+        "Status": "ACTIVE",
+        "CIDR": "192.0.2.0/24",
+        "SubnetType": "example",
+        "UpdatedAt": "2026-01-02T00:00:00Z",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "ZoneID": "zone-example"
+      },
+      "VPCDetailModel": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "192.0.2.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      },
+      "ProjectDetailModel": {
+        "ID": "project-1",
+        "BackendProjectID": "backend-example",
+        "VServerProjectID": "vserver-example"
+      },
+      "PackageModel": {
+        "UUID": "package-example",
+        "Name": "package-example",
+        "PackageID": "vpn-package-example",
+        "TunnelLimit": 3,
+        "Default": true
+      },
+      "VPNSites": [
+        {
+          "RemoteGatewayIP": "203.0.113.10",
+          "UUID": "site-example",
+          "Status": "ACTIVE",
+          "SiteName": "site-example",
+          "CreatedAt": "2026-01-01T00:00:00Z",
+          "Phase1Configs": [
+            {
+              "Phase1Algorithm": "algorithm-example",
+              "Phase1Hash": "hash-example",
+              "Phase1DHGroup": "group-example",
+              "Phase1IKELifetime": "12345"
+            }
+          ],
+          "Tunnels": [
+            {
+              "SiteUUID": "site-example",
+              "TunnelName": "tunnel-example",
+              "RemoteNetworkCIDR": "203.0.113.0/24",
+              "UUID": "tunnel-example",
+              "Status": "ACTIVE",
+              "CreatedAt": "2026-01-01T00:00:00Z",
+              "Phase2Configs": [
+                {
+                  "Phase2Algorithm": "algorithm-example",
+                  "Phase2Hash": "hash-example",
+                  "Phase2DHGroup": "group-example",
+                  "Phase2IKELifetime": "67890"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "UUID": "vpn-error",
+      "VPNName": "vpn-example",
+      "PackageUUID": "package-example",
+      "LocalNetworkCIDR": "192.0.2.0/24",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "Status": "ERROR",
+      "BillingStatus": "active",
+      "ZoneUUID": "zone-example",
+      "LocalGatewayIP": null,
+      "VPNGatewayIP": null,
+      "SubnetDetailModel": {
+        "UUID": "subnet-example",
+        "Name": "subnet-example",
+        "Status": "ACTIVE",
+        "CIDR": "192.0.2.0/24",
+        "SubnetType": "example",
+        "UpdatedAt": "2026-01-02T00:00:00Z",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "ZoneID": "zone-example"
+      },
+      "VPCDetailModel": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "192.0.2.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      },
+      "ProjectDetailModel": {
+        "ID": "project-1",
+        "BackendProjectID": "backend-example",
+        "VServerProjectID": "vserver-example"
+      },
+      "PackageModel": {
+        "UUID": "package-example",
+        "Name": "package-example",
+        "PackageID": "vpn-package-example",
+        "TunnelLimit": 3,
+        "Default": true
+      },
+      "VPNSites": [
+        {
+          "RemoteGatewayIP": "203.0.113.10",
+          "UUID": "site-example",
+          "Status": "ACTIVE",
+          "SiteName": "site-example",
+          "CreatedAt": "2026-01-01T00:00:00Z",
+          "Phase1Configs": [
+            {
+              "Phase1Algorithm": "algorithm-example",
+              "Phase1Hash": "hash-example",
+              "Phase1DHGroup": "group-example",
+              "Phase1IKELifetime": "12345"
+            }
+          ],
+          "Tunnels": [
+            {
+              "SiteUUID": "site-example",
+              "TunnelName": "tunnel-example",
+              "RemoteNetworkCIDR": "203.0.113.0/24",
+              "UUID": "tunnel-example",
+              "Status": "ACTIVE",
+              "CreatedAt": "2026-01-01T00:00:00Z",
+              "Phase2Configs": [
+                {
+                  "Phase2Algorithm": "algorithm-example",
+                  "Phase2Hash": "hash-example",
+                  "Phase2DHGroup": "group-example",
+                  "Phase2IKELifetime": "67890"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "UUID": "vpn-future_status",
+      "VPNName": "vpn-example",
+      "PackageUUID": "package-example",
+      "LocalNetworkCIDR": "192.0.2.0/24",
+      "CreatedAt": "2026-01-01T00:00:00Z",
+      "Status": "FUTURE_STATUS",
+      "BillingStatus": "active",
+      "ZoneUUID": "zone-example",
+      "LocalGatewayIP": "",
+      "VPNGatewayIP": null,
+      "SubnetDetailModel": {
+        "UUID": "subnet-example",
+        "Name": "subnet-example",
+        "Status": "ACTIVE",
+        "CIDR": "192.0.2.0/24",
+        "SubnetType": "example",
+        "UpdatedAt": "2026-01-02T00:00:00Z",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "ZoneID": "zone-example"
+      },
+      "VPCDetailModel": {
+        "UUID": "vpc-example",
+        "Name": "vpc-example",
+        "CIDR": "192.0.2.0/24",
+        "Status": "ACTIVE",
+        "RegionID": "region-example",
+        "ProjectID": "project-1",
+        "LastSyncTime": "2026-01-02T00:00:00Z",
+        "DNSStatus": "ENABLED"
+      },
+      "ProjectDetailModel": {
+        "ID": "project-1",
+        "BackendProjectID": "backend-example",
+        "VServerProjectID": "vserver-example"
+      },
+      "PackageModel": {
+        "UUID": "package-example",
+        "Name": "package-example",
+        "PackageID": "vpn-package-example",
+        "TunnelLimit": 3,
+        "Default": true
+      },
+      "VPNSites": [
+        {
+          "RemoteGatewayIP": "203.0.113.10",
+          "UUID": "site-example",
+          "Status": "ACTIVE",
+          "SiteName": "site-example",
+          "CreatedAt": "2026-01-01T00:00:00Z",
+          "Phase1Configs": [
+            {
+              "Phase1Algorithm": "algorithm-example",
+              "Phase1Hash": "hash-example",
+              "Phase1DHGroup": "group-example",
+              "Phase1IKELifetime": "12345"
+            }
+          ],
+          "Tunnels": [
+            {
+              "SiteUUID": "site-example",
+              "TunnelName": "tunnel-example",
+              "RemoteNetworkCIDR": "203.0.113.0/24",
+              "UUID": "tunnel-example",
+              "Status": "ACTIVE",
+              "CreatedAt": "2026-01-01T00:00:00Z",
+              "Phase2Configs": [
+                {
+                  "Phase2Algorithm": "algorithm-example",
+                  "Phase2Hash": "hash-example",
+                  "Phase2DHGroup": "group-example",
+                  "Phase2IKELifetime": "67890"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 7,
+  "TotalItem": 63
+}

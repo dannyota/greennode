@@ -1,0 +1,12 @@
+{
+  "Items": [
+    {
+      "RouteTableID": "rt-1",
+      "UUID": "route-1",
+      "RoutingType": "internet",
+      "DestinationCIDRBlock": "\u003ccidr\u003e",
+      "Target": "igw-1",
+      "Status": "ACTIVE"
+    }
+  ]
+}

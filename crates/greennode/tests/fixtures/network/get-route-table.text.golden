@@ -1,0 +1,1 @@
+{"CreatedAt":"2026-01-01T00:00:00Z","Name":"\u003cname\u003e","NetworkID":"vpc-1","Routes":[{"DestinationCIDRBlock":"\u003ccidr\u003e","RouteTableID":"rt-2","RoutingType":"internet","Status":"ACTIVE","Target":"\u003cip\u003e","UUID":"route-1"}],"Status":"ACTIVE","UUID":"rt-2"}

@@ -377,6 +377,19 @@ impl<'a> Fields<'a> {
         Ok(self.0.get(name).copied())
     }
 
+    pub(super) fn output_raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {
+        let variants = self
+            .0
+            .keys()
+            .filter(|key| key.as_str() != name && field_matches(key, name))
+            .count();
+        let exact = self.0.get(name).copied();
+        if variants > 1 || (variants == 1 && exact.is_some()) {
+            return Err(());
+        }
+        Ok(exact)
+    }
+
     pub(super) fn required<T: Deserialize<'a>>(&self, name: &str) -> Result<T, ()> {
         serde_json::from_str(self.raw(name)?.ok_or(())?.get()).map_err(|_| ())
     }

@@ -226,6 +226,7 @@ impl Client {
         ];
         let mut write = ChildWriter::new(self, ctx, operation, selection.load_balancer, &ids)
             .map_err(not_sent)?;
+        write.report_redirect = true;
         encode_body(input, &write.evidence).map_err(not_sent)?;
         selection.validate(operation).map_err(not_sent)?;
         mutation.validate(operation).map_err(not_sent)?;

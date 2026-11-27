@@ -157,6 +157,7 @@ async fn provider_error_text_is_not_exposed() {
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::MayHaveBeenSent,
         credentials: SentCredentials::default(),
+        refused_body: Vec::new(),
     };
     let sdk: crate::Failure<()> = failure.into_failure(SdkError::provider_failed());
     assert!(sdk.error().api_error().is_none());
@@ -185,6 +186,7 @@ fn status_detail_preserves_identity_and_api_error() {
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::NotSent,
         credentials: SentCredentials::default(),
+        refused_body: Vec::new(),
     };
     let sdk: crate::Failure<()> = failure.into_failure(mapped);
     assert!(!sdk.error().has_identity(crate::ErrorClass::Auth));

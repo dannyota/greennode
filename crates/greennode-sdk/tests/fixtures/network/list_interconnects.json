@@ -1,0 +1,19 @@
+{
+  "listData": [
+    {
+      "uuid": "link_1",
+      "name": "link",
+      "status": "ACTIVE",
+      "circuitId": {
+        "number": 42,
+        "zone": "zone-1"
+      },
+      "enableGw2": true,
+      "gw01Ip": "192.0.2.8"
+    }
+  ],
+  "page": 2,
+  "pageSize": 5,
+  "totalPage": 2,
+  "totalItem": 6
+}
