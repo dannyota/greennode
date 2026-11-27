@@ -21,6 +21,56 @@ macro_rules! golden {
     };
 }
 #[test]
+fn invalid_history_range_exits_two_without_request() {
+    let server = Server::start(vec![]);
+    let (status, _, _) = invoke(
+        &[
+            "list-check-alarm-history",
+            "--check-id",
+            "chk-1",
+            "--start",
+            "2000-01-01 00:00:00Z",
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn synthetic_usage_descriptions_keep_typed_values() {
+    let usage = fixture!("remaining_synthetic_usage").replace(
+        "\"api\": {\n      \"name\"",
+        "\"authorization\": {\n      \"name\"",
+    );
+    let server = Server::start(vec![response(&usage)]);
+    let (status, stdout, _) = invoke(&["get-synthetic-quota-usage", "--output", "json"], &server);
+    assert_eq!(status, ExitCode::SUCCESS);
+    let value: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(
+        value["Usage"]["Descriptions"]["authorization"]["Name"],
+        "API"
+    );
+}
+
+#[test]
+fn check_request_maps_keep_typed_values() {
+    let check = fixture!("remaining_check")
+        .replace("\"X-Value\": \"one\"", "\"Authorization\": \"safe-value\"");
+    let server = Server::start(vec![response(&check)]);
+    let (status, stdout, _) = invoke(
+        &["get-check", "--check-id", "chk-1", "--output", "json"],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let value: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(
+        value["Check"]["Config"]["Request"]["Headers"]["Authorization"],
+        "safe-value"
+    );
+}
+
+#[test]
 fn remaining_reads_match_go() {
     let mut mismatches = Vec::new();
     for (operation, flags, bodies, goldens) in [

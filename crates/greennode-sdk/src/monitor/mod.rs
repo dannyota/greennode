@@ -14,6 +14,7 @@ mod history;
 mod inventory;
 mod log_projects;
 mod quota;
+mod raw_json;
 mod response_times;
 mod wire;
 
@@ -93,5 +94,22 @@ impl<T: WireField> WireField for ResponseField<T> {
             *self = Self::Redacted;
         }
         !matches!(self, Self::Redacted) || !evidence.text_reflects("<redacted>")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResponseField;
+    use crate::Secret;
+    use crate::model::wire::WireField;
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn numeric_response_redacts_encoded_credential() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("abc"));
+        let mut field = ResponseField::Value(616263_i64);
+        assert!(field.redact(&evidence));
+        assert_eq!(field, ResponseField::Redacted);
     }
 }

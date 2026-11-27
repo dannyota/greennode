@@ -1,7 +1,7 @@
 use super::wire::{Family, Read};
 use crate::model::wire::{Field, WireField, decode_lenient};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
-use crate::wire::strict_json::{Shape, ShapeField, validate_shape};
+use crate::wire::strict_json::{Shape, ShapeField, validate_exact_shape};
 use crate::{Error, PagedList};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
@@ -28,7 +28,7 @@ pub(super) fn output<T: DeserializeOwned>(
     read: &Read,
     evidence: &Evidence,
 ) -> Result<T, Error> {
-    validate_shape(raw.get().as_bytes(), shape, raw.get().len())
+    validate_exact_shape(raw.get().as_bytes(), shape, raw.get().len())
         .map_err(|_| read.invalid(evidence))?;
     decode_lenient(|| serde_json::from_str(raw.get())).map_err(|error: serde_json::Error| {
         if error.to_string().starts_with("duplicate response field") {
@@ -37,7 +37,7 @@ pub(super) fn output<T: DeserializeOwned>(
         read.error(
             None,
             "",
-            "response failed to decode; body withheld",
+            &format!("{}: request failed: response failed to decode", read.id),
             false,
             evidence,
         )

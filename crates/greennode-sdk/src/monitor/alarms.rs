@@ -1,12 +1,12 @@
 use super::inventory::{PAGE, Page, get_input, id, output, page_values, plain, strict};
 use super::wire::{check_path_id, failure, requires_failure};
 use super::{Client, ResponseField};
-use crate::model::wire::{Field, WireField, model};
+use crate::model::wire::{WireField, model};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Failure, PagedList, RequestContext};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Value, value::RawValue};
+use serde_json::value::RawValue;
 
 const GET: super::wire::Read = plain("monitor.GetAlarm", "vmonitor-api/api/v1/alarms/{}");
 const LIST: super::wire::Read = strict("monitor.ListAlarms", "vmonitor-api/api/v1/alarms/list");
@@ -151,22 +151,22 @@ impl PartialEq for AlarmFilter {
 }
 impl Serialize for AlarmFilter {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(serializer)
+        match &self.0 {
+            Some(value) => value.serialize(serializer),
+            None => Vec::<()>::new().serialize(serializer),
+        }
     }
 }
 impl WireField for AlarmFilter {
     fn redact(&mut self, evidence: &Evidence) -> bool {
         let Some(raw) = self.0.as_ref() else {
-            return !evidence.text_reflects("null");
+            return !evidence.text_reflects("[]");
         };
-        let Ok(Field(mut value)) = serde_json::from_str::<Field<Value>>(raw.get()) else {
+        let Some(clean) = super::raw_json::redact(raw.get(), evidence) else {
             return false;
         };
-        if evidence.reflected_in(&value) {
-            if !value.redact(evidence) {
-                return false;
-            }
-            let Ok(safe) = serde_json::value::to_raw_value(&value) else {
+        if clean != raw.get() {
+            let Ok(safe) = RawValue::from_string(clean) else {
                 return false;
             };
             self.0 = Some(safe);
@@ -207,10 +207,7 @@ impl<'de> Deserialize<'de> for FlexibleNumber {
             raw.get()
         };
         Ok(Self(
-            text.parse::<f64>()
-                .ok()
-                .filter(|n| n.is_finite())
-                .unwrap_or_default(),
+            crate::go_float::parse_go_float(text).unwrap_or_default(),
         ))
     }
 }
@@ -238,6 +235,7 @@ model! { struct LogWire {
     project: ScalarText => "logProject", "LogProjectID";
     name: String => "logProjectName", "LogProjectName";
     query: String => "queryString", "QueryString";
+    _search_query: String => "logSearchQuery", "LogSearchQuery";
     filter: AlarmFilter => "filter", "Filter";
     threshold_type: String => "thresholdType", "ThresholdType";
     condition: String => "condition", "Condition";
@@ -363,7 +361,8 @@ impl LogAlarmDetail {
             .into_iter()
             .all(|value| value.redact(evidence))
             && self.filter.redact(evidence)
-            && self.threshold_value.redact(evidence)
+            && (matches!(self.threshold_value, ResponseField::Value(value) if !value.is_finite())
+                || self.threshold_value.redact(evidence))
             && self.time_frame.redact(evidence)
             && self.resend.enabled.redact(evidence)
             && self.resend.statuses.redact(evidence)
@@ -386,7 +385,9 @@ impl Client {
             .await
             .map_err(failure)?;
         let mut envelope: AlarmEnvelope =
-            output(&raw, &ENVELOPE, &GET, &evidence).map_err(failure)?;
+            output::<Option<AlarmEnvelope>>(&raw, &ENVELOPE, &GET, &evidence)
+                .map_err(failure)?
+                .unwrap_or_default();
         if !envelope.data.redact(&evidence) {
             return Err(failure(GET.invalid(&evidence)));
         }
@@ -431,5 +432,87 @@ impl Client {
             }
         }
         Ok(page)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Alarm, AlarmFilter, FlexibleNumber};
+    use crate::Secret;
+    use crate::model::wire::WireField;
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn filter_redacts_string_without_changing_number_spellings() {
+        let raw = r#"{"z":1e5, "s":"secret-token", "a":0.10}"#;
+        let mut filter: AlarmFilter = serde_json::from_str(raw).unwrap();
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("secret-token"));
+        assert!(filter.redact(&evidence));
+        assert_eq!(
+            filter.0.unwrap().get(),
+            r#"{"z":1e5, "s":"<redacted>", "a":0.10}"#
+        );
+    }
+
+    #[test]
+    fn filter_redacts_raw_numbers_without_changing_other_bytes() {
+        let raw = r#"{"z":100000000000000000000000000000, "a":12345, "b":1e+30}"#;
+        let mut filter: AlarmFilter = serde_json::from_str(raw).unwrap();
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("12345"));
+        assert!(filter.redact(&evidence));
+        assert_eq!(
+            filter.0.unwrap().get(),
+            r#"{"z":100000000000000000000000000000, "a":"<redacted>", "b":1e+30}"#
+        );
+    }
+
+    #[test]
+    fn log_search_query_is_checked_for_type_and_alias_collisions() {
+        assert!(serde_json::from_str::<Alarm>(r#"{"alarmLog":{"logSearchQuery":42}}"#).is_err());
+        assert!(
+            serde_json::from_str::<Alarm>(
+                r#"{"alarmLog":{"logSearchQuery":"a","LogSearchQuery":"b"}}"#
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_str::<Alarm>(r#"{"alarmLog":{"logSearchQuery":"safe"}}"#).is_ok());
+    }
+
+    #[test]
+    fn threshold_numbers_follow_go_float_parsing() {
+        assert_eq!(
+            serde_json::from_str::<FlexibleNumber>(r#""0x1.8p2""#)
+                .unwrap()
+                .0,
+            6.0
+        );
+        assert!(
+            serde_json::from_str::<FlexibleNumber>(r#""NaN""#)
+                .unwrap()
+                .0
+                .is_nan()
+        );
+        assert!(
+            serde_json::from_str::<FlexibleNumber>(r#""+Inf""#)
+                .unwrap()
+                .0
+                .is_infinite()
+        );
+        assert_eq!(
+            serde_json::from_str::<FlexibleNumber>(r#""1e999""#)
+                .unwrap()
+                .0,
+            0.0
+        );
+    }
+
+    #[test]
+    fn omitted_filter_serializes_as_empty_array() {
+        assert_eq!(
+            serde_json::to_string(&AlarmFilter::default()).unwrap(),
+            "[]"
+        );
     }
 }

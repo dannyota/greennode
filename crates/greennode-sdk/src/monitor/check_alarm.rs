@@ -267,7 +267,8 @@ fn project_location(wire: Location, evidence: &Evidence) -> Option<CheckLocation
     } = metrics.next()?.dimensions;
     let mut state = wire.state;
     if !safe_id(&wire.id, evidence)
-        || !safe_id(&location_id, evidence)
+        || !PathIds::WithUnderscore.allows(&location_id)
+        || evidence.id_reflects(&location_id)
         || location_name.is_empty()
         || state.is_empty()
         || metrics.any(|metric| {
@@ -290,8 +291,16 @@ fn project_location(wire: Location, evidence: &Evidence) -> Option<CheckLocation
     })
 }
 
+pub(super) fn parse_timestamp(text: &str) -> Option<OffsetDateTime> {
+    let bytes = text.as_bytes();
+    if bytes.get(10) != Some(&b'T') || bytes.get(17..19) == Some(b"60") {
+        return None;
+    }
+    OffsetDateTime::parse(&text.replace(',', "."), &Rfc3339).ok()
+}
+
 pub(super) fn timestamp(text: &str, evidence: &Evidence) -> Option<OffsetDateTime> {
-    let value = OffsetDateTime::parse(text, &Rfc3339).ok()?;
+    let value = parse_timestamp(text)?;
     (value != QuotaTimestamp::default().0
         && !evidence.text_reflects(text)
         && safe_time(value, evidence))

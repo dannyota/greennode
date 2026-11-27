@@ -216,7 +216,7 @@ pub(super) const QUOTE_CREATE_LOG_PROJECT: Operation = read!(
     ],
     "quote-create-log-project --name <name>",
     [MAX_PRICE, NO_WAIT],
-    QUOTE_INPUT_CHECKS
+    LOG_QUOTE_INPUT_CHECKS
 );
 pub(super) const GET_QUOTA_USAGE: Operation = read!(
     "get-quota-usage",

@@ -169,7 +169,12 @@ const QUOTE_INPUT_CHECKS: JsonChecks = JsonChecks {
     read_error: |error| error,
 };
 
-fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
+const LOG_QUOTE_INPUT_CHECKS: JsonChecks = JsonChecks {
+    validate: check_log_quote_json,
+    read_error: |error| error,
+};
+
+fn check_log_quote_json(bytes: &[u8]) -> Result<(), InputError> {
     #[derive(serde::Deserialize)]
     struct Fields {
         #[serde(rename = "Name")]
@@ -182,7 +187,15 @@ fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
         _retention_days: Option<i64>,
         #[serde(rename = "GBPerDay")]
         _gb_per_day: Option<i64>,
+    }
+    serde_json::from_slice::<Option<Fields>>(bytes)
+        .map(|_| ())
+        .map_err(|_| InputError("--cli-input-json: invalid quote field"))
+}
 
+fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
+    #[derive(serde::Deserialize)]
+    struct Fields {
         #[serde(rename = "Kind")]
         _kind: Option<String>,
         #[serde(rename = "ClassID")]
@@ -562,3 +575,14 @@ pub(super) const SERVICE: Service = Service {
         ),
     ],
 };
+
+#[cfg(test)]
+mod tests {
+    use super::check_quote_json;
+
+    #[test]
+    fn quota_quote_ignores_log_only_json_fields() {
+        assert!(check_quote_json(br#"{"Name":42}"#).is_ok());
+        assert!(check_quote_json(br#"{"Quantity":"wrong"}"#).is_err());
+    }
+}

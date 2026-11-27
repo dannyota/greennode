@@ -332,10 +332,7 @@ impl Evidence {
     }
 
     pub(crate) fn reflects_fixed_two(&self, amount: f64) -> bool {
-        may_reflect_rendered_number(&self.credentials)
-            && self
-                .credentials
-                .reflects(crate::output_number::fixed_two(amount).as_bytes())
+        self.text_reflects(&crate::output_number::fixed_two(amount))
     }
 
     fn literal_reflects(&self, value: &Value) -> bool {
@@ -349,21 +346,11 @@ impl Evidence {
     }
 
     fn number_reflects(&self, number: &serde_json::Number) -> bool {
-        self.credentials.reflects(number.as_str().as_bytes())
-            || (may_reflect_rendered_number(&self.credentials)
-                && number.as_f64().is_some_and(|value| {
-                    crate::output_number::reflects(value, &self.credentials, false)
-                }))
+        self.text_reflects(number.as_str())
+            || number.as_f64().is_some_and(|value| {
+                crate::output_number::reflects(value, &self.credentials, false)
+            })
     }
-}
-
-pub(super) fn may_reflect_rendered_number(credentials: &SentCredentials) -> bool {
-    credentials.values().iter().any(|secret| {
-        secret
-            .expose_secret()
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e'))
-    })
 }
 
 impl std::fmt::Debug for Evidence {
@@ -400,6 +387,16 @@ mod tests {
         assert!(evidence.reflected_in(&json!({"n": 0.5})));
         assert!(evidence.reflected_in(&json!([1000000])));
         assert!(!evidence.reflected_in(&json!([1000001, 0.25])));
+    }
+
+    #[test]
+    fn numeric_screening_detects_encoded_credentials_without_refusing_zero() {
+        let evidence = evidence(&["abc"]);
+        assert!(evidence.reflected_in(&json!(616263)));
+        assert!(evidence.reflects_fixed_two(616263.0));
+        let ordinary = super::tests::evidence(&["toy30token"]);
+        assert!(!ordinary.reflected_in(&json!(0)));
+        assert!(!ordinary.reflects_fixed_two(0.0));
     }
 
     #[test]

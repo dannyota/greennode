@@ -328,23 +328,12 @@ fn counts(raw: &RawValue) -> Option<UsageCounts> {
         teams: ResponseField::Value(o.integer("teams")?),
     })
 }
+
 fn synthetic_usage(raw: &RawValue) -> Option<QuotaUsageDetail> {
     let o = Object::of(raw)?;
     let usage = counts(o.required("usage")?)?;
-    let nonzero = [
-        usage.api,
-        usage.location,
-        usage.email,
-        usage.sms,
-        usage.slack,
-        usage.webhook,
-        usage.telegram,
-        usage.teams,
-    ]
-    .into_iter()
-    .any(|value| value != ResponseField::Value(0));
     Some(QuotaUsageDetail {
-        counts: nonzero.then_some(usage),
+        counts: Some(usage),
         amount: ResponseField::Value(0),
         descriptions: usage_descriptions(&o)?,
     })
@@ -375,5 +364,19 @@ impl From<Detail> for SyntheticQuotaDetail {
             tier_name: detail.tier_name,
             price: detail.price.map(ResponseField::Value),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::synthetic_usage;
+    use serde_json::value::RawValue;
+
+    #[test]
+    fn zero_synthetic_usage_keeps_all_counts() {
+        let raw = RawValue::from_string(r#"{"usage":{"api":0,"location":0,"email":0,"sms":0,"slack":0,"webhook":0,"telegram":0,"teams":0},"description":{}}"#.to_owned()).unwrap();
+        let value = synthetic_usage(&raw).unwrap();
+        let output = serde_json::to_value(value).unwrap();
+        assert_eq!(output["Counts"].as_object().unwrap().len(), 8);
     }
 }

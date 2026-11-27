@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use serde::Serializer;
 use serde_json::value::RawValue;
 
 use super::super::{
@@ -59,13 +58,12 @@ output! {
 output! {
     /// Detailed usage for a Monitor quota.
     struct QuotaUsageDetail {
-        /// Synthetic counters when a nonzero counter was reported.
+        /// Synthetic counters when reported.
         #[serde(skip_serializing_if = "Option::is_none")]
         counts: Option<super::usage::UsageCounts> => "Counts",
         /// Amount of quota used.
         amount: ResponseField<i64> => "Amount",
         /// Provider descriptions keyed by field.
-        #[serde(serialize_with = "serialize_descriptions")]
         descriptions: BTreeMap<String, UsageDescription> => "Descriptions",
     }
 }
@@ -210,11 +208,4 @@ impl Screen for BTreeMap<String, UsageDescription> {
         self.values_mut()
             .all(|description| description.screen(evidence))
     }
-}
-
-fn serialize_descriptions<S: Serializer>(
-    descriptions: &BTreeMap<String, UsageDescription>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_newtype_struct("$greennode::dynamic-map", descriptions)
 }

@@ -1,12 +1,11 @@
 use super::inventory::{get_input, id, list_input, output, plain};
-use super::quota::integer;
 use super::wire::{check_path_id, failure};
 use super::{Client, ResponseField};
 use crate::model::wire::{Field, WireField, model};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::Shape;
 use crate::{Failure, List, RequestContext};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use std::{collections::BTreeMap, fmt};
 
@@ -135,11 +134,9 @@ pub struct CheckRequest {
     /// HTTP method.
     pub method: String,
     /// Request headers.
-    #[serde(serialize_with = "text_map")]
-    pub headers: BTreeMap<String, String>,
+    pub headers: Option<BTreeMap<String, String>>,
     /// Query parameters.
-    #[serde(serialize_with = "text_map")]
-    pub query: BTreeMap<String, String>,
+    pub query: Option<BTreeMap<String, String>>,
     /// Request body.
     pub body: String,
     /// Request timeout in seconds.
@@ -171,9 +168,17 @@ struct Whole(i64);
 impl<'de> Deserialize<'de> for Whole {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = Box::<RawValue>::deserialize(d)?;
-        integer(&raw)
-            .map(Self)
-            .ok_or_else(|| serde::de::Error::custom("expected an integral number"))
+        let value: f64 = serde_json::from_str(raw.get()).map_err(serde::de::Error::custom)?;
+        if value.fract() != 0.0 {
+            return Err(serde::de::Error::custom("expected an integral number"));
+        }
+        Ok(Self(
+            if value >= 9223372036854775808.0 || value < -9223372036854775808.0 {
+                i64::MIN
+            } else {
+                value as i64
+            },
+        ))
     }
 }
 impl WireField for Whole {
@@ -198,15 +203,9 @@ impl WireField for TextMap {
         self.0.values_mut().all(|value| value.0.redact(evidence))
     }
 }
-fn text_map<S: Serializer>(
-    map: &BTreeMap<String, String>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_newtype_struct("$greennode::dynamic-map", map)
-}
 
 model! { @ true; struct RequestWire {
-    url:String=>"url","URL"; method:String=>"method","Method"; headers:TextMap=>"headers","Headers"; query:TextMap=>"query","Query";
+    url:String=>"url","URL"; method:String=>"method","Method"; headers:Option<TextMap> =>"headers","Headers"; query:Option<TextMap> =>"query","Query";
     body:String=>"body","Body"; timeout:Whole=>"timeout","Timeout"; verified_ssl:bool=>"verified_ssl","VerifiedSSL";
 }}
 model! { @ true; struct OptionsWire {
@@ -215,11 +214,13 @@ model! { @ true; struct OptionsWire {
 impl<'de> Deserialize<'de> for CheckRequest {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let wire = RequestWire::deserialize(d)?;
-        let values = |map: TextMap| {
-            map.0
-                .into_iter()
-                .map(|(key, value)| (key, value.0))
-                .collect()
+        let values = |map: Option<TextMap>| {
+            map.map(|map| {
+                map.0
+                    .into_iter()
+                    .map(|(key, value)| (key, value.0))
+                    .collect()
+            })
         };
         Ok(Self {
             url: wire.url,
@@ -234,12 +235,18 @@ impl<'de> Deserialize<'de> for CheckRequest {
 }
 impl WireField for CheckRequest {
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        self.headers.retain(|key, _| !evidence.text_reflects(key));
-        self.query.retain(|key, _| !evidence.text_reflects(key));
+        for map in [&mut self.headers, &mut self.query] {
+            if let Some(map) = map {
+                map.retain(|key, _| !evidence.text_reflects(key));
+                if !map.values_mut().all(|value| value.redact(evidence)) {
+                    return false;
+                }
+            } else if evidence.text_reflects("null") {
+                return false;
+            }
+        }
         [&mut self.url, &mut self.method, &mut self.body]
             .into_iter()
-            .chain(self.headers.values_mut())
-            .chain(self.query.values_mut())
             .all(|value| value.redact(evidence))
             && self.timeout.redact(evidence)
             && self.verified_ssl.redact(evidence)
@@ -271,6 +278,7 @@ fn screen_check(check: &mut Check, evidence: &Evidence) -> bool {
         .chain(&mut check.notifications.undetermined);
     ids.into_iter().all(|value| id(value, evidence)) && check.redact(evidence)
 }
+
 impl Client {
     /// Reads one synthetic check and its configured request.
     pub async fn get_check(
@@ -332,5 +340,27 @@ impl Client {
             return Err(failure(LOCATIONS.invalid(&evidence)));
         }
         Ok(List { items })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CheckRequest, Whole};
+
+    #[test]
+    fn check_request_preserves_null_and_empty_maps() {
+        let request: CheckRequest = serde_json::from_str(r#"{"headers":null,"query":{}}"#).unwrap();
+        let value = serde_json::to_value(request).unwrap();
+        assert!(value["Headers"].is_null());
+        assert_eq!(value["Query"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn check_integer_rounds_through_float64() {
+        assert_eq!(
+            serde_json::from_str::<Whole>("9007199254740993").unwrap().0,
+            9007199254740992
+        );
+        assert!(serde_json::from_str::<Whole>("1.5").is_err());
     }
 }

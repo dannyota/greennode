@@ -168,7 +168,16 @@ fn failure_error(
         .detail::<StatusCode>()
         .map(StatusCode::as_u16)
         .or_else(|| api.and_then(ApiError::status));
-    let result = if failure.is_body_too_large() {
+    let result = if failure.is_body_too_large() && op == LOG_QUOTE {
+        error(
+            "",
+            None,
+            "",
+            "transport: response body exceeds limit",
+            false,
+        )
+        .with_body_too_large()
+    } else if failure.is_body_too_large() {
         error(
             op,
             status,
@@ -327,8 +336,7 @@ fn log_document(op: &Operation, response: &sender::Response) -> Result<Box<RawVa
     };
     let text = go_json(&body);
     let raw: Box<RawValue> = serde_json::from_str(&text).map_err(|_| decode_failure())?;
-    validate_shape(raw.get().as_bytes(), &LOG, raw.get().len())
-        .map_err(|_| Box::new(invalid(op.id)))?;
+    validate_shape(raw.get().as_bytes(), &LOG, raw.get().len()).map_err(|_| decode_failure())?;
     let price = serde_json::from_str::<Option<Price>>(raw.get())
         .map_err(|_| decode_failure())?
         .and_then(|shape| shape.optimum)

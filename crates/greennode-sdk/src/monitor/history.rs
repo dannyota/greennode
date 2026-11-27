@@ -1,4 +1,4 @@
-use super::check_alarm::timestamp;
+use super::check_alarm::{parse_timestamp, timestamp};
 use super::response_times::{milliseconds, safe_time, serialize_time};
 use super::wire::{Family, Read, check_path_id, decode, failure};
 use super::{Client, ResponseField};
@@ -8,7 +8,7 @@ use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext};
 use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
-use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{Duration, OffsetDateTime};
 
 const HISTORY: Read = Read {
     id: "monitor.ListCheckAlarmHistory",
@@ -129,8 +129,11 @@ impl Client {
         input: ListCheckAlarmHistoryInput,
     ) -> Result<ListCheckAlarmHistoryOutput, Failure<ListCheckAlarmHistoryOutput>> {
         check_path_id(HISTORY.id, "CheckID", &input.check_id)?;
-        if !input.location_id.is_empty() {
-            check_path_id(HISTORY.id, "LocationID", &input.location_id)?;
+        if !input.location_id.is_empty() && !PathIds::WithUnderscore.allows(&input.location_id) {
+            return Err(failure(super::wire::input_error(format!(
+                "vngcloud: invalid input: {} requires LocationID to match ^[A-Za-z0-9_-]+$",
+                HISTORY.id
+            ))));
         }
         self.check_alarm_history(ctx, input).await.map_err(failure)
     }
@@ -208,10 +211,17 @@ impl Client {
                 limit: HISTORY.limit.min(remaining),
                 ..HISTORY
             };
-            let raw = self
-                .read(ctx, &read, &[&location.alarm_id], &query, &mut evidence)
+            let (_, raw, original_len) = self
+                .read_status(
+                    ctx,
+                    &read,
+                    &[&location.alarm_id],
+                    &query,
+                    &mut evidence,
+                    false,
+                )
                 .await?;
-            remaining = remaining.saturating_sub(raw.get().len());
+            remaining = remaining.saturating_sub(original_len);
             let history: History = decode(&raw, &HISTORY_SHAPE, &read, &evidence)?;
             let alarm_id: Arc<str> = location.alarm_id.into();
             let location_id: Arc<str> = location.location_id.into();
@@ -280,7 +290,7 @@ fn history_endpoint(
     if raw.contains(['t', 'z']) {
         return None;
     }
-    OffsetDateTime::parse(&raw.replace(',', "."), &Rfc3339).ok()
+    parse_timestamp(raw)
 }
 
 fn transition(
@@ -328,4 +338,21 @@ fn transition(
 
 fn shared_text<S: Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{history_endpoint, timestamp};
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn timestamp_requires_go_rfc3339_grammar() {
+        let evidence = Evidence::new();
+        for value in ["2000-01-01 00:00:00Z", "2000-01-01T00:00:60Z"] {
+            assert!(history_endpoint(value, || None).is_none());
+            assert!(timestamp(value, &evidence).is_none());
+        }
+        assert!(history_endpoint("2000-01-01T00:00:00Z", || None).is_some());
+        assert!(timestamp("2000-01-01T00:00:00Z", &evidence).is_some());
+    }
 }

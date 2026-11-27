@@ -1,4 +1,4 @@
-use super::evidence::{Evidence, may_reflect_rendered_number};
+use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
 use super::{redirect, retry, sender};
 use crate::wire::send;
@@ -468,7 +468,7 @@ fn scan_json_reflections(
     if credentials.reflects(body) {
         return Some(true);
     }
-    let numeric_match_possible = check_rendered_numbers && may_reflect_rendered_number(credentials);
+    let numeric_match_possible = check_rendered_numbers && !credentials.values().is_empty();
     let mut index = 0;
     while index < body.len() {
         if body[index] != b'"' {

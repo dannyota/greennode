@@ -88,7 +88,7 @@ impl<'a> Reader<'a> {
             return Err(read.error(
                 response.as_ref().map_or_else(
                     |error| error.api_error().and_then(crate::ApiError::status),
-                    |(status, _)| Some(status.as_u16()),
+                    |(status, _, _)| Some(status.as_u16()),
                 ),
                 "InvalidResponse",
                 "quota credential safety limit exceeded",
@@ -96,7 +96,7 @@ impl<'a> Reader<'a> {
                 &self.evidence,
             ));
         }
-        let (status, raw) = response?;
+        let (status, raw, _) = response?;
         let body = ValidBody::check(raw.get()).map_err(|()| {
             if status == http::StatusCode::NOT_FOUND {
                 read.error(

@@ -15,6 +15,85 @@ fn history_input() -> ListCheckAlarmHistoryInput {
 }
 
 #[tokio::test]
+async fn check_alarm_refused_redirect_does_not_keep_status() {
+    use greennode_sdk::testing::Response;
+    let server = Server::start(vec![Response::Http {
+        status: "302 Found".into(),
+        headers: vec![
+            ("Location".into(), "https://other.invalid/path".into()),
+            ("Content-Length".into(), "0".into()),
+        ],
+        body: Vec::new(),
+    }]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn check_alarm_history_charges_original_json_value_length() {
+    let mut definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
+    let original = definition["data"]["alarms"][0].clone();
+    let mut locations = Vec::new();
+    for i in 0..3 {
+        let mut location = original.clone();
+        location["id"] = format!("sub-{i}").into();
+        location["metrics"][0]["dimensions"]["location_id"] = format!("loc-{i}").into();
+        locations.push(location);
+    }
+    definition["data"]["alarms"] = locations.into();
+    let body = format!(
+        r#"{{"data":[],"filler":"{}"}}"#,
+        r"\ud800".repeat(2_000_000)
+    );
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", &definition.to_string()),
+        response("200 OK", &body),
+        response("200 OK", &body),
+        response("200 OK", &body),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .list_check_alarm_history(&ctx, history_input())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn check_alarm_truncation_does_not_keep_status() {
+    let oversized = "x".repeat((1 << 20) + 1);
+    let server = Server::start(vec![response("200 OK", &oversized)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn empty_check_alarm_success_is_a_structure_refusal() {
+    let server = Server::start(vec![response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    let error = failure.error().api_error().unwrap();
+    assert_eq!(error.code(), "InvalidResponse");
+    assert_eq!(
+        error.message(),
+        "check alarm response rejected; body withheld"
+    );
+}
+
+#[tokio::test]
 async fn alarm_history_reads_the_location_route_and_keeps_the_reported_window() {
     let server = Server::start(vec![
         response("200 OK", SNAPSHOT),
@@ -37,6 +116,25 @@ async fn alarm_history_reads_the_location_route_and_keeps_the_reported_window() 
     assert_eq!(
         route.query(),
         Some("end_time=947030400000&interval=5&start_time=946684800000")
+    );
+}
+
+#[tokio::test]
+async fn alarm_history_accepts_underscore_in_location_selector() {
+    let definition = DEFINITION.replace("loc-1", "loc_1");
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", &definition),
+        response("200 OK", HISTORY),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = history_input();
+    input.location_id = "loc_1".into();
+    assert!(
+        client(&server)
+            .list_check_alarm_history(&ctx, input)
+            .await
+            .is_ok()
     );
 }
 
@@ -67,6 +165,36 @@ async fn alarm_history_refuses_nonmatching_alarm_identity_without_partial_output
         .unwrap_err();
     assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
     assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn channel_list_ignores_wrong_case_list_field() {
+    use greennode_sdk::monitor::ListChannelsInput;
+    let server = Server::start(vec![response("200 OK", r#"{"LstData":42}"#)]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .list_channels(&ctx, ListChannelsInput::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn missing_channel_reports_resource_not_found() {
+    use greennode_sdk::monitor::GetChannelInput;
+    let server = Server::start(vec![response("200 OK", r#"{"lstData":[],"totalItem":0}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_channel(&ctx, GetChannelInput::new("missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<String>().map(String::as_str),
+        Some("vngcloud: resource not found: channel missing")
+    );
 }
 
 #[tokio::test]
@@ -129,6 +257,63 @@ async fn output_reads_ignore_lone_aliases_and_reject_nested_collisions() {
 }
 
 #[tokio::test]
+async fn log_quote_refusal_screens_numeric_token_and_keeps_prefix() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let server = Server::start(vec![response("200 OK", classes)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.retention_days = 23;
+    let failure = super::client_with_token(&server, "23")
+        .quote_create_log_project(&ctx, input)
+        .await
+        .unwrap_err();
+    let message = failure.error().detail::<String>().unwrap();
+    assert!(message.contains("vngcloud: invalid input:"));
+    assert!(!message.contains("23"));
+}
+
+#[tokio::test]
+async fn malformed_log_quote_shape_is_not_reported_as_quota_error() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let server = Server::start(vec![
+        response("200 OK", classes),
+        response("200 OK", r#"{"optimumPrice":1,"propertiesPrice":{}}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "response failed to decode; body withheld"
+    );
+}
+
+#[tokio::test]
+async fn oversized_log_quote_has_transport_error_without_status_or_operation() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let oversized = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![
+        response("200 OK", classes),
+        response("200 OK", &oversized),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.message()),
+        ("", None, "transport: response body exceeds limit")
+    );
+}
+
+#[tokio::test]
 async fn log_quote_distinguishes_missing_and_negative_prices() {
     use greennode_sdk::monitor::CreateLogProjectInput;
     let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
@@ -159,6 +344,61 @@ async fn log_quote_distinguishes_missing_and_negative_prices() {
 }
 
 #[tokio::test]
+async fn ordinary_inventory_decode_error_names_operation() {
+    use greennode_sdk::monitor::GetCheckInput;
+    let server = Server::start(vec![response("200 OK", r#"{"id":42}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_check(&ctx, GetCheckInput::new("chk-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "monitor.GetCheck: request failed: response failed to decode"
+    );
+}
+
+#[tokio::test]
+async fn plain_http_failure_screens_status_against_sent_credentials() {
+    use greennode_sdk::monitor::ListChecksInput;
+    let server = Server::start(vec![response("404 Not Found", "{}")]);
+    let (ctx, _) = RequestContext::new();
+    let error = super::client_with_token(&server, "404")
+        .list_checks(&ctx, ListChecksInput)
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn alarm_threshold_preserves_nonfinite_go_value() {
+    use greennode_sdk::monitor::{GetAlarmInput, ResponseField};
+    let body =
+        include_str!("../fixtures/monitor/remaining_alarm.json").replace("\"2.5\"", "\"NaN\"");
+    let server = Server::start(vec![response("200 OK", &body)]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server)
+        .get_alarm(&ctx, GetAlarmInput::new("alarm-1"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.alarm.log.unwrap().threshold_value, ResponseField::Value(value) if value.is_nan())
+    );
+}
+
+#[tokio::test]
+async fn get_alarm_empty_success_returns_zero_alarm() {
+    use greennode_sdk::monitor::GetAlarmInput;
+    let server = Server::start(vec![response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .get_alarm(&ctx, GetAlarmInput::new("alarm-1"))
+        .await
+        .unwrap();
+    assert_eq!(output.alarm.id, "");
+}
+
+#[tokio::test]
 async fn inventory_empty_body_defaults_only_for_ordinary_output_reads() {
     use greennode_sdk::monitor::{ListAlarmsInput, ListChecksInput};
     let server = Server::start(vec![response("200 OK", ""), response("200 OK", "")]);
@@ -177,6 +417,25 @@ async fn inventory_empty_body_defaults_only_for_ordinary_output_reads() {
         .await
         .unwrap_err();
     assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn log_quote_accepts_class_without_id() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json")
+        .replace("\"id\": \"class-1\",", "");
+    let server = Server::start(vec![
+        response("200 OK", &classes),
+        response("200 OK", r#"{"optimumPrice":1}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+            .await
+            .is_ok()
+    );
+    assert_eq!(server.requests(), 2);
 }
 
 #[tokio::test]

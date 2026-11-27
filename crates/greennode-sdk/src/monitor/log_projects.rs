@@ -250,6 +250,18 @@ model! { @ true;
     }
 }
 
+fn quote_input(message: String, evidence: &Evidence) -> Error {
+    let mut message = format!("vngcloud: invalid input: {message}");
+    if evidence.text_reflects(&message) {
+        message = "vngcloud: invalid input: log quote rejected".into();
+    }
+    if evidence.text_reflects(&message) {
+        Error::new(crate::ErrorClass::InvalidInput)
+    } else {
+        input_error(message)
+    }
+}
+
 impl Client {
     /// Reads a log project by identifier.
     pub async fn get_log_project(
@@ -411,9 +423,10 @@ impl Client {
             .into_iter()
             .any(|text| evidence.text_reflects(text))
         {
-            return Err(input_error(format!(
-                "{LOG_QUOTE} requires a safe Name, Description, and Class"
-            )));
+            return Err(quote_input(
+                format!("{LOG_QUOTE} requires a safe Name, Description, and Class"),
+                &evidence,
+            ));
         }
         let classes = self.log_classes(ctx, LOG_QUOTE, &mut evidence).await?;
         let name = if input.class.is_empty() {
@@ -430,17 +443,21 @@ impl Client {
             .find(|class| class.name == name)
             .filter(|class| class.status == "ACTIVE" && !class.config.items.is_empty())
             .ok_or_else(|| {
-                input_error(format!(
-                    "{LOG_QUOTE} class {quoted} is not an orderable class"
-                ))
+                quote_input(
+                    format!("{LOG_QUOTE} class {quoted} is not an orderable class"),
+                    &evidence,
+                )
             })?;
         let options = &class.config.items;
         let retention = if input.retention_days == 0 {
             let [only] = options.as_slice() else {
-                return Err(input_error(format!(
-                    "{LOG_QUOTE} class {quoted} has {} retention options, RetentionDays must name one",
-                    options.len()
-                )));
+                return Err(quote_input(
+                    format!(
+                        "{LOG_QUOTE} class {quoted} has {} retention options, RetentionDays must name one",
+                        options.len()
+                    ),
+                    &evidence,
+                ));
             };
             only
         } else {
@@ -448,10 +465,13 @@ impl Client {
                 .iter()
                 .find(|option| option.amount == ResponseField::Value(input.retention_days))
                 .ok_or_else(|| {
-                    input_error(format!(
-                        "{LOG_QUOTE} class {quoted} has no {}-day retention option",
-                        input.retention_days
-                    ))
+                    quote_input(
+                        format!(
+                            "{LOG_QUOTE} class {quoted} has no {}-day retention option",
+                            input.retention_days
+                        ),
+                        &evidence,
+                    )
                 })?
         };
         let (ResponseField::Value(days), ResponseField::Value(minimum)) =
@@ -465,8 +485,8 @@ impl Client {
             input.gb_per_day
         }
         .checked_mul(days)
-        .ok_or_else(|| input_error(format!("{LOG_QUOTE} quantity overflows")))?;
-        let ids = [class.id.as_str(), retention.package_id.as_str()];
+        .ok_or_else(|| quote_input(format!("{LOG_QUOTE} quantity overflows"), &evidence))?;
+        let ids = [retention.package_id.as_str()];
         if ids.iter().any(|id| {
             !crate::wire::product::options::PathIds::WithUnderscore.allows(id)
                 || evidence.id_reflects(id)

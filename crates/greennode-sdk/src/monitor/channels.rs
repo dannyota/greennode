@@ -137,11 +137,17 @@ impl<'de> Deserialize<'de> for Channel {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let wire = ChannelWire::deserialize(d)?;
         let header = go_json(wire.header.as_bytes());
-        let headers = if validate(header.as_bytes(), &[], header.len()).is_ok() {
-            serde_json::from_str::<Option<Vec<HeaderWire>>>(&header)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
+        let headers = if serde_json::from_str::<&serde_json::value::RawValue>(&header).is_ok() {
+            validate(header.as_bytes(), &[], header.len())
+                .map_err(|_| serde::de::Error::custom("duplicate response field"))?;
+            let decoded = match serde_json::from_str::<Option<Vec<HeaderWire>>>(&header) {
+                Ok(value) => value.unwrap_or_default(),
+                Err(error) if error.to_string().starts_with("duplicate response field") => {
+                    return Err(serde::de::Error::custom("duplicate response field"));
+                }
+                Err(_) => Vec::new(),
+            };
+            decoded
                 .into_iter()
                 .map(|header| ChannelHeader {
                     key: header.key,
@@ -204,16 +210,19 @@ impl WireField for Channel {
     }
 }
 fn mask_address(address: &str) -> Option<String> {
+    if address.contains('\\') {
+        return None;
+    }
     let parsed = url::Url::parse(address).ok()?;
-    if !matches!(parsed.scheme(), "http" | "https") || !parsed.has_host() {
+    if !matches!(parsed.scheme(), "http" | "https") {
         return None;
     }
-    let (_, rest) = address.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next()?.rsplit('@').next()?;
-    if authority.is_empty() {
-        return None;
-    }
-    Some(format!("{}://{authority}/{REDACTED}", parsed.scheme()))
+    let host = parsed.host()?;
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Some(format!("{}://{host}{port}/{REDACTED}", parsed.scheme()))
 }
 
 impl Client {
@@ -307,7 +316,7 @@ impl Client {
                 break;
             }
         }
-        let message = format!("vngcloud: not found: channel {}", input.channel_id);
+        let message = format!("vngcloud: resource not found: channel {}", input.channel_id);
         let message =
             crate::wire::product::response::sanitize_error_text(&message, evidence.credentials());
         Err(failure(
@@ -331,5 +340,27 @@ impl Client {
         let raw = self.read(ctx, &LIST, &[], &query, evidence).await?;
         let wire: Option<Page<Channel>> = output(&raw, &PAGE, &LIST, evidence)?;
         wire.unwrap_or_default().into_page(false, &LIST, evidence)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Channel, mask_address};
+
+    #[test]
+    fn channel_header_alias_collision_is_rejected() {
+        let duplicate = r#"{"header":"[{\"key\":\"a\",\"Key\":\"b\"}]"}"#;
+        let valid = r#"{"header":"[{\"key\":\"a\",\"value\":\"b\"}]"}"#;
+        assert!(serde_json::from_str::<Channel>(duplicate).is_err());
+        assert!(serde_json::from_str::<Channel>(valid).is_ok());
+    }
+
+    #[test]
+    fn webhook_mask_rejects_ambiguous_authority() {
+        assert_eq!(mask_address(r"https://example.test\secret/path"), None);
+        assert_eq!(
+            mask_address("https://example.test:8443/path"),
+            Some("https://example.test:8443/<redacted>".to_owned())
+        );
     }
 }

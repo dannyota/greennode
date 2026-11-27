@@ -4,6 +4,17 @@ use crate::{ErrorClass, Failure, Secret, WriteDispatch};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+#[test]
+fn numeric_json_screening_detects_encoded_credentials_without_refusing_zero() {
+    let credentials = sender::SentCredentials::for_test(vec![Secret::new("abc")]);
+    assert_eq!(
+        reflects_json(br#"{"n":616263}"#, &credentials, true),
+        Some(true)
+    );
+    let ordinary = sender::SentCredentials::for_test(vec![Secret::new("toy30token")]);
+    assert_eq!(reflects_json(br#"{"n":0}"#, &ordinary, true), Some(false));
+}
+
 #[derive(Default, serde::Deserialize)]
 struct Json(Value);
 

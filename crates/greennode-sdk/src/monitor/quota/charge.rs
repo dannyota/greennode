@@ -77,15 +77,7 @@ impl Cursor<'_> {
             b'[' => self.array(),
             b't' | b'n' => self.literal(4),
             b'f' => self.literal(5),
-            _ => {
-                let start = self.at;
-                while self.bytes.get(self.at).is_some_and(|byte| {
-                    matches!(byte, b'+' | b'-' | b'.' | b'e' | b'E' | b'0'..=b'9')
-                }) {
-                    self.at += 1;
-                }
-                (self.at > start).then_some(self.at - start)
-            }
+            _ => crate::monitor::raw_json::number(self.bytes, &mut self.at),
         }
     }
 
@@ -142,61 +134,8 @@ impl Cursor<'_> {
         Some(2 + total + kept.len().saturating_sub(1))
     }
 
-    fn hex4(&mut self) -> Option<u32> {
-        let digits = self.bytes.get(self.at..self.at + 4)?;
-        self.at += 4;
-        u32::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()
-    }
-
     fn string(&mut self) -> Option<String> {
-        if self.bytes.get(self.at) != Some(&b'"') {
-            return None;
-        }
-        self.at += 1;
-        let mut out: Vec<u8> = Vec::new();
-        loop {
-            let byte = *self.bytes.get(self.at)?;
-            self.at += 1;
-            match byte {
-                b'"' => return String::from_utf8(out).ok(),
-                b'\\' => {
-                    let escape = *self.bytes.get(self.at)?;
-                    self.at += 1;
-                    let ch = match escape {
-                        b'n' => '\n',
-                        b'r' => '\r',
-                        b't' => '\t',
-                        b'b' => '\u{8}',
-                        b'f' => '\u{c}',
-                        b'u' => self.unicode_escape()?,
-                        other => char::from(other),
-                    };
-                    let mut buffer = [0; 4];
-                    out.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
-                }
-                other => out.push(other),
-            }
-        }
-    }
-
-    fn unicode_escape(&mut self) -> Option<char> {
-        let unit = self.hex4()?;
-        match unit {
-            0xD800..=0xDBFF => {
-                let rest = self.bytes.get(self.at..self.at + 2);
-                if rest == Some(b"\\u") {
-                    let saved = self.at;
-                    self.at += 2;
-                    if let Some(low @ 0xDC00..=0xDFFF) = self.hex4() {
-                        return char::from_u32(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00));
-                    }
-                    self.at = saved;
-                }
-                Some(char::REPLACEMENT_CHARACTER)
-            }
-            0xDC00..=0xDFFF => Some(char::REPLACEMENT_CHARACTER),
-            _ => char::from_u32(unit),
-        }
+        crate::monitor::raw_json::string(self.bytes, &mut self.at)
     }
 }
 
