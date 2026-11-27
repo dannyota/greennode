@@ -50,6 +50,7 @@ output! {
 
 output! {
     /// A monthly unit package within one class.
+    #[derive(PartialEq)]
     struct SyntheticClassPackage {
         /// Unit package identifier.
         id: String => "ID",
@@ -70,6 +71,7 @@ output! {
 
 output! {
     /// A class option and its evidenced billing periods.
+    #[derive(PartialEq)]
     struct SyntheticClassOption {
         /// Class package identifier.
         package_id: String => "PackageID",
@@ -205,6 +207,7 @@ impl Client {
     }
 }
 
+#[derive(PartialEq)]
 pub(super) struct Class {
     id: String,
     name: String,
@@ -215,11 +218,13 @@ pub(super) struct Class {
     packages: Vec<SyntheticClassPackage>,
 }
 
+#[derive(PartialEq)]
 struct ClassOption {
     output: SyntheticClassOption,
     status: String,
 }
 
+#[derive(PartialEq)]
 pub(super) struct Settings {
     periods: Vec<i64>,
     maximum: i64,
@@ -480,7 +485,10 @@ impl Offer<'_> {
     }
 }
 
+#[derive(PartialEq)]
 pub(super) struct QuoteOffer {
+    class: Class,
+    settings: Settings,
     pub(super) location: i64,
     pub(super) list_price: f64,
 }
@@ -509,12 +517,13 @@ pub(super) async fn quote_offer(
     if reflected(reader) {
         return Err(reader.invalid());
     }
-    let Some(class) = classes
+    let Some(class_index) = classes
         .iter()
-        .find(|class| class.id == class_id && class.status == ACTIVE)
+        .position(|class| class.id == class_id && class.status == ACTIVE)
     else {
         return Ok(Err(OfferIssue::Class));
     };
+    let class = &classes[class_index];
     let Some(package) = class
         .packages
         .iter()
@@ -543,6 +552,8 @@ pub(super) async fn quote_offer(
         return Err(reader.invalid());
     }
     Ok(Ok(QuoteOffer {
+        class: classes.remove(class_index),
+        settings,
         location,
         list_price,
     }))

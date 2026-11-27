@@ -1,5 +1,6 @@
 use super::{
-    Adapter, ExecutionResult, FutureResult, LocalError, OutputView, ParsedInput, run_with_clock,
+    Adapter, ExecutionResult, Format, FutureResult, LocalError, OutputView, ParsedInput,
+    run_with_clock,
 };
 use crate::cli::input::{self, InputDescriptor, ParsedOperationInput};
 use crate::cli::op::{Kind, SelectedOperation};
@@ -44,10 +45,12 @@ enum FileBinding<T> {
 }
 
 pub(crate) type ErrorWriter = fn(&mut dyn Write, &errors::Envelope<'_>, Option<&Error>);
+pub(crate) type WriteFinisher = fn(&mut dyn Write, &mut dyn Write, Format, ExecutionResult) -> u8;
 pub(crate) struct WritePolicy<T> {
     pub(crate) warning: Option<fn(&T) -> Option<&'static str>>,
-    pub(crate) preflight: Option<fn(&LocalError) -> Option<render::Projected>>,
+    pub(crate) preflight: Option<fn(&errors::Envelope<'_>) -> Option<render::Projected>>,
     pub(crate) error_writer: Option<ErrorWriter>,
+    pub(crate) finish: Option<WriteFinisher>,
 }
 impl<T> Default for WritePolicy<T> {
     fn default() -> Self {
@@ -55,6 +58,7 @@ impl<T> Default for WritePolicy<T> {
             warning: None,
             preflight: None,
             error_writer: None,
+            finish: None,
         }
     }
 }
@@ -273,18 +277,23 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         _: &ManagementInput<'_, T>,
         error: &LocalError,
     ) -> Option<render::Projected> {
-        self.write_policy
-            .preflight
-            .and_then(|project| project(error))
+        self.settings_refusal_output(&errors::Envelope {
+            code: error.code,
+            message: &error.message,
+            status: None,
+            operation: None,
+        })
     }
     fn settings_refusal_output(
         &self,
-        _: &ManagementInput<'_, T>,
-        error: &LocalError,
+        envelope: &errors::Envelope<'_>,
     ) -> Option<render::Projected> {
         self.write_policy
             .preflight
-            .and_then(|project| project(error))
+            .and_then(|project| project(envelope))
+    }
+    fn finish_write(&self) -> Option<WriteFinisher> {
+        self.write_policy.finish
     }
     fn report_error(
         &self,

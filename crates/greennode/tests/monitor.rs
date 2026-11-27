@@ -28,6 +28,9 @@ mod remaining;
 #[path = "monitor/synthetic_quotes.rs"]
 mod synthetic_quotes;
 
+#[path = "monitor/synthetic_writes.rs"]
+mod synthetic_writes;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 

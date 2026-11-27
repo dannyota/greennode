@@ -6,7 +6,6 @@ use greennode_sdk::monitor as sdk;
 use serde::Serialize;
 
 const EFFECT: &str = "Deleting this quota permanently deletes every synthetic check.";
-const CAP: InputField<Input> = field!("max-price", "MaxPrice", max_price, "float64", f64);
 const NO_WAIT: InputField<Input> = field!("no-wait", "NoWait", no_wait, "bool", bool);
 const PURGE: InputField<Input> = field!("purge", "Purge", purge, "bool", bool);
 const EXPECTED: InputField<Input> = field!(
@@ -82,7 +81,7 @@ fn check_delete_query(_: &Input, matches: &ArgMatches) -> Result<(), InputError>
     Ok(())
 }
 fn notification_warning(input: &Input) -> Option<&'static str> {
-    (input.max_price>0.0 && input.max_price.is_finite()).then_some("Warning: pay: true may debit the balance; MaxPrice is a local guard, not a server cap. Email quotes are inferred pre-VAT; SMS VAT treatment is unverified.")
+    input.max_price.is_some_and(|price| price > 0.0 && price.is_finite()).then_some("Warning: pay: true may debit the balance; MaxPrice is a local guard, not a server cap. Email quotes are inferred pre-VAT; SMS VAT treatment is unverified.")
 }
 fn synth_warning(input: &Input) -> Option<&'static str> {
     (input.enabled==Some(true)).then_some("Warning: auto-renew on a free quota is refused by the server (400); POC quota behavior is unverified. The error remains visible.")
@@ -199,7 +198,7 @@ pub(super) const DELETE_SYNTH: Operation = write!("delete-synthetic-quota","Dele
 fn create(input: &Input) -> sdk::CreateNotificationQuotaInput {
     let mut value = sdk::CreateNotificationQuotaInput::new(&input.kind);
     value.package_id.clone_from(&input.package_id);
-    value.max_price = input.max_price;
+    value.max_price = input.max_price.unwrap_or_default();
     value.no_wait = input.no_wait;
     value
 }
@@ -215,13 +214,13 @@ fn notification_renew(input: &Input) -> sdk::SetNotificationQuotaAutoRenewInput 
         input.enabled.unwrap_or_default(),
     );
     value.expected_quota_id.clone_from(&input.expected_quota_id);
-    value.max_price = input.max_price;
+    value.max_price = input.max_price.unwrap_or_default();
     value
 }
 fn synthetic_renew(input: &Input) -> sdk::SetSyntheticQuotaAutoRenewInput {
     let mut value = sdk::SetSyntheticQuotaAutoRenewInput::new(input.enabled.unwrap_or_default());
     value.expected_quota_id.clone_from(&input.expected_quota_id);
-    value.max_price = input.max_price;
+    value.max_price = input.max_price.unwrap_or_default();
     value
 }
 fn delete_synthetic(input: &Input) -> sdk::DeleteSyntheticQuotaInput {
@@ -295,7 +294,7 @@ fn delete_effect(value: sdk::DeleteSyntheticQuotaOutput) -> DeleteEffect {
         effect: EFFECT,
     }
 }
-fn delete_preflight(_: &dispatch::LocalError) -> Option<render::Projected> {
+fn delete_preflight(_: &crate::cli::errors::Envelope<'_>) -> Option<render::Projected> {
     render::project(&DeleteEffect {
         quota: None,
         stage: String::new(),

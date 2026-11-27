@@ -28,7 +28,7 @@ pub(crate) type Execute = for<'a> fn(
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ParsePreflight {
-    pub(crate) project: fn(&super::dispatch::LocalError) -> Option<super::render::Projected>,
+    pub(crate) project: fn(&super::errors::Envelope<'_>) -> Option<super::render::Projected>,
     pub(crate) error_writer: Option<super::dispatch::ErrorWriter>,
 }
 

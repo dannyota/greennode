@@ -12,18 +12,18 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use time::OffsetDateTime;
 
+use super::synthetic_settlement::Action;
 use crate::monitor::mutation::{GuardedBody, Mutation, Reply, screen_details};
-use crate::monitor::settlement::Wait;
-use crate::monitor::wire::{BodyReadFailure, Family, input_error};
-use crate::monitor::{Client, Quota, ResponseField};
+use crate::monitor::wire::input_error;
+use crate::monitor::{Client, Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::super::Screen;
 use super::super::notification::NotificationKind;
-use super::super::status::{Detail, decode_quota, read_synthetic_detail};
-use super::super::wire::{Object, Reader};
+use super::super::status::Detail;
+use super::super::wire::Object;
 
 pub(super) const NOTIFICATION_REDIRECT: &str =
     "https://vmonitor.console.vngcloud.vn/quota-usages/notification";
@@ -176,6 +176,9 @@ impl Snapshot {
     pub(super) fn end(&self) -> Option<OffsetDateTime> {
         field(self.quota.end_time).map(|value| value.0)
     }
+    pub(super) fn start(&self) -> Option<OffsetDateTime> {
+        field(self.quota.start_time).map(|value| value.0)
+    }
     pub(super) fn same(&self, other: &Self) -> bool {
         let x = &self.quota;
         let y = &other.quota;
@@ -198,14 +201,34 @@ pub(super) fn field<T: Copy>(value: ResponseField<T>) -> Option<T> {
 
 #[derive(Clone)]
 pub(super) enum Goal {
-    Notification { package: String },
-    RenewSetting { before: Snapshot, enabled: bool },
-    Delete { before: Snapshot },
+    Notification {
+        package: String,
+    },
+    RenewSetting {
+        before: Snapshot,
+        enabled: bool,
+    },
+    Delete {
+        before: Snapshot,
+    },
+    SyntheticCreate {
+        class_id: String,
+        package: String,
+        quantity: i64,
+        location: i64,
+        sent_at: QuotaTimestamp,
+    },
+    SyntheticChange {
+        before: Snapshot,
+        action: Action,
+    },
 }
 impl Goal {
     pub(super) fn id(&self) -> &str {
         match self {
-            Self::RenewSetting { before, .. } | Self::Delete { before } => before.id(),
+            Self::RenewSetting { before, .. }
+            | Self::Delete { before }
+            | Self::SyntheticChange { before, .. } => before.id(),
             _ => "",
         }
     }
@@ -214,6 +237,7 @@ impl Goal {
             Self::Notification { .. } => Duration::ZERO,
             Self::RenewSetting { .. } => Duration::from_secs(30),
             Self::Delete { .. } => Duration::from_secs(60),
+            Self::SyntheticCreate { .. } | Self::SyntheticChange { .. } => ORDER_BOUND,
         }
     }
 }
@@ -238,6 +262,13 @@ impl Attempt {
             evidence,
         }
     }
+    pub(super) fn sent(&self) -> &'static str {
+        if self.observed_status == 0 {
+            "unknown"
+        } else {
+            "yes"
+        }
+    }
     fn copy(&self) -> Self {
         let mut evidence = Evidence::new();
         evidence.absorb(self.evidence.credentials());
@@ -257,6 +288,7 @@ pub(super) enum SendState {
     Refused {
         error: Error,
         dispatch: WriteDispatch,
+        status: u16,
     },
     Pending {
         failure: Option<Error>,
@@ -298,7 +330,11 @@ impl Client {
                     .unwrap_or_default();
                 if dispatch == WriteDispatch::NotSent || (400..500).contains(&status) {
                     self.quota_ledger.clear(attempt.kind)?;
-                    return Ok(SendState::Refused { error, dispatch });
+                    return Ok(SendState::Refused {
+                        error,
+                        dispatch,
+                        status,
+                    });
                 }
                 attempt.observed_status = status;
                 self.quota_ledger.put(attempt)?;
@@ -309,163 +345,8 @@ impl Client {
             }
         }
     }
-
-    pub(super) async fn reconcile_quota(
-        &self,
-        ctx: &RequestContext,
-        attempt: &mut Attempt,
-        op: &'static str,
-        bound: Duration,
-    ) -> Result<Option<Quota>, Error> {
-        let result = if bound.is_zero() {
-            self.observe_attempt(ctx, attempt).await
-        } else {
-            let mut wait = Wait::new(ctx, self.session.clock(), POLL, bound);
-            loop {
-                let turn = match wait.next().await {
-                    Ok(turn) => turn,
-                    Err(error) => break Err(error),
-                };
-                let outcome = self.observe_attempt(turn, attempt).await;
-                if let Err(error) = wait.check() {
-                    break Err(error);
-                }
-                match outcome {
-                    Ok(None) => (),
-                    other => break other,
-                }
-            }
-        };
-        match result {
-            Ok(Some(quota)) => {
-                self.quota_ledger.clear(attempt.kind)?;
-                Ok(Some(quota))
-            }
-            Ok(None) => {
-                self.quota_ledger.put(attempt)?;
-                Err(unsettled(op, None))
-            }
-            Err(error) => {
-                self.quota_ledger.put(attempt)?;
-                Err(unsettled(op, Some(error)))
-            }
-        }
-    }
-
-    async fn observe_attempt(
-        &self,
-        ctx: &RequestContext,
-        attempt: &mut Attempt,
-    ) -> Result<Option<Quota>, Error> {
-        let kind = attempt.kind;
-        let strict_absence = kind == Kind::Synthetic && matches!(attempt.goal, Goal::Delete { .. });
-        let detail = kind == Kind::Synthetic && matches!(attempt.goal, Goal::RenewSetting { .. });
-        let observed = self
-            .observe_quota(
-                ctx,
-                kind,
-                attempt.op,
-                &mut attempt.evidence,
-                detail,
-                strict_absence,
-            )
-            .await?;
-        let Observation::Present(fresh) = observed else {
-            if let Goal::Delete { before } = &attempt.goal {
-                return Ok(Some(before.quota.clone()));
-            }
-            return Ok(None);
-        };
-        if !ready(&attempt.goal, &fresh) {
-            return Ok(None);
-        }
-        if let Goal::RenewSetting { before, .. } = &attempt.goal {
-            return Ok(Some(before.quota.clone()));
-        }
-        Ok(Some(fresh.quota))
-    }
-
-    pub(super) async fn observe_quota(
-        &self,
-        ctx: &RequestContext,
-        kind: Kind,
-        op: &'static str,
-        evidence: &mut Evidence,
-        detail: bool,
-        strict_absence: bool,
-    ) -> Result<Observation, Error> {
-        let mut reader = Reader::new(self, ctx, op);
-        reader.read.family = Family::Quota {
-            no_redirect: strict_absence && kind == Kind::Synthetic,
-        };
-        reader.evidence.absorb(evidence.credentials());
-        let result = async {
-            let response = reader.get_status(kind.current(), &[], strict_absence).await;
-            let (status, raw) = match response {
-                Ok(value) => value,
-                Err(error)
-                    if !strict_absence
-                        && error.has_class(ErrorClass::NotFound)
-                        && !error.is_body_too_large()
-                        && error.detail::<BodyReadFailure>().is_none() =>
-                {
-                    return Ok(Observation::Absent(error));
-                }
-                Err(error) => return Err(error),
-            };
-            if status == StatusCode::NOT_FOUND {
-                let absent = Object::of(&raw).is_some_and(|body| {
-                    body.len() == 1
-                        && body.text("message").is_some_and(|msg| {
-                            msg == kind.absent() && !reader.evidence.text_reflects(&msg)
-                        })
-                });
-                let error = reader.read.error(
-                    Some(404),
-                    "NotFound",
-                    "quota response withheld",
-                    false,
-                    &reader.evidence,
-                );
-                return if absent {
-                    Ok(Observation::Absent(error))
-                } else {
-                    Err(error)
-                };
-            }
-            let quota = reader.decode(decode_quota(&raw))?;
-            let mut snapshot = Snapshot {
-                quota: quota.to_model(),
-                details: None,
-            };
-            if kind == Kind::Synthetic && detail {
-                snapshot.details = Some(read_synthetic_detail(&quota, &mut reader).await?.into());
-            }
-            if reader.evidence.id_reflects(snapshot.id())
-                || reader.evidence.id_reflects(snapshot.package())
-            {
-                return Err(reader.invalid());
-            }
-            Ok(Observation::Present(snapshot))
-        }
-        .await;
-        evidence.absorb(reader.evidence.credentials());
-        result
-    }
 }
 
-fn ready(goal: &Goal, fresh: &Snapshot) -> bool {
-    match goal {
-        Goal::Notification { package } => fresh.package() == package && fresh.status() == "ACTIVE",
-        Goal::RenewSetting { before, enabled } => {
-            fresh.id() == before.id()
-                && fresh.package() == before.package()
-                && field(fresh.quota.auto_renew) == Some(*enabled)
-                && field(fresh.quota.auto_renew_period) == Some(i64::from(*enabled))
-        }
-        Goal::Delete { .. } => false,
-    }
-}
 pub(super) enum Observation {
     Absent(Error),
     Present(Snapshot),

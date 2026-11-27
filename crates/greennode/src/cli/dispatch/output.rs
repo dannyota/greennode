@@ -7,6 +7,7 @@ use super::{Format, LocalError, OperationFailure};
 pub enum ExecutionFailure {
     Sdk(OperationFailure),
     Local(LocalError),
+    Projection(Option<render::Projected>),
 }
 
 impl From<OperationFailure> for ExecutionFailure {

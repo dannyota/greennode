@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"danny.vn/vngcloud/monitor"
 )
 
 func TestMonitorReadGoldens(t *testing.T) {
@@ -563,5 +567,114 @@ func TestMonitorQuotaLifecycleWriteGoldens(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMonitorSyntheticOrderWriteGoldens(t *testing.T) {
+	load := func(file string) string {
+		body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), file+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	const quota = "/billing-api/v1/synthetic/quota"
+	const prices = "/billing-api/v2/synthetic/prices/created-price"
+	const classes = "/billing-api/v2/synthetic/quota-class"
+	for _, tc := range []struct {
+		op       string
+		flags    []string
+		mutation string
+	}{
+		{"create-synthetic-quota", []string{"--class-id", "class-1", "--package-id", "unit_1", "--quantity", "10"}, "/billing-api/v2/synthetic/quota"},
+		{"renew-synthetic-quota", []string{"--expected-end-time", "2099-02-01T00:00:00Z"}, "/billing-api/v2/synthetic/quota/extend-time"},
+		{"recover-synthetic-quota", []string{"--expected-quota-id", "quota-1"}, "/billing-api/v2/trash/synthetic/quota"},
+		{"ensure-synthetic-quota", []string{"--expected-quota-id", "quota-1", "--max-days-left", "0"}, "/billing-api/v2/synthetic/quota/extend-time"},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.op+"/"+format, func(t *testing.T) {
+				routes := map[string]func(http.ResponseWriter, *http.Request){
+					classes:                       jsonHandler(200, load("quota_classes")),
+					classes + "/class-1/packages": jsonHandler(200, load("quota_class_packages")),
+					classes + "/class-2/packages": jsonHandler(200, "[]"),
+					"/billing-api/v1/settings":    jsonHandler(200, load("quota_settings")),
+					prices:                        jsonHandler(200, `{"optimumPrice":0}`),
+					tc.mutation:                   jsonHandler(200, `{"orderId":"synth-order","paymentUrl":null}`),
+				}
+				count := 14
+				selected := format
+				if tc.op == "create-synthetic-quota" {
+					count = 12
+					selected = "json"
+					routes[quota] = jsonHandler(404, load("synthetic_quote_absent"))
+				} else {
+					before := load("synthetic_quote_renewal")
+					if tc.op == "recover-synthetic-quota" {
+						before = strings.ReplaceAll(strings.ReplaceAll(before, "ACTIVE", "IN-TRASH"), "2099-", "2000-")
+					}
+					routes[quota] = jsonHandler(200, before)
+					routes["/billing-api/v2/synthetic/quota-1/quota-detail"] = jsonHandler(200, load("quota_quota_detail"))
+				}
+				server := newSvcFixture(routes)
+				_, stdout, stderr := newSvcRoot(t, server)
+				args := append([]string{"--region", "hcm-3", "--output", selected, "monitor", tc.op, "--max-price", "0", "--no-wait"}, tc.flags...)
+				if code := Main(context.Background(), args, strings.NewReader(""), stdout, stderr); code != 0 || stderr.Len() != 0 || server.requestCount() != count {
+					t.Fatalf("synthetic quota write failed (exit %d, requests %d)", code, server.requestCount())
+				}
+				if tc.op == "create-synthetic-quota" {
+					var output monitor.CreateSyntheticQuotaOutput
+					if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+						t.Fatal(err)
+					}
+					fixed := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+					output.SentAt = &fixed
+					stdout.Reset()
+					if err := renderOutput(stdout, format, "", &output, true); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.op+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestMonitorSyntheticConfirmationGolden(t *testing.T) {
+	load := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	const classes = "/billing-api/v2/synthetic/quota-class"
+	current := load("synthetic_quote_renewal")
+	extended := strings.ReplaceAll(current, "2099-02-01", "2099-03-01")
+	var reads atomic.Int32
+	server := newSvcFixture(map[string]func(http.ResponseWriter, *http.Request){
+		classes:                                          jsonHandler(200, load("quota_classes")),
+		classes + "/class-1/packages":                    jsonHandler(200, load("quota_class_packages")),
+		classes + "/class-2/packages":                    jsonHandler(200, "[]"),
+		"/billing-api/v1/settings":                       jsonHandler(200, load("quota_settings")),
+		"/billing-api/v2/synthetic/prices/created-price": jsonHandler(200, `{"optimumPrice":0}`),
+		"/billing-api/v2/synthetic/quota/extend-time":    jsonHandler(200, `{"orderId":"synth-order"}`),
+		"/billing-api/v2/synthetic/quota-1/quota-detail": jsonHandler(200, load("quota_quota_detail")),
+		"/billing-api/v1/synthetic/quota": func(w http.ResponseWriter, r *http.Request) {
+			reply := current
+			if reads.Add(1) == 3 {
+				reply = extended
+			}
+			jsonHandler(200, reply)(w, r)
+		},
+	})
+	_, stdout, stderr := newSvcRoot(t, server)
+	args := []string{"--region", "hcm-3", "--output", "json", "monitor", "ensure-synthetic-quota", "--max-price", "0", "--max-days-left", "0"}
+	if code := Main(context.Background(), args, strings.NewReader(""), stdout, stderr); code != 0 || stderr.Len() != 0 || server.requestCount() != 16 {
+		t.Fatalf("synthetic confirmation failed (exit %d, requests %d)", code, server.requestCount())
+	}
+	if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), "ensure-synthetic-quota-confirmed.json.golden"), stdout.Bytes(), 0600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,0 +1,10 @@
+{
+  "Sent": "yes",
+  "Stage": "accepted",
+  "Error": null,
+  "PreviousEndTime": "2099-02-01T07:00:00+07:00",
+  "Quota": null,
+  "OrderID": "synth-order",
+  "PaymentPending": false,
+  "Renewed": false
+}

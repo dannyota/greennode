@@ -32,7 +32,8 @@ struct Input {
     page: i64,
     size: i64,
     system: bool,
-    max_price: f64,
+    max_price: Option<f64>,
+    max_days_left: i64,
     no_wait: bool,
     purge: bool,
     expected_quota_id: String,
@@ -98,6 +99,26 @@ macro_rules! field {
         )
     };
 }
+
+const CAP: InputField<Input> = InputField {
+    json_name: "MaxPrice",
+    flag: Some(Field {
+        name: "max-price",
+        go_type: "float64",
+        required: false,
+    }),
+    secret: false,
+    nullable: false,
+    requirement: Requirement::Optional,
+    set_json: |input, value| {
+        input.max_price = Some(serde_json::from_value(value).map_err(|_| ())?);
+        Ok(())
+    },
+    set_flag: Some(|input, matches| {
+        input.max_price = matches.get_one::<f64>("max-price").copied();
+        Ok(())
+    }),
+};
 
 const DASHBOARD_ID: InputField<Input> =
     field!("dashboard-id", "DashboardID", dashboard_id, required);
@@ -282,6 +303,7 @@ macro_rules! read {
 mod log_project_writes;
 mod quota_writes;
 mod remaining;
+mod synthetic_writes;
 
 fn dashboard_view() -> OutputView {
     OutputView {
@@ -440,6 +462,10 @@ pub(super) const SERVICE: Service = Service {
         quota_writes::RENEW_NOTIFY,
         quota_writes::RENEW_SYNTH,
         quota_writes::DELETE_SYNTH,
+        synthetic_writes::CREATE,
+        synthetic_writes::RENEW,
+        synthetic_writes::RECOVER,
+        synthetic_writes::ENSURE,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,

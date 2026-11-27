@@ -15,10 +15,13 @@ pub use status::*;
 pub use usage::*;
 pub(super) use writes::QuotaLedger;
 pub use writes::{
-    CreateNotificationQuotaOutput, DeleteNotificationQuotaInput, DeleteNotificationQuotaOutput,
-    DeleteQuotaOutput, DeleteSyntheticQuotaInput, DeleteSyntheticQuotaOutput,
-    SetNotificationQuotaAutoRenewInput, SetNotificationQuotaAutoRenewOutput,
-    SetQuotaAutoRenewOutput, SetSyntheticQuotaAutoRenewInput, SetSyntheticQuotaAutoRenewOutput,
+    CreateNotificationQuotaOutput, CreateSyntheticQuotaOutput, DeleteNotificationQuotaInput,
+    DeleteNotificationQuotaOutput, DeleteQuotaOutput, DeleteSyntheticQuotaInput,
+    DeleteSyntheticQuotaOutput, EnsureSyntheticQuotaInput, EnsureSyntheticQuotaOutput,
+    QuotaMutationOutcome, QuotaOutcomeError, RecoverSyntheticQuotaInput,
+    RecoverSyntheticQuotaOutput, RenewSyntheticQuotaOutput, SetNotificationQuotaAutoRenewInput,
+    SetNotificationQuotaAutoRenewOutput, SetQuotaAutoRenewOutput, SetSyntheticQuotaAutoRenewInput,
+    SetSyntheticQuotaAutoRenewOutput,
 };
 
 use std::collections::HashSet;

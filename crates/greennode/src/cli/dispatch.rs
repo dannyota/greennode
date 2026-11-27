@@ -86,14 +86,16 @@ pub trait Adapter<I: ParsedInput> {
     fn preflight_output(&self, _input: &I, _error: &LocalError) -> Option<render::Projected> {
         None
     }
+    fn settings_refusal_output(
+        &self,
+        _envelope: &errors::Envelope<'_>,
+    ) -> Option<render::Projected> {
+        None
+    }
     fn before_send_warning(&self, _input: &I) -> Option<&'static str> {
         None
     }
-    fn settings_refusal_output(
-        &self,
-        _input: &I,
-        _error: &LocalError,
-    ) -> Option<render::Projected> {
+    fn finish_write(&self) -> Option<management::WriteFinisher> {
         None
     }
     fn report_error(
@@ -203,21 +205,7 @@ fn settings_error<I: ParsedInput, A: Adapter<I>>(
     error: &Error,
 ) -> u8 {
     let classified = errors::classify(error, adapter.rules());
-    let code = match classified.envelope.code {
-        "NoCredentials" => "NoCredentials",
-        "TokenCacheFailed" => "TokenCacheFailed",
-        "InvalidConfig" => "InvalidConfig",
-        "InvalidUsage" => "InvalidUsage",
-        "ServiceAccountLoginFailed" => "ServiceAccountLoginFailed",
-        "LoginFailed" => "LoginFailed",
-        _ => "RequestFailed",
-    };
-    let local = LocalError {
-        code,
-        message: classified.envelope.message.to_owned().into(),
-        exit: classified.exit,
-    };
-    if let Some(output) = adapter.settings_refusal_output(input, &local) {
+    if let Some(output) = adapter.settings_refusal_output(&classified.envelope) {
         write_preflight(stdout, stderr, &output, input.output());
     }
     adapter.report_error(stderr, &classified.envelope, Some(error));
@@ -373,6 +361,9 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     log_write(stderr, "write started");
     let result = adapter.execute(ctx, &settings, input).await;
     log_write(stderr, "write finished");
+    if let Some(finish) = adapter.finish_write() {
+        return finish(stdout, stderr, format, result);
+    }
     match result {
         Ok(Some(output)) => match output
             .map_err(OutputError::from)
@@ -448,6 +439,21 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
         },
         Ok(None) => 0,
         Err(ExecutionFailure::Local(error)) => report_local::<I, A>(adapter, stderr, error),
+        Err(ExecutionFailure::Projection(fallback)) => {
+            if let Some(output) = fallback {
+                let _ = render_output(stdout, stderr, &output, format, None, OutputView::default());
+            }
+            report_local::<I, A>(
+                adapter,
+                stderr,
+                LocalError {
+                    code: "RequestFailed",
+                    message: "output failed".into(),
+                    exit: 1,
+                },
+            )
+        }
+
         Err(ExecutionFailure::Sdk(failure)) => {
             if let Some(partial) = &failure.partial {
                 let _ = render_output(

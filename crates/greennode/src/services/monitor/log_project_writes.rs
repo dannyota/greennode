@@ -13,7 +13,6 @@ const RETENTION_DAYS: InputField<Input> = field!(
     i64
 );
 const GB_PER_DAY: InputField<Input> = field!("gb-per-day", "GBPerDay", gb_per_day, "int", i64);
-const CAP: InputField<Input> = field!("max-price", "MaxPrice", max_price, "float64", f64);
 const LOG_PROJECT_ID: InputField<Input> =
     field!("log-project-id", "LogProjectID", log_project_id, required);
 const PURGE: InputField<Input> = field!("purge", "Purge", purge, "bool", bool);
@@ -85,7 +84,7 @@ pub(super) const CREATE: Operation = Operation {
                         value.class.clone_from(&input.class);
                         value.retention_days = input.retention_days;
                         value.gb_per_day = input.gb_per_day;
-                        value.max_price = input.max_price;
+                        value.max_price = input.max_price.unwrap_or_default();
                         value.no_wait = input.no_wait;
                         dispatch::project_result(
                             sdk::Client::new(config)

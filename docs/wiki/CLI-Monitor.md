@@ -137,6 +137,33 @@ read-only quota reads and console billing after uncertainty.
 greennode monitor create-notification-quota --kind Email
 ```
 
+## create-synthetic-quota
+
+Kind: Write.
+
+Requires an absent quota. Confirmation matches package and detail and requires a
+start at or after SentAt.
+
+Requires explicit --max-price or JSON MaxPrice, including zero. The account
+catalog and price quote must agree on a free one-month term. Billing may debit
+the balance. The SDK rechecks the terms before its single order and confirms by
+reading. --no-wait retains the attempt for reconciliation. --query is
+unavailable. Serialize writes across processes per account and kind. Retain a
+durable pending marker and reconcile with read-only quota reads and console
+billing after uncertainty.
+
+| Flag           | Type      | Required |
+| -------------- | --------- | -------- |
+| `--class-id`   | `string`  | yes      |
+| `--package-id` | `string`  | yes      |
+| `--quantity`   | `int`     | yes      |
+| `--max-price`  | `float64` |          |
+| `--no-wait`    | `bool`    |          |
+
+```sh
+greennode monitor create-synthetic-quota --class-id <class-id> --package-id <package-id> --quantity 10 --max-price 0
+```
+
 ## delete-channel
 
 Kind: Write, destructive.
@@ -233,6 +260,33 @@ marker, and reconcile with reads after uncertainty.
 
 ```sh
 greennode monitor delete-synthetic-quota --expected-quota-id <quota-id> --yes
+```
+
+## ensure-synthetic-quota
+
+Kind: Write.
+
+Selects renewal for ACTIVE future expiry or recovery for expired IN-TRASH. POC
+and auto-renew must be off. MaxDaysLeft defaults to seven in flags and JSON.
+Explicit zero permits early renewal.
+
+Requires explicit --max-price or JSON MaxPrice, including zero. The account
+catalog and price quote must agree on a free one-month term. Billing may debit
+the balance. The SDK rechecks the terms before its single order and confirms by
+reading. --no-wait retains the attempt for reconciliation. --query is
+unavailable. Serialize writes across processes per account and kind. Retain a
+durable pending marker and reconcile with read-only quota reads and console
+billing after uncertainty.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--expected-quota-id` | `string`  |          |
+| `--max-price`         | `float64` |          |
+| `--max-days-left`     | `int`     |          |
+| `--no-wait`           | `bool`    |          |
+
+```sh
+greennode monitor ensure-synthetic-quota --max-days-left 7 --max-price 0
 ```
 
 ## get-alarm
@@ -706,6 +760,57 @@ MaxDaysLeft, and NoWait are ignored. Read-only permits this quote.
 
 ```sh
 greennode monitor quote-renew-synthetic-quota --expected-end-time <expected-end-time>
+```
+
+## recover-synthetic-quota
+
+Kind: Write.
+
+Requires the expected quota ID and expired IN-TRASH status. POC and auto-renew
+must be off. Confirmation requires the same ID and package with a later expiry.
+
+Requires explicit --max-price or JSON MaxPrice, including zero. The account
+catalog and price quote must agree on a free one-month term. Billing may debit
+the balance. The SDK rechecks the terms before its single order and confirms by
+reading. --no-wait retains the attempt for reconciliation. --query is
+unavailable. Serialize writes across processes per account and kind. Retain a
+durable pending marker and reconcile with read-only quota reads and console
+billing after uncertainty.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--expected-quota-id` | `string`  | yes      |
+| `--max-price`         | `float64` |          |
+| `--no-wait`           | `bool`    |          |
+
+```sh
+greennode monitor recover-synthetic-quota --expected-quota-id <quota-id> --max-price 0
+```
+
+## renew-synthetic-quota
+
+Kind: Write.
+
+ExpectedEndTime must match the active quota. POC and auto-renew must be off. A
+positive MaxDaysLeft skips early renewal.
+
+Requires explicit --max-price or JSON MaxPrice, including zero. The account
+catalog and price quote must agree on a free one-month term. Billing may debit
+the balance. The SDK rechecks the terms before its single order and confirms by
+reading. --no-wait retains the attempt for reconciliation. --query is
+unavailable. Serialize writes across processes per account and kind. Retain a
+durable pending marker and reconcile with read-only quota reads and console
+billing after uncertainty.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--expected-end-time` | `string`  | yes      |
+| `--max-price`         | `float64` |          |
+| `--max-days-left`     | `int`     |          |
+| `--no-wait`           | `bool`    |          |
+
+```sh
+greennode monitor renew-synthetic-quota --expected-end-time <expiry> --max-days-left 7 --max-price 0
 ```
 
 ## resume-check

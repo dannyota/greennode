@@ -254,20 +254,17 @@ pub(super) fn parse(
                     .ok()
                     .flatten()
                     .map(String::as_str);
-                if let Some(output) = (preflight.project)(&error) {
+                let envelope = super::errors::Envelope {
+                    code: error.code,
+                    message: &error.message,
+                    operation: None,
+                    status: None,
+                };
+                if let Some(output) = (preflight.project)(&envelope) {
                     super::dispatch::write_preflight(stdout, stderr, &output, format);
                 }
                 if let Some(writer) = preflight.error_writer {
-                    writer(
-                        stderr,
-                        &super::errors::Envelope {
-                            code: error.code,
-                            message: &error.message,
-                            operation: None,
-                            status: None,
-                        },
-                        None,
-                    );
+                    writer(stderr, &envelope, None);
                     return Err(ExitCode::from(error.exit));
                 }
                 return Err(ExitCode::from(super::dispatch::local(stderr, error)));

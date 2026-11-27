@@ -223,18 +223,35 @@ fn write_string(writer: &mut dyn Write, value: &str) -> std::io::Result<()> {
 }
 
 pub fn write_error(writer: &mut dyn Write, envelope: &Envelope<'_>) {
+    write_error_ordered(writer, envelope, false);
+}
+
+pub(crate) fn write_error_operation_first(writer: &mut dyn Write, envelope: &Envelope<'_>) {
+    write_error_ordered(writer, envelope, true);
+}
+
+fn write_error_ordered(writer: &mut dyn Write, envelope: &Envelope<'_>, operation_first: bool) {
     let _ = write!(writer, "{{\"error\":{{\"code\":");
     let _ = write_string(writer, envelope.code);
     let _ = write!(writer, ",\"message\":");
     let _ = write_string(writer, envelope.message);
+    if operation_first {
+        append_operation(writer, envelope);
+    }
     if let Some(status) = envelope.status {
         let _ = write!(writer, ",\"status\":{status}");
     }
+    if !operation_first {
+        append_operation(writer, envelope);
+    }
+    let _ = writeln!(writer, "}}}}");
+}
+
+fn append_operation(writer: &mut dyn Write, envelope: &Envelope<'_>) {
     if let Some(operation) = envelope.operation {
         let _ = write!(writer, ",\"operation\":");
         let _ = write_string(writer, operation);
     }
-    let _ = writeln!(writer, "}}}}");
 }
 
 #[cfg(test)]

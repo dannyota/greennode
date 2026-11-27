@@ -21,6 +21,9 @@ mod log_project_writes;
 #[path = "monitor/quota_writes.rs"]
 mod quota_writes;
 
+#[path = "monitor/synthetic_writes.rs"]
+mod synthetic_writes;
+
 #[path = "monitor/next_reads.rs"]
 mod next_reads;
 
