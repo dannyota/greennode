@@ -175,9 +175,9 @@ Unlike Go, refuse every write redirect and every POST read redirect, even at the
 same origin. This includes the VPC rename and monitor log-project quote. Discard
 `Location` in public errors. A refused redirect reports its 3xx status only for
 operations whose Go request sets `Once` or `NoRedirect` and returns the redirect
-itself; elsewhere it reports no status, as Go does. Routes own trusted
-templates; validate caller path IDs before escaping and never interpolate them
-in log events.
+itself; elsewhere it reports no status, as Go does for the cross-host redirects
+it refuses. Routes own trusted templates; validate caller path IDs before
+escaping and never interpolate them in log events.
 
 Decoders may receive bounded response bytes and typed status internally. Accept
 peer error codes and message fields only through the operation's safe

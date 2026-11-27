@@ -57,10 +57,6 @@ fn truncated_not_found_is_request_failed() {
     assert_eq!(status, ExitCode::from(1));
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["code"], "RequestFailed");
-    assert_eq!(
-        error["error"]["message"],
-        "tagging.ListResourceTags: request failed: network request failed"
-    );
 }
 
 #[test]

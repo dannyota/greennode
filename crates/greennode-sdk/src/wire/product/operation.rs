@@ -372,20 +372,13 @@ async fn send_route<T>(
                 _ => crate::ErrorClass::Api,
             };
             let retryable = send_retry_hint(&failure.error, operation.retry);
-            let cause = transport_cause(&failure.error);
-            let kept = if operation.keep_status { status } else { None };
             let error = match failure.error {
                 sender::Error::Provider(error) => *error,
-                _ if retryable => retryable_error(operation.id, cause),
-                _ => api_error_with_message(
+                _ if retryable => retryable_error(operation.id),
+                _ => api_error(
                     operation.id,
-                    kept,
+                    if operation.keep_status { status } else { None },
                     class,
-                    &if kept.is_none() {
-                        transport_message(operation.id, cause)
-                    } else {
-                        String::new()
-                    },
                 ),
             };
             let error = match status {
@@ -549,28 +542,14 @@ fn send_retry_hint(error: &sender::Error, policy: redirect::Retry) -> bool {
         ))
 }
 
-fn retryable_error(operation: &'static str, cause: &str) -> crate::Error {
+fn retryable_error(operation: &'static str) -> crate::Error {
     crate::Error::from_api(crate::ApiError::without_fallback(
         operation,
         None,
         crate::error::SafeText::new("", &[]),
-        crate::error::SafeText::new(&transport_message(operation, cause), &[]),
+        crate::error::SafeText::new("", &[]),
         true,
     ))
-}
-
-fn transport_message(operation: &str, cause: &str) -> String {
-    format!("{operation}: request failed: {cause}")
-}
-
-fn transport_cause(error: &sender::Error) -> &'static str {
-    match error {
-        sender::Error::Context(crate::ContextEnd::Cancelled) => "canceled",
-        sender::Error::Context(crate::ContextEnd::DeadlineExceeded)
-        | sender::Error::Send(send::Error::Deadline) => "timed out",
-        sender::Error::Redirect(redirect::Refusal::Limit) => "stopped after 10 redirects",
-        _ => crate::error::NETWORK_REQUEST_FAILED,
-    }
 }
 
 fn api_error(
@@ -578,20 +557,11 @@ fn api_error(
     status: Option<StatusCode>,
     class: crate::ErrorClass,
 ) -> crate::Error {
-    api_error_with_message(operation, status, class, "")
-}
-
-fn api_error_with_message(
-    operation: &'static str,
-    status: Option<StatusCode>,
-    class: crate::ErrorClass,
-    message: &str,
-) -> crate::Error {
     let api = crate::ApiError::without_fallback(
         operation,
         status.map(|s| s.as_u16()),
         crate::error::SafeText::new("", &[]),
-        crate::error::SafeText::new(message, &[]),
+        crate::error::SafeText::new("", &[]),
         false,
     );
     if class == crate::ErrorClass::Api {
@@ -1179,12 +1149,7 @@ mod tests {
         let failed = sender::Error::Send(send::Error::Transport(retry::SendFailure::FailedDial));
         let body = sender::Error::Send(send::Error::Body);
         assert!(send_retry_hint(&failed, redirect::Retry::Once));
-        assert!(
-            retryable_error("test", "x")
-                .api_error()
-                .unwrap()
-                .retryable()
-        );
+        assert!(retryable_error("test").api_error().unwrap().retryable());
         assert!(!send_retry_hint(&body, redirect::Retry::Once));
     }
 
