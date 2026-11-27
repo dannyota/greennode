@@ -1,0 +1,26 @@
+{
+  "data": {
+    "id": "alarm-1",
+    "status": {
+      "status": "OK",
+      "status_updated_at": "2000-01-03T00:00:00Z"
+    },
+    "alarms": [
+      {
+        "id": "sub-1",
+        "metrics": [
+          {
+            "dimensions": {
+              "location_id": "loc-1",
+              "location_name": "Probe"
+            }
+          }
+        ],
+        "state": "OK",
+        "state_updated_timestamp": "2000-01-03T00:00:00Z",
+        "updated_timestamp": "2000-01-02T00:00:00Z",
+        "created_timestamp": "2000-01-01T00:00:00Z"
+      }
+    ]
+  }
+}

@@ -36,7 +36,7 @@ impl<'a> Reader<'a> {
                 id,
                 route: "",
                 limit: 1 << 20,
-                family: Family::Quota,
+                family: Family::Quota { no_redirect: true },
             },
             evidence: Evidence::new(),
         }
@@ -47,6 +47,17 @@ impl<'a> Reader<'a> {
         route: &'static str,
         segments: &[&str],
     ) -> Result<Box<RawValue>, Error> {
+        self.get_status(route, segments, false)
+            .await
+            .map(|(_, raw)| raw)
+    }
+
+    pub(super) async fn get_status(
+        &mut self,
+        route: &'static str,
+        segments: &[&str],
+        accept_not_found: bool,
+    ) -> Result<(http::StatusCode, Box<RawValue>), Error> {
         if self.exhausted {
             return Err(self
                 .read
@@ -62,14 +73,21 @@ impl<'a> Reader<'a> {
         let read = Read { route, ..self.read };
         let response = self
             .client
-            .read(self.ctx, &read, segments, &[], &mut self.evidence)
+            .read_status(
+                self.ctx,
+                &read,
+                segments,
+                &[],
+                &mut self.evidence,
+                accept_not_found,
+            )
             .await;
         if self.evidence.credentials().values().len() > CREDENTIAL_LIMIT {
             self.exhausted = true;
             return Err(read.error(
                 response.as_ref().map_or_else(
                     |error| error.api_error().and_then(crate::ApiError::status),
-                    |_| Some(200),
+                    |(status, _)| Some(status.as_u16()),
                 ),
                 "InvalidResponse",
                 "quota credential safety limit exceeded",
@@ -77,14 +95,26 @@ impl<'a> Reader<'a> {
                 &self.evidence,
             ));
         }
-        let raw = response?;
-        validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| self.invalid())?;
+        let (status, raw) = response?;
+        validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| {
+            if status == http::StatusCode::NOT_FOUND {
+                read.error(
+                    Some(404),
+                    "NotFound",
+                    "quota response had invalid structure",
+                    false,
+                    &self.evidence,
+                )
+            } else {
+                self.invalid()
+            }
+        })?;
         let length = sanitized_len(raw.get());
         if length > COMPOSITE_LIMIT - self.retained {
             self.exhausted = true;
             return Err(read
                 .error(
-                    Some(200),
+                    Some(status.as_u16()),
                     "ResponseTooLarge",
                     "quota retained body budget exceeded",
                     false,
@@ -93,7 +123,7 @@ impl<'a> Reader<'a> {
                 .with_body_too_large());
         }
         self.retained += length;
-        Ok(raw)
+        Ok((status, raw))
     }
 
     pub(super) fn invalid(&self) -> Error {
@@ -136,6 +166,14 @@ pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>);
 impl<'a> Object<'a> {
     pub(super) fn of(raw: &'a RawValue) -> Option<Self> {
         serde_json::from_str(raw.get()).ok().map(Self)
+    }
+
+    pub(super) fn entries(self) -> impl Iterator<Item = (String, &'a RawValue)> {
+        self.0.into_iter()
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
     }
 
     pub(super) fn field(&self, key: &str) -> Option<Option<&'a RawValue>> {
@@ -189,7 +227,7 @@ fn number_token(raw: &str) -> bool {
     matches!(raw.as_bytes().first(), Some(b'-' | b'0'..=b'9'))
 }
 
-pub(super) fn integer(value: &RawValue) -> Option<i64> {
+pub(in crate::monitor) fn integer(value: &RawValue) -> Option<i64> {
     let raw = value.get();
     if raw.len() > 128 || !number_token(raw) {
         return None;

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
+use greennode_sdk::monitor::QuotaTimestamp;
+
 use crate::cli::dispatch::{Format, OutputView};
 use crate::cli::render::{self, Value};
 
@@ -20,6 +22,43 @@ pub(super) fn status_view() -> OutputView {
         transform_query_cells: Some(unknown_cells),
         use_for_partial: true,
         ..OutputView::default()
+    }
+}
+
+pub(super) fn notification_view() -> OutputView {
+    OutputView {
+        project_non_json: Some(notification_times_utc),
+        transform_query_cells: Some(unknown_cells),
+        ..OutputView::default()
+    }
+}
+
+pub(super) fn notification_usage_view() -> OutputView {
+    OutputView {
+        transform_query_cells: Some(unknown_cells),
+        ..OutputView::default()
+    }
+}
+
+fn notification_times_utc(value: &mut Value) {
+    let Value::Object(fields) = value else { return };
+    let Some(Value::Object(quota)) = fields.get_mut("Quota") else {
+        return;
+    };
+    for key in ["StartTime", "EndTime", "CreatedAt", "UpdatedAt"] {
+        let Some(Value::String(text)) = quota.get_mut(key) else {
+            continue;
+        };
+        let input = serde_json::Value::String(text.clone());
+        let utc = serde_json::from_value::<QuotaTimestamp>(input)
+            .ok()
+            .and_then(QuotaTimestamp::to_utc);
+        if let Some(serde_json::Value::String(utc)) =
+            utc.and_then(|time| serde_json::to_value(time).ok())
+            && let Value::String(display) = timestamp(Value::String(utc))
+        {
+            *text = display;
+        }
     }
 }
 

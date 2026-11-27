@@ -5,6 +5,7 @@
     reason = "SDK methods return Failure with the typed output"
 )]
 
+mod check_alarm;
 mod dashboards;
 mod quota;
 mod response_times;
@@ -19,6 +20,7 @@ use crate::config::Session;
 use crate::model::wire::{Field, WireField};
 use crate::wire::product::evidence::Evidence;
 
+pub use check_alarm::*;
 pub use dashboards::*;
 pub use quota::*;
 pub use response_times::*;

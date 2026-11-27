@@ -1,4 +1,5 @@
 pub(crate) mod decode;
+pub(crate) mod monitor;
 
 use crate::config::session::Session;
 use crate::wire::product::{
@@ -18,6 +19,10 @@ use serde_json::value::RawValue;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Product<'a> {
+    Monitor {
+        identifiers: &'a [&'a str],
+        no_redirect: bool,
+    },
     Portal,
     Regional,
     Vnetwork(&'a crate::endpoint::Base),
@@ -31,6 +36,7 @@ impl<'a> Product<'a> {
     {
         let endpoints = session.endpoints();
         match self {
+            Self::Monitor { .. } => endpoints.monitor.as_ref(),
             Self::Portal => endpoints.portal.as_ref(),
             Self::Regional => endpoints.vserver.as_ref(),
             Self::Vnetwork(base) => Some(base),
@@ -265,7 +271,10 @@ pub(crate) async fn exchange(
         overflow_overrides_status: false,
         sensitive: !direct,
         reject_reflected_credentials: false,
-        no_redirect: true,
+        no_redirect: match req.product {
+            Product::Monitor { no_redirect, .. } => no_redirect,
+            _ => true,
+        },
         retry_config: retry::Config::default(),
     };
     let body = req
@@ -276,6 +285,18 @@ pub(crate) async fn exchange(
         .map_or_else(Bytes::new, Bytes::from);
     let mut jitter = || session.retry_jitter();
     let runtime = session.runtime(ctx, &mut jitter)?;
+    if let Product::Monitor { identifiers, .. } = req.product {
+        return monitor::exchange(
+            runtime,
+            base,
+            &operation,
+            req,
+            body,
+            evidence,
+            (session.bearer_source(), identifiers),
+        )
+        .await;
+    }
     let source = session.bearer_source();
     let (status, document) = if vnetwork {
         let (status, VnetworkDocument(document)) = operation::execute_with_evidence(

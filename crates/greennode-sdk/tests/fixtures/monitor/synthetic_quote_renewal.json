@@ -1,0 +1,15 @@
+{
+  "id": "quota-1",
+  "name": "Synthetic",
+  "type": "SYNTHETIC_TEST",
+  "status": "ACTIVE",
+  "packageId": "unit_1",
+  "startTime": "2000-01-01T00:00:00Z",
+  "endTime": "2099-02-01T07:00:00+07:00",
+  "createdAt": "2000-01-01T00:00:00Z",
+  "updatedAt": null,
+  "autoRenew": 0,
+  "poc": 0,
+  "system": false,
+  "autoRenewPeriod": 1
+}

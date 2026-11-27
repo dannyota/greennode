@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 
-use super::wire::{Family, Read, decode, failure, invalid_input};
+use super::wire::{Family, Read, decode, failure, input_error, path_id_failure};
 use super::{Client, ResponseField};
 use crate::model::wire::{Field, WireField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
@@ -167,7 +167,10 @@ impl Client {
         input: ListDashboardsInput,
     ) -> Result<ListDashboardsOutput, Failure<ListDashboardsOutput>> {
         if input.page < 0 || !(0..=100).contains(&input.size) {
-            return Err(invalid_input());
+            return Err(failure(input_error(format!(
+                "vngcloud: invalid input: {}: invalid page or size",
+                LIST.id
+            ))));
         }
         let page = input.page.max(1);
         let size = if input.size == 0 { 10 } else { input.size };
@@ -198,7 +201,7 @@ impl Client {
         input: GetDashboardInput,
     ) -> Result<GetDashboardOutput, Failure<GetDashboardOutput>> {
         if !PathIds::Strict.allows(&input.dashboard_id) {
-            return Err(invalid_input());
+            return Err(path_id_failure(GET.id, "DashboardID"));
         }
         let mut evidence = Evidence::new();
         let raw = self

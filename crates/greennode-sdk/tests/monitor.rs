@@ -3,6 +3,15 @@
 #[path = "monitor/quota.rs"]
 mod quota;
 
+#[path = "monitor/notification.rs"]
+mod notification;
+
+#[path = "monitor/next_reads.rs"]
+mod next_reads;
+
+#[path = "monitor/synthetic_quotes.rs"]
+mod synthetic_quotes;
+
 use greennode_sdk::monitor::{
     Client, GetDashboardInput, ListCheckResponseTimesInput, ListDashboardsInput,
 };
@@ -428,4 +437,82 @@ async fn response_times_reject_reflected_raw_numbers() {
         failure.error().api_error().unwrap().code(),
         "InvalidResponse"
     );
+}
+
+#[tokio::test]
+async fn path_id_refusals_carry_go_messages_for_every_monitor_read() {
+    use greennode_sdk::monitor::GetCheckAlarmInput;
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![]);
+    let client = client(&server);
+    let pattern = |op: &str, field: &str| {
+        format!("vngcloud: invalid input: {op} requires {field} to match ^[A-Za-z0-9-]+$")
+    };
+    let required =
+        |op: &str, field: &str| format!("vngcloud: invalid input: {op} requires {field}");
+    let text = |error: &Error| error.detail::<String>().cloned();
+
+    let failure = client
+        .get_check_alarm(&ctx, GetCheckAlarmInput::new("bad_id"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(pattern("monitor.GetCheckAlarm", "CheckID"))
+    );
+    let failure = client
+        .get_check_alarm(&ctx, GetCheckAlarmInput::new(""))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(required("monitor.GetCheckAlarm", "CheckID"))
+    );
+    let failure = client
+        .list_check_response_times(&ctx, ListCheckResponseTimesInput::new("bad_id"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(pattern("monitor.ListCheckResponseTimes", "CheckID"))
+    );
+    let failure = client
+        .list_check_response_times(&ctx, ListCheckResponseTimesInput::new(""))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(required("monitor.ListCheckResponseTimes", "CheckID"))
+    );
+    let failure = client
+        .get_dashboard(&ctx, GetDashboardInput::new("bad_id"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(pattern("monitor.GetDashboard", "DashboardID"))
+    );
+    let failure = client
+        .get_dashboard(&ctx, GetDashboardInput::new(""))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some(pattern("monitor.GetDashboard", "DashboardID"))
+    );
+    let failure = client
+        .list_dashboards(
+            &ctx,
+            ListDashboardsInput {
+                size: 101,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        text(failure.error()),
+        Some("vngcloud: invalid input: monitor.ListDashboards: invalid page or size".to_owned())
+    );
+    assert_eq!(server.requests(), 0);
 }

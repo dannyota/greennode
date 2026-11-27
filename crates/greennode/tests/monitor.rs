@@ -1,6 +1,15 @@
 #[path = "monitor/quota.rs"]
 mod quota;
 
+#[path = "monitor/notification.rs"]
+mod notification;
+
+#[path = "monitor/next_reads.rs"]
+mod next_reads;
+
+#[path = "monitor/synthetic_quotes.rs"]
+mod synthetic_quotes;
+
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 

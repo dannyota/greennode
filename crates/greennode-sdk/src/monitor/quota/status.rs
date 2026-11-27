@@ -21,6 +21,10 @@ pub enum ErrorDetail {
     QuotaStatusIncomplete,
     /// The requested quota kind is unsupported.
     InvalidQuotaKind,
+    /// The current quota expiry differs from the expected expiry.
+    QuotaChanged,
+    /// The provider returned a status without known quota semantics.
+    UnexpectedStatus,
 }
 
 /// Selects which quotas to include in a status snapshot.
@@ -30,9 +34,16 @@ pub struct GetQuotaStatusInput {
     pub kind: String,
 }
 
-/// A UTC timestamp returned by a Monitor quota read.
+/// A timestamp returned by a Monitor quota read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuotaTimestamp(pub OffsetDateTime);
+
+impl QuotaTimestamp {
+    /// Returns the same instant with a UTC offset, if representable.
+    pub fn to_utc(self) -> Option<Self> {
+        self.0.checked_to_offset(UtcOffset::UTC).map(Self)
+    }
+}
 
 impl Default for QuotaTimestamp {
     fn default() -> Self {
@@ -45,11 +56,7 @@ impl Default for QuotaTimestamp {
 
 impl Serialize for QuotaTimestamp {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let text = self
-            .0
-            .to_offset(UtcOffset::UTC)
-            .format(&Rfc3339)
-            .map_err(serde::ser::Error::custom)?;
+        let text = self.0.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
         serializer.serialize_str(&text)
     }
 }
@@ -58,18 +65,23 @@ impl<'de> Deserialize<'de> for QuotaTimestamp {
     fn deserialize<D: Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
         let text = String::deserialize(input)?;
         OffsetDateTime::parse(&text, &Rfc3339)
-            .map_err(serde::de::Error::custom)?
-            .checked_to_offset(UtcOffset::UTC)
             .map(Self)
-            .ok_or_else(|| serde::de::Error::custom("UTC timestamp is out of range"))
+            .map_err(serde::de::Error::custom)
     }
 }
 
 impl WireField for QuotaTimestamp {
     fn redact(&mut self, evidence: &Evidence) -> bool {
         self.0.format(&Rfc3339).is_ok_and(|text| {
-            let display = text.trim_end_matches('Z').replace('T', " ") + " UTC";
-            !evidence.text_reflects(&text) && !evidence.text_reflects(&display)
+            let display = self
+                .0
+                .checked_to_offset(UtcOffset::UTC)
+                .and_then(|time| time.format(&Rfc3339).ok());
+            !evidence.text_reflects(&text)
+                && display.is_some_and(|text| {
+                    let text = text.trim_end_matches('Z').replace('T', " ") + " UTC";
+                    !evidence.text_reflects(&text)
+                })
         })
     }
 }
@@ -326,7 +338,8 @@ async fn status_row(
         }
         Err(error) => return Err(error),
     };
-    let quota = reader.decode(decode_quota(&raw))?;
+    let mut quota = reader.decode(decode_quota(&raw))?;
+    reader.decode(quota.normalize_utc())?;
     reader.decision_ids.extend([
         quota.id_fields.id.clone(),
         quota.id_fields.package_id.clone(),
@@ -340,6 +353,9 @@ async fn status_row(
             };
             let raw = reader.get(route, &[]).await?;
             let packages = reader.decode(notification_packages(&raw))?;
+            if !unique(packages.iter().map(|package| &package.id)) {
+                return Err(reader.invalid());
+            }
             if let Some(package) = packages
                 .into_iter()
                 .find(|package| package.id == quota.id_fields.package_id)
@@ -372,24 +388,9 @@ async fn synthetic_row(
     now: OffsetDateTime,
     reader: &mut Reader<'_>,
 ) -> Result<(), Error> {
+    let detail = read_synthetic_detail(quota, reader).await?;
     let fields = &quota.id_fields;
-    if [&fields.id, &fields.package_id]
-        .into_iter()
-        .any(|id| reader.evidence.id_reflects(id))
-    {
-        return Err(reader.invalid());
-    }
-    let raw = reader
-        .get("billing-api/v2/synthetic/{}/quota-detail", &[&fields.id])
-        .await?;
-    let detail = reader.decode(synthetic_detail(&raw, fields))?;
     reader.decision_ids.push(detail.class_id.clone());
-    if [&fields.id, &fields.package_id, &detail.class_id]
-        .into_iter()
-        .any(|id| reader.evidence.id_reflects(id))
-    {
-        return Err(reader.invalid());
-    }
     row.class_name = detail.class_name;
     row.price = detail.price.map(ResponseField::Value);
     if detail.price == Some(0.0) {
@@ -426,28 +427,64 @@ async fn synthetic_row(
     Ok(())
 }
 
-struct QuotaIds {
-    id: String,
-    package_id: String,
-    status: String,
+pub(super) async fn read_synthetic_detail(
+    quota: &DecodedQuota,
+    reader: &mut Reader<'_>,
+) -> Result<Detail, Error> {
+    let fields = &quota.id_fields;
+    if [&fields.id, &fields.package_id]
+        .into_iter()
+        .any(|id| reader.evidence.id_reflects(id))
+    {
+        return Err(reader.invalid());
+    }
+    let raw = reader
+        .get("billing-api/v2/synthetic/{}/quota-detail", &[&fields.id])
+        .await?;
+    let detail = reader.decode(synthetic_detail(&raw, fields))?;
+    if [&fields.id, &fields.package_id, &detail.class_id]
+        .into_iter()
+        .any(|id| reader.evidence.id_reflects(id))
+    {
+        return Err(reader.invalid());
+    }
+    Ok(detail)
 }
 
-struct DecodedQuota {
-    id_fields: QuotaIds,
+pub(super) struct QuotaIds {
+    pub(super) id: String,
+    pub(super) package_id: String,
+    pub(super) status: String,
+}
+
+pub(super) struct DecodedQuota {
+    pub(super) id_fields: QuotaIds,
     name: String,
     quota_type: String,
-    start_time: QuotaTimestamp,
-    end_time: QuotaTimestamp,
+    pub(super) start_time: QuotaTimestamp,
+    pub(super) end_time: QuotaTimestamp,
     created_at: QuotaTimestamp,
     updated_at: QuotaTimestamp,
-    auto_renew: bool,
-    poc: bool,
+    pub(super) auto_renew: bool,
+    pub(super) poc: bool,
     system: bool,
     auto_renew_period: i64,
 }
 
 impl DecodedQuota {
-    fn into_model(self) -> Quota {
+    fn normalize_utc(&mut self) -> Option<()> {
+        for timestamp in [
+            &mut self.start_time,
+            &mut self.end_time,
+            &mut self.created_at,
+            &mut self.updated_at,
+        ] {
+            timestamp.0 = timestamp.0.checked_to_offset(UtcOffset::UTC)?;
+        }
+        Some(())
+    }
+
+    pub(super) fn into_model(self) -> Quota {
         Quota {
             id: self.id_fields.id,
             name: self.name,
@@ -466,7 +503,7 @@ impl DecodedQuota {
     }
 }
 
-fn decode_quota(raw: &serde_json::value::RawValue) -> Option<DecodedQuota> {
+pub(super) fn decode_quota(raw: &serde_json::value::RawValue) -> Option<DecodedQuota> {
     let o = Object::of(raw)?;
     let id = o.text("id")?;
     let package_id = o.text("packageId")?;
@@ -497,12 +534,12 @@ fn decode_quota(raw: &serde_json::value::RawValue) -> Option<DecodedQuota> {
     })
 }
 
-struct Detail {
-    class_id: String,
+pub(super) struct Detail {
+    pub(super) class_id: String,
     class_name: String,
-    api: i64,
-    location: i64,
-    price: Option<f64>,
+    pub(super) api: i64,
+    pub(super) location: i64,
+    pub(super) price: Option<f64>,
 }
 
 fn synthetic_detail(raw: &serde_json::value::RawValue, quota: &QuotaIds) -> Option<Detail> {
@@ -530,13 +567,15 @@ fn synthetic_detail(raw: &serde_json::value::RawValue, quota: &QuotaIds) -> Opti
     })
 }
 
-struct NotificationPackage {
-    id: String,
+pub(super) struct NotificationPackage {
+    pub(super) id: String,
     name: String,
-    price: Option<f64>,
+    pub(super) price: Option<f64>,
 }
 
-fn notification_packages(raw: &serde_json::value::RawValue) -> Option<Vec<NotificationPackage>> {
+pub(super) fn notification_packages(
+    raw: &serde_json::value::RawValue,
+) -> Option<Vec<NotificationPackage>> {
     let mut packages = Vec::new();
     for item in array(raw)? {
         let o = Object::of(item)?;
@@ -551,7 +590,7 @@ fn notification_packages(raw: &serde_json::value::RawValue) -> Option<Vec<Notifi
             price: o.price()?,
         });
     }
-    unique(packages.iter().map(|package| &package.id)).then_some(packages)
+    Some(packages)
 }
 
 #[cfg(test)]
@@ -559,11 +598,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn as_of_is_utc_for_non_utc_clock() {
+    fn timestamp_serializes_with_retained_offset() {
         let now = OffsetDateTime::UNIX_EPOCH.to_offset(UtcOffset::from_hms(7, 0, 0).unwrap());
-        let timestamp = QuotaTimestamp(now);
         assert_eq!(
-            serde_json::to_string(&timestamp).unwrap(),
+            serde_json::to_string(&QuotaTimestamp(now)).unwrap(),
+            "\"1970-01-01T07:00:00+07:00\""
+        );
+    }
+
+    #[test]
+    fn utc_view_serializes_as_utc() {
+        let now = OffsetDateTime::UNIX_EPOCH.to_offset(UtcOffset::from_hms(7, 0, 0).unwrap());
+        let utc = QuotaTimestamp(now).to_utc().unwrap();
+        assert_eq!(
+            serde_json::to_string(&utc).unwrap(),
             "\"1970-01-01T00:00:00Z\""
         );
     }

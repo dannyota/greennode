@@ -50,6 +50,7 @@ pub(super) const VIEW: OutputView = OutputView {
     withhold: None,
     custom: Some(render),
     raw_text: None,
+    project_non_json: None,
     transform_query_cells: None,
     use_for_partial: false,
 };

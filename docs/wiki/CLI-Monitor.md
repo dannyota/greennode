@@ -2,6 +2,23 @@
 
 # CLI: Monitor
 
+## get-check-alarm
+
+Kind: Read.
+
+Reads the current alarm and its location states through the check's
+HistoryAlarmID. An empty alarm reference is NotFound (exit 4). An unknown
+definition can return server error 500 (exit 1). A check's Status reports
+whether it runs. MonitorStatus reports its alarm state.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--check-id` | `string` | yes      |
+
+```sh
+greennode monitor get-check-alarm --check-id <check-id> --query Alarm
+```
+
 ## get-dashboard
 
 Kind: Read.
@@ -14,6 +31,38 @@ Reads one dashboard without widgets. There is no delete command.
 
 ```sh
 greennode monitor get-dashboard --dashboard-id <dashboard-id> --query Dashboard
+```
+
+## get-notification-quota
+
+Kind: Read.
+
+--kind accepts Email or SMS, case insensitively. Reads quota identity, status,
+expiry, and AutoRenew. Table and text timestamps show UTC. A missing quota is
+NotFound (exit 4).
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--kind` | `string` | yes      |
+
+```sh
+greennode monitor get-notification-quota --kind Email --query Quota
+```
+
+## get-notification-quota-usage
+
+Kind: Read.
+
+--kind accepts Email, case insensitively. Reads message consumption and
+descriptions. A missing quota is NotFound (exit 4). SMS usage is refused before
+requests.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--kind` | `string` | yes      |
+
+```sh
+greennode monitor get-notification-quota-usage --kind Email --query Usage
 ```
 
 ## list-check-response-times
@@ -93,4 +142,64 @@ Read-only settings allow this read.
 
 ```sh
 greennode monitor quota-status --kind synthetic
+```
+
+## quote-create-notification-quota
+
+Kind: Read.
+
+Estimates one month of Email or SMS capacity without ordering. Omitting
+--package-id selects the unique zero-price package. An existing quota is
+refused. MaxPrice and NoWait are ignored. Prices are in VND. Email pre-VAT
+treatment is inferred and SMS VAT treatment is unverified. GuardPrice is the
+higher of list and quote prices.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--kind`                                 | `string`  | yes      |
+| `--package-id`                           | `string`  |          |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+| `NoWait` (via `--cli-input-json` only)   | `bool`    |          |
+
+```sh
+greennode monitor quote-create-notification-quota --kind Email
+```
+
+## quote-create-synthetic-quota
+
+Kind: Read.
+
+Estimates one month of a selected free package after verifying quota absence and
+eligibility in the class catalog. Uses class unit prices. Paid offers are
+refused. MaxPrice and NoWait are ignored. Read-only permits this quote.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--class-id`                             | `string`  | yes      |
+| `--package-id`                           | `string`  | yes      |
+| `--quantity`                             | `int`     | yes      |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+| `NoWait` (via `--cli-input-json` only)   | `bool`    |          |
+
+```sh
+greennode monitor quote-create-synthetic-quota --class-id <class-id> --package-id <package-id> --quantity <quantity>
+```
+
+## quote-renew-synthetic-quota
+
+Kind: Read.
+
+Estimates one month from the active quota and its identity-checked detail.
+ExpectedEndTime must be RFC 3339 and match the quota expiry. MaxPrice,
+MaxDaysLeft, and NoWait are ignored. Read-only permits this quote.
+
+| Flag                                        | Type      | Required |
+| ------------------------------------------- | --------- | -------- |
+| `--expected-end-time`                       | `string`  | yes      |
+| `MaxPrice` (via `--cli-input-json` only)    | `float64` |          |
+| `MaxDaysLeft` (via `--cli-input-json` only) | `int`     |          |
+| `NoWait` (via `--cli-input-json` only)      | `bool`    |          |
+
+```sh
+greennode monitor quote-renew-synthetic-quota --expected-end-time <expected-end-time>
 ```

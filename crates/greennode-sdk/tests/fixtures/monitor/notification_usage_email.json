@@ -1,0 +1,12 @@
+{
+  "usage": {
+    "amount": 0
+  },
+  "description": {
+    "amount": {
+      "name": "Email",
+      "specs": "Monthly email messages",
+      "unit": "/month"
+    }
+  }
+}

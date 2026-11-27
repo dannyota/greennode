@@ -38,6 +38,7 @@ pub struct OutputView {
     pub(crate) withhold: Option<&'static str>,
     pub(crate) custom: Option<CustomOutput>,
     pub(crate) raw_text: Option<RawText>,
+    pub(crate) project_non_json: Option<fn(&mut render::Value)>,
     pub(crate) transform_query_cells: Option<fn(&mut render::Value)>,
     pub(crate) use_for_partial: bool,
 }
@@ -104,6 +105,11 @@ fn write_output(
         return render::write_projected_table(&mut writer, projected, table).map_err(Into::into);
     }
     let mut value = projected.for_query()?;
+    if format != Format::Json
+        && let Some(project) = view.project_non_json
+    {
+        project(&mut value);
+    }
     if let Some(query) = query {
         value = query::evaluate(query, &value).map_err(|_| OutputError::Query)?;
         if format != Format::Json

@@ -445,6 +445,13 @@ fn offers(classes: &[Class]) -> BTreeMap<&str, Offer<'_>> {
 
 impl Offer<'_> {
     fn free(&self, class_id: &str, location: i64, quantity: Option<i64>) -> bool {
+        self.matches(class_id, location, quantity)
+            && self
+                .package
+                .is_some_and(|(_, package)| package.price == Some(ResponseField::Value(0.0)))
+    }
+
+    fn matches(&self, class_id: &str, location: i64, quantity: Option<i64>) -> bool {
         let (Some((package_class, package)), Some((option_class, option))) =
             (self.package, self.option)
         else {
@@ -465,13 +472,89 @@ impl Offer<'_> {
             && option.status == ACTIVE
             && get(package.location) == Some(location)
             && get(option.output.location) == Some(location)
-            && get(package.price.unwrap_or(ResponseField::Redacted)) == Some(0.0)
             && quantity.is_none_or(|quantity| {
                 (min..=max).contains(&quantity)
                     && (quantity - min) % step == 0
                     && quantity % api == 0
             })
     }
+}
+
+pub(super) struct QuoteOffer {
+    pub(super) location: i64,
+    pub(super) list_price: f64,
+}
+
+pub(super) enum OfferIssue {
+    Class,
+    Package,
+    Option,
+    Period,
+}
+
+pub(super) async fn quote_offer(
+    reader: &mut Reader<'_>,
+    class_id: &str,
+    package_id: &str,
+    quantity: i64,
+) -> Result<Result<QuoteOffer, OfferIssue>, Error> {
+    let mut classes = read_classes(reader).await?;
+    read_class_packages(reader, &mut classes).await?;
+    let reflected = |reader: &Reader<'_>| {
+        [class_id, package_id]
+            .into_iter()
+            .chain(class_ids(&classes))
+            .any(|id| reader.evidence.id_reflects(id))
+    };
+    if reflected(reader) {
+        return Err(reader.invalid());
+    }
+    let Some(class) = classes
+        .iter()
+        .find(|class| class.id == class_id && class.status == ACTIVE)
+    else {
+        return Ok(Err(OfferIssue::Class));
+    };
+    let Some(package) = class
+        .packages
+        .iter()
+        .find(|package| package.id == package_id)
+    else {
+        return Ok(Err(OfferIssue::Package));
+    };
+    let unit_price = reader.decode(package.price.and_then(get))?;
+    let location = reader.decode(get(package.location))?;
+    if get(package.api) != Some(1)
+        || !offers(&classes)
+            .get(package_id)
+            .is_some_and(|offer| offer.matches(class_id, location, Some(quantity)))
+    {
+        return Ok(Err(OfferIssue::Option));
+    }
+    let list_price = unit_price * quantity as f64;
+    if !list_price.is_finite() {
+        return Err(reader.invalid());
+    }
+    let settings = read_settings(reader).await?;
+    if !settings_offer_one_free_month(&settings) {
+        return Ok(Err(OfferIssue::Period));
+    }
+    if reflected(reader) {
+        return Err(reader.invalid());
+    }
+    Ok(Ok(QuoteOffer {
+        location,
+        list_price,
+    }))
+}
+
+pub(super) fn settings_offer_one_free_month(settings: &Settings) -> bool {
+    settings
+        .periods
+        .iter()
+        .copied()
+        .filter(|period| *period <= settings.maximum)
+        .eq([1])
 }
 
 pub(super) fn status_eligibility(
@@ -504,12 +587,7 @@ pub(super) fn status_eligibility(
         }
     }
     Ok(api > 0
-        && settings
-            .periods
-            .iter()
-            .copied()
-            .filter(|period| *period <= settings.maximum)
-            .eq([1])
+        && settings_offer_one_free_month(settings)
         && offers(classes)
             .get(package_id)
             .is_some_and(|offer| offer.free(class_id, location, Some(api))))
