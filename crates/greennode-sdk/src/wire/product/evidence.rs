@@ -232,7 +232,7 @@ impl Evidence {
         self.credentials.discarded_credentials = true;
     }
 
-    pub(crate) fn for_first_login_preflight(&self) -> Option<Self> {
+    pub(crate) fn for_first_bearer_failure(&self) -> Option<Self> {
         let credentials = &self.credentials;
         if !credentials.incomplete_signin
             || credentials.discarded_credentials

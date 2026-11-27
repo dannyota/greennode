@@ -149,18 +149,15 @@ impl Client {
                 };
                 unsettled(spec.op, Some(cause))
             });
-        let login_evidence = if state.dispatch == WriteDispatch::NotSent
-            && outcome.as_ref().is_err_and(|error| {
-                error.service_account_login_error().is_some() || error.login_error().is_some()
-            }) {
-            state.evidence.for_first_login_preflight()
+        let preflight_evidence = if outcome.is_err() && state.dispatch == WriteDispatch::NotSent {
+            state.evidence.for_first_bearer_failure()
         } else {
             None
         };
-        if login_evidence.is_some() {
+        if preflight_evidence.is_some() {
             state.draft = Draft::default();
         }
-        let evidence = login_evidence.as_ref().unwrap_or(&state.evidence);
+        let evidence = preflight_evidence.as_ref().unwrap_or(&state.evidence);
         let output = state
             .draft
             .project(spec.op, outcome.as_ref().err(), evidence, make);

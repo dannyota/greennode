@@ -10,9 +10,9 @@ use serde::Serialize;
 const PEER_TEXT: &str = "peer-diagnostic-canary";
 const CSRF: &str = "fixture-csrf-canary";
 
-fn service_account_config(login: &Server, monitor: &Server) -> Config {
+fn service_account_config(options: ConfigOptions, login: &Server, monitor: &Server) -> Config {
     let mut config = Config::new(
-        options()
+        options
             .with_service_account(service())
             .with_product_loopback(crate::testing::Product::Monitor, monitor, true),
     )
@@ -82,7 +82,69 @@ fn assert_preflight(
     assert!(output["Quota"].is_null());
     assert_eq!(output["OrderID"], "");
     assert_eq!(output["PaymentPending"], false);
-    assert_eq!(error.class(), ErrorClass::Auth);
+}
+
+struct RefusingProvider(AtomicUsize);
+
+impl CredentialsProvider for RefusingProvider {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Err(Error::provider_failed()) })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        panic!("a failed initial acquisition cannot invalidate a bearer");
+    }
+}
+
+#[cfg(unix)]
+struct UnsafeCache(PathBuf);
+
+#[cfg(unix)]
+impl UnsafeCache {
+    fn new() -> Self {
+        use std::os::unix::fs::{DirBuilderExt, symlink};
+
+        let path = env::temp_dir().canonicalize().unwrap().join(format!(
+            "greennode-monitor-cache-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&path)
+            .unwrap();
+        let cache = Self(path);
+        let store = crate::cache::store::Store::create(&cache.0).unwrap();
+        store.create_child("service-account-v1").unwrap();
+        let auth = service();
+        let stem = crate::cache::service_account_stem(
+            "default",
+            auth.client_id.expose_secret(),
+            "https://iamapis.vngcloud.vn/accounts-api/v2/auth/token",
+            &auth.client_secret,
+        );
+        let lock = cache
+            .0
+            .join("service-account-v1")
+            .join(format!("{stem}.lock"));
+        symlink("missing", lock).unwrap();
+        cache
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnsafeCache {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
 }
 
 macro_rules! synthetic_preflight_cases {
@@ -95,13 +157,14 @@ macro_rules! synthetic_preflight_cases {
                 async fn $method() {
                     let login = Server::start(vec![response("403 Forbidden", None, PEER_TEXT)]);
                     let monitor = Server::start(vec![]);
-                    let client = Client::new(&service_account_config(&login, &monitor));
+                    let client = Client::new(&service_account_config(options(), &login, &monitor));
                     let (ctx, _) = RequestContext::new();
                     let failure = client.$method(&ctx, $input).await.unwrap_err();
                     assert_eq!(login.requests(), 1);
                     assert!(login.heads()[0].starts_with(b"POST /accounts-api/v2/auth/token "));
                     assert_eq!(monitor.requests(), 0);
                     assert_preflight(&failure, $operation, "ServiceAccountLoginFailed", 403);
+                    assert_eq!(failure.error().class(), ErrorClass::Auth);
                     let detail = failure.error().service_account_login_error().unwrap();
                     assert_eq!(detail.status(), Some(403));
                     assert_eq!(detail.reason(), "token endpoint rejected request");
@@ -130,9 +193,59 @@ macro_rules! synthetic_preflight_cases {
                     assert!(heads[1].starts_with(b"POST /ap/auth/iam/login?"));
                     assert_eq!(monitor.requests(), 0);
                     assert_preflight(&failure, $operation, "RequestFailed", 0);
+                    assert_eq!(failure.error().class(), ErrorClass::Auth);
                     let detail = failure.error().login_error().unwrap();
                     assert_eq!(detail.status(), Some(403));
                     assert_eq!(detail.reason(), "signin submission");
+                }
+            )+
+        }
+
+        #[cfg(unix)]
+        mod unsafe_token_cache {
+            use super::*;
+
+            $(
+                #[tokio::test]
+                async fn $method() {
+                    let cache = UnsafeCache::new();
+                    let login = Server::start(vec![]);
+                    let monitor = Server::start(vec![]);
+                    let options = options().with_token_cache(cache.0.clone());
+                    let client = Client::new(&service_account_config(options, &login, &monitor));
+                    let (ctx, _) = RequestContext::new();
+                    let failure = client.$method(&ctx, $input).await.unwrap_err();
+                    assert_eq!(login.requests(), 0);
+                    assert_eq!(monitor.requests(), 0);
+                    assert_eq!(failure.error().class(), ErrorClass::TokenCache);
+                    assert!(failure.error().service_account_login_error().is_none());
+                    assert_preflight(&failure, $operation, "TokenCacheFailed", 0);
+                }
+            )+
+        }
+
+        mod custom_provider {
+            use super::*;
+
+            $(
+                #[tokio::test]
+                async fn $method() {
+                    let monitor = Server::start(vec![]);
+                    let provider = Arc::new(RefusingProvider(AtomicUsize::new(0)));
+                    let config = Config::new(
+                        options()
+                            .with_credentials_provider(provider.clone())
+                            .with_product_loopback(crate::testing::Product::Monitor, &monitor, true),
+                    )
+                    .unwrap();
+                    let (ctx, _) = RequestContext::new();
+                    let failure = Client::new(&config).$method(&ctx, $input).await.unwrap_err();
+                    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+                    assert_eq!(monitor.requests(), 0);
+                    assert_eq!(failure.error().class(), ErrorClass::Auth);
+                    assert!(failure.error().login_error().is_none());
+                    assert!(failure.error().service_account_login_error().is_none());
+                    assert_preflight(&failure, $operation, "RequestFailed", 0);
                 }
             )+
         }
