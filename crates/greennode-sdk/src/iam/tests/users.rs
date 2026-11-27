@@ -65,6 +65,31 @@ async fn uncertain_create_keeps_password_private_and_refuses_reflected_identity(
     assert_eq!(server.requests(), 1);
 }
 
+#[tokio::test]
+async fn dropped_iam_write_records_the_submitted_password() {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![crate::wire::test_server::Response::StallBeforeHead(
+        sent,
+    )]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, _) = RequestContext::new();
+    let password = Secret::new("toy-private-password");
+    let mut input = CreateUserInput::new("worker");
+    input.password = Some(password.clone());
+    RequestContext::with_response_screening(async {
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = client.create_user(&ctx, input) => panic!("write should still be pending"),
+        }
+        assert!(crate::wire::product::exit::recorded_exactly(
+            password.expose_secret()
+        ));
+        assert!(crate::wire::product::exit::private_safe(&password));
+    })
+    .await;
+    assert_eq!(server.requests(), 1);
+}
+
 #[test]
 fn debug_redacts_password_and_reflected_operands() {
     let password = Secret::new("toy-private-password");

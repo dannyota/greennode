@@ -416,3 +416,11 @@ async fn once_inner(
         body,
     })
 }
+
+pub(crate) async fn with_sent_credentials<T>(
+    credentials: &crate::wire::product::evidence::SentCredentials,
+    send: impl std::future::Future<Output = T>,
+) -> T {
+    crate::wire::product::exit::observe_sent(credentials);
+    send.await
+}

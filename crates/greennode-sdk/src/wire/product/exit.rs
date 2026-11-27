@@ -34,14 +34,32 @@ pub(super) fn record(public: &SentCredentials, transport: &SentCredentials, writ
     });
 }
 
-pub(crate) fn observe_signin(credentials: &SentCredentials) {
+pub(crate) fn observe_sent(credentials: &SentCredentials) {
     record(credentials, credentials, WriteDispatch::NotAWrite);
+}
+
+#[cfg(test)]
+pub(crate) fn recorded_exactly(value: &str) -> bool {
+    OBSERVED.with(|state| {
+        state
+            .borrow()
+            .public
+            .values()
+            .iter()
+            .any(|secret| secret.expose_secret() == value)
+    })
 }
 
 pub(crate) fn authenticate_error(error: Error, configured: &SentCredentials) -> Error {
     let mut evidence = Evidence::from_credentials(configured);
     let _ = OBSERVED.try_with(|state| evidence.absorb(&state.borrow().public));
     evidence.screen_error(error)
+}
+
+pub(super) fn observe_operation_password(slot: super::options::PasswordSlot<'_>) {
+    let (super::options::PasswordSlot::DatabaseUser(password)
+    | super::options::PasswordSlot::IamUser(password)) = slot;
+    record_secret(password);
 }
 
 pub(super) fn record_secret(secret: &crate::Secret) {

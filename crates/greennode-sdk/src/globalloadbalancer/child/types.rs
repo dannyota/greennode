@@ -1,5 +1,6 @@
 use super::super::{Listener, Pool, PoolMember};
 use super::{Evidence, safe_id};
+use crate::wire::product::identifier;
 use std::fmt;
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
@@ -220,8 +221,11 @@ impl Serialize for DeletePoolOutput {
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeletePoolOutput", 3)?;
-        out.serialize_field("LoadBalancerID", &self.load_balancer_id)?;
-        out.serialize_field("PoolID", &self.pool_id)?;
+        out.serialize_field(
+            "LoadBalancerID",
+            &identifier::checked(&self.load_balancer_id),
+        )?;
+        out.serialize_field("PoolID", &identifier::checked(&self.pool_id))?;
         out.serialize_field("Deleted", &self.deleted)?;
         out.end()
     }
@@ -256,8 +260,11 @@ impl Serialize for DeleteListenerOutput {
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeleteListenerOutput", 3)?;
-        out.serialize_field("LoadBalancerID", &self.load_balancer_id)?;
-        out.serialize_field("ListenerID", &self.listener_id)?;
+        out.serialize_field(
+            "LoadBalancerID",
+            &identifier::checked(&self.load_balancer_id),
+        )?;
+        out.serialize_field("ListenerID", &identifier::checked(&self.listener_id))?;
         out.serialize_field("Deleted", &self.deleted)?;
         out.end()
     }

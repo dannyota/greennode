@@ -71,6 +71,18 @@ pub(crate) fn serialize<T: Serialize + ?Sized, S: Serializer>(
     value.serialize(serializer)
 }
 
+pub(crate) fn checked<T: Serialize + ?Sized>(value: &T) -> impl Serialize + '_ {
+    struct Checked<'a, T: ?Sized>(&'a T);
+
+    impl<T: Serialize + ?Sized> Serialize for Checked<'_, T> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serialize(self.0, serializer)
+        }
+    }
+
+    Checked(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,40 +100,193 @@ mod tests {
         }
     }
 
+    struct Inventory {
+        structs: Regex,
+        fields: Regex,
+        serde: Regex,
+        rename: Regex,
+        rename_all: Regex,
+        manual: Regex,
+        member: Regex,
+    }
+
+    impl Inventory {
+        fn new() -> Self {
+            Self {
+                structs: Regex::new(concat!(
+                    r"(?ms)^((?:#\[[^\]]*\]\s*|///[^\n]*\n)*)",
+                    r"(?:pub(?:\([^)]*\))?\s+)?struct (\w+)[^\n{;]*\{[ \t]*\n(.*?)^}"
+                ))
+                .unwrap(),
+                fields: Regex::new(concat!(
+                    r"(?ms)^((?:    (?:#\[[^\]]*\]|///[^\n]*)[ \t]*\n)*)",
+                    r"    (?:pub(?:\([^)]*\))?\s+)?(?:r#)?(\w+)\s*:"
+                ))
+                .unwrap(),
+                serde: Regex::new(r"(?s)#\[serde\((.*?)\)\]").unwrap(),
+                rename: renames("rename"),
+                rename_all: renames("rename_all"),
+                manual: Regex::new(r#"(?s)\bserialize_(?:field|entry)\(\s*"(\w+)",\s*(.*?)\)\?"#)
+                    .unwrap(),
+                member: Regex::new(r"^&(?:\w+\.)+(\w+)$").unwrap(),
+            }
+        }
+
+        fn serde_attrs(&self, attrs: &str) -> String {
+            self.serde
+                .captures_iter(attrs)
+                .map(|item| item[1].to_owned())
+                .collect::<Vec<_>>()
+                .join(",")
+        }
+
+        fn missing_serde(&self, source: &str) -> Vec<String> {
+            use super::super::evidence::identifier_key;
+
+            let mut missing = Vec::new();
+            for model in self.structs.captures_iter(source) {
+                if !model[1].contains("Serialize") {
+                    continue;
+                }
+                let model_attrs = self.serde_attrs(&model[1]);
+                let (wire_case, output_case) = names(&self.rename_all, &model_attrs);
+                for field in self.fields.captures_iter(&model[3]) {
+                    let attrs = self.serde_attrs(&field[1]);
+                    let name = &field[2];
+                    let (wire, output) = names(&self.rename, &attrs);
+                    let explicit_wire = wire.is_some();
+                    let wire = wire.map_or_else(|| field_case(name, wire_case), str::to_owned);
+                    let output =
+                        output.map_or_else(|| field_case(name, output_case), str::to_owned);
+                    if declared(&wire, &output)
+                        && (!identifier_key(&output) || (explicit_wire && wire != output))
+                        && !attrs.contains("identifier::serialize")
+                        && !attrs
+                            .split(',')
+                            .any(|attr| matches!(attr.trim(), "skip" | "skip_serializing"))
+                    {
+                        missing.push(format!("{}.{name} ({wire} -> {output})", &model[2]));
+                    }
+                }
+            }
+            missing
+        }
+
+        fn missing_manual(&self, source: &str) -> Vec<String> {
+            self.manual
+                .captures_iter(source)
+                .filter_map(|field| {
+                    let output = &field[1];
+                    let value = field[2].trim().trim_end_matches(',').trim_end();
+                    let wire = self.member.captures(value);
+                    let identifier = declared(output, output)
+                        || wire.as_ref().is_some_and(|wire| declared(&wire[1], output));
+                    (identifier && !value.starts_with("&identifier::checked("))
+                        .then(|| output.to_owned())
+                })
+                .collect()
+        }
+    }
+
+    fn renames(attribute: &str) -> Regex {
+        Regex::new(&format!(r#"\b{attribute}\s*(?:=\s*"([^"]+)"|\(([^)]*)\))"#)).unwrap()
+    }
+
+    fn names<'a>(attribute: &Regex, attrs: &'a str) -> (Option<&'a str>, Option<&'a str>) {
+        let Some(rename) = attribute.captures(attrs) else {
+            return (None, None);
+        };
+        if let Some(common) = rename.get(1) {
+            return (Some(common.as_str()), Some(common.as_str()));
+        }
+        let directions = rename.get(2).unwrap().as_str();
+        let direction = |name: &str| {
+            directions
+                .split(',')
+                .filter_map(|entry| entry.split_once('='))
+                .find_map(|(key, value)| {
+                    (key.trim() == name).then(|| value.trim().trim_matches('"'))
+                })
+        };
+        (direction("deserialize"), direction("serialize"))
+    }
+
+    fn field_case(field: &str, style: Option<&str>) -> String {
+        let pascal = || {
+            field
+                .split('_')
+                .filter(|word| !word.is_empty())
+                .map(|word| word[..1].to_ascii_uppercase() + &word[1..])
+                .collect::<String>()
+        };
+        match style {
+            None | Some("lowercase" | "snake_case") => field.to_owned(),
+            Some("UPPERCASE" | "SCREAMING_SNAKE_CASE") => field.to_ascii_uppercase(),
+            Some("PascalCase") => pascal(),
+            Some("camelCase") => {
+                let mut name = pascal();
+                name[..1].make_ascii_lowercase();
+                name
+            }
+            Some("kebab-case") => field.replace('_', "-"),
+            Some("SCREAMING-KEBAB-CASE") => field.to_ascii_uppercase().replace('_', "-"),
+            Some(style) => panic!("unknown Serde rename rule {style}"),
+        }
+    }
+
+    #[test]
+    fn identifier_inventory_catches_effective_serde_names_and_manual_projections() {
+        let inventory = Inventory::new();
+        let source = r#"
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all(deserialize = "camelCase", serialize = "PascalCase"))]
+struct Projection {
+    #[serde(rename(serialize = "VPCID"))]
+    vpc_id: String,
+    #[serde(rename(serialize = "Project"))]
+    project_uuid: String,
+    project_id: String,
+}
+        "#;
+        assert_eq!(
+            inventory.missing_serde(source),
+            [
+                "Projection.vpc_id (vpcId -> VPCID)",
+                "Projection.project_uuid (projectUuid -> Project)",
+            ]
+        );
+        let serializer = r#"
+            out.serialize_field("VPCID", &self.vpc_id)?;
+            out.serialize_field("Project", &self.project_uuid)?;
+            out.serialize_field("VPCID", &identifier::checked(&self.vpc_id))?;
+            out.serialize_entry(key, value)?;
+        "#;
+        assert_eq!(inventory.missing_manual(serializer), ["VPCID", "Project"]);
+    }
+
     #[test]
     fn typed_wire_identifier_fields_have_projected_declarations() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let attributes = Regex::new(r"(?s)#\[serde\((.*?)\)\]").unwrap();
-        let wire_name = Regex::new(r#"(?:^|[,\s(])deserialize\s*=\s*"([^"\r\n]+)""#).unwrap();
-        let projected_name = Regex::new(r#"(?:^|[,\s(])serialize\s*=\s*"([^"\r\n]+)""#).unwrap();
-        let field = Regex::new(r"^\s*pub(?:\([^)]*\))?\s+(\w+)\s*:").unwrap();
+        let inventory = Inventory::new();
+        let missing = RefCell::new(Vec::new());
         inspect_fields(&root, &|path, source| {
-            for attribute in attributes.captures_iter(source) {
-                let names = &attribute[1];
-                let Some(projected) = projected_name.captures(names) else {
-                    continue;
-                };
-                let output = &projected[1];
-                let wire = wire_name.captures(names);
-                let implicit = attribute
-                    .get(0)
-                    .and_then(|attribute| field.captures(&source[attribute.end()..]));
-                let name = wire
-                    .as_ref()
-                    .map(|name| &name[1])
-                    .or_else(|| implicit.as_ref().map(|name| &name[1]));
-                if let Some(name) = name
-                    && declared(name, output)
-                {
-                    assert!(
-                        names.contains("identifier::serialize")
-                            || (wire.is_none() && super::super::evidence::identifier_key(output)),
-                        "{} {name} -> {output}",
-                        path.display()
-                    );
-                }
+            if path == root.join("wire/product/identifier.rs") {
+                return;
+            }
+            for field in inventory
+                .missing_serde(source)
+                .into_iter()
+                .chain(inventory.missing_manual(source))
+            {
+                missing.borrow_mut().push(format!(
+                    "{} {field}",
+                    path.strip_prefix(&root).unwrap().display()
+                ));
             }
         });
+        let mut missing = missing.into_inner();
+        missing.sort();
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
         for path in [
             "model/wire.rs",
             "globalloadbalancer/models.rs",

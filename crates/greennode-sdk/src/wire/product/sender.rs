@@ -530,14 +530,20 @@ async fn run_inner(
                 observed.attempt_counter = Some(sleeper);
             }
             let result = bounded(&ctx, clock, || {
-                send::once_with_evidence(
-                    client,
-                    outgoing,
-                    op.cap,
-                    op.encoding,
-                    clock,
-                    deadline,
-                    &mut observed,
+                if let Some(slot) = route_inputs.password_slot {
+                    super::exit::observe_operation_password(slot);
+                }
+                send::with_sent_credentials(
+                    sent,
+                    send::once_with_evidence(
+                        client,
+                        outgoing,
+                        op.cap,
+                        op.encoding,
+                        clock,
+                        deadline,
+                        &mut observed,
+                    ),
                 )
             })
             .await;

@@ -44,6 +44,13 @@ impl SentCredentials {
         self.record_from(secret, Source::Credential);
     }
 
+    pub(crate) fn record_basic(&mut self, authorization: &str) {
+        self.record(&Secret::new(authorization));
+        if let Some(payload) = authorization.strip_prefix("Basic ") {
+            self.record(&Secret::new(payload));
+        }
+    }
+
     pub(crate) fn record_bearer(&mut self, secret: &Secret) {
         self.record_from(secret, Source::Bearer);
     }
@@ -365,6 +372,11 @@ impl Evidence {
     pub(crate) fn redact(&self, value: &mut Value) -> bool {
         self.redact_value(value, false);
         !self.output_reflects(value)
+    }
+
+    pub(crate) fn redact_identifier_value(&self, value: &mut Value) -> bool {
+        self.redact_value(value, true);
+        !self.identifier_output_reflects(value)
     }
 
     fn redact_value(&self, value: &mut Value, identifier: bool) {

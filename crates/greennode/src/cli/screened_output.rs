@@ -18,7 +18,7 @@ pub(super) struct Budget {
 impl Budget {
     pub(super) const fn new() -> Self {
         Self {
-            remaining: Cell::new(OUTPUT_CAP),
+            remaining: Cell::new(OUTPUT_CAP - WRITE_SUCCEEDED.len()),
             exhausted: Cell::new(false),
         }
     }
@@ -79,11 +79,7 @@ pub(super) fn publish(
         return 1;
     }
     let output = stdout.write_all(&output.bytes);
-    if output.is_err()
-        && write
-        && status == 0
-        && WRITE_SUCCEEDED.len() <= diagnostics.budget.remaining.get()
-    {
+    if output.is_err() && write && status == 0 {
         let original = diagnostics.bytes.len();
         diagnostics.bytes.extend_from_slice(WRITE_SUCCEEDED);
         if RequestContext::response_bytes_reflect(&diagnostics.bytes) {
@@ -117,5 +113,31 @@ mod tests {
         );
         assert!(stdout.is_empty());
         assert_eq!(stderr, WITHHELD);
+    }
+
+    #[test]
+    fn confirmed_write_recovers_when_regular_output_budget_is_full() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let budget = Budget {
+            remaining: Cell::new(1),
+            exhausted: Cell::new(false),
+        };
+        let mut output = Stream::new(&budget);
+        output.write_all(b"x").unwrap();
+        let diagnostics = Stream::new(&budget);
+        let mut stderr = Vec::new();
+        assert_eq!(
+            publish(&mut Broken, &mut stderr, output, diagnostics, 0, true),
+            1
+        );
+        assert_eq!(stderr, WRITE_SUCCEEDED);
     }
 }

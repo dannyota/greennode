@@ -312,3 +312,18 @@ async fn oversized_ssh_create_refusal_uses_http_status_and_withholds_the_body() 
     assert!(failure.partial().is_none());
     assert_eq!(server.heads().len(), 1);
 }
+
+#[tokio::test]
+async fn ssh_key_page_redacts_only_the_reflected_identifier() {
+    let body = r#"{"listData":[{"id":"pre6A6B6Cpost","name":"first"},{"id":"key-2","name":"second"}],"page":1,"totalPage":1,"totalItem":2}"#;
+    let server = TestServer::start(vec![response(body)]);
+    let output = client_with_token(&server, "jkl")
+        .list_ssh_keys(&RequestContext::new().0, ListSshKeysInput::default())
+        .await
+        .unwrap();
+    assert_eq!(output.items.len(), 2);
+    assert!(output.items[0].id == "<redacted>");
+    assert_eq!(output.items[0].name, "first");
+    assert_eq!(output.items[1].id, "key-2");
+    assert_eq!(server.requests(), 1);
+}

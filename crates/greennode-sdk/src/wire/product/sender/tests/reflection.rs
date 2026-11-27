@@ -442,6 +442,54 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
 }
 
 #[tokio::test]
+async fn dropped_database_write_records_the_submitted_password() {
+    use crate::wire::product::{evidence::Evidence, exit, options::PasswordSlot};
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let operation = operation(Method::POST, redirect::Retry::Once);
+    let password = Secret::new("toy-database-password");
+    let mut evidence = Evidence::new();
+    evidence.add_operation_password(&password);
+    let mut request = request(&server.origin);
+    request.body =
+        Bytes::from(serde_json::json!({"user":{"password":password.expose_secret()}}).to_string());
+    crate::RequestContext::with_response_screening(async {
+        let mut jitter = || 0;
+        let sleeper = Immediate::default();
+        let source = Provider::default();
+        let source = PublicSource(&source);
+        let send = super::super::run(
+            Runtime {
+                configured_credentials: Some(evidence.credentials()),
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &sleeper,
+                jitter: &mut jitter,
+            },
+            &operation,
+            Auth::Bearer(&source),
+            &request,
+            RouteInputs {
+                password_slot: Some(PasswordSlot::DatabaseUser(&password)),
+                ..RouteInputs::default()
+            },
+        );
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = send => panic!("write should still be pending"),
+        }
+        assert!(exit::recorded_exactly(password.expose_secret()));
+        assert!(exit::private_safe(&password));
+    })
+    .await;
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn redirect_base64_query_with_bearer_is_refused() {
     let encoded = data_encoding::BASE64.encode(b"toy-first");
     check_reflected_redirect(&format!("/next?copy={encoded}")).await;

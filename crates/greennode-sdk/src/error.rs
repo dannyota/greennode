@@ -211,8 +211,18 @@ impl fmt::Debug for ApiError {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum LoginFailureKind {
+    Other,
+    SigninRejected,
+    TotpRejected,
+    TokenCache,
+}
+
 /// Safe details of an IAM user login failure.
+#[derive(Clone)]
 pub struct LoginError {
+    kind: LoginFailureKind,
     reason: &'static str,
     status: Option<u16>,
     captcha_suspected: bool,
@@ -220,11 +230,22 @@ pub struct LoginError {
 impl LoginError {
     pub(crate) fn new(reason: &'static str, status: Option<u16>, captcha_suspected: bool) -> Self {
         Self {
+            kind: LoginFailureKind::Other,
             reason,
             status,
             captcha_suspected,
         }
     }
+
+    pub(crate) fn with_kind(mut self, kind: LoginFailureKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub(crate) fn kind(&self) -> LoginFailureKind {
+        self.kind
+    }
+
     pub(crate) fn screen(&mut self, reflects: impl Fn(&str) -> bool) {
         if reflects(self.reason) {
             self.reason = "";

@@ -535,13 +535,16 @@ async fn repeated_image_versions_count_against_the_retained_byte_limit() {
 }
 
 #[tokio::test]
-async fn compute_exit_refuses_a_short_encoding_in_a_projected_id() {
+async fn user_image_page_redacts_a_short_encoding_in_a_projected_id() {
     let server = TestServer::start(vec![response(
         r#"{"listData":[{"uuid":"image-1","projectId":"pre6A6B6Cpost"}],"page":1,"totalPage":1,"totalItem":1}"#,
     )]);
-    let result = client_with_token(&server, "jkl")
+    let page = client_with_token(&server, "jkl")
         .list_user_images(&RequestContext::new().0, ListUserImagesInput::default())
-        .await;
+        .await
+        .unwrap();
     assert_eq!(server.requests(), 1);
-    assert!(result.is_err());
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].uuid, "image-1");
+    assert!(page.items[0].project_id == "<redacted>");
 }

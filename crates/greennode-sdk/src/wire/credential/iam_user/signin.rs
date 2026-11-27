@@ -20,7 +20,8 @@ pub(super) fn classify(
         return Err(failure("signin submission", false));
     }
     if status == http::StatusCode::OK {
-        return Err(failure("signin rejection", true));
+        return Err(failure("signin rejection", true)
+            .with_kind(crate::error::LoginFailureKind::SigninRejected));
     }
     let location = location.ok_or_else(|| failure("signin submission", false))?;
     let target = origin
@@ -106,12 +107,13 @@ pub(super) async fn signin_with_evidence(
     .map_err(|_| page_error())?;
     target
         .query_pairs_mut()
-        .append_pair("clientId", "c9e78411-f2a2-41ba-a9e4-3c56263c181a")
+        .append_pair("clientId", super::CLIENT_ID)
         .append_pair("responseType", "code")
         .append_pair("codeChallenge", &pkce.1)
         .append_pair("codeChallengeMethod", "S256")
         .append_pair("redirectUri", login.dashboard.as_str())
         .append_pair("rootEmail", login.root_email);
+    jar.record_form(&Secret::new(super::CLIENT_ID));
     jar.record_form(&Secret::new(login.root_email));
     jar.record_form(&Secret::new(&pkce.1));
     let request = Request::get(target.as_str())
@@ -122,13 +124,16 @@ pub(super) async fn signin_with_evidence(
         .header(header::ACCEPT_ENCODING, "gzip")
         .body(Full::new(Bytes::new()))
         .map_err(|_| page_error())?;
-    let page = send::once(
-        login.client.as_client(),
-        request,
-        1 << 20,
-        Encoding::Gzip,
-        login.clock,
-        login.deadline,
+    let page = send::with_sent_credentials(
+        &jar.sent,
+        send::once(
+            login.client.as_client(),
+            request,
+            1 << 20,
+            Encoding::Gzip,
+            login.clock,
+            login.deadline,
+        ),
     )
     .await
     .map_err(|e| {
@@ -177,14 +182,17 @@ pub(super) async fn signin_with_evidence(
         )))
         .map_err(|_| LoginError::new("signin submission", None, false))?;
     let mut evidence = send::Evidence::default();
-    let reply = send::once_with_expected(
-        login.client.as_client(),
-        request,
-        1 << 20,
-        Encoding::Gzip,
-        login.clock,
-        login.deadline,
-        (&mut evidence, &[]),
+    let reply = send::with_sent_credentials(
+        &jar.sent,
+        send::once_with_expected(
+            login.client.as_client(),
+            request,
+            1 << 20,
+            Encoding::Gzip,
+            login.clock,
+            login.deadline,
+            (&mut evidence, &[]),
+        ),
     )
     .await
     .map_err(|e| {

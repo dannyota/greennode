@@ -623,3 +623,20 @@ async fn raw_route(
     )
     .await
 }
+
+#[tokio::test]
+async fn product_sender_records_bearer_before_a_dropped_exchange() {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let op = declaration();
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    crate::RequestContext::with_response_screening(async {
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = call_evidence(&server, &op, &options, "one", "toy-inflight-token", &mut evidence) => panic!("exchange should still be pending"),
+        }
+        assert!(crate::RequestContext::response_bytes_reflect(b"toy-inflight-token"));
+    }).await;
+    assert_eq!(server.requests(), 1);
+}

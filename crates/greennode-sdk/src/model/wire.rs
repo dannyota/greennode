@@ -32,6 +32,10 @@ pub(crate) trait WireField: Default + DeserializeOwned {
 
     fn redact(&mut self, evidence: &Evidence) -> bool;
 
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.redact(evidence)
+    }
+
     fn identifiers_reflect(&self, _: &Evidence) -> bool {
         false
     }
@@ -58,6 +62,10 @@ impl<T: WireField> WireField for Vec<T> {
     fn identifiers_reflect(&self, evidence: &Evidence) -> bool {
         self.iter().any(|item| item.identifiers_reflect(evidence))
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.iter_mut().all(|item| item.redact_identifier(evidence))
+    }
 }
 
 impl<T: WireField> WireField for Option<T> {
@@ -76,6 +84,13 @@ impl<T: WireField> WireField for Option<T> {
         self.as_ref()
             .is_some_and(|item| item.identifiers_reflect(evidence))
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.as_mut().map_or_else(
+            || !evidence.text_reflects("null"),
+            |item| item.redact_identifier(evidence),
+        )
+    }
 }
 
 impl WireField for String {
@@ -85,6 +100,11 @@ impl WireField for String {
             return !evidence.text_reflects(self);
         }
         true
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        crate::wire::product::evidence::redact_identifier(self, evidence.credentials());
+        !evidence.id_reflects(self)
     }
 }
 
@@ -98,6 +118,10 @@ impl WireField for i64 {
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
         !evidence.integer_output_reflects(*self)
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        !evidence.identifier_output_reflects(&Value::from(*self))
     }
 }
 
@@ -118,6 +142,10 @@ impl WireField for f64 {
     fn redact(&mut self, evidence: &Evidence) -> bool {
         !evidence.output_number_reflects(*self, true)
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        !evidence.identifier_output_reflects(&Value::from(*self))
+    }
 }
 
 impl WireField for bool {
@@ -136,6 +164,10 @@ impl WireField for Value {
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
         evidence.redact(self)
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        evidence.redact_identifier_value(self)
     }
 }
 
@@ -380,9 +412,11 @@ macro_rules! model {
 
         impl $crate::model::wire::WireField for $model {
             fn redact(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
-                $((!$crate::wire::product::identifier::declared($wire, $go)
-                    || serde_json::to_value(&self.$field).is_ok_and(|value| !evidence.identifier_output_reflects(&value)))
-                    && self.$field.redact(evidence) &&)* $(self.$derived.redact(evidence) &&)? true
+                $((if $crate::wire::product::identifier::declared($wire, $go) {
+                    self.$field.redact_identifier(evidence)
+                } else {
+                    self.$field.redact(evidence)
+                }) &&)* $(self.$derived.redact(evidence) &&)? true
             }
 
             fn identifiers_reflect(&self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {

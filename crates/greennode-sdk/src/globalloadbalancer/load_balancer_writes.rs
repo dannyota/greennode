@@ -9,7 +9,9 @@ use super::write::{
     Settlement, Write, guard_operation, not_sent, rejected_response, write_operation,
 };
 use super::{Client, LoadBalancer, invalid_input, path_ids};
-use crate::wire::product::{evidence::Evidence, operation::Operation, options::Options};
+use crate::wire::product::{
+    evidence::Evidence, identifier, operation::Operation, options::Options,
+};
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use crate::{Error, Failure, RequestContext};
 
@@ -68,13 +70,13 @@ impl Serialize for ConfirmedLoadBalancer<'_> {
             return lb.serialize(serializer);
         }
         let mut output = serializer.serialize_struct("LoadBalancer", 12)?;
-        output.serialize_field("ID", &lb.id)?;
+        output.serialize_field("ID", &identifier::checked(&lb.id))?;
         output.serialize_field("Name", &lb.name)?;
         output.serialize_field("Description", &lb.description)?;
         output.serialize_field("Status", &lb.status)?;
         output.serialize_field("Package", &lb.package)?;
         output.serialize_field("Type", &lb.r#type)?;
-        output.serialize_field("UserID", "<redacted>")?;
+        output.serialize_field("UserID", &identifier::checked("<redacted>"))?;
         output.serialize_field("CreatedAt", &lb.created_at)?;
         output.serialize_field("UpdatedAt", &lb.updated_at)?;
         output.serialize_field("DeletedAt", &lb.deleted_at)?;
@@ -113,7 +115,10 @@ pub struct DeleteLoadBalancerOutput {
 impl Serialize for DeleteLoadBalancerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("DeleteLoadBalancerOutput", 2)?;
-        output.serialize_field("LoadBalancerID", &self.load_balancer_id)?;
+        output.serialize_field(
+            "LoadBalancerID",
+            &identifier::checked(&self.load_balancer_id),
+        )?;
         if self.redact_deleted {
             output.serialize_field("Deleted", "<redacted>")?;
         } else {

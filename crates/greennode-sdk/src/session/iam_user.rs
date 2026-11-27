@@ -49,7 +49,7 @@ pub(crate) struct IamUser {
 struct State {
     cached: Option<Cached>,
     rejected: Option<Secret>,
-    failure: Option<(time::OffsetDateTime, &'static str, Option<u16>, bool)>,
+    failure: Option<(time::OffsetDateTime, crate::LoginError)>,
 }
 
 struct Cached {
@@ -325,12 +325,11 @@ impl IamUser {
         state: &mut State,
     ) -> Result<flow::TimedToken, Box<Error>> {
         let clock = self.clock.as_ref();
-        if let Some((at, reason, status, captcha)) = state.failure {
-            let age = clock.utc_now() - at;
+        if let Some((at, error)) = &state.failure {
+            let age = clock.utc_now() - *at;
             if age >= time::Duration::ZERO && age < time::Duration::seconds(30) {
                 return Err(Box::new(
-                    Error::new(ErrorClass::Auth)
-                        .with_login(crate::LoginError::new(reason, status, captcha)),
+                    Error::new(ErrorClass::Auth).with_login(error.clone()),
                 ));
             }
         }
@@ -455,17 +454,15 @@ impl IamUser {
         let work = flow::run(login, &self.token_url);
         let result = bounded(&bounded_ctx, clock, work).await?;
         result.map_err(|error| {
-            if matches!(error.reason(), "signin rejection" | "totp rejection")
-                || error.captcha_suspected()
+            use crate::error::LoginFailureKind;
+            if matches!(
+                error.kind(),
+                LoginFailureKind::SigninRejected | LoginFailureKind::TotpRejected
+            ) || error.captcha_suspected()
             {
-                state.failure = Some((
-                    clock.utc_now(),
-                    error.reason(),
-                    error.status(),
-                    error.captcha_suspected(),
-                ));
+                state.failure = Some((clock.utc_now(), error.clone()));
             }
-            if error.reason() == "token cache" {
+            if error.kind() == LoginFailureKind::TokenCache {
                 Box::new(Error::new(ErrorClass::TokenCache))
             } else {
                 Box::new(Error::new(ErrorClass::Auth).with_login(error))

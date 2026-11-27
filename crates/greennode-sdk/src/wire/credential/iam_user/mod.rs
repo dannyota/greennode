@@ -1,3 +1,5 @@
+pub(crate) const CLIENT_ID: &str = "c9e78411-f2a2-41ba-a9e4-3c56263c181a";
+
 pub(crate) mod flow;
 mod signin;
 mod token;
