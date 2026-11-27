@@ -11,14 +11,14 @@ use super::mutation::{Mutation, SendGuard, WriteError, before_write, maybe_sent,
 use super::response_times::{safe_time, serialize_time};
 use super::wire::{check_path_id, input_error, requires_failure};
 use super::{Channel, ChannelHeader, Client};
-use crate::model::wire::{Field, WireField};
+use crate::model::wire::Field;
 use crate::quote::request::monitor::privacy_limit;
 use crate::wire::product::evidence::Evidence;
-use crate::wire::product::{options::PathIds, redirect::Retry};
+use crate::wire::product::redirect::Retry;
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
 use ack::{CREATED, CreateAck};
-use privacy::channel_values;
+use privacy::{channel_values, validate_channel};
 
 const CHANNEL: &str = "notification-gateway/api/v1/notification";
 const CREATE: Mutation = Mutation {
@@ -275,8 +275,15 @@ impl Client {
             )));
         }
         channel.r#type = input.r#type;
-        validate_channel(&CREATE, reply.status, &mut channel, &evidence, &privacy)
-            .map_err(maybe_sent)?;
+        validate_channel(
+            &CREATE,
+            reply.status,
+            &mut channel,
+            &evidence,
+            &privacy,
+            (&input.otp, &code),
+        )
+        .map_err(maybe_sent)?;
         Ok(CreateChannelOutput { channel })
     }
 
@@ -342,7 +349,15 @@ impl Client {
         if channel.r#type.is_empty() {
             return Err(not_sent(UPDATE.invalid(200, &evidence)));
         }
-        validate_channel(&UPDATE, 200, &mut channel, &evidence, &privacy).map_err(not_sent)?;
+        validate_channel(
+            &UPDATE,
+            200,
+            &mut channel,
+            &evidence,
+            &privacy,
+            (&input.otp, &Secret::new("")),
+        )
+        .map_err(not_sent)?;
         if channel.r#type == "Webhook" && !input.otp.expose_secret().is_empty() {
             return Err(not_sent(invalid(
                 UPDATE.id,
@@ -362,7 +377,15 @@ impl Client {
             channel.raw_header = header;
         }
         channel.updated_date.clear();
-        validate_channel(&UPDATE, 200, &mut channel, &evidence, &privacy).map_err(not_sent)?;
+        validate_channel(
+            &UPDATE,
+            200,
+            &mut channel,
+            &evidence,
+            &privacy,
+            (&input.otp, &Secret::new("")),
+        )
+        .map_err(not_sent)?;
         let code = self
             .channel_code(
                 ctx,
@@ -400,8 +423,15 @@ impl Client {
             )
             .await
             .map_err(|failure| screen_failure(failure, &privacy))?;
-        validate_channel(&UPDATE, reply.status, &mut channel, &evidence, &privacy)
-            .map_err(maybe_sent)?;
+        validate_channel(
+            &UPDATE,
+            reply.status,
+            &mut channel,
+            &evidence,
+            &privacy,
+            (&input.otp, &code),
+        )
+        .map_err(maybe_sent)?;
         Ok(UpdateChannelOutput { channel })
     }
 
@@ -623,38 +653,6 @@ fn encode_headers(headers: &[ChannelHeader]) -> Result<String, Error> {
                 .replace('\u{2029}', "\\u2029")
         })
         .map_err(|_| input_error("monitor channel headers could not be encoded".into()))
-}
-fn validate_channel(
-    mutation: &Mutation,
-    status: u16,
-    channel: &mut Channel,
-    evidence: &Evidence,
-    privacy: &Evidence,
-) -> Result<(), Error> {
-    let ids = [&channel.id, &channel.metric_mapping_id];
-    if !PathIds::WithUnderscore.allows(&channel.id)
-        || ids
-            .iter()
-            .any(|id| evidence.id_reflects(id) || privacy.id_reflects(id))
-        || [&channel.address, &channel.raw_header]
-            .into_iter()
-            .any(|text| evidence.text_reflects(text))
-        || [
-            &channel.name,
-            &channel.r#type,
-            &channel.created_date,
-            &channel.updated_date,
-        ]
-        .into_iter()
-        .any(|text| evidence.text_reflects(text) || privacy.text_reflects(text))
-        || channel.headers.iter().any(|header| {
-            evidence.text_reflects(&header.key) || evidence.text_reflects(&header.value)
-        })
-        || !channel.redact(evidence)
-    {
-        return Err(mutation.invalid(status, evidence));
-    }
-    Ok(())
 }
 fn screen_error(error: Error, privacy: &Evidence) -> Error {
     super::mutation::screen_details(error, privacy)

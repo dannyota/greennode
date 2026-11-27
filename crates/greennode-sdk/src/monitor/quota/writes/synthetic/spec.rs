@@ -182,10 +182,7 @@ impl Spec<'_> {
 
     pub(super) fn guard_mismatch(&self, goal: &Goal, expected_end: Option<OffsetDateTime>) -> bool {
         match (&self.intent, goal) {
-            (Intent::Renew { .. }, Goal::SyntheticChange { before, .. }) => {
-                before.end() != expected_end
-            }
-            (Intent::Renew { .. }, _) => true,
+            (Intent::Renew { .. }, goal) => goal.before().and_then(Snapshot::end) != expected_end,
             (Intent::Recover { id }, _) => goal.id() != *id,
             (Intent::Ensure { id }, _) => !id.is_empty() && goal.id() != *id,
             (Intent::Create { .. }, _) => false,

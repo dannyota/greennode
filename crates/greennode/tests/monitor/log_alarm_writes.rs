@@ -259,3 +259,28 @@ fn nested_resend_negative_zero_is_an_integer_zero() {
     assert_eq!(status, ExitCode::SUCCESS);
     assert_eq!(server.requests(), 2);
 }
+
+#[test]
+fn floating_negative_zero_stays_negative_in_log_alarm_reason() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", PAGE),
+        response_with_status("200 OK", PROJECT),
+        response_with_status("201 Created", "{}"),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "create-log-alarm",
+            "--name",
+            "Probe",
+            "--log-project-id",
+            "project-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"ThresholdValue":-0}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[2]).unwrap();
+    assert!(body["reason"] == "query(*) >-0");
+}

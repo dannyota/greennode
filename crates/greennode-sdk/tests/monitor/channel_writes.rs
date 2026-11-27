@@ -388,3 +388,46 @@ async fn channel_guard_http_error_keeps_the_list_operation() {
         "monitor.ListChannels"
     );
 }
+
+#[tokio::test]
+async fn opaque_channel_header_scans_first_json_value_before_trailing_data() {
+    let original = serde_json::to_string(r#"[{"key":"X-Hook","value":"toy-hook"}]"#).unwrap();
+    let raw =
+        serde_json::to_string(r#"{"nested":["fixture-private-hook"]} trailing text"#).unwrap();
+    assert!(CHANNELS.contains(&original));
+    let current = CHANNELS.replace(&original, &raw);
+    let server = Server::start(vec![response("200 OK", &current), response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateChannelInput::new("channel-1");
+    input.name = Some("fixture-private-hook".into());
+    let out = client(&server).update_channel(&ctx, input).await;
+    assert!(out.is_err());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn channel_ack_refuses_otp_and_code_in_exposed_fields() {
+    for field in ["address", "header"] {
+        for reflected in ["123456", "fixture-operation-code"] {
+            let mut ack = serde_json::json!({"id":"channel-new","name":"Alerts","address":"fixture@example.test"});
+            ack[field] = if field == "address" {
+                format!("{reflected}@example.test").into()
+            } else {
+                serde_json::json!([{"key":reflected,"value":"fixture-value"}])
+                    .to_string()
+                    .into()
+            };
+            let server = Server::start(vec![
+                response("200 OK", r#"{"code":"fixture-operation-code"}"#),
+                response("200 OK", &ack.to_string()),
+            ]);
+            let (ctx, _) = RequestContext::new();
+            let mut input = CreateChannelInput::new("Alerts", "Email", "fixture@example.test");
+            input.otp_ref = "fixture-otp-ref".into();
+            input.otp = Secret::new("123456");
+            let out = client(&server).create_channel(&ctx, input).await;
+            assert!(out.is_err(), "credential reflection in {field}");
+            assert_eq!(server.requests(), 2);
+        }
+    }
+}

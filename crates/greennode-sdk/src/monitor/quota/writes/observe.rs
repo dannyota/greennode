@@ -44,7 +44,7 @@ impl Client {
         match result {
             Ok(Some(quota)) => {
                 self.quota_ledger.clear(attempt.kind)?;
-                Ok(Some(quota))
+                Ok((!attempt.credentials_exhausted).then_some(quota))
             }
             Ok(None) => {
                 self.quota_ledger.put(attempt)?;
@@ -86,7 +86,7 @@ impl Client {
             )
             .await;
         if let Some(retained) = self.quota_ledger.get(kind)? {
-            attempt.evidence.absorb(retained.evidence.credentials());
+            attempt.merge_retained(&retained);
         }
         let observed = observed?;
         let Observation::Present(fresh) = observed else {

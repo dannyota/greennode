@@ -100,15 +100,30 @@ impl SentCredentials {
     }
 
     pub(crate) fn extend(&mut self, credentials: &Self) {
+        self.extend_bounded(credentials, usize::MAX);
+    }
+
+    fn extend_bounded(&mut self, credentials: &Self, limit: usize) -> bool {
         self.incomplete_signin |= credentials.incomplete_signin;
         self.numeric_product_credential |= credentials.numeric_product_credential;
+        let mut complete = true;
         for (secret, source) in credentials
             .values
             .iter()
             .zip(credentials.sources.iter().copied())
         {
-            self.record_from(secret, source);
+            if self.values.len() >= limit
+                && !self
+                    .values
+                    .iter()
+                    .any(|known| known.expose_secret() == secret.expose_secret())
+            {
+                complete = false;
+            } else {
+                self.record_from(secret, source);
+            }
         }
+        complete
     }
     pub(crate) fn values(&self) -> &[Secret] {
         &self.values
@@ -200,6 +215,10 @@ impl Evidence {
 
     pub(crate) fn absorb(&mut self, credentials: &SentCredentials) {
         self.credentials.extend(credentials);
+    }
+
+    pub(crate) fn absorb_bounded(&mut self, credentials: &SentCredentials, limit: usize) -> bool {
+        self.credentials.extend_bounded(credentials, limit)
     }
 
     pub(crate) fn transport_only(&self) -> Self {

@@ -386,6 +386,9 @@ impl Client {
                 }
                 Ok(_) => return initial(changed_intent(input.op)),
                 Err(error) if matched || input.op == DELETE_SYNTH => {
+                    if attempt.credentials_exhausted {
+                        out.quota = None;
+                    }
                     let error = if mismatch && input.op == DELETE_SYNTH {
                         error.with_cause(changed_intent(input.op))
                     } else {
@@ -606,13 +609,18 @@ impl Client {
                     &attempt.evidence,
                 )
             }
-            Err(error) => lifecycle_result(
-                project,
-                out,
-                Err(error),
-                WriteDispatch::MayHaveBeenSent,
-                &attempt.evidence,
-            ),
+            Err(error) => {
+                if attempt.credentials_exhausted {
+                    out.quota = None;
+                }
+                lifecycle_result(
+                    project,
+                    out,
+                    Err(error),
+                    WriteDispatch::MayHaveBeenSent,
+                    &attempt.evidence,
+                )
+            }
         }
     }
 }

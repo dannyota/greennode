@@ -2,6 +2,10 @@ use crate::Secret;
 use crate::wire::product::evidence::Evidence;
 use crate::wire::product::response::percent_decode;
 
+pub(super) fn first_json_value(input: &str) -> Option<&serde_json::value::RawValue> {
+    serde::Deserialize::deserialize(&mut serde_json::Deserializer::from_str(input)).ok()
+}
+
 pub(super) fn collect_url(
     evidence: &mut Evidence,
     value: &str,

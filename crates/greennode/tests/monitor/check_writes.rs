@@ -318,3 +318,23 @@ fn null_probe_header_and_query_values_become_empty_strings() {
     assert!(body["config"]["request"]["headers"]["X-Foo"] == "");
     assert!(body["config"]["request"]["query"]["search"] == "");
 }
+
+#[test]
+fn null_location_entry_becomes_an_empty_string() {
+    let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+    let (status, _, _) = invoke(
+        &[
+            "create-check",
+            "--name",
+            "Probe",
+            "--url",
+            "https://example.test/",
+            "--cli-input-json",
+            r#"{"Locations":[null,"loc-1"]}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+    assert!(body["locations"] == serde_json::json!(["", "loc-1"]));
+}

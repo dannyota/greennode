@@ -1,5 +1,5 @@
 use super::{Check, CheckRequest, Mutation, check_ids};
-use crate::monitor::privacy::{check_budget, collect_url};
+use crate::monitor::privacy::{check_budget, collect_url, first_json_value};
 use crate::wire::product::evidence::Evidence;
 use crate::{Error, Failure, Secret};
 use serde_json::Value;
@@ -28,8 +28,8 @@ impl Privacy {
         }
         add(&mut self.diagnostics, &request.body, true)?;
         add(&mut self.operands, &request.body, false)?;
-        if serde_json::from_str::<&serde_json::value::RawValue>(&request.body).is_ok() {
-            let json = serde_json::from_str::<Value>(&request.body).map_err(|_| ())?;
+        if let Some(raw) = first_json_value(&request.body) {
+            let json = serde_json::from_str::<Value>(raw.get()).map_err(|_| ())?;
             visit(&mut self.diagnostics, &json, true)?;
             visit(&mut self.operands, &json, false)?;
         }

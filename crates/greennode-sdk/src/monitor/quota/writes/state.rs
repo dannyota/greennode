@@ -142,7 +142,7 @@ impl QuotaLedger {
             .lock()
             .map_err(|_| Error::new(ErrorClass::Api))?;
         if let Some(attempt) = pending.get_mut(&kind) {
-            attempt.evidence.absorb(credentials);
+            attempt.retain_credentials(credentials);
         }
         Ok(())
     }
@@ -240,11 +240,14 @@ pub(super) enum Goal {
 }
 impl Goal {
     pub(super) fn id(&self) -> &str {
+        self.before().map_or("", Snapshot::id)
+    }
+    pub(super) fn before(&self) -> Option<&Snapshot> {
         match self {
             Self::RenewSetting { before, .. }
             | Self::Delete { before }
-            | Self::SyntheticChange { before, .. } => before.id(),
-            _ => "",
+            | Self::SyntheticChange { before, .. } => Some(before),
+            _ => None,
         }
     }
     pub(super) fn bound(&self) -> Duration {
@@ -264,6 +267,7 @@ pub(super) struct Attempt {
     pub(super) payment_pending: bool,
     pub(super) observed_status: u16,
     pub(super) evidence: Evidence,
+    pub(super) credentials_exhausted: bool,
 }
 impl Attempt {
     pub(super) fn new(op: &'static str, kind: Kind, goal: Goal, evidence: Evidence) -> Self {
@@ -275,6 +279,7 @@ impl Attempt {
             payment_pending: false,
             observed_status: 0,
             evidence,
+            credentials_exhausted: false,
         }
     }
     pub(super) fn sent(&self) -> &'static str {
@@ -284,18 +289,36 @@ impl Attempt {
             "yes"
         }
     }
+    fn retain_credentials(
+        &mut self,
+        credentials: &crate::wire::product::evidence::SentCredentials,
+    ) {
+        self.credentials_exhausted |= !self.evidence.absorb_bounded(credentials, CREDENTIAL_LIMIT);
+        if self.credentials_exhausted {
+            self.order_id.clear();
+        }
+    }
+
+    pub(super) fn merge_retained(&mut self, retained: &Self) {
+        let evidence = std::mem::take(&mut self.evidence);
+        self.credentials_exhausted |= retained.credentials_exhausted;
+        self.retain_credentials(retained.evidence.credentials());
+        self.retain_credentials(evidence.credentials());
+    }
+
     fn copy(&self) -> Self {
-        let mut evidence = Evidence::new();
-        evidence.absorb(self.evidence.credentials());
-        Self {
+        let mut copy = Self {
             op: self.op,
             kind: self.kind,
             goal: self.goal.clone(),
             order_id: self.order_id.clone(),
             payment_pending: self.payment_pending,
             observed_status: self.observed_status,
-            evidence,
-        }
+            evidence: Evidence::new(),
+            credentials_exhausted: self.credentials_exhausted,
+        };
+        copy.retain_credentials(self.evidence.credentials());
+        copy
     }
 }
 
@@ -625,3 +648,6 @@ pub(super) fn order_display(value: &str, evidence: &Evidence) -> String {
         value.into()
     }
 }
+
+#[cfg(test)]
+mod tests;

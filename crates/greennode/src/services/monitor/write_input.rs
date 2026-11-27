@@ -36,6 +36,7 @@ enum Shape {
     Object(&'static [(&'static str, Field)]),
     List(&'static [(&'static str, Field)]),
     TextMap,
+    Integer,
 }
 
 pub(super) const CHECK: JsonChecks = checks(|bytes| {
@@ -46,13 +47,24 @@ pub(super) const CHECK: JsonChecks = checks(|bytes| {
             ("Notifications", Shape::Object(NOTIFICATIONS)),
             ("Headers", Shape::TextMap),
             ("Query", Shape::TextMap),
+            ("Timeout", Shape::Integer),
+            ("TestFrequency", Shape::Integer),
+            ("Tests", Shape::Integer),
+            ("FailedLocations", Shape::Integer),
         ],
     )
 });
 pub(super) const CHANNEL: JsonChecks =
     checks(|bytes| normalize(bytes, &[("Headers", Shape::List(HEADERS))]));
-pub(super) const ALARM: JsonChecks =
-    checks(|bytes| normalize(bytes, &[("Resend", Shape::Object(RESEND))]));
+pub(super) const ALARM: JsonChecks = checks(|bytes| {
+    normalize(
+        bytes,
+        &[
+            ("Resend", Shape::Object(RESEND)),
+            ("TimeFrame", Shape::Integer),
+        ],
+    )
+});
 
 const fn checks(normalize: JsonNormalization) -> JsonChecks {
     JsonChecks {
@@ -68,9 +80,6 @@ fn normalize(bytes: &[u8], shapes: &[FieldShape]) -> Result<Vec<u8>, InputError>
     let mut root: Option<HashMap<String, Box<RawValue>>> =
         serde_json::from_slice(bytes).map_err(|_| INVALID)?;
     if let Some(root) = &mut root {
-        for raw in root.values_mut().filter(|raw| raw.get() == "-0") {
-            *raw = RawValue::from_string("0".into()).map_err(|_| INVALID)?;
-        }
         for (name, shape) in shapes {
             if let Some(raw) = root.get_mut(*name).filter(|raw| raw.get() != "null") {
                 let decoded = match shape {
@@ -85,6 +94,8 @@ fn normalize(bytes: &[u8], shapes: &[FieldShape]) -> Result<Vec<u8>, InputError>
                         )
                     }
                     Shape::Object(fields) => object(raw, fields)?,
+                    Shape::Integer if raw.get() == "-0" => Value::from(0),
+                    Shape::Integer => continue,
                     Shape::TextMap => {
                         let fields: HashMap<String, Option<String>> =
                             serde_json::from_str(raw.get()).map_err(|_| INVALID)?;

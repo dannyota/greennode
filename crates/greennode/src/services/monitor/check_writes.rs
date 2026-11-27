@@ -129,7 +129,13 @@ const LOCATIONS_INPUT: InputField<Input> = InputField {
     secret: false,
     nullable: false,
     set_json: |input, value| {
-        input.locations = Some(serde_json::from_value(value).map_err(|_| ())?);
+        let locations: Vec<Option<String>> = serde_json::from_value(value).map_err(|_| ())?;
+        input.locations = Some(
+            locations
+                .into_iter()
+                .map(Option::unwrap_or_default)
+                .collect(),
+        );
         Ok(())
     },
     set_flag: Some(|input, matches| {

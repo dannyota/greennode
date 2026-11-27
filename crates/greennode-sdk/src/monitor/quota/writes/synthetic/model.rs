@@ -184,13 +184,16 @@ impl Default for Draft {
 }
 impl Draft {
     pub(super) fn retained(attempt: &Attempt) -> Self {
-        let (sent_at, previous, action) = match &attempt.goal {
-            Goal::SyntheticCreate { sent_at, .. } => (Some(*sent_at), None, Action::None),
-            Goal::SyntheticChange { before, action } => {
-                (None, before.end().map(QuotaTimestamp), *action)
-            }
-            _ => (None, None, Action::None),
+        let (sent_at, action) = match &attempt.goal {
+            Goal::SyntheticCreate { sent_at, .. } => (Some(*sent_at), Action::None),
+            Goal::SyntheticChange { action, .. } => (None, *action),
+            _ => (None, Action::None),
         };
+        let previous = attempt
+            .goal
+            .before()
+            .and_then(super::super::state::Snapshot::end)
+            .map(QuotaTimestamp);
         Self {
             sent: attempt.sent(),
             stage: "unconfirmed",
@@ -199,8 +202,8 @@ impl Draft {
             quota: None,
             order_id: attempt.order_id.clone(),
             payment_pending: attempt.payment_pending,
-            sent_at,
-            previous,
+            sent_at: sent_at.filter(|_| !attempt.credentials_exhausted),
+            previous: previous.filter(|_| !attempt.credentials_exhausted),
         }
     }
     pub(super) fn project<T>(

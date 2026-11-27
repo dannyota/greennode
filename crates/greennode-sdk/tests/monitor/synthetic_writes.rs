@@ -679,3 +679,6 @@ async fn renewal_checks_the_current_clock_after_catalog_reads() {
     assert_eq!(output.outcome.stage, "accepted");
     assert_eq!(server.requests(), 14);
 }
+
+#[path = "synthetic_writes/lifecycle_retained.rs"]
+mod lifecycle_retained;
