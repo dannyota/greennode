@@ -1,0 +1,13 @@
+{
+  "AlarmID": "alarm-1",
+  "Alarm": {
+    "ID": "",
+    "Name": "",
+    "Description": "",
+    "Kind": "",
+    "Status": "",
+    "Severity": "",
+    "MetricMappingID": "",
+    "Log": null
+  }
+}

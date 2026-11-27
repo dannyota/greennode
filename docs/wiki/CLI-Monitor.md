@@ -56,6 +56,41 @@ Undetermined.
 greennode monitor create-check --name <name> --url <url> --locations <locations>
 ```
 
+## create-log-alarm
+
+Kind: Write.
+
+The exact name search must finish every page with consistent counts and
+identities before creating the alarm. A duplicate name exits 2. Supply
+QueryString and a JSON Filter together, or leave both empty for a match-all
+query. A nonfinite threshold exits 2 before requests. Without --no-wait the SDK
+polls for ACTIVE for up to 120 seconds. An unconfirmed write must be reconciled
+by reading before another create.
+
+| Flag                                   | Type                      | Required |
+| -------------------------------------- | ------------------------- | -------- |
+| `--name`                               | `string`                  | yes      |
+| `--log-project-id`                     | `string`                  | yes      |
+| `--threshold-value`                    | `*float64`                | yes      |
+| `--description`                        | `string`                  |          |
+| `--severity`                           | `string`                  |          |
+| `--query-string`                       | `string`                  |          |
+| `--threshold-type`                     | `string`                  |          |
+| `--condition`                          | `string`                  |          |
+| `--time-frame`                         | `int`                     |          |
+| `--group-by-field`                     | `string`                  |          |
+| `--agg-field`                          | `string`                  |          |
+| `--agg-type`                           | `string`                  |          |
+| `--in-alarm`                           | `[]string`                |          |
+| `--ok`                                 | `[]string`                |          |
+| `--no-wait`                            | `bool`                    |          |
+| `Filter` (via `--cli-input-json` only) | `jsontext.Value`          |          |
+| `Resend` (via `--cli-input-json` only) | `*monitor.LogAlarmResend` |          |
+
+```sh
+greennode monitor create-log-alarm --name <name> --log-project-id <log-project-id> --threshold-value <threshold-value>
+```
+
 ## delete-channel
 
 Kind: Write, destructive.
@@ -82,6 +117,21 @@ Requires --yes. Deleting a check removes its history.
 
 ```sh
 greennode monitor delete-check --check-id <check-id> --yes
+```
+
+## delete-log-alarm
+
+Kind: Write, destructive.
+
+Requires --yes. The SDK verifies the alarm kind before deleting it. Deleting an
+alarm removes its history.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--alarm-id` | `string` | yes      |
+
+```sh
+greennode monitor delete-log-alarm --alarm-id <alarm-id> --yes
 ```
 
 ## get-alarm
@@ -645,4 +695,37 @@ update serialize by CheckID within one SDK client.
 
 ```sh
 greennode monitor update-check --check-id <check-id> --name <name>
+```
+
+## update-log-alarm
+
+Kind: Write.
+
+Updates only ACTIVE log alarms. Every omitted field retains its current value. A
+supplied QueryString requires a supplied Filter and vice versa. Until settlement
+can confirm ACTIVE, an uncertain write must be reconciled with a read.
+
+| Flag                                   | Type                      | Required |
+| -------------------------------------- | ------------------------- | -------- |
+| `--alarm-id`                           | `string`                  | yes      |
+| `--no-wait`                            | `bool`                    |          |
+| `--name`                               | `*string`                 |          |
+| `--description`                        | `*string`                 |          |
+| `--severity`                           | `*string`                 |          |
+| `--log-project-id`                     | `*string`                 |          |
+| `--query-string`                       | `*string`                 |          |
+| `--threshold-type`                     | `*string`                 |          |
+| `--condition`                          | `*string`                 |          |
+| `--threshold-value`                    | `*float64`                |          |
+| `--time-frame`                         | `*int`                    |          |
+| `--group-by-field`                     | `*string`                 |          |
+| `--agg-field`                          | `*string`                 |          |
+| `--agg-type`                           | `*string`                 |          |
+| `--in-alarm`                           | `*[]string`               |          |
+| `--ok`                                 | `*[]string`               |          |
+| `Filter` (via `--cli-input-json` only) | `*jsontext.Value`         |          |
+| `Resend` (via `--cli-input-json` only) | `*monitor.LogAlarmResend` |          |
+
+```sh
+greennode monitor update-log-alarm --alarm-id <alarm-id> --description <description>
 ```

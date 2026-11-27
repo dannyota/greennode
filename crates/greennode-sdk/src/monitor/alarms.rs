@@ -123,6 +123,8 @@ pub struct LogAlarmDetail {
     pub ok: Vec<String>,
     /// Notification resend settings.
     pub resend: LogAlarmResend,
+    #[serde(skip)]
+    pub(super) raw_log_search_query: String,
 }
 
 /// Settings for repeating notifications.
@@ -238,6 +240,7 @@ model! { struct LogWire {
     project: ScalarText => "logProject", "LogProjectID";
     name: String => "logProjectName", "LogProjectName";
     query: String => "queryString", "QueryString";
+    raw_query: String => "logSearchQuery", "LogSearchQuery";
     filter: AlarmFilter => "filter", "Filter";
     threshold_type: String => "thresholdType", "ThresholdType";
     condition: String => "condition", "Condition";
@@ -297,6 +300,7 @@ impl From<LogWire> for LogAlarmDetail {
             log_project_id: wire.project.0,
             log_project_name: wire.name,
             query_string: wire.query,
+            raw_log_search_query: wire.raw_query,
             filter: wire.filter,
             threshold_type: wire.threshold_type,
             condition: wire.condition,

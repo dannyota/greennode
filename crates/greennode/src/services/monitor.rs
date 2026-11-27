@@ -1,5 +1,6 @@
 mod channel_writes;
 mod check_writes;
+mod log_alarm_writes;
 mod quota;
 
 use std::io::Write;
@@ -422,6 +423,9 @@ pub(super) const SERVICE: Service = Service {
         check_writes::DELETE,
         check_writes::PAUSE,
         check_writes::RESUME,
+        log_alarm_writes::CREATE,
+        log_alarm_writes::UPDATE,
+        log_alarm_writes::DELETE,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,

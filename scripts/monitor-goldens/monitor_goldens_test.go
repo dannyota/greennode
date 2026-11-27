@@ -383,3 +383,45 @@ func TestMonitorCheckWriteGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestMonitorLogAlarmWriteGoldens(t *testing.T) {
+	load := func(file string) string {
+		body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), file+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	const prefix = "/vmonitor-api/api/v1/alarms"
+	for _, tc := range []struct {
+		operation, route string
+		flags            []string
+		status           int
+		ack              string
+	}{
+		{"create-log-alarm", prefix + "/logs", []string{"--name", "Read alarm", "--log-project-id", "project-1", "--threshold-value", "0", "--no-wait"}, 201, `{"data":{"id":"alarm-1"}}`},
+		{"update-log-alarm", prefix + "/logs/alarm-1", []string{"--alarm-id", "alarm-1", "--description", "Changed", "--no-wait"}, 200, ""},
+		{"delete-log-alarm", prefix + "/logs/alarm-1", []string{"--alarm-id", "alarm-1", "--yes"}, 204, ""},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.operation+"/"+format, func(t *testing.T) {
+				routes := map[string]func(http.ResponseWriter, *http.Request){tc.route: jsonHandler(tc.status, tc.ack)}
+				if tc.operation == "create-log-alarm" {
+					routes[prefix+"/list"] = jsonHandler(200, `{"lstData":[],"page":1,"pageSize":10000,"totalItem":0,"totalPage":0}`)
+					routes["/log-api/v1/projects/project-1"] = jsonHandler(200, load("remaining_log_project"))
+				} else {
+					routes[prefix+"/alarm-1"] = jsonHandler(200, load("log_alarm_guard"))
+				}
+				server := newSvcFixture(routes)
+				root, stdout, stderr := newSvcRoot(t, server)
+				root.SetArgs(append([]string{"--region", "hcm-3", "--output", format, "monitor", tc.operation}, tc.flags...))
+				if err := root.ExecuteContext(context.Background()); err != nil || stderr.Len() != 0 || server.requestCount() != len(routes) {
+					t.Fatalf("log alarm write failed (requests %d)", server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}

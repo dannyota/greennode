@@ -12,6 +12,12 @@ mod channel_writes;
 #[path = "monitor/check_writes.rs"]
 mod check_writes;
 
+#[path = "monitor/log_alarm_writes.rs"]
+mod log_alarm_writes;
+
+#[path = "monitor/log_project_writes.rs"]
+mod log_project_writes;
+
 #[path = "monitor/next_reads.rs"]
 mod next_reads;
 

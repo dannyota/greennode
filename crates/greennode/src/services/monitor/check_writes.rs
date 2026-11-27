@@ -138,7 +138,7 @@ const LOCATIONS_INPUT: InputField<Input> = InputField {
         let values = matches.get_many::<String>(LOCATIONS.name).ok_or(())?;
         let mut locations = Vec::new();
         for text in values {
-            locations.extend(split_location_arg(text)?);
+            locations.extend(split_string_slice_arg(text)?);
         }
         input.locations = Some(locations);
         Ok(())
@@ -146,7 +146,7 @@ const LOCATIONS_INPUT: InputField<Input> = InputField {
     requirement: Requirement::Optional,
 };
 
-fn split_location_arg(text: &str) -> Result<Vec<String>, ()> {
+pub(super) fn split_string_slice_arg(text: &str) -> Result<Vec<String>, ()> {
     if text.is_empty() {
         return Ok(Vec::new());
     }
