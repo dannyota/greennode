@@ -3,7 +3,7 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::Base;
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, operation, options::PathIds, response};
+use crate::wire::product::{evidence::Evidence, options::PathIds, response};
 use crate::{ApiError, Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
 use super::inventory::{Selection, screen};
@@ -449,7 +449,7 @@ fn check_null_elements(fields: &Fields<'_>, name: &str) -> Result<(), ()> {
 }
 
 pub(super) fn reflects(text: &str, evidence: &Evidence) -> bool {
-    operation::reflects_json(text.as_bytes(), evidence.credentials(), true) != Some(false)
+    evidence.peer_body_reflects(text.as_bytes()) != Some(false)
         || response::reflects_credential_forms(text, evidence.credentials())
 }
 

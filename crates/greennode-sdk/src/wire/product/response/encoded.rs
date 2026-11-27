@@ -27,21 +27,25 @@ impl EncodedNeedle {
         alphabet: Base64Alphabet,
         fragment: bool,
     ) {
-        if let Some(needle) = needles
-            .iter_mut()
-            .find(|needle| needle.value.as_str() == value.as_str())
-        {
-            needle.fragment |= fragment;
-            if needle.alphabet != alphabet {
-                needle.alphabet = Base64Alphabet::Both;
+        needles.push(Self {
+            value,
+            alphabet,
+            fragment,
+        });
+    }
+
+    pub(super) fn dedup(needles: &mut Vec<Self>) {
+        needles.sort_unstable_by(|a, b| a.value.as_str().cmp(b.value.as_str()));
+        needles.dedup_by(|next, kept| {
+            if next.value != kept.value {
+                return false;
             }
-        } else {
-            needles.push(Self {
-                value,
-                alphabet,
-                fragment,
-            });
-        }
+            kept.fragment |= next.fragment;
+            if kept.alphabet != next.alphabet {
+                kept.alphabet = Base64Alphabet::Both;
+            }
+            true
+        });
     }
 
     pub(super) fn matches(&self, input: &[u8], strict: bool) -> bool {
@@ -95,11 +99,4 @@ pub(super) fn contains_hex(input: &[u8], needle: &str, strict: bool) -> bool {
                 .all(|byte| !byte.is_ascii_alphanumeric())
         })
     })
-}
-
-pub(super) fn insert_hex(needles: &mut Vec<Zeroizing<String>>, part: &str) {
-    let hex = Zeroizing::new(data_encoding::HEXLOWER.encode(part.as_bytes()));
-    if !needles.contains(&hex) {
-        needles.push(hex);
-    }
 }

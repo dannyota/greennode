@@ -106,7 +106,7 @@ impl Client {
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
-        if wire::reflects(evidence, body) {
+        if evidence.output_reflects(body) {
             return Err(invalid(
                 "vngcloud: invalid input: request contains credential material",
             ));

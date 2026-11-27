@@ -69,12 +69,7 @@ impl Client {
             .await
             .map_err(failure)?;
         let text = go_json(&raw);
-        if crate::wire::product::operation::reflects_json(
-            text.as_bytes(),
-            evidence.credentials(),
-            true,
-        ) == Some(true)
-        {
+        if evidence.go_peer_body_reflects(&raw) == Some(true) {
             return Err(failure(ROUTE_TABLE.invalid(&evidence)));
         }
         let envelope = ROUTE_TABLE.fields(&text, &evidence).map_err(failure)?;

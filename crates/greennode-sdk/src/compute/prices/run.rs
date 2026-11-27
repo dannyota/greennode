@@ -381,7 +381,7 @@ impl Run<'_> {
     }
 
     fn safe_error(&self, error: Error) -> Error {
-        error.screen_api(&|text| self.catalog.evidence.text_reflects(text))
+        self.catalog.evidence.screen_error(error)
     }
 
     #[expect(
@@ -401,7 +401,7 @@ impl Run<'_> {
         let evidence = &self.catalog.evidence;
         if !evidence.can_retain_partial()
             || serde_json::to_value(&self.output)
-                .map_or(true, |value| evidence.reflected_in(&value))
+                .map_or(true, |value| evidence.output_reflects(&value))
             || self
                 .output
                 .items

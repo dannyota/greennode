@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, go_json};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
-use super::inventory::{InventoryRead, InventoryStyle, Selection, screen, value_reflects_id};
+use super::inventory::{InventoryRead, InventoryStyle, Selection, screen};
 use super::wire::Fields;
 use super::{Client, Endpoint, EndpointTag, VNetworkRegion, failure};
 
@@ -407,27 +406,9 @@ fn recheck(
     }
 }
 
-fn nested_ids_reflect(evidence: &Evidence, value: &Value) -> bool {
-    match value {
-        Value::Object(map) => map.iter().any(|(key, item)| {
-            let key = key.to_ascii_lowercase();
-            ["id", "ids", "uuid", "uuids"]
-                .into_iter()
-                .any(|suffix| key.ends_with(suffix))
-                && value_reflects_id(evidence, item)
-                || nested_ids_reflect(evidence, item)
-        }),
-        Value::Array(items) => items.iter().any(|item| match item {
-            Value::String(_) | Value::Number(_) => value_reflects_id(evidence, item),
-            _ => nested_ids_reflect(evidence, item),
-        }),
-        _ => false,
-    }
-}
-
 fn validate_endpoint_ids(evidence: &Evidence, endpoint: &Endpoint) -> Result<(), ()> {
-    if value_reflects_id(evidence, &endpoint.package_id)
-        || value_reflects_id(evidence, &endpoint.portal_user_id)
+    if evidence.identifier_output_reflects(&endpoint.package_id)
+        || evidence.identifier_output_reflects(&endpoint.portal_user_id)
         || [
             &endpoint.endpoint_domains,
             &endpoint.project,
@@ -447,7 +428,7 @@ fn validate_endpoint_ids(evidence: &Evidence, endpoint: &Endpoint) -> Result<(),
             &endpoint.vpc,
         ]
         .into_iter()
-        .any(|value| nested_ids_reflect(evidence, value))
+        .any(|value| evidence.output_fields_reflect(value))
     {
         return Err(());
     }

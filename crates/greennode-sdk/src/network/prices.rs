@@ -3,7 +3,6 @@ use serde::Serialize;
 use crate::model::pricing::{
     DiscoveryFailure, DiscoveryMetadata, DiscoveryPrice, PricingNote, discovery_notes, note,
 };
-use crate::output_number;
 use crate::quote::{
     catalog::{self, Catalog},
     input,
@@ -211,7 +210,7 @@ impl Client {
         });
         if reflected_amount
             || !serde_json::to_value(&output)
-                .is_ok_and(|value| !catalog.evidence.reflected_in(&value))
+                .is_ok_and(|value| !catalog.evidence.output_reflects(&value))
         {
             return Err(failure(screen(
                 *request::invalid(QUOTE, 200),
@@ -248,11 +247,10 @@ async fn public_ip_price(
     let value = catalog::value(QUOTE, &raw)?;
     let mut price = decode::monthly(QUOTE, &value)?;
     price.currency = "VND".into();
-    if price.monthly_price.is_some_and(|amount| {
-        catalog
-            .evidence
-            .text_reflects(&output_number::fixed_two(amount))
-    }) {
+    if price
+        .monthly_price
+        .is_some_and(|amount| catalog.evidence.reflects_fixed_two(amount))
+    {
         return Err(request::invalid(QUOTE, 200));
     }
     catalog.rows(1)?;

@@ -8,12 +8,13 @@ use crate::billing::{
 };
 use crate::wire::{
     product::{
+        evidence::Evidence,
         operation::{self, Operation, Output},
         sender::Response,
     },
     strict_json::{self, Shape, ShapeField},
 };
-use crate::{Error, Failure, RequestContext, output_number};
+use crate::{Error, Failure, RequestContext};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
@@ -212,7 +213,6 @@ const DATA: Shape<'static> = Shape::Object(&[
 ]);
 
 impl Output for ResourceEnvelope {
-    const CHECK_RENDERED_NUMBERS: bool = true;
     const SCHEMA: Shape<'static> = Shape::Object(&[
         field("code"),
         ShapeField {
@@ -246,12 +246,8 @@ impl Output for ResourceEnvelope {
         }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
-        if output
-            .data
-            .items
-            .iter()
-            .filter_map(|item| item.cost)
-            .any(|cost| output_number::reflects(cost, &response.credentials, true))
+        let evidence = Evidence::from_credentials(&response.credentials);
+        if serde_json::to_value(&output.data).map_or(true, |value| evidence.output_reflects(&value))
         {
             return Err(invalid());
         }

@@ -120,18 +120,20 @@ pub(super) fn api(
     message: &str,
     evidence: &Evidence,
 ) -> Error {
-    Error::from_api(ApiError::without_fallback(
+    evidence.screen_error(Error::from_api(ApiError::without_fallback(
         op,
         status,
         SafeText::new(code, &[]),
         SafeText::new(message, &[]),
         false,
-    ))
-    .screen_api(&|text| evidence.text_reflects(text))
+    )))
 }
 
 #[derive(Default)]
-pub(super) struct Envelope(BTreeMap<String, Box<RawValue>>);
+pub(super) struct Envelope {
+    fields: BTreeMap<String, Box<RawValue>>,
+    original: Bytes,
+}
 
 #[expect(
     clippy::result_large_err,
@@ -139,13 +141,7 @@ pub(super) struct Envelope(BTreeMap<String, Box<RawValue>>);
 )]
 impl Envelope {
     pub(super) fn reflects(&self, evidence: &Evidence) -> bool {
-        self.0.iter().any(|(key, raw)| {
-            evidence.text_reflects(key)
-                || operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
-                    .unwrap_or(true)
-                || serde_json::from_str::<serde_json::Value>(raw.get())
-                    .map_or(true, |value| evidence.reflected_in(&value))
-        })
+        !self.original.is_empty() && evidence.go_peer_body_reflects(&self.original) != Some(false)
     }
 
     pub(super) fn field<T: WireField, O>(
@@ -156,13 +152,13 @@ impl Envelope {
     ) -> Result<T, Failure<O>> {
         let invalid = || failure(read.invalid(evidence));
         if self
-            .0
+            .fields
             .keys()
             .any(|key| key != name && field_matches(name, key))
         {
             return Err(invalid());
         }
-        let Some(raw) = self.0.get(name) else {
+        let Some(raw) = self.fields.get(name) else {
             return Ok(T::default());
         };
         serde_json::from_str::<Field<T>>(raw.get())
@@ -207,7 +203,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| failure(error.screen_api(&|text| evidence.text_reflects(text))))?;
+            .map_err(|error| failure(evidence.screen_error(*error)))?;
         if std::iter::once(project.as_str())
             .chain(ids.iter().copied())
             .any(|input| evidence.text_reflects(input))
@@ -275,13 +271,13 @@ impl Client {
                         "invalid server response; body withheld",
                         evidence,
                     ),
-                    ReadStyle::Plain => error.screen_api(&|text| evidence.text_reflects(text)),
+                    ReadStyle::Plain => evidence.screen_error(error),
                 });
             }
             if read.style == ReadStyle::Console && status.is_some() {
                 return failure(console_status(read, status, evidence));
             }
-            failure(error.screen_api(&|text| evidence.text_reflects(text)))
+            failure(evidence.screen_error(error))
         })?;
         if read.style == ReadStyle::Console && response.status != StatusCode::OK {
             return Err(failure(console_status(
@@ -298,7 +294,7 @@ impl Client {
             (true, protected, operation.retry),
             evidence.credentials(),
         )
-        .map_err(|error| failure(error.screen_api(&|text| evidence.text_reflects(text))))?;
+        .map_err(|error| failure(evidence.screen_error(*error)))?;
         if body.is_empty() && !protected {
             return Ok(Envelope::default());
         }
@@ -315,7 +311,10 @@ impl Client {
             .map_err(|_| failure(read.invalid(evidence)))?;
         let fields = serde_json::from_str::<Option<_>>(raw.get())
             .map_err(|_| failure(read.invalid(evidence)))?;
-        Ok(Envelope(fields.unwrap_or_default()))
+        Ok(Envelope {
+            fields: fields.unwrap_or_default(),
+            original: body,
+        })
     }
 }
 
@@ -331,12 +330,11 @@ fn console_status(read: &Read, status: Option<u16>, evidence: &Evidence) -> Erro
         Some(400..=499) => "ClientError",
         _ => "RequestFailed",
     };
-    Error::from_api(ApiError::without_fallback(
+    evidence.screen_error(Error::from_api(ApiError::without_fallback(
         read.id,
         status,
         SafeText::new(code, &[]),
         SafeText::new("console log request failed; body withheld", &[]),
         status.is_some_and(|status| matches!(status, 429 | 502..=504)),
-    ))
-    .screen_api(&|text| evidence.text_reflects(text))
+    )))
 }

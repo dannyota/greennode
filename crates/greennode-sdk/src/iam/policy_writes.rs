@@ -119,7 +119,7 @@ impl Client {
             wire_statements(&input.statements),
         );
         let mut evidence = self.write_evidence(ctx, CREATE, &[], &[])?;
-        if evidence.reflected_in(&body) {
+        if evidence.output_reflects(&body) {
             return Err(withheld_operand());
         }
         let mut guard = Guard::new(self, ctx, CREATE, &mut evidence).await?;
@@ -214,7 +214,7 @@ impl Client {
         if input
             .statements
             .as_ref()
-            .is_some_and(|statements| evidence.reflected_in(&wire_statements(statements)))
+            .is_some_and(|statements| evidence.output_reflects(&wire_statements(statements)))
         {
             return Err(withheld_operand());
         }

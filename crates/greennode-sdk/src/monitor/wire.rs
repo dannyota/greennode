@@ -59,14 +59,13 @@ impl Read {
         retryable: bool,
         evidence: &Evidence,
     ) -> Error {
-        Error::from_api(ApiError::new(
+        evidence.screen_error(Error::from_api(ApiError::new(
             self.id,
             status,
             SafeText::new(code, &[]),
             SafeText::new(message, &[]),
             retryable,
-        ))
-        .screen_api(&|text| evidence.text_reflects(text))
+        )))
     }
 
     fn failure(&self, error: Error, evidence: &Evidence) -> Error {
@@ -89,7 +88,7 @@ impl Read {
             return self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
         }
         if error.class() != ErrorClass::Api || api.is_none() {
-            return error.screen_api(&|text| evidence.text_reflects(text));
+            return evidence.screen_error(error);
         }
         self.request_failed(status, api.is_some_and(ApiError::retryable), evidence)
     }

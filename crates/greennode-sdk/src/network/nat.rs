@@ -5,7 +5,7 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, operation, options::PathIds};
+use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, List, RequestContext};
 
 use super::wire::{Fields, PAGING, Read, Style};
@@ -262,7 +262,7 @@ impl Client {
         let raw = self.read(ctx, base, REGIONS, &[], evidence).await?;
         let invalid = || INVALID_REGIONS.invalid_as(evidence, "invalid regions envelope");
         let text = go_json(&raw);
-        if operation::reflects_json(text.as_bytes(), evidence.credentials(), true) != Some(false) {
+        if evidence.go_peer_body_reflects(&raw) != Some(false) {
             return Err(invalid());
         }
         let data: &RawValue = nat_data(&text).map_err(|()| invalid())?;

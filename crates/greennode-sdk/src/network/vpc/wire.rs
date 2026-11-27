@@ -160,7 +160,7 @@ impl<'a> Reads<'a> {
     }
 
     pub(super) fn screen(&self, error: Error) -> Error {
-        error.screen_api(&|text| self.evidence.text_reflects(text))
+        self.evidence.screen_error(error)
     }
 
     pub(super) fn sanitize<T: WireField + serde::Serialize>(
@@ -169,7 +169,10 @@ impl<'a> Reads<'a> {
         mut output: T,
     ) -> Result<T, Error> {
         let value = serde_json::to_value(&output).map_err(|_| self.invalid(read))?;
-        if self.unsafe_output(&value, false) {
+        if self
+            .evidence
+            .output_fields_reflect_with(&value, &|number| self.protected_number(number.as_str()))
+        {
             return Err(self.invalid(read));
         }
         if output.redact(&self.evidence) {
@@ -179,33 +182,13 @@ impl<'a> Reads<'a> {
         }
     }
 
-    fn unsafe_output(&self, value: &serde_json::Value, identity: bool) -> bool {
-        match value {
-            serde_json::Value::String(text) if identity => self.evidence.id_reflects(text),
-            serde_json::Value::Number(number) => {
-                self.evidence.credentials().has_numeric_product_credential()
-                    || self.number_reflects(&number.to_string())
-            }
-            serde_json::Value::Array(items) => {
-                items.iter().any(|item| self.unsafe_output(item, identity))
-            }
-            serde_json::Value::Object(fields) => fields.iter().any(|(key, item)| {
-                self.unsafe_output(
-                    item,
-                    key.ends_with("ID") || key.ends_with("IDs") || key.ends_with("UUID"),
-                )
-            }),
-            _ => false,
-        }
-    }
-
-    fn number_reflects(&self, text: &str) -> bool {
-        if self.evidence.text_reflects(text) {
+    fn protected_number(&self, text: &str) -> bool {
+        let credentials = self.evidence.credentials();
+        if credentials.has_numeric_product_credential() {
             return true;
         }
         let hex = data_encoding::HEXLOWER.encode(text.as_bytes());
-        self.evidence
-            .credentials()
+        credentials
             .values()
             .iter()
             .any(|secret| secret.expose_secret().eq_ignore_ascii_case(&hex))
@@ -221,8 +204,10 @@ impl<'a> Reads<'a> {
         let text =
             serde_json::to_string(&value).map_err(|_| self.screen(read.protected_invalid()))?;
         if self.evidence.text_reflects(&text)
-            || self.evidence.reflected_in(&value)
-            || self.unsafe_output(&value, false)
+            || self.evidence.output_reflects(&value)
+            || self.evidence.output_fields_reflect_with(&value, &|number| {
+                self.protected_number(number.as_str())
+            })
         {
             return Err(self.screen(read.protected_invalid()));
         }
@@ -494,8 +479,8 @@ impl<'a> Reads<'a> {
     ) -> Result<PagedList<T>, Error> {
         let mut metadata = [page.page, page.page_size, page.total_page, page.total_item];
         if metadata.iter().any(|value| {
-            self.evidence.credentials().has_numeric_product_credential()
-                || self.number_reflects(&value.to_string())
+            self.protected_number(&value.to_string())
+                || self.evidence.integer_output_reflects(*value)
         }) || !metadata
             .iter_mut()
             .all(|value| value.redact(&self.evidence))

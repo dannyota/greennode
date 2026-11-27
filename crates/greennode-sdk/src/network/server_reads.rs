@@ -4,7 +4,7 @@ use crate::model::wire::{Field, decode_lenient, go_json};
 use crate::wire::product::evidence::Evidence;
 use crate::{Error, ErrorClass, Failure, List, RequestContext};
 
-use super::inventory::{InventoryRead, InventoryStyle, Selection, screen, value_reflects_id};
+use super::inventory::{InventoryRead, InventoryStyle, Selection, screen};
 use super::wire::Fields;
 use super::{Client, failure};
 
@@ -206,11 +206,11 @@ fn finish(
     };
     if items.iter().any(|item| {
         server_ids(item).any(|id| evidence.id_reflects(id))
-            || value_reflects_id(evidence, &item.server_group_id)
+            || evidence.identifier_output_reflects(&item.server_group_id)
     }) {
         return Err(failure(protected.shape(evidence)));
     }
-    if !serde_json::to_value(&items).is_ok_and(|value| !evidence.reflected_in(&value)) {
+    if !serde_json::to_value(&items).is_ok_and(|value| !evidence.output_reflects(&value)) {
         return Err(failure(protected.shape(evidence)));
     }
     let items = read.retain(items, evidence).map_err(failure)?;

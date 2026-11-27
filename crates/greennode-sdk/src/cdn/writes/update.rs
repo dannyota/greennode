@@ -12,7 +12,7 @@ use super::{
     settle::{Poll, Target, finish},
 };
 use crate::cdn::wire::convert;
-use crate::wire::product::{operation::reflects_json, options::PathIds};
+use crate::wire::product::options::PathIds;
 use crate::{Failure, RequestContext};
 
 const UPDATE: Call = Call::write("cdn.UpdateWebAccelerator", "v1/cdn/update", &Method::PUT);
@@ -185,8 +185,8 @@ impl Client {
             return finish(initial, None, &mut evidence, output);
         }
         let body = encode(&merged)?;
-        if evidence.reflected_in(&projected)
-            || reflects_json(&body, evidence.credentials(), true).unwrap_or(true)
+        if evidence.output_reflects(&projected)
+            || evidence.peer_body_reflects(&body).unwrap_or(true)
         {
             return Err(invalid(
                 "the merged CDN detail contains a configured credential",

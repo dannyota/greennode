@@ -95,8 +95,7 @@ impl WireField for i64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !evidence.credentials().reflects(self.to_string().as_bytes())
-            && !output_number::reflects(*self as f64, evidence.credentials(), false)
+        !evidence.integer_output_reflects(*self)
     }
 }
 
@@ -122,7 +121,7 @@ impl WireField for Value {
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
         evidence.redact(self);
-        !evidence.reflected_in(self)
+        !evidence.output_reflects(self)
     }
 }
 

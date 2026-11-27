@@ -70,7 +70,6 @@ fn decode_value(raw: &RawValue) -> serde_json::Result<Value> {
 
 impl Output for Envelope {
     const SCHEMA: Shape<'static> = Shape::Object(&[]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK

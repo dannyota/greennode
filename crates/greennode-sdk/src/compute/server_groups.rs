@@ -1,6 +1,6 @@
 use http::{Method, StatusCode};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::model::wire::WireField;
 use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
@@ -199,7 +199,7 @@ impl Client {
             .map_err(|error| not_sent(error.into_parts().0))?;
         if group.uuid != *id
             || group_ids_reflect(&group, &evidence)
-            || serde_json::to_value(&group).map_or(true, |value| evidence.reflected_in(&value))
+            || serde_json::to_value(&group).map_or(true, |value| evidence.output_reflects(&value))
             || !group.redact(&evidence)
         {
             return Err(not_sent(group_read_error(
@@ -266,7 +266,7 @@ impl Client {
             .group_page_checked::<()>(ctx, &ListServerGroupsInput::default(), &mut evidence, true)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
-        if evidence.reflected_in(&json!([
+        if evidence.output_reflects(&json!([
             groups.page,
             groups.page_size,
             groups.total_page,
@@ -321,19 +321,9 @@ impl Client {
 }
 
 fn group_ids_reflect(group: &ServerGroup, evidence: &Evidence) -> bool {
-    fn dynamic(value: &Value, evidence: &Evidence) -> bool {
-        match value {
-            Value::String(id) => evidence.id_reflects(id),
-            Value::Array(values) => values.iter().any(|value| dynamic(value, evidence)),
-            Value::Object(values) => values
-                .iter()
-                .any(|(key, value)| evidence.id_reflects(key) || dynamic(value, evidence)),
-            _ => evidence.reflected_in(value),
-        }
-    }
     evidence.id_reflects(&group.uuid)
         || evidence.id_reflects(&group.policy_id)
-        || dynamic(&group.server_group_id, evidence)
+        || evidence.identifier_output_reflects(&group.server_group_id)
         || group.servers.as_ref().is_some_and(|servers| {
             servers
                 .iter()

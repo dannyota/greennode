@@ -156,7 +156,7 @@ async fn discovery_adds_bearer_to_caller_evidence() {
         )
         .await
         .unwrap();
-    assert!(evidence.reflected_in(&serde_json::json!("toy-token")));
+    assert!(evidence.output_reflects(&serde_json::json!("toy-token")));
 }
 
 #[tokio::test]

@@ -374,7 +374,7 @@ impl<'a> Guard<'a> {
     }
 
     fn check_response<O>(&self, op: &str, value: &impl Serialize) -> Result<(), Failure<O>> {
-        if serde_json::to_value(value).is_ok_and(|value| !self.evidence.reflected_in(&value)) {
+        if serde_json::to_value(value).is_ok_and(|value| !self.evidence.output_reflects(&value)) {
             return Ok(());
         }
         Err(guard_refusal(

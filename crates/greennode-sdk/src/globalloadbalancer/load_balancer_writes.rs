@@ -433,7 +433,7 @@ fn create_output(mut load_balancer: LoadBalancer, evidence: &Evidence) -> Create
     }
     CreateLoadBalancerOutput {
         load_balancer,
-        redact_user_id: evidence.reflected_in(&json!(0)),
+        redact_user_id: evidence.output_reflects(&json!(0)),
     }
 }
 
@@ -443,6 +443,6 @@ fn delete_output(id: &str, deleted: bool, evidence: &Evidence) -> DeleteLoadBala
     DeleteLoadBalancerOutput {
         load_balancer_id,
         deleted,
-        redact_deleted: evidence.reflected_in(&json!(deleted)),
+        redact_deleted: evidence.output_reflects(&json!(deleted)),
     }
 }

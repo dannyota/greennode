@@ -194,12 +194,18 @@ does not depend on neighbouring bytes, at each of the three alignments), and a
 hex form of seven or more match anywhere; a shorter whole encoding matches only
 when bounded, that is when neither neighbour is an ASCII letter or digit, nor
 `+` or `/` for Base64, nor `-` or `_` for Base64URL. Identifier checks match
-every form anywhere. Withhold any peer `code` or `message` containing `/`, `\`,
-`@`, `www.` in any case, or a colon followed by anything but whitespace or the
-end; this closed rule stands in for URL detection. Never expose raw headers,
-response bodies, unbounded peer text, URLs, or decode errors via an error
-source, capture, or debug event. Keep per-attempt credentials available only
-within the logical request for reflection checks, including across retries.
+every form anywhere. One shared screener checks a peer body: its bounded bytes
+as received (a value spanning a key, delimiter or raw escape), each decoded
+string, with the identifier check where a key's last word (after `_`, `-` or a
+lowercase-to-uppercase change) is `id`, `ids`, `uuid` or `uuids` in any case,
+and numbers as received; output spellings apply only to kept values. Kept values
+and local errors are rechecked against current credentials before each use.
+Withhold any peer `code` or `message` containing `/`, `\`, `@`, `www.` in any
+case, or a colon followed by anything but whitespace or the end; this closed
+rule stands in for URL detection. Never expose raw headers, response bodies,
+unbounded peer text, URLs, or decode errors via an error source, capture, or
+debug event. Keep per-attempt credentials available only within the logical
+request for reflection checks, including across retries.
 
 Success bodies are checked against the operation's output schema before
 decoding: object or array shape at every node, duplicate keys, and keys that

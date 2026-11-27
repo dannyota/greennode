@@ -287,7 +287,7 @@ pub(super) fn require_safe<O>(
     message: &str,
     evidence: &Evidence,
 ) -> Result<(), Failure<O>> {
-    if serde_json::to_value(value).is_ok_and(|value| !evidence.reflected_in(&value)) {
+    if serde_json::to_value(value).is_ok_and(|value| !evidence.output_reflects(&value)) {
         Ok(())
     } else {
         Err(guard_refusal(message, None))

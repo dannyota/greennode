@@ -18,16 +18,16 @@ impl PolicyProjection {
             return Err(());
         }
         let mut value = serde_json::to_value(&*policy).map_err(|_| ())?;
-        if !evidence.reflected_in(&value) {
+        if !evidence.output_reflects(&value) {
             return Ok(None);
         }
         evidence.redact(&mut value);
-        if evidence.reflected_in(&value) {
+        if evidence.output_reflects(&value) {
             return Err(());
         }
         scrub_policy(policy, evidence);
         let typed = serde_json::to_value(&*policy).map_err(|_| ())?;
-        if evidence.reflected_in(&typed) {
+        if evidence.output_reflects(&typed) {
             return Err(());
         }
         Ok(Some(Self(value)))
@@ -130,11 +130,11 @@ fn scrub_policy(policy: &mut Policy, evidence: &Evidence) {
         }
     }
     for number in [&mut policy.redirect_http_code, &mut policy.position] {
-        if evidence.reflected_in(&Value::from(*number)) {
+        if evidence.output_reflects(&Value::from(*number)) {
             *number = 0;
         }
     }
-    if evidence.reflected_in(&Value::from(policy.keep_query_string)) {
+    if evidence.output_reflects(&Value::from(policy.keep_query_string)) {
         policy.keep_query_string = false;
     }
 }

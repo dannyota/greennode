@@ -63,14 +63,13 @@ impl Read {
     }
 
     pub(super) fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
-        Error::from_api(ApiError::without_fallback(
+        evidence.screen_error(Error::from_api(ApiError::without_fallback(
             self.id,
             None,
             SafeText::new(code, &[]),
             SafeText::new(message, &[]),
             false,
-        ))
-        .screen_api(&|value| evidence.text_reflects(value))
+        )))
     }
 
     pub(super) fn decode<T: WireField>(
@@ -277,7 +276,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))))?;
+            .map_err(|error| Box::new(evidence.screen_error(*error)))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(ids.iter().map(|(_, value)| *value))
             .collect();
@@ -322,8 +321,7 @@ impl Client {
             evidence,
         )
         .await;
-        let screen =
-            |error: Error| Box::new(error.screen_api(&|text| evidence.text_reflects(text)));
+        let screen = |error: Error| Box::new(evidence.screen_error(error));
         let received = result.map_err(|error| screen(error.into_parts().0))?;
         let status = received.status;
         let in_use = (require_complete && !operation.success.contains(&status))

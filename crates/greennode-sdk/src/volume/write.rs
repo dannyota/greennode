@@ -14,7 +14,7 @@ use crate::wire::product::{
 use crate::wire::strict_json::Shape;
 use crate::{ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
-use super::wire::{CAP, Redact, api, invalid, reflects};
+use super::wire::{CAP, Redact, api, invalid};
 use super::{Client, Volume};
 
 #[derive(Clone)]
@@ -222,18 +222,15 @@ pub(super) fn attached(volume: &Volume, server: &str) -> bool {
 }
 
 pub(super) fn screen_state(evidence: &Evidence, volume: &Volume) -> Result<(), Box<Error>> {
-    if reflects(
-        evidence,
-        &serde_json::json!([
-            volume.uuid,
-            volume.status,
-            volume.size,
-            volume.server_id,
-            volume.server_id_list,
-            volume.bootable,
-            volume.volume_type_id
-        ]),
-    ) {
+    if evidence.output_reflects(&serde_json::json!([
+        volume.uuid,
+        volume.status,
+        volume.size,
+        volume.server_id,
+        volume.server_id_list,
+        volume.bootable,
+        volume.volume_type_id
+    ])) {
         return Err(Box::new(api(
             "volume.GetVolume",
             Some(200),
@@ -288,7 +285,7 @@ pub(super) fn settlement_error(error: Error, op: &str, detail: &str) -> Error {
 pub(super) fn safe<T: Serialize + Redact>(mut output: T, evidence: &Evidence) -> Option<T> {
     output.redact(evidence);
     let screened = evidence.can_retain_partial()
-        && serde_json::to_value(&output).is_ok_and(|value| !reflects(evidence, &value));
+        && serde_json::to_value(&output).is_ok_and(|value| !evidence.output_reflects(&value));
     screened.then_some(output)
 }
 

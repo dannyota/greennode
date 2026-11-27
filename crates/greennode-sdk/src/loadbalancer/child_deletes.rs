@@ -463,7 +463,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| not_sent(error.screen_api(&|value| evidence.text_reflects(value))))?;
+            .map_err(|error| not_sent(evidence.screen_error(*error)))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(child.ids.iter().map(|(_, id)| *id))
             .collect();
@@ -503,7 +503,7 @@ impl Client {
             evidence,
         )
         .await;
-        let screen = |error: Error| error.screen_api(&|value| evidence.text_reflects(value));
+        let screen = |error: Error| evidence.screen_error(error);
         let reply = result.map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(screen(error), None, dispatch)

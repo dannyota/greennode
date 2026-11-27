@@ -155,7 +155,7 @@ impl Client {
             combine_quote(&mut server, ip);
             validate_component(&server, evidence)?;
         }
-        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
+        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
             return Err(component_error());
         }
         Ok(server)

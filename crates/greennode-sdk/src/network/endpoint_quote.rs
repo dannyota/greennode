@@ -108,7 +108,7 @@ impl EndpointQuote<'_> {
             "packageUuid": offer.package, "vpcUuid": input.vpc_id, "subnetUuid": input.subnet_id,
             "regionUuid": self.zone, "projectUuid": self.project, "enableAZ": true, "enableDnsName": false,
         }});
-        if self.evidence.reflected_in(&body) {
+        if self.evidence.output_reflects(&body) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
         let raw = request::exchange(

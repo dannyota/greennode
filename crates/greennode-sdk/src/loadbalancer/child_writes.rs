@@ -246,7 +246,7 @@ impl<'a> ChildWriter<'a> {
             .await
             .map_err(|error| {
                 Failure::new(
-                    error.screen_api(&|text| self.evidence.text_reflects(text)),
+                    self.evidence.screen_error(*error),
                     None,
                     WriteDispatch::NotSent,
                 )
@@ -298,11 +298,7 @@ impl<'a> ChildWriter<'a> {
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            Failure::new(
-                error.screen_api(&|text| self.evidence.text_reflects(text)),
-                None,
-                dispatch,
-            )
+            Failure::new(self.evidence.screen_error(error), None, dispatch)
         })?;
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
@@ -322,7 +318,7 @@ impl<'a> ChildWriter<'a> {
             self.evidence.credentials(),
         )
         .map_err(|error| {
-            let mut error = error.screen_api(&|text| self.evidence.text_reflects(text));
+            let mut error = self.evidence.screen_error(*error);
             if refusal {
                 error = error.with_outer_detail(CompleteRefusal);
             }
@@ -390,10 +386,10 @@ impl<'a> ChildWriter<'a> {
         let id = (valid.allows(&id) && !self.evidence.id_reflects(&id)).then_some(id);
         id.ok_or_else(|| {
             let message = format!("create response had no id; the resource may exist, check with {list} and match the name exactly");
-            let error = Error::from_api(ApiError::without_fallback(
+            let error = self.evidence.screen_error(Error::from_api(ApiError::without_fallback(
                 self.operation, Some(status.as_u16()), crate::error::SafeText::new("", &[]),
                 crate::error::SafeText::new(&message, &[]), false,
-            )).screen_api(&|text| self.evidence.text_reflects(text));
+            )));
             Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
         })
     }
@@ -524,7 +520,7 @@ pub(super) fn encode_body(body: &impl Serialize, evidence: &Evidence) -> Result<
 fn screen_body(body: &Bytes, evidence: &Evidence) -> Result<(), Box<Error>> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| invalid_input("cannot encode request body"))?;
-    if evidence.reflected_in(&value) || evidence.text_reflects(&String::from_utf8_lossy(body)) {
+    if evidence.output_reflects(&value) || evidence.text_reflects(&String::from_utf8_lossy(body)) {
         return Err(invalid_input("request contains credential material"));
     }
     Ok(())

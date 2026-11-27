@@ -160,7 +160,7 @@ impl<'a> Catalog<'a> {
             .any(|value| self.evidence.text_reflects(value))
             || req
                 .body
-                .is_some_and(|body| self.evidence.reflected_in(body))
+                .is_some_and(|body| self.evidence.output_reflects(body))
         {
             return Err(request::invalid(req.operation, 200));
         }

@@ -151,7 +151,7 @@ impl Client {
             "natName": input.name, "packageUuid": input.package_id, "vpcUuid": input.vpc_id,
             "regionUuid": scope.zone, "projectUuid": scope.project,
         }});
-        if evidence.reflected_in(&body) {
+        if evidence.output_reflects(&body) {
             return Err(failure(Error::new(ErrorClass::InvalidInput)));
         }
         let result = request::exchange(

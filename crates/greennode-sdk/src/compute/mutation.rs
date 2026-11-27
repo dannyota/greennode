@@ -142,11 +142,7 @@ impl Client {
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            Failure::new(
-                error.screen_api(&|text| evidence.text_reflects(text)),
-                None,
-                dispatch,
-            )
+            Failure::new(evidence.screen_error(error), None, dispatch)
         })?;
         let withhold = matches!(policy, ReplyPolicy::PrivateKey)
             || (matches!(policy, ReplyPolicy::SshPublic)
@@ -162,7 +158,7 @@ impl Client {
         )
         .map_err(|error| {
             Failure::new(
-                error.screen_api(&|text| evidence.text_reflects(text)),
+                evidence.screen_error(*error),
                 None,
                 WriteDispatch::MayHaveBeenSent,
             )
@@ -213,7 +209,7 @@ impl Client {
                             evidence,
                         ))
                     };
-                    if evidence.reflected_in(&json!([server.uuid, server.status]))
+                    if evidence.output_reflects(&json!([server.uuid, server.status]))
                         || (matches!(mode, Settlement::Resized(_))
                             && evidence.text_reflects(&server.flavor.flavor_id))
                     {
@@ -246,7 +242,7 @@ impl Client {
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
-        if evidence.reflected_in(value) || !evidence.can_retain_partial() {
+        if evidence.output_reflects(value) || !evidence.can_retain_partial() {
             return Err(Box::new(Error::new(ErrorClass::InvalidInput)));
         }
         Ok(())

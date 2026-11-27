@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::model::wire::{Field, go_json};
 use crate::wire::{
-    product::{evidence::Evidence, operation, redirect::Retry},
+    product::{evidence::Evidence, redirect::Retry},
     strict_json,
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch, error::SafeText};
@@ -146,7 +146,7 @@ impl Client {
         };
         let output = safe_server(server, &evidence)
             .filter(|_| {
-                !evidence.reflected_in(&json!(quote.optimum_price))
+                !evidence.output_reflects(&json!(quote.optimum_price))
                     && !evidence.reflects_fixed_two(quote.optimum_price)
             })
             .map(|server| CreateServerOutput {
@@ -189,7 +189,7 @@ impl Client {
             .server_detail_checked::<()>(ctx, id, &mut evidence, true)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
-        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
+        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
             return Err(not_sent(delete_inventory_error(&evidence)));
         }
         let volumes = self
@@ -416,7 +416,7 @@ fn create_id(body: &[u8], evidence: &Evidence) -> Result<String, Box<Error>> {
         let text = go_json(body);
         strict_json::validate_exact_shape(text.as_bytes(), &SHAPE, 8 << 20)
             .map_err(|_| invalid())?;
-        if operation::reflects_json(text.as_bytes(), evidence.credentials(), true).unwrap_or(true) {
+        if evidence.go_peer_body_reflects(body).unwrap_or(true) {
             return Err(invalid());
         }
         serde_json::from_str::<Option<Acknowledgement>>(&text)
@@ -483,14 +483,13 @@ fn create_error(
         } else {
             message.to_owned()
         };
-        Error::from_api(ApiError::new(
+        evidence.screen_error(Error::from_api(ApiError::new(
             CREATE.id,
             remote_status,
             SafeText::new(code, &[]),
             SafeText::new(&message, &[]),
             observed.is_some_and(ApiError::retryable),
-        ))
-        .screen_api(&|text| evidence.text_reflects(text))
+        )))
     } else {
         error
     };
@@ -558,7 +557,7 @@ pub(super) fn check_price(
     cap: f64,
     evidence: &Evidence,
 ) -> Result<(), Box<Error>> {
-    if evidence.reflected_in(&json!([quoted, cap]))
+    if evidence.output_reflects(&json!([quoted, cap]))
         || evidence.text_reflects(&format!("{quoted:.0} {cap:.0}"))
         || evidence.reflects_fixed_two(quoted)
     {

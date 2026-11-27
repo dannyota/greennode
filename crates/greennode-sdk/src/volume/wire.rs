@@ -296,35 +296,7 @@ scalar_redaction!(bool, i64, u64);
 
 impl Redact for Value {
     fn redact(&mut self, evidence: &Evidence) {
-        match self {
-            Value::String(value) => value.redact(evidence),
-            Value::Array(items) => items.redact(evidence),
-            Value::Object(map) => map.retain(|key, item| {
-                if evidence.text_reflects(key) {
-                    return false;
-                }
-                item.redact(evidence);
-                true
-            }),
-            value if reflects(evidence, value) => *value = Value::String("<redacted>".into()),
-            _ => {}
-        }
-    }
-}
-
-pub(super) fn reflects(evidence: &Evidence, value: &Value) -> bool {
-    match value {
-        Value::String(text) => evidence.text_reflects(text),
-        Value::Array(items) => items.iter().any(|item| reflects(evidence, item)),
-        Value::Object(map) => map
-            .iter()
-            .any(|(key, item)| evidence.text_reflects(key) || reflects(evidence, item)),
-        Value::Bool(true) => evidence.text_reflects("true"),
-        Value::Bool(false) => evidence.text_reflects("false"),
-        Value::Null => evidence.text_reflects("null"),
-        Value::Number(number) => {
-            evidence.text_reflects(number.as_str()) || evidence.reflected_in(value)
-        }
+        evidence.redact(self);
     }
 }
 
@@ -333,7 +305,7 @@ pub(super) fn screen<T: serde::Serialize>(
     value: T,
     op: &'static str,
 ) -> Result<T, Box<Error>> {
-    if serde_json::to_value(&value).map_or(true, |value| reflects(evidence, &value)) {
+    if serde_json::to_value(&value).map_or(true, |value| evidence.output_reflects(&value)) {
         let message = if matches!(
             op,
             "volume.ListSnapshotBackends" | "volume.ListSnapshotPolicies"

@@ -247,8 +247,8 @@ impl Client {
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
-        if cdn_id.is_some_and(|id| evidence.reflected_in(&Value::String(id.into())))
-            || body.is_some_and(|body| evidence.reflected_in(body))
+        if cdn_id.is_some_and(|id| evidence.output_reflects(&Value::String(id.into())))
+            || body.is_some_and(|body| evidence.output_reflects(body))
         {
             return Err(invalid("the write input contains a configured credential"));
         }

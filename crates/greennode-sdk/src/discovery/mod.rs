@@ -239,10 +239,9 @@ async fn read_projects_with_evidence(
     });
     let credentials = &inventory.credentials;
     if (!projects.is_empty() && credentials.reflects(region.as_bytes()))
-        || projects.iter().any(|project| {
-            credentials.reflects(project.user_id.to_string().as_bytes())
-                || crate::output_number::reflects(project.user_id as f64, credentials, false)
-        })
+        || projects
+            .iter()
+            .any(|project| credentials.integer_output_reflects(project.user_id))
     {
         return Err(invalid_response(StatusCode::OK));
     }
@@ -356,7 +355,8 @@ impl Output for Inventory {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if !operation.success.contains(&response.status)
-            && operation::reflects_json(&response.body, &response.credentials, false)
+            && crate::wire::product::evidence::Evidence::from_credentials(&response.credentials)
+                .peer_body_reflects(&response.body)
                 .unwrap_or(false)
         {
             return Err(invalid_response(response.status));

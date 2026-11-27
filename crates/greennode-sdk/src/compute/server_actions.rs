@@ -312,13 +312,10 @@ impl Client {
             return Err(not_sent(invalid_preflight(&evidence)));
         }
         if server.flavor.flavor_id == input.flavor_id {
-            return Err(not_sent(
-                invalid_input(&format!(
-                    "{}: server {id} already has flavor {}",
-                    RESIZE.id, input.flavor_id
-                ))
-                .screen_api(&|text| evidence.text_reflects(text)),
-            ));
+            return Err(not_sent(evidence.screen_error(invalid_input(&format!(
+                "{}: server {id} already has flavor {}",
+                RESIZE.id, input.flavor_id
+            )))));
         }
         require_status(&RESIZE, id, &server, &["ACTIVE", "STOPPED"], &evidence)
             .map_err(|error| not_sent(*error))?;
@@ -332,7 +329,7 @@ impl Client {
         let output = |server, evidence: &Evidence| {
             safe_server(server, evidence)
                 .filter(|_| {
-                    !evidence.reflected_in(&json!(quoted_adjustment))
+                    !evidence.output_reflects(&json!(quoted_adjustment))
                         && !evidence.reflects_fixed_two(quoted_adjustment)
                 })
                 .map(|server| ResizeServerOutput {
@@ -388,7 +385,7 @@ impl Client {
             .server_detail_checked::<()>(ctx, id, evidence, true)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
-        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
+        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
             return Err(not_sent(invalid_preflight(evidence)));
         }
         Ok(server)
@@ -413,7 +410,7 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
         let output = |server, changed, evidence: &Evidence| {
             safe_server(server, evidence)
-                .filter(|_| !evidence.reflected_in(&json!(changed)))
+                .filter(|_| !evidence.output_reflects(&json!(changed)))
                 .map(|server| projection(server, changed))
         };
         if server.status.eq_ignore_ascii_case(target) {
@@ -461,7 +458,7 @@ fn require_status(
     allowed: &[&str],
     evidence: &Evidence,
 ) -> Result<(), Box<Error>> {
-    if evidence.reflected_in(&json!([server.uuid, server.status])) {
+    if evidence.output_reflects(&json!([server.uuid, server.status])) {
         return Err(Box::new(invalid_preflight(evidence)));
     }
     if allowed

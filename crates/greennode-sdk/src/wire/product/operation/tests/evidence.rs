@@ -17,6 +17,112 @@ impl Output for Json {
     const SCHEMA: Shape<'static> = Shape::Any;
 }
 
+#[tokio::test]
+async fn body_screens_bearer_spanning_key_and_delimiter() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"TAIL":"public"}"#),
+        response("200 OK", br#"{"other":"public"}"#),
+    ]);
+    let mut op = declaration();
+    op.reject_reflected_credentials = true;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let token = "tail\":";
+    let reflected = call_evidence(&server, &op, &options, "one", token, &mut evidence).await;
+    let clean = call_evidence(&server, &op, &options, "one", token, &mut evidence).await;
+    assert_eq!(server.requests(), 2);
+    assert!(reflected.is_err());
+    assert!(clean.is_ok());
+}
+
+#[tokio::test]
+async fn body_screens_bearer_in_raw_escape_spelling() {
+    let body = format!(r#"{{"name":"{}u005A"}}"#, char::from(92));
+    let server = Server::start(vec![
+        response("200 OK", body.as_bytes()),
+        response("200 OK", br#"{"name":"Z"}"#),
+    ]);
+    let mut op = declaration();
+    op.reject_reflected_credentials = true;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let reflected = call_evidence(&server, &op, &options, "one", "u005a", &mut evidence).await;
+    let clean = call_evidence(&server, &op, &options, "one", "u005a", &mut evidence).await;
+    assert_eq!(server.requests(), 2);
+    assert!(reflected.is_err());
+    assert!(clean.is_ok());
+}
+
+#[tokio::test]
+async fn body_screens_short_encodings_under_identifier_keys() {
+    let bodies = [
+        br#"{"projectId":"pre6A6B6Cpost"}"#.as_slice(),
+        br#"{"project_uuid":"pre6A6B6Cpost"}"#,
+        br#"{"ids":[["pre6A6B6Cpost"]]}"#,
+        br#"{"UUID":"pre6A6B6Cpost"}"#,
+        br#"{"paid":"pre6A6B6Cpost","valid":"pre6A6B6Cpost"}"#,
+    ];
+    let server = Server::start(bodies.map(|body| response("200 OK", body)).into());
+    let mut op = declaration();
+    op.reject_reflected_credentials = true;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let mut refused = Vec::new();
+    for _ in bodies {
+        refused.push(
+            call_evidence(&server, &op, &options, "one", "jkl", &mut evidence)
+                .await
+                .is_err(),
+        );
+    }
+    assert_eq!(server.requests(), bodies.len());
+    assert_eq!(refused, [true, true, true, true, false]);
+}
+
+#[tokio::test]
+async fn body_does_not_render_ignored_numbers() {
+    let body = br#"{"ignored":1e6}"#;
+    let server = Server::start(vec![response("200 OK", body), response("200 OK", body)]);
+    let mut op = declaration();
+    op.reject_reflected_credentials = true;
+    op.no_output = true;
+    let options = Options::default();
+    let mut outcomes = Vec::new();
+    for token in ["e+06", "1000000"] {
+        outcomes.push(
+            call_evidence(&server, &op, &options, "one", token, &mut Evidence::new())
+                .await
+                .is_ok(),
+        );
+    }
+    assert_eq!(server.requests(), 2);
+    assert_eq!(outcomes, [true, true]);
+}
+
+#[tokio::test]
+async fn retained_identifier_is_rescreened_after_later_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            br#"{"projectId":"pre6A6B6Cpost","valid":"pre6A6B6Cpost"}"#,
+        ),
+        response("403 Forbidden", b"{}"),
+    ]);
+    let op = declaration();
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let (_, retained) = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
+        .await
+        .unwrap();
+    assert!(!evidence.output_reflects(&retained.0));
+    let failed = call_evidence(&server, &op, &options, "one", "jkl", &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 2);
+    let failure = evidence.with_partial(failed, retained.0, WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial() == Some(&json!({"projectId":"<redacted>","valid":"pre6A6B6Cpost"})));
+}
+
 enum EvidenceSource {
     Token(&'static str),
     FailedSignin,
@@ -125,17 +231,17 @@ async fn evidence_accumulates_across_success_and_send_failure() {
             .await
             .is_ok()
     );
-    assert!(evidence.reflected_in(&json!("toy-first")));
-    assert!(evidence.reflected_in(&json!("toy-signin")));
-    assert!(evidence.reflected_in(&json!("toy-configured")));
+    assert!(evidence.output_reflects(&json!("toy-first")));
+    assert!(evidence.output_reflects(&json!("toy-signin")));
+    assert!(evidence.output_reflects(&json!("toy-configured")));
     assert!(
         call_evidence(&server, &op, &options, "one", "toy-second", &mut evidence)
             .await
             .is_err()
     );
-    assert!(evidence.reflected_in(&json!("toy-first")));
-    assert!(evidence.reflected_in(&json!("toy-second")));
-    assert!(!evidence.reflected_in(&json!("public")));
+    assert!(evidence.output_reflects(&json!("toy-first")));
+    assert!(evidence.output_reflects(&json!("toy-second")));
+    assert!(!evidence.output_reflects(&json!("public")));
 }
 
 #[tokio::test]
@@ -193,7 +299,7 @@ async fn settlement_failure_preserves_sanitized_decoded_output_and_dispatch() {
     assert_eq!(failure.error().class(), ErrorClass::PermissionDenied);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let partial = failure.partial().unwrap();
-    assert!(!evidence.reflected_in(partial));
+    assert!(!evidence.output_reflects(partial));
     assert!(
         partial
             == &json!({
@@ -408,7 +514,7 @@ async fn key_routes_send_only_the_cdn_key_and_record_reflection() {
         .await
         .unwrap();
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
-    assert!(evidence.reflected_in(&json!("toy-cdn-key")));
+    assert!(evidence.output_reflects(&json!("toy-cdn-key")));
     let heads = server.heads();
     let req = String::from_utf8_lossy(&heads[0]);
     assert!(

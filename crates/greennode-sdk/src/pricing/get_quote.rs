@@ -141,7 +141,7 @@ impl Client {
             None,
         )
         .await
-        .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))));
+        .map_err(|error| Box::new(evidence.screen_error(*error)));
         let numeric = evidence.credentials().has_numeric_product_credential();
         match raw {
             Err(error) => {
@@ -163,7 +163,8 @@ impl Client {
                     .ok()
                     .and_then(|value| project(&value, action, require_totals).ok());
                 let output = output.filter(|result| {
-                    serde_json::to_value(result).is_ok_and(|value| !evidence.reflected_in(&value))
+                    serde_json::to_value(result)
+                        .is_ok_and(|value| !evidence.output_reflects(&value))
                 });
                 output.ok_or_else(|| failure(decode::invalid_quote(OP, Some(200))))
             }

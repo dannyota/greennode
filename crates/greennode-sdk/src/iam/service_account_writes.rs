@@ -351,7 +351,7 @@ impl Client {
         }
         let body = Value::Object(body);
         let mut evidence = self.write_evidence(ctx, UPDATE, &[("ServiceAccountID", id)], &[])?;
-        if evidence.reflected_in(&body) {
+        if evidence.output_reflects(&body) {
             return Err(guard_failed(invalid_input(
                 "IAM request operand withheld".into(),
             )));

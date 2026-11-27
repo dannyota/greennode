@@ -161,7 +161,7 @@ impl Write<'_> {
     }
 
     pub(super) fn safe_output(&self, output: &impl Serialize) -> bool {
-        serde_json::to_value(output).is_ok_and(|value| !self.evidence.reflected_in(&value))
+        serde_json::to_value(output).is_ok_and(|value| !self.evidence.output_reflects(&value))
     }
 
     pub(super) fn wait_context(&self, ctx: &RequestContext, duration: Duration) -> RequestContext {
@@ -217,7 +217,7 @@ impl Write<'_> {
 
 fn reflected(evidence: &Evidence, path: &[&str], body: Option<&Value>) -> bool {
     path.iter().any(|id| evidence.text_reflects(id))
-        || body.is_some_and(|body| evidence.reflected_in(body))
+        || body.is_some_and(|body| evidence.output_reflects(body))
 }
 
 struct GuardedSource<'a> {
@@ -394,15 +394,18 @@ fn provider_message<'a>(
     let unsafe_text = |text: &str| {
         text.len() > 512 || UNSAFE.as_ref().is_none_or(|pattern| pattern.is_match(text))
     };
-    let unsafe_wire = operation::reflects_json(&reply.body, &reply.credentials, true)
-        .unwrap_or(false)
-        || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
-            |fields| {
-                fields.iter().any(|(key, value)| {
-                    key.eq_ignore_ascii_case("message") && value.as_str().is_some_and(unsafe_text)
-                })
-            },
-        );
+    let unsafe_wire =
+        crate::wire::product::evidence::Evidence::from_credentials(&reply.credentials)
+            .peer_body_reflects(&reply.body)
+            .unwrap_or(false)
+            || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
+                |fields| {
+                    fields.iter().any(|(key, value)| {
+                        key.eq_ignore_ascii_case("message")
+                            && value.as_str().is_some_and(unsafe_text)
+                    })
+                },
+            );
     let mut input_evidence = Evidence::new();
     for value in input
         .and_then(Value::as_object)

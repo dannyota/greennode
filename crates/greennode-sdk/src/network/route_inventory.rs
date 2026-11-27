@@ -74,8 +74,7 @@ impl InventoryRead {
             SafeText::new(&format!("{message}: {} {reason}", self.id), &[]),
             false,
         );
-        Error::new(class)
-            .with_cause(Error::from_api(api).screen_api(&|text| evidence.text_reflects(text)))
+        Error::new(class).with_cause(evidence.screen_error(Error::from_api(api)))
     }
 
     pub(super) fn check_id(
@@ -168,14 +167,13 @@ impl InventoryRead {
         retryable: bool,
         evidence: &Evidence,
     ) -> Error {
-        Error::from_api(ApiError::new(
+        evidence.screen_error(Error::from_api(ApiError::new(
             self.id,
             status.map(|status| status.as_u16()),
             SafeText::new(code, &[]),
             SafeText::new(message, &[]),
             retryable,
-        ))
-        .screen_api(&|text| evidence.text_reflects(text))
+        )))
     }
 
     pub(super) fn fields<'a>(
@@ -294,7 +292,7 @@ impl Client {
                 error.class(),
                 ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
             ) {
-                return error.screen_api(&|text| evidence.text_reflects(text));
+                return evidence.screen_error(error);
             }
             if error.is_body_too_large() {
                 if read.kind != ResponseKind::Standard {
@@ -323,7 +321,7 @@ impl Client {
                     );
                 }
             }
-            error.screen_api(&|text| evidence.text_reflects(text))
+            evidence.screen_error(error)
         })?;
         if response.status == StatusCode::OK {
             return Ok(response.reply.body);
@@ -354,7 +352,7 @@ impl Client {
                     evidence,
                 );
             }
-            error.screen_api(&|text| evidence.text_reflects(text))
+            evidence.screen_error(*error)
         })
     }
 
@@ -448,38 +446,7 @@ pub(super) fn redact_page<T: WireField + serde::Serialize>(
 }
 
 pub(super) fn ids_reflect<T: serde::Serialize>(value: &T, evidence: &Evidence) -> bool {
-    fn scan(value: &serde_json::Value, evidence: &Evidence, numeric: bool) -> bool {
-        match value {
-            serde_json::Value::Number(number) if numeric => {
-                evidence.text_reflects(&number.to_string())
-                    || number.as_f64().is_none_or(|value| {
-                        [
-                            crate::output_number::Style::Json,
-                            crate::output_number::Style::Fixed,
-                        ]
-                        .into_iter()
-                        .any(|style| {
-                            crate::output_number::f64(value, style)
-                                .is_none_or(|rendered| evidence.text_reflects(&rendered))
-                        })
-                    })
-            }
-            serde_json::Value::Array(items) => {
-                items.iter().any(|item| scan(item, evidence, numeric))
-            }
-            serde_json::Value::Object(fields) => fields.iter().any(|(name, value)| {
-                ((name.ends_with("ID") || name.ends_with("UUID"))
-                    && value.as_str().is_some_and(|id| evidence.id_reflects(id)))
-                    || scan(
-                        value,
-                        evidence,
-                        numeric || name == "TunnelLimit" || name == "CircuitID",
-                    )
-            }),
-            _ => false,
-        }
-    }
-    serde_json::to_value(value).map_or(true, |value| scan(&value, evidence, false))
+    serde_json::to_value(value).map_or(true, |value| evidence.output_fields_reflect(&value))
 }
 
 macro_rules! paged_input {

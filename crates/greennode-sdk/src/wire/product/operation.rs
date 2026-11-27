@@ -1,4 +1,4 @@
-use super::evidence::{Evidence, may_reflect_rendered_number};
+use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
 use super::{redirect, retry, sender};
 use crate::wire::send;
@@ -6,7 +6,6 @@ use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 
-#[allow(dead_code)]
 pub(crate) struct Operation {
     pub(crate) id: &'static str,
     pub(crate) template: &'static str,
@@ -26,7 +25,7 @@ pub(crate) struct Operation {
     pub(crate) retry_config: retry::Config,
 }
 
-#[allow(dead_code, clippy::result_large_err)]
+#[allow(clippy::result_large_err)]
 pub(crate) async fn execute<T: Output>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
@@ -50,7 +49,7 @@ pub(crate) async fn execute<T: Output>(
     .await
 }
 
-#[allow(dead_code, clippy::result_large_err, clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(crate) async fn execute_with_evidence<T: Output>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
@@ -78,7 +77,15 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         evidence,
         T::credential_error,
     )
-    .await?;
+    .await
+    .map_err(|failure| {
+        let (error, partial, dispatch) = failure.into_parts();
+        crate::Failure::new(
+            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+            partial,
+            dispatch,
+        )
+    })?;
     let status = response.status;
     let dispatch = if matches!(operation.class, redirect::Classification::Write) {
         crate::WriteDispatch::MayHaveBeenSent
@@ -86,10 +93,19 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         crate::WriteDispatch::NotAWrite
     };
     if let Some(error) = T::credential_error(operation, &response.credentials) {
-        return Err(crate::Failure::new(*error, None, dispatch));
+        return Err(crate::Failure::new(
+            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+            None,
+            dispatch,
+        ));
     }
-    let output = T::decode_response(operation, &response)
-        .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+    let output = T::decode_response(operation, &response).map_err(|error| {
+        crate::Failure::new(
+            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+            None,
+            dispatch,
+        )
+    })?;
     Ok((status, output))
 }
 
@@ -221,7 +237,7 @@ async fn send_route<T>(
                 serde_json::from_slice(&body).map_err(|_| invalid())?;
             if fields
                 .values()
-                .any(|value| evidence.reflected_in(value) || key_evidence.reflected_in(value))
+                .any(|value| evidence.output_reflects(value) || key_evidence.output_reflects(value))
             {
                 return Err(invalid());
             }
@@ -410,8 +426,8 @@ pub(crate) fn decode_response<T: Output>(
         &response.credentials,
     )?;
     if operation.reject_reflected_credentials
-        && (reflects_json(&body, &response.credentials, T::CHECK_RENDERED_NUMBERS).unwrap_or(true)
-            || serde_json::from_slice::<&serde_json::value::RawValue>(&body).is_err())
+        && Evidence::from_credentials(&response.credentials).peer_body_reflects(&body)
+            != Some(false)
     {
         return Err(invalid());
     }
@@ -430,85 +446,14 @@ pub(crate) fn unsafe_json_response(
     if body.iter().all(u8::is_ascii_whitespace) {
         return false;
     }
-    [known, sent].into_iter().any(|credentials| {
-        let match_ = reflects_json(body, credentials, true);
-        if validate {
-            match_ != Some(false)
-        } else {
-            match_ == Some(true)
-        }
-    }) || (validate && serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err())
-}
-
-pub(crate) fn reflects_json(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-    check_rendered_numbers: bool,
-) -> Option<bool> {
-    scan_json_reflections(body, credentials, check_rendered_numbers, |value| {
-        credentials.reflects(value.as_bytes())
-    })
-}
-
-pub(crate) fn reflects_json_forms(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-) -> Option<bool> {
-    scan_json_reflections(body, credentials, true, |value| {
-        super::response::reflects_credential(value, credentials)
-    })
-}
-
-fn scan_json_reflections(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-    check_rendered_numbers: bool,
-    reflects_string: impl Fn(&str) -> bool,
-) -> Option<bool> {
-    if credentials.reflects(body) {
-        return Some(true);
+    let mut evidence = Evidence::from_credentials(known);
+    evidence.absorb(sent);
+    let reflected = evidence.peer_body_reflects(body);
+    if validate {
+        reflected != Some(false)
+    } else {
+        reflected == Some(true)
     }
-    let numeric_match_possible = check_rendered_numbers && may_reflect_rendered_number(credentials);
-    let mut index = 0;
-    while index < body.len() {
-        if body[index] != b'"' {
-            if numeric_match_possible && matches!(body[index], b'-' | b'0'..=b'9') {
-                let start = index;
-                while index < body.len()
-                    && matches!(body[index], b'-' | b'+' | b'0'..=b'9' | b'.' | b'e' | b'E')
-                {
-                    index += 1;
-                }
-                if std::str::from_utf8(&body[start..index])
-                    .ok()
-                    .and_then(|number| number.parse::<f64>().ok())
-                    .is_some_and(|number| {
-                        number.is_finite()
-                            && crate::output_number::reflects(number, credentials, false)
-                    })
-                {
-                    return Some(true);
-                }
-                continue;
-            }
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < body.len() && body[index] != b'"' {
-            if body[index] == b'\\' {
-                index += 1;
-            }
-            index += 1;
-        }
-        let value = serde_json::from_slice::<String>(body.get(start..=index)?).ok()?;
-        if reflects_string(&value) {
-            return Some(true);
-        }
-        index += 1;
-    }
-    Some(false)
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -572,11 +517,9 @@ fn api_error(
     }
 }
 
-#[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
     const RESPONSE_GUARD: Option<sender::ResponseGuard> = None;
-    const CHECK_RENDERED_NUMBERS: bool = false;
 
     fn credential_error(
         _operation: &Operation,
@@ -593,7 +536,6 @@ pub(crate) trait Output: DeserializeOwned + Default {
     }
 }
 
-#[allow(dead_code)]
 fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()> {
     if allow_empty && body.is_empty() {
         return Ok(T::default());

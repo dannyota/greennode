@@ -166,7 +166,7 @@ impl Client {
                 },
             }
         }).await {
-            Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.reflected_in(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
+            Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.output_reflects(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
             Ok(_) => Err(unsettled(CREATE, INTERRUPTED, Some(id.to_owned()), &evidence, id_only)),
             Err(settlement) => Err(unsettled(CREATE, settlement, Some(id.to_owned()), &evidence, id_only)),
         }
@@ -507,7 +507,6 @@ impl Output for CreateReply {
             Shape::Array(&Shape::Object(&[field("resourceId", Shape::Any)])),
         ),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         operation::decode_response(operation, response).map_err(|error| {

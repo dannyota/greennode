@@ -39,7 +39,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Field<T> {
 impl<T: Serialize> Field<T> {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         if let Self::Value(value) = self
-            && serde_json::to_value(value).map_or(true, |value| evidence.reflected_in(&value))
+            && serde_json::to_value(value).map_or(true, |value| evidence.output_reflects(&value))
         {
             *self = Self::Redacted;
         }
@@ -84,7 +84,7 @@ pub(super) fn redact_text(text: &mut String, evidence: &Evidence) {
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
     match serde_json::from_str::<Value>(text.get()) {
-        Ok(mut value) if evidence.reflected_in(&value) => {
+        Ok(mut value) if evidence.output_reflects(&value) => {
             evidence.redact(&mut value);
             *raw = serde_json::value::to_raw_value(&value).ok();
         }

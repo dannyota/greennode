@@ -285,7 +285,7 @@ debug_projection!(
 
 fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
     let mut value = serde_json::to_value(output).ok()?;
-    if !evidence.reflected_in(&value) {
+    if !evidence.output_reflects(&value) {
         return None;
     }
     evidence.redact(&mut value);

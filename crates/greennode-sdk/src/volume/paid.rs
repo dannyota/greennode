@@ -8,7 +8,7 @@ use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::quotes::{create_quote, resize_bodies};
-use super::wire::{Object, Redact, api, decode, invalid, reflects};
+use super::wire::{Object, Redact, api, decode, invalid};
 use super::write::{
     CREATE_UNKNOWN, Mutation, Settlement, available, client_error, finish, in_use, named, not_sent,
     safe, screen_state, settlement_error,
@@ -342,7 +342,7 @@ fn check_price(
     cap: f64,
     evidence: &Evidence,
 ) -> Result<(), Box<Error>> {
-    if reflects(evidence, &Value::from(quoted)) {
+    if evidence.output_reflects(&Value::from(quoted)) {
         return Err(withheld_price());
     }
     let (class, message) = if quoted <= 0.0 {

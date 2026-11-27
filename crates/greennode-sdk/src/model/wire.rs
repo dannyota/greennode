@@ -4,7 +4,6 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use serde_json::{Number, Value, value::RawValue};
 
-use crate::output_number;
 use crate::wire::product::evidence::Evidence;
 
 thread_local! {
@@ -85,8 +84,7 @@ impl WireField for i64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !evidence.credentials().reflects(self.to_string().as_bytes())
-            && !output_number::reflects(*self as f64, evidence.credentials(), false)
+        !evidence.integer_output_reflects(*self)
     }
 }
 
@@ -105,7 +103,7 @@ impl WireField for f64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !output_number::reflects(*self, evidence.credentials(), true)
+        !evidence.output_number_reflects(*self, true)
     }
 }
 
@@ -125,7 +123,7 @@ impl WireField for Value {
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
         evidence.redact(self);
-        !evidence.reflected_in(self)
+        !evidence.output_reflects(self)
     }
 }
 

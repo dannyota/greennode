@@ -337,7 +337,7 @@ impl Client {
                 .await
                 .unwrap_or(false)
         {
-            return error.screen_api(&|value| evidence.text_reflects(value));
+            return evidence.screen_error(error);
         }
         let message = format!(
             "vngcloud: resource not found: {DELETE_CERT}: certificate {}",
@@ -416,7 +416,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| not_sent(error.screen_api(&|value| evidence.text_reflects(value))))?;
+            .map_err(|error| not_sent(evidence.screen_error(*error)))?;
         let path = [project.as_str(), resource];
         screen_input(evidence, path).map_err(|error| not_sent(*error))?;
         let base = session
@@ -454,7 +454,7 @@ impl Client {
             evidence,
         )
         .await;
-        let screen = |error: Error| error.screen_api(&|value| evidence.text_reflects(value));
+        let screen = |error: Error| evidence.screen_error(error);
         let reply = result.map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(screen(error), None, dispatch)

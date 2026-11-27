@@ -150,7 +150,6 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Collection<T> {
 }
 impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
     const SCHEMA: Shape<'static> = Shape::Any;
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(
         operation: &Operation,

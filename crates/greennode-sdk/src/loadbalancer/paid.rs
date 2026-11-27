@@ -481,7 +481,7 @@ impl Client {
             None,
         )
         .await
-        .map_err(|error| error.screen_api(&|text| evidence.text_reflects(text)))?;
+        .map_err(|error| evidence.screen_error(*error))?;
         let read = Read {
             id: op,
             route: "v1/price",

@@ -365,7 +365,6 @@ struct UnsafeReply;
 
 impl Output for DeleteReply {
     const SCHEMA: Shape<'static> = Shape::Any;
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status.is_success() && response.body.is_empty() {

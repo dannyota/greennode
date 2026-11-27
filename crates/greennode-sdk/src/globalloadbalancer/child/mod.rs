@@ -91,7 +91,7 @@ impl Child<'_> {
         if let Some(credentials) = session.runtime(ctx, &mut jitter)?.configured_credentials {
             self.0.evidence.absorb(credentials);
         }
-        if self.0.evidence.reflected_in(values) {
+        if self.0.evidence.output_reflects(values) {
             Err(refuse("a request value contains a credential"))
         } else {
             Ok(())
@@ -228,7 +228,7 @@ impl Child<'_> {
             return false;
         };
         crate::quote::catalog::value(self.0.id, raw)
-            .is_ok_and(|value| !model::reflected_text(&value, &self.0.evidence))
+            .is_ok_and(|value| !self.0.evidence.output_reflects(&value))
     }
 
     fn fail<O: Serialize>(&self, reason: &'static str, partial: O) -> Failure<O> {

@@ -134,14 +134,7 @@ impl Client {
                 evidence,
             )
             .await
-            .map_err(|result| {
-                failure(Box::new(
-                    result
-                        .into_parts()
-                        .0
-                        .screen_api(&|text| evidence.text_reflects(text)),
-                ))
-            })
+            .map_err(|result| failure(Box::new(evidence.screen_error(result.into_parts().0))))
     }
 }
 

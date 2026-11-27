@@ -79,7 +79,7 @@ impl Client {
     ) -> Result<T, Failure<O>> {
         let body = match body {
             Some(body) => {
-                if evidence.reflected_in(&body) {
+                if evidence.output_reflects(&body) {
                     return Err(withheld_operand());
                 }
                 serde_json::to_vec(&body)
@@ -415,7 +415,7 @@ fn caller_reflected(caller: &super::GetCallerIdentityOutput, evidence: &Evidence
         || [&caller.user_type, &caller.username]
             .into_iter()
             .any(|v| evidence.text_reflects(v))
-        || evidence.reflected_in(&Value::from(caller.account_id))
+        || evidence.output_reflects(&Value::from(caller.account_id))
 }
 
 fn unsafe_cached_error(op: &str) -> Error {
@@ -444,7 +444,7 @@ pub(super) fn keep_actions_check(names: &[String], evidence: &mut Evidence) {
         let mut probe = Evidence::new();
         probe.absorb(credentials);
         serde_json::to_value(&names)
-            .map_or(true, |value| probe.reflected_in(&value))
+            .map_or(true, |value| probe.output_reflects(&value))
             .then(|| Box::new(unsafe_cached_error("iam.ListActions")))
     }));
 }
@@ -465,7 +465,7 @@ pub(super) fn check_cached_actions<O>(
     names: &[String],
     evidence: &Evidence,
 ) -> Result<(), Failure<O>> {
-    if serde_json::to_value(names).is_ok_and(|value| !evidence.reflected_in(&value)) {
+    if serde_json::to_value(names).is_ok_and(|value| !evidence.output_reflects(&value)) {
         Ok(())
     } else {
         Err(unsafe_cached("iam.ListActions"))

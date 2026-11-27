@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use serde_json::Value;
 
 use super::super::wire::{WireField, deserialize_field};
 use super::super::{Listener, Pool, PoolHealthMonitor, PoolMember, PoolMemberDetail};
@@ -162,17 +161,6 @@ impl From<ListenerWire> for Listener {
             status: row.status,
             ..Self::default()
         }
-    }
-}
-
-pub(super) fn reflected_text(value: &Value, evidence: &Evidence) -> bool {
-    match value {
-        Value::String(text) => evidence.text_reflects(text),
-        Value::Array(items) => items.iter().any(|item| reflected_text(item, evidence)),
-        Value::Object(fields) => fields
-            .iter()
-            .any(|(key, value)| evidence.text_reflects(key) || reflected_text(value, evidence)),
-        _ => false,
     }
 }
 

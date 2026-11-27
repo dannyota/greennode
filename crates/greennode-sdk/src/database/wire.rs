@@ -33,7 +33,6 @@ impl<T: Data> Output for Envelope<T> {
         field("message", Shape::Any),
         field("data", T::SHAPE),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {

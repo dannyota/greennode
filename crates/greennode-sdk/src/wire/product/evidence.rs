@@ -1,8 +1,10 @@
+mod peer;
+
 use super::options::PasswordSlot;
 use super::response;
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum Source {
@@ -18,6 +20,7 @@ pub(crate) struct SentCredentials {
     sources: Vec<Source>,
     numeric_product_credential: bool,
     incomplete_signin: bool,
+    patterns: Arc<OnceLock<Option<response::Patterns>>>,
 }
 impl SentCredentials {
     #[cfg(test)]
@@ -60,6 +63,7 @@ impl SentCredentials {
         } else {
             self.values.push(secret.clone());
             self.sources.push(source);
+            self.patterns = Arc::default();
         }
     }
 
@@ -90,6 +94,7 @@ impl SentCredentials {
             sources,
             numeric_product_credential: self.numeric_product_credential,
             incomplete_signin: self.incomplete_signin,
+            patterns: Arc::default(),
         }
     }
 
@@ -127,6 +132,17 @@ impl SentCredentials {
     pub(crate) fn values(&self) -> &[Secret] {
         &self.values
     }
+    pub(crate) fn integer_output_reflects(&self, value: i64) -> bool {
+        response::reflects_credential(&value.to_string(), self)
+            || crate::output_number::reflects(value as f64, self, false)
+    }
+
+    pub(super) fn patterns(&self) -> Option<&response::Patterns> {
+        self.patterns
+            .get_or_init(|| response::Patterns::compile(&self.values))
+            .as_ref()
+    }
+
     pub(crate) fn reflects(&self, data: &[u8]) -> bool {
         self.values.iter().any(|secret| {
             let value = secret.expose_secret().as_bytes();
@@ -203,6 +219,13 @@ impl Evidence {
         Self::default()
     }
 
+    pub(crate) fn from_credentials(credentials: &SentCredentials) -> Self {
+        Self {
+            credentials: credentials.clone(),
+            cached: Vec::new(),
+        }
+    }
+
     pub(crate) fn add_secret(&mut self, secret: &Secret) {
         self.credentials.record(secret);
     }
@@ -257,51 +280,95 @@ impl Evidence {
         !self.credentials.has_incomplete_signin()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn reflected_in(&self, value: &Value) -> bool {
+    pub(crate) fn output_reflects(&self, value: &Value) -> bool {
+        self.output_value_reflects(value, false, false, &|_| false)
+    }
+
+    pub(crate) fn output_fields_reflect(&self, value: &Value) -> bool {
+        self.output_fields_reflect_with(value, &|_| false)
+    }
+
+    pub(crate) fn identifier_output_reflects(&self, value: &Value) -> bool {
+        self.output_value_reflects(value, true, true, &|_| false)
+    }
+
+    pub(crate) fn output_fields_reflect_with(
+        &self,
+        value: &Value,
+        number_policy: &impl Fn(&serde_json::Number) -> bool,
+    ) -> bool {
+        self.output_value_reflects(value, false, true, number_policy)
+    }
+
+    fn output_value_reflects(
+        &self,
+        value: &Value,
+        identifier: bool,
+        immutable_only: bool,
+        number_policy: &impl Fn(&serde_json::Number) -> bool,
+    ) -> bool {
         match value {
-            Value::String(text) => self.text_reflects(text),
-            Value::Number(number) => self.number_reflects(number),
-            Value::Array(items) => items.iter().any(|item| self.reflected_in(item)),
-            Value::Object(map) => map
-                .iter()
-                .any(|(key, item)| self.text_reflects(key) || self.reflected_in(item)),
-            Value::Null | Value::Bool(_) => self.literal_reflects(value),
+            Value::Array(items) => items.iter().any(|item| {
+                self.output_value_reflects(item, identifier, immutable_only, number_policy)
+            }),
+            Value::Object(map) => map.iter().any(|(key, item)| {
+                (!immutable_only && self.text_reflects(key))
+                    || (identifier && self.id_reflects(key))
+                    || self.output_value_reflects(
+                        item,
+                        identifier || identifier_key(key),
+                        immutable_only,
+                        number_policy,
+                    )
+            }),
+            Value::Number(number) if number_policy(number) => true,
+            Value::String(_) | Value::Bool(_) | Value::Null if immutable_only && !identifier => {
+                false
+            }
+            _ => self.output_scalar_reflects(value, identifier),
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn redact(&self, value: &mut Value) {
+        self.redact_value(value, false);
+    }
+
+    fn redact_value(&self, value: &mut Value, identifier: bool) {
         match value {
-            Value::String(text) => {
-                if self.text_reflects(text) {
-                    *text = REDACTED.to_owned();
+            Value::Array(items) => items
+                .iter_mut()
+                .for_each(|item| self.redact_value(item, identifier)),
+            Value::Object(map) => map.retain(|key, item| {
+                if self.string_reflects(key, identifier) {
+                    return false;
                 }
+                self.redact_value(item, identifier || identifier_key(key));
+                true
+            }),
+            _ if self.output_scalar_reflects(value, identifier) => {
+                *value = Value::String(REDACTED.to_owned());
             }
-            Value::Number(number) => {
-                if self.number_reflects(number) {
-                    *value = Value::String(REDACTED.to_owned());
-                }
-            }
-            Value::Array(items) => items.iter_mut().for_each(|item| self.redact(item)),
-            Value::Object(map) => {
-                map.retain(|key, item| {
-                    if self.text_reflects(key) {
-                        return false;
-                    }
-                    self.redact(item);
-                    true
-                });
-            }
-            Value::Null | Value::Bool(_) => {
-                if self.literal_reflects(value) {
-                    *value = Value::String(REDACTED.to_owned());
-                }
-            }
+            _ => {}
         }
     }
 
-    #[allow(dead_code)]
+    fn output_scalar_reflects(&self, value: &Value, identifier: bool) -> bool {
+        match value {
+            Value::String(text) => self.string_reflects(text, identifier),
+            Value::Number(number) => {
+                self.string_reflects(number.as_str(), identifier)
+                    || number.as_f64().is_some_and(|amount| {
+                        crate::output_number::any_spelling(amount, false, |text| {
+                            self.string_reflects(text, identifier)
+                        })
+                    })
+            }
+            Value::Null => self.text_reflects("null"),
+            Value::Bool(value) => self.text_reflects(if *value { "true" } else { "false" }),
+            _ => false,
+        }
+    }
+
     pub(crate) fn with_partial<T>(
         &self,
         failure: Failure<T>,
@@ -316,10 +383,13 @@ impl Evidence {
             (WriteDispatch::NotSent, _) | (_, WriteDispatch::NotSent) => WriteDispatch::NotSent,
             _ => WriteDispatch::NotAWrite,
         };
-        let partial = self.can_retain_partial().then(|| {
-            self.redact(&mut partial);
-            partial
-        });
+        let partial = self
+            .can_retain_partial()
+            .then(|| {
+                self.redact(&mut partial);
+                partial
+            })
+            .filter(|partial| !self.output_reflects(partial));
         Failure::new(error, partial, dispatch)
     }
 
@@ -331,39 +401,62 @@ impl Evidence {
         response::reflects_identifier(id, &self.credentials)
     }
 
+    pub(crate) fn peer_bytes_reflect(&self, body: &[u8]) -> bool {
+        response::reflects_bytes(body, &self.credentials)
+    }
+
+    pub(crate) fn peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
+        if self.peer_bytes_reflect(body) {
+            return Some(true);
+        }
+        peer::decoded_reflects(self, body)
+    }
+
+    pub(crate) fn go_peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
+        self.peer_body_reflects(body)
+            .or_else(|| self.peer_body_reflects(crate::model::wire::go_json(body).as_bytes()))
+    }
+
+    pub(crate) fn output_number_reflects(&self, amount: f64, include_sdk_json: bool) -> bool {
+        crate::output_number::reflects(amount, &self.credentials, include_sdk_json)
+    }
+
+    pub(crate) fn integer_output_reflects(&self, value: i64) -> bool {
+        self.credentials.integer_output_reflects(value)
+    }
+
     pub(crate) fn reflects_fixed_two(&self, amount: f64) -> bool {
-        may_reflect_rendered_number(&self.credentials)
-            && self
-                .credentials
-                .reflects(crate::output_number::fixed_two(amount).as_bytes())
+        !amount.is_finite() || self.text_reflects(&crate::output_number::fixed_two(amount))
     }
 
-    fn literal_reflects(&self, value: &Value) -> bool {
-        let text: &[u8] = match value {
-            Value::Null => b"null",
-            Value::Bool(true) => b"true",
-            Value::Bool(false) => b"false",
-            _ => return false,
-        };
-        self.credentials.reflects(text)
+    pub(crate) fn screen_error(&self, error: crate::Error) -> crate::Error {
+        error.screen_api(&|text| self.text_reflects(text))
     }
 
-    fn number_reflects(&self, number: &serde_json::Number) -> bool {
-        self.credentials.reflects(number.as_str().as_bytes())
-            || (may_reflect_rendered_number(&self.credentials)
-                && number.as_f64().is_some_and(|value| {
-                    crate::output_number::reflects(value, &self.credentials, false)
-                }))
+    fn string_reflects(&self, text: &str, identifier: bool) -> bool {
+        if identifier {
+            self.id_reflects(text)
+        } else {
+            self.text_reflects(text)
+        }
     }
 }
 
-pub(super) fn may_reflect_rendered_number(credentials: &SentCredentials) -> bool {
-    credentials.values().iter().any(|secret| {
-        secret
-            .expose_secret()
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e'))
-    })
+fn identifier_key(key: &str) -> bool {
+    let mut start = 0;
+    let mut previous = None;
+    for (index, ch) in key.char_indices() {
+        if matches!(ch, '_' | '-') {
+            start = index + 1;
+        } else if ch.is_uppercase() && previous.is_some_and(char::is_lowercase) {
+            start = index;
+        }
+        previous = Some(ch);
+    }
+    let suffix = &key[start..];
+    ["id", "ids", "uuid", "uuids"]
+        .into_iter()
+        .any(|word| suffix.eq_ignore_ascii_case(word))
 }
 
 impl std::fmt::Debug for Evidence {
@@ -388,18 +481,80 @@ mod tests {
     #[test]
     fn detects_secrets_in_strings_keys_and_nested_values() {
         let evidence = evidence(&["toy-secret"]);
-        assert!(evidence.reflected_in(&json!({"a": ["x", {"b": "has toy-secret inside"}]})));
-        assert!(evidence.reflected_in(&json!({"toy-secret": 1})));
-        assert!(!evidence.reflected_in(&json!({"a": ["x", 1, null, true]})));
+        assert!(evidence.output_reflects(&json!({"a": ["x", {"b": "has toy-secret inside"}]})));
+        assert!(evidence.output_reflects(&json!({"toy-secret": 1})));
+        assert!(!evidence.output_reflects(&json!({"a": ["x", 1, null, true]})));
+    }
+
+    #[test]
+    fn redaction_agrees_with_refusal_inside_identifier_objects() {
+        let evidence = evidence(&["jkl"]);
+        let mut value = json!({
+            "projectId": {"name": "pre6A6B6Cpost", "pre6A6B6Cpost": true},
+            "ordinary": {"name": "pre6A6B6Cpost"}
+        });
+        assert!(evidence.output_reflects(&value));
+        evidence.redact(&mut value);
+        assert!(!evidence.output_reflects(&value));
+        assert!(
+            value
+                == json!({"projectId": {"name": "<redacted>"}, "ordinary": {"name": "pre6A6B6Cpost"}})
+        );
     }
 
     #[test]
     fn detects_rendered_numbers() {
         let evidence = evidence(&["1000000", "0.5"]);
-        assert!(evidence.reflected_in(&json!({"n": 1e6})));
-        assert!(evidence.reflected_in(&json!({"n": 0.5})));
-        assert!(evidence.reflected_in(&json!([1000000])));
-        assert!(!evidence.reflected_in(&json!([1000001, 0.25])));
+        assert!(evidence.output_reflects(&json!({"n": 1e6})));
+        assert!(evidence.output_reflects(&json!({"n": 0.5})));
+        assert!(evidence.output_reflects(&json!([1000000])));
+        assert!(!evidence.output_reflects(&json!([1000001, 0.25])));
+    }
+
+    #[test]
+    fn oversized_multiline_credential_fails_closed_during_pattern_construction() {
+        let long = (0..600)
+            .map(|index| format!("synthetic-{index:04}-segment"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(evidence(&[&long]).text_reflects("ordinary output"));
+        assert!(
+            !evidence(&["synthetic-0000-segment\nsynthetic-0001-segment"])
+                .text_reflects("ordinary output")
+        );
+    }
+
+    #[test]
+    fn numeric_values_allow_a_reflection_in_unused_go_map_key_spelling() {
+        let evidence = evidence(&["e+06"]);
+        assert!(!evidence.output_number_reflects(1e6, true));
+        assert!(!evidence.output_reflects(&json!({"price": 1e6})));
+    }
+
+    #[test]
+    fn numeric_ids_use_identifier_matching_in_peer_and_retained_values() {
+        let evidence = evidence(&["a"]);
+        assert_eq!(
+            evidence.peer_body_reflects(br#"{"projectId":9619}"#),
+            Some(true)
+        );
+        assert!(evidence.output_reflects(&json!({"projectId": 9619})));
+        assert!(!evidence.output_reflects(&json!({"count": 9619})));
+    }
+
+    #[test]
+    fn output_integer_screens_exact_and_rounded_spellings() {
+        assert!(evidence(&["00000009"]).output_reflects(&json!(3030303030303039_i64)));
+        assert!(evidence(&["9007199254740993"]).output_reflects(&json!(9007199254740993_i64)));
+        assert!(evidence(&["9007199254740992"]).output_reflects(&json!(9007199254740993_i64)));
+    }
+
+    #[test]
+    fn kept_price_screens_its_two_decimal_spelling() {
+        let evidence = evidence(&["P"]);
+        assert!(evidence.reflects_fixed_two(49.999));
+        assert!(!evidence.output_reflects(&json!({"amount": 49.999})));
+        assert!(!evidence.reflects_fixed_two(51.0));
     }
 
     #[test]
@@ -411,15 +566,15 @@ mod tests {
             value,
             json!({"keep": "fine", "hit": "<redacted>", "n": "<redacted>", "m": 43, "k": {"keep": "stay"}})
         );
-        assert!(!evidence.reflected_in(&value));
+        assert!(!evidence.output_reflects(&value));
     }
 
     #[test]
     fn secrets_added_later_apply_and_empty_secrets_are_ignored() {
         let mut evidence = evidence(&[""]);
-        assert!(!evidence.reflected_in(&json!("anything")));
+        assert!(!evidence.output_reflects(&json!("anything")));
         evidence.add_secret(&crate::Secret::new("issued-password"));
-        assert!(evidence.reflected_in(&json!("issued-password")));
+        assert!(evidence.output_reflects(&json!("issued-password")));
         assert_eq!(format!("{evidence:?}"), "Evidence([redacted])");
     }
 }

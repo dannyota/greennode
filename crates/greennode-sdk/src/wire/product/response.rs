@@ -1,20 +1,21 @@
 mod encoded;
 mod full_error;
 mod marker;
+mod patterns;
 
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
-use encoded::{Base64Alphabet, EncodedNeedle};
+use encoded::EncodedNeedle;
 use full_error::full_error;
 pub(crate) use full_error::inspect_error_message;
 use http::StatusCode;
 pub(crate) use marker::has_credential_marker;
+pub(super) use patterns::Patterns;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use zeroize::Zeroizing;
 
-#[allow(dead_code)]
 pub(crate) fn classify(
     operation: &'static str,
     status: StatusCode,
@@ -102,7 +103,9 @@ fn classify_with_decoder(
             retryable,
         )
     };
-    Err(Box::new(crate::Error::from_api(api)))
+    let error = crate::Error::from_api(api)
+        .screen_diagnostic_fallback(|text| reflects_credential(text, credentials));
+    Err(Box::new(error))
 }
 
 pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) -> bool) -> bool {
@@ -152,17 +155,22 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
 }
 
 pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
-    matches_credential_forms(text, credentials, MatchContext::ErrorText)
+    matches_credential_forms(text.as_bytes(), credentials, MatchContext::ErrorText)
 }
 
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
     !credentials.values().is_empty()
-        && matches_credential_forms(text, credentials, MatchContext::Text)
+        && matches_credential_forms(text.as_bytes(), credentials, MatchContext::Text)
 }
 
 pub(super) fn reflects_identifier(value: &str, credentials: &SentCredentials) -> bool {
     !credentials.values().is_empty()
-        && matches_credential_forms(value, credentials, MatchContext::Identifier)
+        && matches_credential_forms(value.as_bytes(), credentials, MatchContext::Identifier)
+}
+
+pub(crate) fn reflects_bytes(bytes: &[u8], credentials: &SentCredentials) -> bool {
+    !credentials.values().is_empty()
+        && matches_credential_forms(bytes, credentials, MatchContext::Text)
 }
 
 #[derive(Clone, Copy)]
@@ -173,79 +181,24 @@ enum MatchContext {
 }
 
 fn matches_credential_forms(
-    text: &str,
+    text: &[u8],
     credentials: &SentCredentials,
     context: MatchContext,
 ) -> bool {
-    let mut needles = Vec::new();
-    let mut encoded_needles = Vec::new();
-    let mut hex_needles = Vec::new();
-    for secret in credentials.values() {
-        let value = secret.expose_secret();
-        if !value.is_empty() && value.len() < 6 {
-            for (encoding, alphabet) in [
-                (data_encoding::BASE64, Base64Alphabet::Standard),
-                (data_encoding::BASE64_NOPAD, Base64Alphabet::Standard),
-                (data_encoding::BASE64URL, Base64Alphabet::UrlSafe),
-                (data_encoding::BASE64URL_NOPAD, Base64Alphabet::UrlSafe),
-            ] {
-                EncodedNeedle::insert(
-                    &mut encoded_needles,
-                    Zeroizing::new(encoding.encode(value.as_bytes())),
-                    alphabet,
-                    false,
-                );
-            }
-        }
-        for part in std::iter::once(value).chain(
-            value
-                .lines()
-                .map(str::trim)
-                .filter(|line| line.len() >= 8 && *line != value),
-        ) {
-            if part.is_empty() {
-                continue;
-            }
-            for offset in 0..3 {
-                let mut aligned = Zeroizing::new(vec![0; offset]);
-                aligned.extend_from_slice(part.as_bytes());
-                let start = (offset * 8).div_ceil(6);
-                let end = offset.saturating_add(part.len()).saturating_mul(8) / 6;
-                if end.saturating_sub(start) >= encoded::STABLE_FLOOR {
-                    for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
-                        let encoded = Zeroizing::new(encoding.encode(&aligned));
-                        if let Some(stable) = encoded.get(start..end) {
-                            EncodedNeedle::insert(
-                                &mut encoded_needles,
-                                Zeroizing::new(stable.to_owned()),
-                                Base64Alphabet::Both,
-                                true,
-                            );
-                        }
-                    }
-                }
-            }
-            encoded::insert_hex(&mut hex_needles, part);
-            let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
-            if !needles
-                .iter()
-                .any(|existing: &Zeroizing<Vec<u8>>| existing.as_slice() == needle.as_slice())
-            {
-                needles.push(needle);
-            }
-        }
-    }
+    let Some(patterns) = credentials.patterns() else {
+        return true;
+    };
     let error_text = matches!(context, MatchContext::ErrorText);
     let mut state = MatchState {
         work: matching_work_limit(text.len(), error_text),
         forms: Vec::new(),
         visited: Vec::new(),
-        encoded_needles,
-        hex_needles,
+        encoded_needles: &patterns.base64,
+        hex_needles: &patterns.hex,
         error_text,
         strict_base64: matches!(context, MatchContext::Identifier),
     };
-    matches_forms(text.as_bytes(), &needles, [0; 4], &mut state)
+    matches_forms(text, &patterns.literal, [0; 4], &mut state)
 }
 
 fn matching_work_limit(length: usize, error_text: bool) -> usize {
@@ -253,21 +206,21 @@ fn matching_work_limit(length: usize, error_text: bool) -> usize {
     if error_text {
         LIMIT
     } else {
-        (length.min(LIMIT) * 24).max(LIMIT)
+        length.saturating_mul(64).clamp(LIMIT, 24 * LIMIT)
     }
 }
 
-struct MatchState {
+struct MatchState<'a> {
     work: usize,
     forms: Vec<Zeroizing<Vec<u8>>>,
     visited: Vec<(usize, [u8; 4])>,
-    encoded_needles: Vec<EncodedNeedle>,
-    hex_needles: Vec<Zeroizing<String>>,
+    encoded_needles: &'a [EncodedNeedle],
+    hex_needles: &'a [Zeroizing<String>],
     error_text: bool,
     strict_base64: bool,
 }
 
-impl MatchState {
+impl MatchState<'_> {
     fn charge(&mut self, work: usize) -> bool {
         if work >= self.work {
             return false;
@@ -281,7 +234,7 @@ fn matches_forms(
     input: &[u8],
     needles: &[Zeroizing<Vec<u8>>],
     counts: [u8; 4],
-    state: &mut MatchState,
+    state: &mut MatchState<'_>,
 ) -> bool {
     let mut found = None;
     for index in 0..state.forms.len() {
@@ -1290,8 +1243,8 @@ mod tests {
             work: 8 << 20,
             forms: Vec::new(),
             visited: Vec::new(),
-            encoded_needles: Vec::new(),
-            hex_needles: Vec::new(),
+            encoded_needles: &[],
+            hex_needles: &[],
             error_text: true,
             strict_base64: false,
         };

@@ -197,7 +197,7 @@ impl Output for Users {
         field("totalPage"),
         field("totalItem"),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
@@ -218,10 +218,7 @@ impl Output for Users {
                 .flatten()
                 .map(|u| u.number_of_repositories),
         )
-        .any(|v| {
-            response.credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, &response.credentials, false)
-        });
+        .any(|v| response.credentials.integer_output_reflects(v));
         if reflected
             || keys
                 .keys()
@@ -238,7 +235,7 @@ impl Output for Users {
 }
 impl Output for Repository {
     const SCHEMA: Shape<'static> = REPOSITORY;
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let value: Self = operation::decode_response(op, response)?;
         if [
@@ -247,10 +244,8 @@ impl Output for Repository {
             value.attached_users,
         ]
         .into_iter()
-        .any(|v| {
-            response.credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, &response.credentials, false)
-        }) || crate::output_number::reflects(value.quota_used, &response.credentials, true)
+        .any(|v| response.credentials.integer_output_reflects(v))
+            || crate::output_number::reflects(value.quota_used, &response.credentials, true)
         {
             return Err(Box::new(Error::new(ErrorClass::Api)));
         }
@@ -461,7 +456,6 @@ pub(super) struct RepositoryRead {
 
 impl Output for RepositoryRead {
     const SCHEMA: Shape<'static> = REPOSITORY;
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         #[derive(Deserialize)]

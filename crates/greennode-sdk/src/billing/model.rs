@@ -135,8 +135,7 @@ pub(super) const fn field(name: &'static str) -> ShapeField<'static> {
 }
 
 pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> bool {
-    credentials.reflects(value.to_string().as_bytes())
-        || crate::output_number::reflects(value as f64, credentials, false)
+    credentials.integer_output_reflects(value)
 }
 
 pub(super) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(

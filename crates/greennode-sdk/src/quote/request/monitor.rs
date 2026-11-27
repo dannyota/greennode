@@ -38,8 +38,7 @@ impl BearerSource for ScopedBearer<'_> {
             }
             evidence.add_secret(&token.token.access_token);
             if self.identifiers.iter().any(|id| evidence.id_reflects(id)) {
-                return Err(credential_conflict(self.operation)
-                    .screen_api(&|text| evidence.text_reflects(text)));
+                return Err(evidence.screen_error(credential_conflict(self.operation)));
             }
             Ok(token)
         })
@@ -121,7 +120,7 @@ pub(super) async fn exchange(
     }
     if identifiers.iter().any(|id| evidence.id_reflects(id)) {
         return Err(Box::new(
-            credential_conflict(operation.id).screen_api(&|text| evidence.text_reflects(text)),
+            evidence.screen_error(credential_conflict(operation.id)),
         ));
     }
     let source = ScopedBearer {
@@ -203,7 +202,7 @@ fn failure_error(
     } else {
         failure
     };
-    result.screen_api(&|text| evidence.text_reflects(text))
+    evidence.screen_error(result)
 }
 
 fn invalid(op: &'static str) -> Error {

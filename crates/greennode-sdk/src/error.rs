@@ -268,10 +268,13 @@ impl fmt::Debug for ServiceAccountLoginError {
     }
 }
 
+const DIAGNOSTIC_FALLBACK: &str = "request failed";
+
 /// A categorized failure with optional typed details and a cause chain.
 pub struct Error {
     class: ErrorClass,
     identity: bool,
+    fallback_message_reflected: bool,
     api: Option<ApiError>,
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
@@ -292,6 +295,7 @@ impl Error {
         Self {
             class,
             identity: true,
+            fallback_message_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -321,6 +325,7 @@ impl Error {
         Self {
             class,
             identity: false,
+            fallback_message_reflected: false,
             api: Some(api),
             login: None,
             service_login: None,
@@ -329,6 +334,7 @@ impl Error {
         }
     }
     pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
+        self = self.screen_diagnostic_fallback(reflects);
         if let Some(api) = self.api.as_mut() {
             if api
                 .status
@@ -359,6 +365,26 @@ impl Error {
         self
     }
 
+    pub(crate) fn screen_diagnostic_fallback(
+        mut self,
+        reflects: impl FnOnce(&str) -> bool,
+    ) -> Self {
+        self.fallback_message_reflected |= reflects(DIAGNOSTIC_FALLBACK);
+        self
+    }
+
+    /// Returns the diagnostic fallback after credential screening.
+    pub fn diagnostic_fallback(&self) -> &'static str {
+        let mut error = Some(self);
+        while let Some(node) = error {
+            if node.fallback_message_reflected {
+                return "";
+            }
+            error = node.cause.as_deref();
+        }
+        DIAGNOSTIC_FALLBACK
+    }
+
     pub(crate) fn with_cause(mut self, cause: Error) -> Self {
         match self.cause.as_mut() {
             Some(existing) => {
@@ -384,6 +410,7 @@ impl Error {
         Self {
             class: self.class,
             identity: false,
+            fallback_message_reflected: false,
             api: None,
             login: None,
             service_login: None,

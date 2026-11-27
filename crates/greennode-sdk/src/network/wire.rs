@@ -110,14 +110,13 @@ impl Read {
     }
 
     pub(super) fn invalid_as(self, evidence: &Evidence, message: &str) -> Error {
-        api(
+        evidence.screen_error(api(
             self.id,
             Some(StatusCode::OK),
             "InvalidResponse",
             message,
             false,
-        )
-        .screen_api(&|text| evidence.text_reflects(text))
+        ))
     }
 
     fn withheld(self, status: Option<StatusCode>, retryable: bool) -> Error {
@@ -265,9 +264,7 @@ impl Client {
             },
             ..Options::DEFAULT
         };
-        let screen = |error: Error, evidence: &Evidence| {
-            error.screen_api(&|text| evidence.text_reflects(text))
-        };
+        let screen = |error: Error, evidence: &Evidence| evidence.screen_error(error);
         let response = operation::execute_raw(
             runtime,
             base,
@@ -375,10 +372,7 @@ impl Client {
         };
         let text = go_json(&raw);
         let fields = Fields::decode(&text).map_err(|()| invalid())?;
-        if read.style == Style::Nat
-            && operation::reflects_json(text.as_bytes(), evidence.credentials(), true)
-                != Some(false)
-        {
+        if read.style == Style::Nat && evidence.go_peer_body_reflects(&raw) != Some(false) {
             return Err(invalid());
         }
         let rows: Vec<Fields<'_>> = fields.required("projects").map_err(|()| invalid())?;

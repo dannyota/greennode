@@ -244,7 +244,7 @@ impl Client {
             for cause in causes {
                 error = error.with_cause(Error::new(cause.class()).with_cause(cause));
             }
-            let error = error.screen_api(&|text| reader.evidence.text_reflects(text));
+            let error = reader.evidence.screen_error(error);
             return Err(Failure::new(
                 error,
                 safe_output.then_some(output),

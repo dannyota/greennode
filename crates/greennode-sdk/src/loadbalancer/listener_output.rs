@@ -18,16 +18,16 @@ impl ListenerProjection {
             return Err(());
         }
         let mut value = serde_json::to_value(&*listener).map_err(|_| ())?;
-        if !evidence.reflected_in(&value) {
+        if !evidence.output_reflects(&value) {
             return Ok(None);
         }
         evidence.redact(&mut value);
-        if evidence.reflected_in(&value) {
+        if evidence.output_reflects(&value) {
             return Err(());
         }
         scrub_listener(listener, evidence);
         let typed = serde_json::to_value(&*listener).map_err(|_| ())?;
-        if evidence.reflected_in(&typed) {
+        if evidence.output_reflects(&typed) {
             return Err(());
         }
         Ok(Some(Self(value)))
@@ -135,7 +135,7 @@ fn scrub_listener(listener: &mut Listener, evidence: &Evidence) {
         &mut listener.timeout_member,
         &mut listener.timeout_connection,
     ] {
-        if evidence.reflected_in(&Value::from(*number)) {
+        if evidence.output_reflects(&Value::from(*number)) {
             *number = 0;
         }
     }

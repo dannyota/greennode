@@ -177,7 +177,7 @@ impl Output for Repositories {
         field("totalPage"),
         field("totalItem"),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
@@ -199,23 +199,18 @@ impl Output for Repositories {
             result.total_item.unwrap_or_default(),
         ]
         .into_iter()
-        .any(|v| {
-            credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, credentials, false)
-        }) || result
-            .data
-            .iter()
-            .chain(result.list_data.iter())
-            .flatten()
-            .any(|item| {
-                [item.quota_limit_gb, item.image_count, item.attached_users]
-                    .into_iter()
-                    .any(|v| {
-                        credentials.reflects(v.to_string().as_bytes())
-                            || crate::output_number::reflects(v as f64, credentials, false)
-                    })
-                    || crate::output_number::reflects(item.quota_used, credentials, true)
-            });
+        .any(|v| credentials.integer_output_reflects(v))
+            || result
+                .data
+                .iter()
+                .chain(result.list_data.iter())
+                .flatten()
+                .any(|item| {
+                    [item.quota_limit_gb, item.image_count, item.attached_users]
+                        .into_iter()
+                        .any(|v| credentials.integer_output_reflects(v))
+                        || crate::output_number::reflects(item.quota_used, credentials, true)
+                });
         if reflected {
             return Err(Box::new(Error::new(ErrorClass::Api)));
         }
@@ -386,7 +381,6 @@ struct RegistryResponse<T>(T);
 
 impl<T: Output> Output for RegistryResponse<T> {
     const SCHEMA: Shape<'static> = T::SCHEMA;
-    const CHECK_RENDERED_NUMBERS: bool = T::CHECK_RENDERED_NUMBERS;
 
     fn credential_error(
         op: &Operation,
@@ -407,14 +401,16 @@ impl<T: Output> Output for RegistryResponse<T> {
                 return error;
             }
             let reflected = op.reject_reflected_credentials
-                && operation::reflects_json(
-                    &response.body,
+                && crate::wire::product::evidence::Evidence::from_credentials(
                     &response.credentials,
-                    T::CHECK_RENDERED_NUMBERS,
-                ) == Some(true);
+                )
+                .peer_body_reflects(&response.body)
+                    == Some(true);
             let malformed =
                 serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err();
-            let (operation, message) = if reflected {
+            let (operation, message) = if reflected && op.sensitive && op.template == "v1/user/permissions" {
+                (op.id, "containerregistry.CreateUser: could not distinguish an unknown action; known actions withheld")
+            } else if reflected {
                 ("", "containerregistry: unsafe registry response")
             } else if malformed && op.sensitive {
                 (op.id, "invalid JSON response; body withheld")

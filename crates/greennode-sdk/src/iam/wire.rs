@@ -265,7 +265,7 @@ impl Screen for String {
 
 impl Screen for i64 {
     fn screen(&mut self, evidence: &Evidence) -> bool {
-        if evidence.reflected_in(&Value::from(*self)) {
+        if evidence.output_reflects(&Value::from(*self)) {
             *self = 0;
             return true;
         }
@@ -275,7 +275,7 @@ impl Screen for i64 {
 
 impl Screen for bool {
     fn screen(&mut self, evidence: &Evidence) -> bool {
-        if evidence.reflected_in(&Value::Bool(*self)) {
+        if evidence.output_reflects(&Value::Bool(*self)) {
             *self = false;
             return true;
         }
@@ -287,7 +287,7 @@ impl<T: Screen> Screen for Option<T> {
     fn screen(&mut self, evidence: &Evidence) -> bool {
         let reflected = match self {
             Some(value) => value.screen(evidence),
-            None => evidence.reflected_in(&Value::Null),
+            None => evidence.output_reflects(&Value::Null),
         };
         if reflected {
             *self = None;
@@ -355,7 +355,8 @@ impl<T: Wire> Output for Body<T> {
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
         if operation.reject_reflected_credentials
-            && super::operation::reflects_json_forms(body.as_bytes(), &response.credentials)
+            && Evidence::from_credentials(&response.credentials)
+                .go_peer_body_reflects(&response.body)
                 != Some(false)
         {
             return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(

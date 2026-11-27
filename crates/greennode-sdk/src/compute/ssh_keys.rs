@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, value::RawValue};
 
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, operation, options::PathIds, redirect::Retry};
+use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
 use crate::wire::strict_json;
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
@@ -192,7 +192,7 @@ impl Client {
         }
         if evidence.text_reflects("PrivateKey")
             || evidence.text_reflects("[redacted]")
-            || serde_json::to_value(&ssh_key).map_or(true, |value| evidence.reflected_in(&value))
+            || serde_json::to_value(&ssh_key).map_or(true, |value| evidence.output_reflects(&value))
         {
             return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
         }
@@ -374,7 +374,7 @@ fn decode_key(
     ];
     let invalid = || Box::new(invalid_mutation_response(mutation, evidence));
     let text = zeroize::Zeroizing::new(go_json(body).into_owned());
-    let raw: &RawValue = serde_json::from_str(&text).map_err(|_| {
+    serde_json::from_str::<&RawValue>(&text).map_err(|_| {
         Box::new(api(
             mutation.id,
             None,
@@ -398,14 +398,8 @@ fn decode_key(
     {
         return Err(invalid());
     }
-    if mutation.id == CREATE.id {
-        let reflects = |text: &str| evidence.text_reflects(text);
-        if operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
-            .unwrap_or(true)
-            || matches_raw_tokens(raw, &reflects, &reflects).unwrap_or(true)
-        {
-            return Err(invalid());
-        }
+    if mutation.id == CREATE.id && evidence.go_peer_body_reflects(body) != Some(false) {
+        return Err(invalid());
     }
     let envelope: Envelope<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;
     let Some(data) = envelope.data else {
