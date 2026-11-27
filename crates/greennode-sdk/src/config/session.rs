@@ -283,6 +283,10 @@ impl Session {
         })
     }
 
+    pub(crate) fn configured_credentials(&self) -> &SentCredentials {
+        &self.configured_credentials
+    }
+
     pub(crate) fn retry_jitter(&self) -> u64 {
         let mut bytes = [0; 8];
         match getrandom::fill(&mut bytes) {

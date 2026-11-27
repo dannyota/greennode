@@ -391,3 +391,55 @@ fn system_tag_errors_match_baseline_goldens() {
         assert_eq!(String::from_utf8(stderr).unwrap(), golden, "{name}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_key_is_a_usage_error_without_a_request() {
+    use std::os::unix::ffi::OsStringExt;
+    let server = Server::start(vec![]);
+    let options = with_product_loopback(
+        Product::Vserver,
+        ConfigOptions::default().with_static_token(Secret::new("toy-token")),
+        &server,
+    );
+    let (context, _) = RequestContext::new();
+    let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+    let mut args: Vec<OsString> = [
+        "greennode",
+        "--project-id",
+        "project-1",
+        "tagging",
+        "tag-resource",
+        "--resource-id",
+        "res-1",
+        "--resource-type",
+        "SERVER",
+        "--value",
+        "new",
+        "--key",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect();
+    args.push(OsString::from_vec(b"vng.\xff".to_vec()));
+    let status = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_invocation(Invocation {
+            args,
+            source: &Source,
+            config_options: options,
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_terminal: false,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &SystemClock,
+            context: &context,
+        }));
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stdout.is_empty());
+    assert_eq!(server.requests(), 0);
+}

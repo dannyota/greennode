@@ -15,6 +15,9 @@ later ones through GitHub Actions. Uploads are permanent ([Cargo publishing]).
 
 ## Versions
 
+`greennode-sdk` declares `license = "Apache-2.0 AND BSD-3-Clause"` and ships
+`licenses/go-LICENSE` for the tables derived from Go's standard library.
+
 The root `Cargo.toml` owns `[workspace.package].version`. Both members use
 `version.workspace = true`. The tool has no SDK dependency until it first uses
 SDK code. From that commit, `crates/greennode/Cargo.toml` declares

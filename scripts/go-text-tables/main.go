@@ -115,7 +115,13 @@ func htmlCorpus(dir string) []pair {
 		"&NotEqualTilde;", "&nvlt;", "&NotEqualTilde", "&fjlig;", "&acE;", "&bne;", "&ThickSpace;", "&nGt;",
 		"\u00e9&eacute;\u00fc&uuml;", "&\u00e9;", "&a\u00e9;", "tail&", "tail&#", "tail&#x", "&#xg", "&#9999999999;", "&#xGG;",
 	}
-	for name := range entitySet(dir) {
+	set := entitySet(dir)
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		inputs = append(inputs, "&"+name, "&"+name+"Z")
 	}
 	for n := 0; n <= 0x1FF; n++ {
@@ -168,7 +174,12 @@ func main() {
 	write(filepath.Join(out, "entities.txt"), head+"\n# name codepoint [codepoint]", entities(dir))
 	write(filepath.Join(out, "replacements.txt"), head+"\n# html replacementTable for 0x80 to 0x9F", replacements(dir))
 	write(filepath.Join(out, "printable.txt"), head+"\n# strconv.IsPrint ranges, first last", printable())
-	for name, corpus := range map[string][]pair{"html_unescape.json": htmlCorpus(dir), "quote.json": quoteCorpus()} {
+	corpora := []struct {
+		name   string
+		corpus []pair
+	}{{"html_unescape.json", htmlCorpus(dir)}, {"quote.json", quoteCorpus()}}
+	for _, c := range corpora {
+		name, corpus := c.name, c.corpus
 		lines := make([]string, len(corpus))
 		for i, p := range corpus {
 			data, err := json.Marshal(p)

@@ -1,5 +1,4 @@
 use super::*;
-use crate::RecoveryAdvice;
 use crate::wire::product::{evidence::Evidence, options::Options};
 use serde_json::{Value, json};
 
@@ -73,7 +72,7 @@ fn system_tag_error(evidence: &Evidence, op: &str, resource: Option<&str>, key: 
         };
     Error::new(ErrorClass::Api)
         .with_detail(ErrorDetail::SystemTag)
-        .with_outer_detail(RecoveryAdvice::new(&text))
+        .with_outer_detail(SystemTagText(text))
 }
 
 fn operation(id: &'static str, write: bool) -> Operation {
@@ -169,12 +168,7 @@ impl Client {
         };
         if key.starts_with("vng.") {
             let mut known = Evidence::new();
-            let mut jitter = || self.session.retry_jitter();
-            if let Ok(runtime) = self.session.runtime(ctx, &mut jitter)
-                && let Some(credentials) = runtime.configured_credentials
-            {
-                known.absorb(credentials);
-            }
+            known.absorb(self.session.configured_credentials());
             return Err(fail(system_tag_error(&known, op_id, None, key)));
         }
         let mut evidence = Evidence::new();

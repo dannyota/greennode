@@ -287,8 +287,8 @@ async fn system_tag_refusal_has_baseline_identity() {
 fn refusal_text(failure: &Failure<serde_json::Value>) -> String {
     failure
         .error()
-        .detail::<crate::RecoveryAdvice>()
-        .map(|advice| advice.message().to_owned())
+        .detail::<SystemTagText>()
+        .map(|text| text.message().to_owned())
         .unwrap_or_default()
 }
 
@@ -346,6 +346,33 @@ async fn system_tag_refusal_falls_back_to_fixed_text_for_a_reflected_credential(
     )]);
     let failure = test_client(&server, "toy-token")
         .tag_resource(&ctx, write_input("toy-token"))
+        .await
+        .unwrap_err();
+    assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
+}
+
+#[tokio::test]
+async fn system_tag_refusal_keeps_a_long_key_whole() {
+    let key = format!("vng.{}", "k".repeat(900));
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![]);
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input(&key))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_text(&failure),
+        format!("tagging: key is a system tag: tagging.TagResource: key \"{key}\"")
+    );
+}
+
+#[tokio::test]
+async fn system_tag_prefix_screen_survives_a_cancelled_context() {
+    let (ctx, handle) = RequestContext::new();
+    handle.cancel();
+    let server = Server::start(vec![]);
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("vng.toy-token"))
         .await
         .unwrap_err();
     assert_eq!(refusal_text(&failure), "tagging: key is a system tag");

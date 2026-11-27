@@ -402,3 +402,29 @@ fn resize_replies(acknowledgement: &str) -> [Response; 4] {
         response("202 Accepted", acknowledgement),
     ]
 }
+
+#[tokio::test]
+async fn price_guard_and_quote_keep_the_screened_peer_refusal() {
+    let refused = r#"{"code":"QuoteRefused","message":"package is not orderable"}"#;
+    let server = Server::start(vec![
+        response("400 Bad Request", refused),
+        response("400 Bad Request", refused),
+    ]);
+    let client = client(&server, CANARY);
+    let (ctx, _) = RequestContext::new();
+    let guard = client
+        .create_load_balancer(&ctx, create())
+        .await
+        .unwrap_err();
+    assert_eq!(guard.write_dispatch(), WriteDispatch::NotSent);
+    let api = guard.error().api_error().unwrap();
+    assert_eq!(api.code(), "QuoteRefused");
+    assert_eq!(api.message(), "package is not orderable");
+    let quote = client
+        .quote_create_load_balancer(&ctx, create())
+        .await
+        .unwrap_err();
+    let api = quote.error().api_error().unwrap();
+    assert_eq!(api.code(), "QuoteRefused");
+    assert_eq!(api.message(), "package is not orderable");
+}

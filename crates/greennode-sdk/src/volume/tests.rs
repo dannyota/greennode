@@ -494,3 +494,50 @@ async fn null_encryption_wrapper_precedes_later_arrays() {
         .unwrap();
     assert!(rows.items.is_empty());
 }
+
+#[tokio::test]
+async fn volume_quote_keeps_the_peer_refusal_but_discovery_prices_are_status_only() {
+    let refused = r#"{"code":"QuoteRefused","message":"size is not orderable"}"#;
+    let refusal = || Response::Http {
+        status: "400 Bad Request".into(),
+        headers: vec![("Content-Length".into(), refused.len().to_string())],
+        body: refused.as_bytes().to_vec(),
+    };
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![response(VOLUME), refusal()]);
+    let error = client(&server, "hcm-3")
+        .quote_resize_volume(
+            &ctx,
+            ResizeVolumeInput {
+                volume_id: "volume-1".into(),
+                size: 1000,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = error.error().api_error().unwrap();
+    assert_eq!(api.code(), "QuoteRefused");
+    assert_eq!(api.message(), "size is not orderable");
+    let server = Server::start(vec![
+        response(r#"{"data":[{"uuid":"zone_1","isEnabled":true}]}"#),
+        response(r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#),
+        response("[]"),
+        response(r#"{"volumeTypes":[{"id":"type_1","name":"SSD","minSize":1,"maxSize":10}]}"#),
+        refusal(),
+    ]);
+    let error = client(&server, "hcm-3")
+        .list_volume_prices(
+            &ctx,
+            ListVolumePricesInput {
+                volume_type_id: "type_1".into(),
+                encryption: "none".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = error.error().api_error().unwrap();
+    assert_eq!(api.message(), "Bad Request");
+    assert_ne!(api.code(), "QuoteRefused");
+}

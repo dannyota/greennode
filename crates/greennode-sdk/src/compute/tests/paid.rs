@@ -592,3 +592,29 @@ async fn create_server_refuses_floating_attachment_before_network() {
     assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
     assert!(server.heads().is_empty());
 }
+
+#[tokio::test]
+async fn compute_quote_keeps_clean_peer_message_and_withholds_a_reflected_one() {
+    let (ctx, _) = RequestContext::new();
+    let clean = TestServer::start(vec![http(
+        "400 Bad Request",
+        r#"{"code":"QuoteRefused","message":"flavor is not orderable"}"#,
+    )]);
+    let failure = server_order_client(&clean)
+        .quote_create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.code(), "QuoteRefused");
+    assert_eq!(api.message(), "flavor is not orderable");
+    let reflected = TestServer::start(vec![http(
+        "400 Bad Request",
+        &format!(r#"{{"code":"QuoteRefused","message":"bad {CANARY}"}}"#),
+    )]);
+    let failure = server_order_client(&reflected)
+        .quote_create_server(&ctx, server_order())
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.message(), "Bad Request");
+}
