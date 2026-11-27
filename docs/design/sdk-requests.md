@@ -224,6 +224,11 @@ operations with privacy options. A failed recheck refuses the write with Go's
 `unsafe cached guard response` text and sends nothing more. An operation that
 did not use a cached value never consults it.
 
+The monitor quota reads charge their shared 8 MiB budget on the length Go's
+credential scrub and `json.Marshal` would produce, scrubbing only the bearers
+sent on those requests and the CDN key. When scrubbed keys collide, Go keeps
+whichever entry its map writes last, so the larger charge counts.
+
 ### Signed S3
 
 `ObjectConfig` is independent of `Config`: explicit `ObjectCredentials` (two

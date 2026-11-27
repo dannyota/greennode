@@ -52,6 +52,25 @@ fn client_with_token(server: &Server, token: &str) -> Client {
     Client::new(&Config::new(with_product_loopback(Product::Monitor, options, server)).unwrap())
 }
 
+fn client_with_cdn_key(server: &Server, token: &str, key: &str) -> Client {
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new(token))
+        .with_cdn_api_key(Secret::new(key));
+    Client::new(&Config::new(with_product_loopback(Product::Monitor, options, server)).unwrap())
+}
+
+fn client_at(server: &Server, token: &str, now: time::OffsetDateTime) -> Client {
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new(token));
+    let options = greennode_sdk::testing::with_clock(
+        options,
+        std::sync::Arc::new(greennode_sdk::TestClock::new(now)),
+    );
+    Client::new(&Config::new(with_product_loopback(Product::Monitor, options, server)).unwrap())
+}
+
 fn target(head: &[u8]) -> url::Url {
     let target = std::str::from_utf8(head)
         .unwrap()

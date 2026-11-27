@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
 
-use http::Method;
+use bytes::Bytes;
+use http::{Method, StatusCode};
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
 use crate::wire::product::{evidence::Evidence, redirect::Retry};
@@ -220,6 +221,7 @@ impl Client {
         mutation: Mutation<'_>,
         output: impl FnOnce(MemberResult) -> O,
     ) -> WriteResult<O> {
+        selection.required(operation).map_err(not_sent)?;
         let ids = [
             ("LoadBalancerID", selection.load_balancer),
             ("PoolID", selection.pool),
@@ -255,11 +257,9 @@ impl Client {
             }
             let encoded = encode_body(&Replacement { members: &entries }, &write.evidence)
                 .map_err(|error| Failure::new(*error, None, previous))?;
-            preflight_time(ctx, &pre, &write)
+            let sent = send_replacement(ctx, &pre, &mut write, &route, encoded)
+                .await
                 .map_err(|error| Failure::new(*error, None, previous))?;
-            let sent = write
-                .send_once::<()>(ctx, &Method::PUT, &route, encoded, Retry::Once)
-                .await;
             if let Err(failure) = &sent
                 && previous == WriteDispatch::NotSent
                 && failure.error().detail::<BusyRefusal>().is_some()
@@ -300,18 +300,25 @@ impl Client {
 }
 
 impl Selection<'_> {
-    fn validate(&self, operation: &str) -> Result<(), Box<Error>> {
-        if self.address.is_empty() {
-            return Err(invalid_input(&format!("{operation} requires Address")));
+    fn required(&self, operation: &str) -> Result<(), Box<Error>> {
+        let missing = [
+            ("LoadBalancerID", self.load_balancer.is_empty()),
+            ("PoolID", self.pool.is_empty()),
+            ("Address", self.address.is_empty()),
+            ("Port", self.port == 0),
+        ];
+        match missing.iter().find(|(_, empty)| *empty) {
+            Some((field, _)) => Err(invalid_input(&format!("{operation} requires {field}"))),
+            None => Ok(()),
         }
+    }
+
+    fn validate(&self, operation: &str) -> Result<(), Box<Error>> {
         if self.address.parse::<Ipv4Addr>().is_err() {
             return Err(invalid_input(&format!(
                 "{operation}: Address must be an IPv4 address, got {:?}",
                 self.address
             )));
-        }
-        if self.port == 0 {
-            return Err(invalid_input(&format!("{operation} requires Port")));
         }
         check_port(operation, "Port", self.port)
     }
@@ -437,11 +444,11 @@ async fn prepare(
     write: &mut ChildWriter<'_>,
     target: &ChildTarget<'_>,
 ) -> Result<(Pool, Vec<super::PoolMember>), Box<Error>> {
-    preflight_time(ctx, pre, write)?;
+    write.ready_time(ctx, pre, Some(target))?;
     let ready = write
         .ready_with(pre, Some(target), member_state::validate_pool_document)
         .await;
-    preflight_time(ctx, pre, write)?;
+    write.ready_time(ctx, pre, Some(target))?;
     let ready = ready?;
     let (pool, embedded) = member_state::pool_and_embedded(
         ready.child.as_deref().unwrap_or("null"),
@@ -449,10 +456,23 @@ async fn prepare(
         &write.evidence,
     )?;
     let raw = write.read_data(pre, &MEMBERS, target.ids).await;
-    preflight_time(ctx, pre, write)?;
+    write.ready_time(ctx, pre, Some(target))?;
     let members = member_state::read_members(&raw?, &write.evidence)?;
     member_state::check_agree(write, target, &pool, embedded, &members)?;
     Ok((pool, members))
+}
+
+pub(super) async fn send_replacement(
+    ctx: &RequestContext,
+    pre: &RequestContext,
+    write: &mut ChildWriter<'_>,
+    route: &ChildTarget<'_>,
+    encoded: Bytes,
+) -> Result<Result<(StatusCode, Bytes), Failure<()>>, Box<Error>> {
+    preflight_time(ctx, pre, write)?;
+    Ok(write
+        .send_once::<()>(ctx, &Method::PUT, route, encoded, Retry::Once)
+        .await)
 }
 
 fn preflight_time(

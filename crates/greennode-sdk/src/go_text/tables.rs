@@ -62,3 +62,34 @@ pub(super) fn is_print(ch: char) -> bool {
         })
         .is_ok()
 }
+
+pub(super) fn is_letter_or_digit(ch: char) -> bool {
+    static TABLE: OnceLock<Vec<(u32, u32)>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        rows(include_str!("letterdigit.txt"))
+            .filter_map(|row| {
+                let (first, last) = row.split_once(' ')?;
+                Some((scalar(first), scalar(last)))
+            })
+            .collect()
+    });
+    let value = u32::from(ch);
+    let at = table.partition_point(|&(_, last)| last < value);
+    table.get(at).is_some_and(|&(first, _)| first <= value)
+}
+
+pub(super) fn ascii_lower(ch: char) -> Option<u8> {
+    static TABLE: OnceLock<Vec<(u32, u8)>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        rows(include_str!("lower_ascii.txt"))
+            .filter_map(|row| {
+                let (rune, lower) = row.split_once(' ')?;
+                Some((scalar(rune), u8::try_from(scalar(lower)).ok()?))
+            })
+            .collect()
+    });
+    table
+        .binary_search_by_key(&u32::from(ch), |&(rune, _)| rune)
+        .ok()
+        .map(|at| table[at].1)
+}

@@ -48,7 +48,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
 |`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0: lexer, parser, `compile`, evaluation and all built-in functions; its license and compliance suite|
-|`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Port of Go's `html.UnescapeString` and `strconv.Quote` (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
+|`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Port of Go's `html.UnescapeString` and `strconv.Quote`, plus the letter/digit and ASCII-lowercase tables behind the monitor credential-key check (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|
@@ -59,7 +59,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode-sdk/src/cache/`|Token cache: safe path selection, the anchored Unix store, the lock, the entry format and the one-time-code marker (crate-private)|
 |`crates/greennode-sdk/src/session/`|Built-in token sources: the service-account and IAM user sources with the cache, the one-time-code marker, single-flight refresh and rejection rules (crate-private)|
 |`crates/greennode-sdk/src/discovery/`|Project discovery: the region's projects read, selection and the shared discovery gate (crate-private)|
-|`crates/greennode-sdk/src/config/session/tests/queries.rs`|Session project access and auth and endpoint query tests|
+|`crates/greennode-sdk/src/config/session/tests/queries.rs`, `tests/monitor.rs`|Session project access and auth and endpoint query tests, and the monitor quota scrub test that needs a sign-in endpoint hook|
 |`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
 |`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, the operation client with strict schema decoding, safe response classification, strict token validation, the service-account exchange, the IAM user sign-in with PKCE, cookies and TOTP, and the loopback TLS test server (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|

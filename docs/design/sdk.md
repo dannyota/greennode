@@ -155,13 +155,13 @@ does not undo a write.
 `Clock` supplies running UTC and monotonic time and an async sleep until an
 instant. A `RequestContext` deadline and every timer the SDK itself creates use
 the same clock as the request. Timers inside hyper-util's connector use Tokio
-time; test them with paused Tokio time, not the injected clock.
-`ConfigOptions::with_clock` and the S3 runtime input select the clock; the
-default reads system time and uses Tokio timers. `Random` is internal:
-production reads the OS CSPRNG, and tests inject bytes for PKCE, temporary
-names, and retry jitter. Randomness failure during auth fails closed. Test time
-drives cache expiry, TOTP rollover, HTTP deadlines, signing, and settlement
-together.
+time; test them with paused Tokio time, not the injected clock. The S3 runtime
+input selects the clock, and so does `ConfigOptions::with_clock`, which exists
+only under `cfg(test)` or the `test-support` feature; the default reads system
+time and uses Tokio timers. `Random` is internal: production reads the OS
+CSPRNG, and tests inject bytes for PKCE, temporary names, and retry jitter.
+Randomness failure during auth fails closed. Test time drives cache expiry, TOTP
+rollover, HTTP deadlines, signing, and settlement together.
 
 ## Services and models
 

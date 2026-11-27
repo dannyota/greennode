@@ -1,6 +1,8 @@
 mod catalog;
+mod charge;
 mod notification;
 mod quotes;
+mod scrub;
 mod status;
 mod wire;
 

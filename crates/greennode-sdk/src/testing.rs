@@ -54,6 +54,13 @@ pub fn with_product_loopback(
     options.with_product_loopback(product, server, false)
 }
 
+pub fn with_clock(
+    options: crate::ConfigOptions,
+    clock: std::sync::Arc<dyn crate::Clock>,
+) -> crate::ConfigOptions {
+    options.with_clock(clock)
+}
+
 pub fn with_write_loopback(
     product: Product,
     options: crate::ConfigOptions,

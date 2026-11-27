@@ -374,9 +374,13 @@ impl Session {
         project_id: Option<String>,
         directory: Option<PathBuf>,
         home: Option<PathBuf>,
-        auth_options: (Option<IamUserAuth>, EndpointOverrides),
+        auth_options: (
+            Option<IamUserAuth>,
+            EndpointOverrides,
+            Option<Arc<dyn Clock>>,
+        ),
     ) -> Result<Self, Error> {
-        let (iam_details, overrides) = auth_options;
+        let (iam_details, overrides, injected_clock) = auth_options;
         let invalid = || Error::new(ErrorClass::InvalidConfig);
         let details = if selected.source == credentials::Source::Options
             && matches!(&selected.kind, credentials::Kind::IamUser(_))
@@ -406,7 +410,8 @@ impl Session {
             crate::cache::checked_directory(home.as_deref(), &path.join("service-account-v1"))
                 .map_err(|e| *e)?;
         }
-        let clock: Arc<dyn crate::Clock> = Arc::new(crate::SystemClock);
+        let clock: Arc<dyn crate::Clock> =
+            injected_clock.unwrap_or_else(|| Arc::new(crate::SystemClock));
         let timeout = Duration::from_secs(120);
         let mut configured_credentials = SentCredentials::default();
         if let Some(key) = &selected.cdn_key {

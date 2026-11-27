@@ -1,4 +1,4 @@
-use super::{client, client_with_token, response, target};
+use super::{client, client_at, client_with_cdn_key, client_with_token, response, target};
 use greennode_sdk::monitor::{ErrorDetail, GetQuotaStatusInput, ListSyntheticPackagesInput};
 use greennode_sdk::testing::Server;
 use greennode_sdk::{ErrorClass, RequestContext, WriteDispatch};
@@ -187,15 +187,14 @@ async fn synthetic_catalog_rejects_hex_credential_in_class_id_before_request() {
 
 #[tokio::test]
 async fn quota_status_redacts_credential_in_formatted_time_left() {
-    let end =
-        time::OffsetDateTime::now_utc() + time::Duration::days(12345) + time::Duration::hours(12);
-    let end = end
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let end = (now + time::Duration::days(12345) + time::Duration::hours(12))
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
     let quota = QUOTA.replace("2000-02-01T00:00:00Z", &end);
     let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
     let (ctx, _) = RequestContext::new();
-    let output = client_with_token(&server, "12345")
+    let output = client_at(&server, "12345", now)
         .get_quota_status(
             &ctx,
             GetQuotaStatusInput {
@@ -210,15 +209,14 @@ async fn quota_status_redacts_credential_in_formatted_time_left() {
 
 #[tokio::test]
 async fn quota_status_redacts_bearer_ending_in_day_suffix() {
-    let end =
-        time::OffsetDateTime::now_utc() + time::Duration::days(12345) + time::Duration::hours(12);
-    let end = end
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let end = (now + time::Duration::days(12345) + time::Duration::hours(12))
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap();
     let quota = QUOTA.replace("2000-02-01T00:00:00Z", &end);
     let server = Server::start(vec![response("200 OK", &quota), response("200 OK", "[]")]);
     let (ctx, _) = RequestContext::new();
-    let output = client_with_token(&server, "12345d")
+    let output = client_at(&server, "12345d", now)
         .get_quota_status(
             &ctx,
             GetQuotaStatusInput {
@@ -251,6 +249,86 @@ async fn catalog_budget_counts_html_escaped_bodies() {
         "ResponseTooLarge"
     );
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn catalog_budget_counts_escaped_bodies_once() {
+    let payload = "<".repeat(600_000);
+    let classes = CLASSES.replace("Coming soon.", &payload);
+    let packages = PACKAGES.replace("free10", &payload);
+    let server = Server::start(
+        [classes.as_str(), packages.as_str(), SETTINGS, UNITS, "[]"]
+            .map(|body| response("200 OK", body))
+            .into(),
+    );
+    let (ctx, _) = RequestContext::new();
+    client(&server)
+        .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn catalog_budget_is_charged_after_credential_redaction() {
+    let payload = "<".repeat(750_000);
+    let classes = CLASSES.replace("Coming soon.", &payload);
+    let packages = PACKAGES.replace("free10", &payload);
+    let server = Server::start(
+        [classes.as_str(), packages.as_str(), SETTINGS, UNITS, "[]"]
+            .map(|body| response("200 OK", body))
+            .into(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let output = client_with_token(&server, "<<")
+        .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+        .await
+        .unwrap();
+    assert_eq!(output.items[1].description, "<redacted>");
+    assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn catalog_budget_charges_the_substring_scrubbed_length() {
+    for (side, too_large) in [(340_000, false), (350_000, true)] {
+        let padded = format!("{0}ABCDEFGH{0}", "<".repeat(side));
+        let classes = CLASSES.replace("Coming soon.", &padded);
+        let packages = PACKAGES.replace("free10", &padded);
+        let server = Server::start(
+            [classes.as_str(), packages.as_str(), SETTINGS, UNITS, "[]"]
+                .map(|body| response("200 OK", body))
+                .into(),
+        );
+        let (ctx, _) = RequestContext::new();
+        let result = client_with_token(&server, "ABCDEFGH")
+            .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+            .await;
+        let large = result.is_err_and(|failure| {
+            failure
+                .error()
+                .api_error()
+                .is_some_and(|error| error.code() == "ResponseTooLarge")
+        });
+        assert_eq!(large, too_large, "side {side}");
+    }
+}
+
+#[tokio::test]
+async fn catalog_budget_scrubs_the_configured_cdn_key_like_go() {
+    let padded = format!("{0}CDN{0}", "<".repeat(350_000));
+    let classes = CLASSES.replace("Coming soon.", &padded);
+    let packages = PACKAGES.replace("free10", &padded);
+    let server = Server::start(
+        [classes.as_str(), packages.as_str(), SETTINGS, UNITS, "[]"]
+            .map(|body| response("200 OK", body))
+            .into(),
+    );
+    let (ctx, _) = RequestContext::new();
+    let result = client_with_cdn_key(&server, "toy-monitor-token", "CDN")
+        .list_synthetic_packages(&ctx, ListSyntheticPackagesInput)
+        .await;
+    assert!(result.is_ok_and(|output| output.items[1].description == "<redacted>"));
+    assert_eq!(server.requests(), 5);
 }
 
 #[tokio::test]

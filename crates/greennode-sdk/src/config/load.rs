@@ -165,6 +165,7 @@ fn load_local(
     if let Some(end) = check() {
         return Err(end.into());
     }
+    let clock = options.injected_clock();
     let session = super::session::Session::new(
         credentials,
         region,
@@ -178,7 +179,7 @@ fn load_local(
             }
         }),
         source.home.filter(|path| path.is_absolute()),
-        (options.iam_details, options.endpoint_overrides),
+        (options.iam_details, options.endpoint_overrides, clock),
     )?;
     if let Some(end) = check() {
         return Err(end.into());
