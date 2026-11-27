@@ -336,3 +336,199 @@ async fn cross_operation_reconciliation_keeps_the_callers_operation() {
     assert_eq!(api.status(), Some(403));
     assert_eq!(server.requests(), 15);
 }
+
+#[tokio::test]
+async fn mismatched_synthetic_delete_reconciles_and_preserves_invalid_usage() {
+    for settled in [true, false] {
+        let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+        let extended = ACTIVE.replace("2099-02-01", "2099-03-01");
+        replies.push(response("200 OK", ACK));
+        if settled {
+            replies.extend([response("200 OK", &extended), response("200 OK", DETAIL)]);
+        } else {
+            replies.push(response("403 Forbidden", "{}"));
+        }
+        let server = Server::start(replies);
+        let client = client(&server);
+        let (ctx, _) = RequestContext::new();
+        let mut renew = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+        renew.no_wait = true;
+        client.renew_synthetic_quota(&ctx, renew).await.unwrap();
+        let failure = client
+            .delete_synthetic_quota(
+                &ctx,
+                greennode_sdk::monitor::DeleteSyntheticQuotaInput::new("different-quota"),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            failure
+                .error()
+                .has_class(greennode_sdk::ErrorClass::InvalidInput)
+        );
+        assert_eq!(
+            failure
+                .error()
+                .has_class(greennode_sdk::ErrorClass::NotSettled),
+            !settled
+        );
+        assert_eq!(server.requests(), if settled { 16 } else { 15 });
+    }
+}
+
+#[tokio::test]
+async fn dropped_order_preserves_the_response_head_in_the_ledger() {
+    use greennode_sdk::{Clock, SystemClock};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    #[derive(Default)]
+    struct OrderClock {
+        remaining: AtomicUsize,
+        head_observed: tokio::sync::Notify,
+    }
+    impl Clock for OrderClock {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            SystemClock.utc_now()
+        }
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            SystemClock.monotonic_now()
+        }
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            if self.remaining.load(Ordering::SeqCst) > 0
+                && self.remaining.fetch_sub(1, Ordering::SeqCst) == 1
+            {
+                self.head_observed.notify_one();
+            }
+            SystemClock.sleep_until(deadline)
+        }
+    }
+    struct Provider {
+        clock: Arc<OrderClock>,
+        calls: AtomicUsize,
+    }
+    impl greennode_sdk::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<greennode_sdk::Token, greennode_sdk::Error>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            Box::pin(async move {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 13 {
+                    self.clock.remaining.store(3, Ordering::SeqCst);
+                }
+                Ok(greennode_sdk::Token::new(
+                    greennode_sdk::Secret::new("fixture-dispatch-bearer"),
+                    None,
+                ))
+            })
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a greennode_sdk::Secret,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), greennode_sdk::Error>> + Send + 'a>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let (sent_head, _receipt) = tokio::sync::oneshot::channel();
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.push(Response::Stall(sent_head, 20));
+    let server = Server::start(replies);
+    let clock = Arc::new(OrderClock::default());
+    let options = greennode_sdk::ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_credentials_provider(Arc::new(Provider {
+            clock: clock.clone(),
+            calls: AtomicUsize::new(0),
+        }));
+    let options = greennode_sdk::testing::with_fixture_clock(options, clock.clone());
+    let options = greennode_sdk::testing::with_write_loopback(
+        greennode_sdk::testing::Product::Monitor,
+        options,
+        &server,
+    );
+    let client = greennode_sdk::monitor::Client::new(&greennode_sdk::Config::new(options).unwrap());
+    let (ctx, _) = RequestContext::new();
+    let input = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    {
+        let mut renew = std::pin::pin!(client.renew_synthetic_quota(&ctx, input.clone()));
+        tokio::select! {
+            () = clock.head_observed.notified() => (),
+            _ = &mut renew => panic!("the order completed before the body was stalled"),
+        }
+    }
+    let ctx = ctx.child_with_deadline(tokio::time::Instant::now());
+    let failure = client.renew_synthetic_quota(&ctx, input).await.unwrap_err();
+    let outcome = &failure.partial().unwrap().outcome;
+    assert_eq!(outcome.sent, "yes");
+    assert_eq!(
+        outcome.error.as_ref().unwrap().status,
+        greennode_sdk::monitor::ResponseField::Value(200)
+    );
+    assert_eq!(server.requests(), 14);
+}
+
+#[tokio::test]
+async fn synthetic_create_uses_the_retained_auto_renew_settlement_bound() {
+    let (started, settling) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        response("200 OK", ACTIVE),
+        response("200 OK", DETAIL),
+        response("200 OK", FREE),
+        response("200 OK", ACTIVE),
+        response("200 OK", DETAIL),
+        response("503 Service Unavailable", "{}"),
+        Response::StallBeforeHead(started),
+    ]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let first = client
+        .set_synthetic_quota_auto_renew(
+            &ctx,
+            greennode_sdk::monitor::SetSyntheticQuotaAutoRenewInput::new(true),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        first
+            .error()
+            .has_class(greennode_sdk::ErrorClass::NotSettled)
+    );
+
+    let mut create = std::pin::pin!(client.create_synthetic_quota(
+        &ctx,
+        CreateSyntheticQuotaInput::new("class-1", "unit_1", 10),
+    ));
+    tokio::select! {
+        biased;
+        started = settling => started.unwrap(),
+        _ = &mut create => panic!("reconciliation completed before the fixture held its response"),
+    }
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    let result = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(create.as_mut(), cx))
+    })
+    .await;
+    let std::task::Poll::Ready(Err(failure)) = result else {
+        panic!("creation did not honor the retained 30-second settlement bound");
+    };
+    assert!(
+        failure
+            .error()
+            .has_class(greennode_sdk::ErrorClass::DeadlineExceeded)
+    );
+    assert_eq!(server.requests(), 7);
+}

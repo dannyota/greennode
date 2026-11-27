@@ -163,8 +163,7 @@ impl Client {
             return Err(maybe_sent(ORDER.invalid(reply.status, &evidence)));
         }
         if let Err(cause) = result {
-            let safe =
-                serde_json::to_value(&output).is_ok_and(|value| !evidence.reflected_in(&value));
+            let safe = super::log_projects::safe_project_guard(&output.log_project, &evidence);
             return Err(Failure::new(
                 screen_details(
                     uncertain(&ORDER, "log project order was accepted", cause),

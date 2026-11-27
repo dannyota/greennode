@@ -176,8 +176,7 @@ const RESEND_INPUT: InputField<Input> = InputField {
     set_flag: None,
     requirement: Requirement::Optional,
     set_json: |input, value| {
-        let resend: Resend =
-            super::decode_nested(value, &["Enabled", "Statuses", "Period", "Times"])?;
+        let resend: Resend = serde_json::from_value(value).map_err(|_| ())?;
         input.resend = Some(sdk::LogAlarmResend {
             enabled: sdk::ResponseField::Value(resend.enabled),
             statuses: resend.statuses,
@@ -205,6 +204,11 @@ const FILTER_INPUT: InputField<Input> = InputField {
     },
 };
 
+const CREATE_FILTER_INPUT: InputField<Input> = InputField {
+    nullable: true,
+    ..FILTER_INPUT
+};
+
 const fn descriptor(fields: &'static [InputField<Input>]) -> InputDescriptor<Input> {
     InputDescriptor {
         defaults: Input::default,
@@ -217,22 +221,22 @@ const fn descriptor(fields: &'static [InputField<Input>]) -> InputDescriptor<Inp
     }
 }
 macro_rules! flags_input {
-    ($name:ident,$project:ident,$threshold:ident $(,$extra:expr)?)=>{
+    ($filter:ident; $name:ident,$project:ident,$threshold:ident $(,$extra:expr)?)=>{
         [$($extra,)?$name,$project,$threshold,
          slot!("Description",DESCRIPTION,description,String),slot!("Severity",SEVERITY,severity,String),slot!("QueryString",QUERY,query_string,String),
          slot!("ThresholdType",THRESHOLD_TYPE,threshold_type,String),slot!("Condition",CONDITION,condition,String),slot!("TimeFrame",TIME_FRAME,time_frame,i64),
          slot!("GroupByField",GROUP,group_by_field,String),slot!("AggField",AGG_FIELD,agg_field,String),slot!("AggType",AGG_TYPE,agg_type,String),
-         channels!("InAlarm",IN_ALARM,in_alarm),channels!("OK",OK,ok),slot!("NoWait",NO_WAIT,no_wait,bool),RESEND_INPUT,FILTER_INPUT]
+         channels!("InAlarm",IN_ALARM,in_alarm),channels!("OK",OK,ok),slot!("NoWait",NO_WAIT,no_wait,bool),RESEND_INPUT,$filter]
     };
 }
 const CREATE_INPUT: InputDescriptor<Input> =
-    descriptor(&flags_input!(NAME_INPUT, PROJECT_INPUT, THRESHOLD_INPUT));
+    descriptor(&flags_input!(CREATE_FILTER_INPUT; NAME_INPUT, PROJECT_INPUT, THRESHOLD_INPUT));
 const UPDATE_NAME: InputField<Input> = slot!("Name", NAME, name, String);
 const UPDATE_PROJECT: InputField<Input> = slot!("LogProjectID", PROJECT_ID, log_project_id, String);
 const UPDATE_THRESHOLD: InputField<Input> =
     slot!("ThresholdValue", THRESHOLD, threshold_value, f64);
 const UPDATE_INPUT: InputDescriptor<Input> = descriptor(&flags_input!(
-    UPDATE_NAME,
+    FILTER_INPUT; UPDATE_NAME,
     UPDATE_PROJECT,
     UPDATE_THRESHOLD,
     ID_INPUT
@@ -268,7 +272,7 @@ macro_rules! write {
                         })
                     },
                     OutputView::default(),
-                    None,
+                    Some(super::write_input::ALARM),
                 ))
             })),
         }

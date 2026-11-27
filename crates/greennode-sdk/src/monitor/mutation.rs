@@ -232,14 +232,9 @@ impl Client {
         let mut scoped =
             crate::quote::request::monitor::ScopedBearer::new(bearer, identifiers, mutation.id);
         if let Some(privacy) = guard.privacy {
-            let mut values = evidence.credentials().clone();
-            values.extend(privacy.credentials());
-            if values.values().len() > 256 {
-                return Err(not_sent(Error::new(ErrorClass::Api).with_outer_detail(
-                    "monitor: credential safety limit exceeded".to_owned(),
-                )));
-            }
-            scoped = scoped.with_privacy(values);
+            scoped = scoped.with_privacy(
+                privacy_credentials(mutation.id, evidence, privacy).map_err(not_sent)?,
+            );
         }
         let bearer = if identifiers.is_empty() && guard.privacy.is_none() {
             bearer
@@ -311,6 +306,22 @@ impl<T: Serialize + Send + Sync> SerializeBody for T {
     fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(self)
     }
+}
+
+pub(super) fn privacy_credentials(
+    operation: &'static str,
+    evidence: &Evidence,
+    privacy: &Evidence,
+) -> Result<crate::wire::product::evidence::SentCredentials, Error> {
+    let mut combined = Evidence::new();
+    combined.absorb(evidence.credentials());
+    combined.absorb(privacy.credentials());
+    if combined.credentials().values().len() > 256 {
+        return Err(crate::quote::request::monitor::privacy_limit(
+            operation, &combined,
+        ));
+    }
+    Ok(combined.credentials().clone())
 }
 
 pub(super) fn not_sent<T>(error: Error) -> Failure<T> {

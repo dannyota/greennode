@@ -3,7 +3,7 @@ mod model;
 pub use model::*;
 
 use http::{Method, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::time::Duration;
 
@@ -121,7 +121,9 @@ impl Client {
             },
             alarm: last,
         };
-        finish(result, &CREATE, output, &evidence)
+        finish(result, &CREATE, output, &evidence, |output| {
+            (&output.alarm, &output.alarm_id)
+        })
     }
 
     /// Replaces supplied log alarm fields and keeps the rest of the guarded configuration.
@@ -236,6 +238,7 @@ impl Client {
             &UPDATE,
             UpdateLogAlarmOutput { alarm: last },
             &evidence,
+            |output| (&output.alarm, ""),
         )
     }
 
@@ -514,12 +517,12 @@ fn finish<T>(
     mutation: &Mutation,
     output: T,
     evidence: &Evidence,
-) -> Result<T, Failure<T>>
-where
-    T: Serialize,
-{
+    retained: impl FnOnce(&T) -> (&Alarm, &str),
+) -> Result<T, Failure<T>> {
     if let Err(cause) = result {
-        let safe = serde_json::to_value(&output).is_ok_and(|value| !evidence.reflected_in(&value));
+        let (alarm, id) = retained(&output);
+        let safe =
+            !evidence.id_reflects(id) && check_alarm_output(alarm, mutation, evidence).is_ok();
         let error = uncertain(mutation, "log alarm was accepted", cause);
         return Err(Failure::new(
             screen_details(error, evidence),

@@ -14,7 +14,7 @@ use time::OffsetDateTime;
 
 use super::synthetic_settlement::Action;
 use crate::monitor::mutation::{Mutation, Reply, SendGuard, screen_details};
-use crate::monitor::wire::input_error;
+use crate::monitor::wire::{Family, Read, input_error};
 use crate::monitor::{Client, Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::wire::strict_json::{Shape, ShapeField};
@@ -338,12 +338,15 @@ impl Client {
             }
             Err(failure) => {
                 let (error, _, dispatch) = failure.into_parts();
-                let status = error
-                    .detail::<StatusCode>()
-                    .map(|value| value.as_u16())
-                    .or_else(|| error.api_error().and_then(crate::ApiError::status))
-                    .unwrap_or_default();
-                let error = if error.is_body_too_large() {
+                let observed = error.detail::<StatusCode>().map(StatusCode::as_u16);
+                let api_status = error.api_error().and_then(crate::ApiError::status);
+                let status = observed.or(api_status).unwrap_or_default();
+                let overflow = error.is_body_too_large();
+                let incomplete = !mutation.keep_status
+                    && !overflow
+                    && observed.is_some()
+                    && api_status.is_none();
+                let error = if overflow {
                     mutation
                         .error(
                             (status != 0).then_some(status),
@@ -353,10 +356,23 @@ impl Client {
                         )
                         .with_cause(error)
                 } else if let Some(api) = error.api_error().filter(|_| status > 0) {
-                    let withheld = mutation.error(
-                        Some(status),
-                        if status < 400 { "InvalidResponse" } else { "" },
+                    let read = Read {
+                        id: mutation.id,
+                        route: mutation.route,
+                        limit: mutation.limit,
+                        family: Family::Quota {
+                            no_redirect: mutation.no_redirect,
+                        },
+                    };
+                    let withheld = read.error(
+                        (!incomplete).then_some(status),
+                        if status < 400 || incomplete {
+                            "InvalidResponse"
+                        } else {
+                            ""
+                        },
                         "quota response withheld",
+                        api.retryable(),
                         &attempt.evidence,
                     );
                     if api.message() == "quota response withheld" {
@@ -367,7 +383,9 @@ impl Client {
                 } else {
                     error
                 };
-                if dispatch == WriteDispatch::NotSent || (400..500).contains(&status) {
+                if dispatch == WriteDispatch::NotSent
+                    || (!incomplete && (400..500).contains(&status))
+                {
                     self.quota_ledger.clear(attempt.kind)?;
                     return Ok(SendState::Refused {
                         error,
@@ -396,9 +414,13 @@ struct PendingSend<'a> {
 impl Drop for PendingSend<'_> {
     fn drop(&mut self) {
         if !self.completed
-            && let Some(credentials) = self.dispatch.take()
+            && let Some(dispatched) = self.dispatch.take()
         {
-            self.attempt.evidence.absorb(&credentials);
+            self.attempt.evidence.absorb(&dispatched.credentials);
+            self.attempt.observed_status = dispatched
+                .status
+                .map(|status| status.as_u16())
+                .unwrap_or_default();
             let _ = self.ledger.put(&self.attempt);
         }
     }

@@ -2,6 +2,7 @@ mod channel_writes;
 mod check_writes;
 mod log_alarm_writes;
 mod quota;
+mod write_input;
 
 use std::io::Write;
 
@@ -196,6 +197,7 @@ const RENEW_QUOTE: InputDescriptor<Input> = descriptor(&[
 const QUOTE_INPUT_CHECKS: JsonChecks = JsonChecks {
     validate: check_quote_json,
     read_error: |error| error,
+    normalize: None,
 };
 
 fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
@@ -662,37 +664,3 @@ pub(super) const SERVICE: Service = Service {
         ),
     ],
 };
-
-fn decode_nested<T: serde::de::DeserializeOwned>(
-    value: serde_json::Value,
-    names: &[&str],
-) -> Result<T, ()> {
-    let serde_json::Value::Object(fields) = value else {
-        return Err(());
-    };
-    let mut canonical = serde_json::Map::new();
-    for (key, value) in fields {
-        let name = names
-            .iter()
-            .find(|name| key.eq_ignore_ascii_case(name))
-            .ok_or(())?;
-        if !value.is_null() {
-            canonical.insert((*name).into(), value);
-        }
-    }
-    serde_json::from_value(serde_json::Value::Object(canonical)).map_err(|_| ())
-}
-
-fn decode_nested_list<T: serde::de::DeserializeOwned, U>(
-    value: serde_json::Value,
-    names: &[&str],
-    convert: impl Fn(T) -> U,
-) -> Result<Vec<U>, ()> {
-    let serde_json::Value::Array(items) = value else {
-        return Err(());
-    };
-    items
-        .into_iter()
-        .map(|item| decode_nested(item, names).map(&convert))
-        .collect()
-}

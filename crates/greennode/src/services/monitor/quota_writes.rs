@@ -262,29 +262,37 @@ fn finish_delete(
         Err(ExecutionFailure::Local(error)) => return dispatch::local(stderr, error),
         Ok(_) => (None, None, true),
     };
-    let mut may_have_sent = failure
+    let dispatch_uncertain = failure
         .as_ref()
         .is_some_and(|(_, dispatch)| *dispatch == WriteDispatch::MayHaveBeenSent);
+    let stage = output
+        .as_ref()
+        .and_then(|output| match output.for_query().ok()? {
+            Value::Object(mut fields) => match fields.remove("Stage")? {
+                Value::String(stage) => Some(stage),
+                _ => None,
+            },
+            _ => None,
+        });
+    let stage = stage
+        .as_deref()
+        .unwrap_or(if dispatch_uncertain { "sent" } else { "" });
+    let may_have_sent = dispatch_uncertain || matches!(stage, "sent" | "settled");
     let mut output_failed = projection_failed;
     if let Some(output) = output.as_ref() {
-        if let Ok(Value::Object(fields)) = output.for_query()
-            && let Some(Value::String(stage)) = fields.get("Stage")
-        {
-            may_have_sent |= matches!(stage.as_str(), "sent" | "settled");
-        }
         match encode(output, format) {
             Ok(bytes) => {
-                if stdout.write_all(&bytes).is_err() {
+                if stdout.write_all(&bytes).is_err() && failure.is_none() {
                     output_failed = true;
                 }
             }
             Err(_) => {
-                output_failed = true;
-                write_delete_fallback(stdout, format, may_have_sent);
+                output_failed = may_have_sent || failure.is_none();
+                write_delete_fallback(stdout, format, stage);
             }
         }
     } else {
-        write_delete_fallback(stdout, format, may_have_sent);
+        write_delete_fallback(stdout, format, stage);
     }
     if output_failed {
         let code = if may_have_sent {
@@ -314,8 +322,7 @@ fn finish_delete(
     }
 }
 
-fn write_delete_fallback(stdout: &mut dyn Write, format: Format, may_have_sent: bool) {
-    let stage = if may_have_sent { "sent" } else { "" };
+fn write_delete_fallback(stdout: &mut dyn Write, format: Format, stage: &str) {
     if let Ok(projected) = render::project(&fallback_delete(stage))
         && let Ok(bytes) = super::synthetic_writes::outcome::encode(&projected, format)
     {
@@ -457,5 +464,30 @@ mod tests {
         assert!(stdout == expected);
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], "NotSettled");
+    }
+
+    #[test]
+    fn broken_delete_stdout_preserves_the_sdk_error_and_exit_code() {
+        struct Broken;
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture write refused"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let partial = render::project(&fallback_delete("prepared")).unwrap();
+        let failure = dispatch::OperationFailure {
+            error: greennode_sdk::Error::provider_failed(),
+            partial: Some(partial),
+            dispatch: greennode_sdk::WriteDispatch::NotSent,
+            query_partial: false,
+        };
+        let mut stderr = Vec::new();
+        let code = finish_delete(&mut Broken, &mut stderr, Format::Json, Err(failure.into()));
+        assert_eq!(code, 3);
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "LoginFailed");
     }
 }

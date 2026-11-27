@@ -399,7 +399,6 @@ struct Evidence {
     reflection: SentCredentials,
     refused_body: Vec<u8>,
 }
-
 async fn run_inner(
     runtime: Runtime<'_>,
     op: &Operation<'_>,
@@ -554,20 +553,21 @@ async fn run_inner(
                 .map_err(|_| Error::InvalidRequest)?;
             *outgoing.headers_mut() = headers;
             let mut observed = send::Evidence::default();
-            let result = bounded(&ctx, clock, || async {
+            let notify = |status| {
                 if let Some(record) = route_inputs.dispatch_record {
-                    record.record(&credentials);
+                    record.record(&credentials, status);
                 }
-                send::once_with_evidence(
+            };
+            let result = bounded(&ctx, clock, || {
+                send::once_with_dispatch_observer(
                     client,
                     outgoing,
                     op.cap,
                     op.encoding,
                     clock,
                     deadline,
-                    &mut observed,
+                    (&mut observed, &notify),
                 )
-                .await
             })
             .await;
             if let Some(status) = observed.status {

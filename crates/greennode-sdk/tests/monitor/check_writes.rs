@@ -140,3 +140,23 @@ async fn check_privacy_limit_is_enforced_before_post() {
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 0);
 }
+
+#[tokio::test]
+async fn exhausted_check_query_scan_refuses_before_guard_read() {
+    let server = Server::start(vec![]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = greennode_sdk::monitor::UpdateCheckInput::new("chk-1");
+    input.url = Some(format!(
+        "https://example.test/?{}",
+        "key=repeated&".repeat(257)
+    ));
+    let failure = client(&server).update_check(&ctx, input).await.unwrap_err();
+    let api = failure
+        .error()
+        .api_error()
+        .expect("missing scoped privacy error");
+    assert_eq!(api.code(), "InvalidResponse");
+    assert_eq!(api.operation(), "monitor.UpdateCheck");
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(server.heads().is_empty());
+}

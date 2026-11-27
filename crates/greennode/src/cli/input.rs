@@ -11,10 +11,12 @@ use super::render::decode_string;
 pub type FlagSetter<T> = fn(&mut T, &ArgMatches) -> Result<(), ()>;
 pub type ProjectSetter<T> = fn(&mut T, &str);
 pub type InputGuard<T> = fn(&T, &ArgMatches) -> Result<(), InputError>;
+pub(crate) type JsonNormalization = fn(&[u8]) -> Result<Vec<u8>, InputError>;
 #[derive(Clone, Copy)]
 pub(crate) struct JsonChecks {
     pub(crate) validate: fn(&[u8]) -> Result<(), InputError>,
     pub(crate) read_error: fn(InputError) -> InputError,
+    pub(crate) normalize: Option<JsonNormalization>,
 }
 pub type ArgvGuard = fn(&ArgMatches, Option<&str>) -> Result<(), InputError>;
 
@@ -109,7 +111,11 @@ pub(crate) fn merge_checked<T>(
                     }
                 };
                 (checks.validate)(&bytes)?;
-                bytes
+                if let Some(normalize) = checks.normalize {
+                    normalize(&bytes)?
+                } else {
+                    bytes
+                }
             }
             None => normalized(&read_input(raw)?)?,
         };
@@ -448,6 +454,7 @@ mod tests {
         let checks = JsonChecks {
             validate,
             read_error: |error| error,
+            normalize: None,
         };
         let error = merge_checked(
             &descriptor(),

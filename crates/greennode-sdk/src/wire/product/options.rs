@@ -58,19 +58,32 @@ impl PathIds {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct DispatchEvidence {
+    pub(crate) credentials: super::evidence::SentCredentials,
+    pub(crate) status: Option<http::StatusCode>,
+}
+
 #[derive(Default, Debug)]
-pub(crate) struct DispatchRecord(std::sync::Mutex<Option<super::evidence::SentCredentials>>);
+pub(crate) struct DispatchRecord(std::sync::Mutex<Option<DispatchEvidence>>);
 
 impl DispatchRecord {
-    pub(super) fn record(&self, credentials: &super::evidence::SentCredentials) {
+    pub(super) fn record(
+        &self,
+        credentials: &super::evidence::SentCredentials,
+        status: Option<http::StatusCode>,
+    ) {
         if let Ok(mut record) = self.0.lock() {
-            record
-                .get_or_insert_with(Default::default)
-                .extend(credentials);
+            let observed = record.get_or_insert_with(|| DispatchEvidence {
+                credentials: Default::default(),
+                status: None,
+            });
+            observed.credentials.extend(credentials);
+            observed.status = status;
         }
     }
 
-    pub(crate) fn take(&self) -> Option<super::evidence::SentCredentials> {
+    pub(crate) fn take(&self) -> Option<DispatchEvidence> {
         self.0.lock().ok()?.take()
     }
 }

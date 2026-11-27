@@ -336,3 +336,46 @@ async fn dropping_a_dispatched_delete_preserves_the_pending_attempt() {
     assert_eq!(result.stage, "settled");
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn notification_delete_retains_a_truncated_four_xx_attempt() {
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        Response::RawClose(b"HTTP/1.1 409 Conflict\r\nContent-Length: 20\r\n\r\n{".to_vec()),
+        response("404 Not Found", ABSENT),
+    ]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let input = DeleteNotificationQuotaInput::new("Email");
+    let failure = client
+        .delete_notification_quota(&ctx, input.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .has_class(greennode_sdk::ErrorClass::NotSettled)
+    );
+    let result = client.delete_notification_quota(&ctx, input).await.unwrap();
+    assert_eq!(result.stage, "settled");
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
+async fn completed_quota_throttle_preserves_its_retry_hint() {
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("429 Too Many Requests", r#"{"message":"server throttle"}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(429));
+    assert!(api.retryable());
+    assert_eq!(server.requests(), 3);
+}

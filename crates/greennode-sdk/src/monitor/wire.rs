@@ -156,6 +156,33 @@ impl Client {
         evidence: &mut Evidence,
         accept_not_found: bool,
     ) -> Result<(StatusCode, Box<RawValue>), Error> {
+        self.read_status_guarded(ctx, read, path, query, evidence, (accept_not_found, None))
+            .await
+    }
+
+    pub(super) async fn read_guarded(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        path: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        privacy: Option<&Evidence>,
+    ) -> Result<Box<RawValue>, Error> {
+        self.read_status_guarded(ctx, read, path, query, evidence, (false, privacy))
+            .await
+            .map(|(_, raw)| raw)
+    }
+
+    async fn read_status_guarded(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        path: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        (accept_not_found, privacy): (bool, Option<&Evidence>),
+    ) -> Result<(StatusCode, Box<RawValue>), Error> {
         let base = self
             .session
             .endpoints()
@@ -195,6 +222,16 @@ impl Client {
             no_redirect: read.no_redirect(),
             retry_config: retry::Config::default(),
         };
+        let bearer = self.session.bearer_source();
+        let scoped = privacy
+            .map(|private| {
+                super::mutation::privacy_credentials(read.id, evidence, private).map(|values| {
+                    crate::quote::request::monitor::ScopedBearer::new(bearer, path, read.id)
+                        .with_privacy(values)
+                })
+            })
+            .transpose()?;
+        let bearer = scoped.as_ref().map_or(bearer, |source| source);
         let reply = match execute_raw(
             runtime,
             base,
@@ -210,7 +247,7 @@ impl Client {
             },
             path,
             query,
-            RouteAuth::Bearer(self.session.bearer_source()),
+            RouteAuth::Bearer(bearer),
             Bytes::new(),
             evidence,
         )

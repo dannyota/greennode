@@ -7,6 +7,7 @@ use serde_json::Value;
 pub(super) struct Privacy {
     diagnostics: Evidence,
     operands: Evidence,
+    exhausted: bool,
 }
 impl Privacy {
     pub(super) fn from_request(request: &CheckRequest) -> Self {
@@ -15,18 +16,35 @@ impl Privacy {
         value
     }
     pub(super) fn add_request(&mut self, request: &CheckRequest) {
-        add(&mut self.diagnostics, &request.url, true);
-        add(&mut self.operands, &request.url, false);
+        self.exhausted |= self.collect(request).is_err();
+    }
+    fn collect(&mut self, request: &CheckRequest) -> Result<(), ()> {
+        add(&mut self.diagnostics, &request.url, true)?;
+        add(&mut self.operands, &request.url, false)?;
         for (key, value) in request.headers.iter().chain(&request.query) {
-            add(&mut self.diagnostics, value, true);
-            add(&mut self.operands, value, is_credential_key(key));
+            add(&mut self.diagnostics, value, true)?;
+            add(&mut self.operands, value, is_credential_key(key))?;
         }
-        add(&mut self.diagnostics, &request.body, true);
-        add(&mut self.operands, &request.body, false);
+        add(&mut self.diagnostics, &request.body, true)?;
+        add(&mut self.operands, &request.body, false)?;
         if let Ok(json) = serde_json::from_str::<Value>(&request.body) {
-            visit(&mut self.diagnostics, &json, true);
-            visit(&mut self.operands, &json, false);
+            visit(&mut self.diagnostics, &json, true)?;
+            visit(&mut self.operands, &json, false)?;
         }
+        Ok(())
+    }
+    pub(super) fn check_limit(
+        &self,
+        operation: &'static str,
+        evidence: &Evidence,
+    ) -> Result<(), Error> {
+        if self.exhausted {
+            return Err(crate::quote::request::monitor::privacy_limit(
+                operation, evidence,
+            ));
+        }
+        crate::monitor::mutation::privacy_credentials(operation, evidence, &self.diagnostics)
+            .map(|_| ())
     }
     pub(super) fn diagnostics(&self) -> &Evidence {
         &self.diagnostics
@@ -39,11 +57,7 @@ impl Privacy {
         evidence: &Evidence,
     ) -> Result<(), Error> {
         let invalid = || mutation.invalid(status, evidence);
-        let mut combined = evidence.credentials().clone();
-        combined.extend(self.diagnostics.credentials());
-        if combined.values().len() > 256 {
-            return Err(invalid());
-        }
+        self.check_limit(mutation.id, evidence)?;
         if check_ids(check).any(|id| evidence.id_reflects(id) || self.operands.id_reflects(id)) {
             return Err(invalid());
         }
@@ -74,9 +88,9 @@ impl Privacy {
         self.diagnostics.text_reflects(text)
     }
 }
-fn add(evidence: &mut Evidence, value: &str, sensitive: bool) {
+fn add(evidence: &mut Evidence, value: &str, sensitive: bool) -> Result<(), ()> {
     if evidence.credentials().values().len() > 256 {
-        return;
+        return Err(());
     }
     let pair = value.trim().split_once(' ');
     let scheme = pair.map_or("", |(scheme, _)| scheme);
@@ -89,7 +103,10 @@ fn add(evidence: &mut Evidence, value: &str, sensitive: bool) {
         if let Some(password) = url.password() {
             evidence.add_redaction(&Secret::new(password));
         }
-        for (key, value) in url.query_pairs().take(257) {
+        for (index, (key, value)) in url.query_pairs().enumerate() {
+            if index >= 256 {
+                return Err(());
+            }
             if sensitive || auth || is_credential_key(&key) {
                 evidence.add_redaction(&Secret::new(value.into_owned()));
             }
@@ -108,24 +125,30 @@ fn add(evidence: &mut Evidence, value: &str, sensitive: bool) {
             }
         }
     }
+    Ok(())
 }
-fn visit(evidence: &mut Evidence, value: &Value, sensitive: bool) {
+fn visit(evidence: &mut Evidence, value: &Value, sensitive: bool) -> Result<(), ()> {
     if evidence.credentials().values().len() > 256 {
-        return;
+        return Err(());
     }
     match value {
-        Value::String(text) => add(evidence, text, sensitive),
+        Value::String(text) => add(evidence, text, sensitive)?,
         Value::Number(number) if sensitive => {
             evidence.add_redaction(&Secret::new(number.to_string()))
         }
-        Value::Array(items) => items
-            .iter()
-            .for_each(|item| visit(evidence, item, sensitive)),
-        Value::Object(fields) => fields
-            .iter()
-            .for_each(|(key, value)| visit(evidence, value, sensitive || is_credential_key(key))),
+        Value::Array(items) => {
+            for item in items {
+                visit(evidence, item, sensitive)?;
+            }
+        }
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                visit(evidence, value, sensitive || is_credential_key(key))?;
+            }
+        }
         _ => (),
     }
+    Ok(())
 }
 fn is_credential_key(key: &str) -> bool {
     let key: String = key

@@ -191,7 +191,28 @@ pub(crate) async fn once_with_evidence(
         encoding,
         clock,
         deadline,
-        (evidence, None),
+        (evidence, None, None),
+    )
+    .await
+}
+
+pub(crate) async fn once_with_dispatch_observer(
+    client: &Client,
+    request: Request<Full<Bytes>>,
+    cap: usize,
+    encoding: Encoding,
+    clock: &dyn Clock,
+    deadline: Instant,
+    (evidence, on_dispatch): (&mut Evidence, DispatchObserver<'_>),
+) -> Result<Reply, Error> {
+    once_inner(
+        client,
+        request,
+        cap,
+        encoding,
+        clock,
+        deadline,
+        (evidence, None, Some(on_dispatch)),
     )
     .await
 }
@@ -212,10 +233,12 @@ pub(crate) async fn once_with_expected(
         encoding,
         clock,
         deadline,
-        (evidence, Some(expected)),
+        (evidence, Some(expected), None),
     )
     .await
 }
+
+type DispatchObserver<'a> = &'a (dyn Fn(Option<StatusCode>) + Sync);
 
 async fn once_inner(
     client: &Client,
@@ -224,7 +247,11 @@ async fn once_inner(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    (evidence, expected): (&mut Evidence, Option<&[StatusCode]>),
+    (evidence, expected, on_dispatch): (
+        &mut Evidence,
+        Option<&[StatusCode]>,
+        Option<DispatchObserver<'_>>,
+    ),
 ) -> Result<Reply, Error> {
     let method = request.method();
     if !matches!(
@@ -261,7 +288,12 @@ async fn once_inner(
     let mut request = Box::pin(client.request(request));
     let send = poll_fn(|cx| {
         let result = request.as_mut().poll(cx);
-        evidence.started |= guard.capture.connection_metadata().is_some();
+        if !evidence.started && guard.capture.connection_metadata().is_some() {
+            evidence.started = true;
+            if let Some(notify) = on_dispatch {
+                notify(None);
+            }
+        }
         result
     });
     let response = timed(clock, deadline, send)
@@ -269,6 +301,9 @@ async fn once_inner(
         .map_err(|error| Error::Transport(transport_failure(&error)))?;
     let (parts, mut body) = response.into_parts();
     evidence.status = Some(parts.status);
+    if let Some(notify) = on_dispatch {
+        notify(evidence.status);
+    }
     let head = Observed {
         status: parts.status,
     };

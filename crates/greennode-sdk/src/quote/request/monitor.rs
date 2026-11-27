@@ -64,9 +64,8 @@ impl BearerSource for ScopedBearer<'_> {
                 let mut combined = privacy.lock().map_err(|_| Error::provider_failed())?;
                 combined.extend(evidence.credentials());
                 if combined.values().len() > 256 {
-                    return Err(Error::new(crate::ErrorClass::Api).with_outer_detail(
-                        "monitor: credential safety limit exceeded".to_owned(),
-                    ));
+                    evidence.absorb(&combined);
+                    return Err(privacy_limit(self.operation, &evidence));
                 }
             }
             if self.identifiers.iter().any(|id| evidence.id_reflects(id)) {
@@ -85,6 +84,17 @@ impl BearerSource for ScopedBearer<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         self.source.rejected(ctx, sent, evict)
     }
+}
+
+pub(crate) fn privacy_limit(operation: &'static str, evidence: &Evidence) -> Error {
+    Error::from_api(ApiError::new(
+        operation,
+        None,
+        SafeText::new("InvalidResponse", &[]),
+        SafeText::new("monitor: credential safety limit exceeded", &[]),
+        false,
+    ))
+    .screen_api(&|text| evidence.text_reflects(text))
 }
 
 pub(crate) const LOG_QUOTE: &str = "monitor.QuoteCreateLogProject";

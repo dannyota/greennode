@@ -186,23 +186,24 @@ struct Assertion {
 }
 const ASSERTIONS_INPUT: InputField<Input> = InputField {
     set_json: |input, value| {
-        input.assertions = Some(super::decode_nested_list(
-            value,
-            &["type", "operator", "target"],
-            |assertion: Assertion| sdk::Assertion {
-                r#type: assertion.r#type,
-                operator: assertion.operator,
-                target: assertion.target,
-            },
-        )?);
+        let assertions: Vec<Assertion> = serde_json::from_value(value).map_err(|_| ())?;
+        input.assertions = Some(
+            assertions
+                .into_iter()
+                .map(|assertion| sdk::Assertion {
+                    r#type: assertion.r#type,
+                    operator: assertion.operator,
+                    target: assertion.target,
+                })
+                .collect(),
+        );
         Ok(())
     },
     ..json_only!(assertions, "Assertions", std::convert::identity)
 };
 const NOTIFICATIONS_INPUT: InputField<Input> = InputField {
     set_json: |input, value| {
-        let notifications: Notifications =
-            super::decode_nested(value, &["In-alarm", "Up", "Undetermined"])?;
+        let notifications: Notifications = serde_json::from_value(value).map_err(|_| ())?;
         input.notifications = Some(notifications.into());
         Ok(())
     },
@@ -427,7 +428,7 @@ macro_rules! write {
                         })
                     },
                     OutputView::default(),
-                    None,
+                    Some(super::write_input::CHECK),
                 ))
             })),
         }

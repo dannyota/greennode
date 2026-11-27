@@ -271,3 +271,27 @@ fn nested_check_input_accepts_go_case_fallback() {
     assert!(body["config"]["assertions"][0]["type"] == "status");
     assert!(body["notifications"]["Up"][0] == "fixture-channel");
 }
+
+#[test]
+fn null_assertion_entry_is_a_zero_valued_struct() {
+    let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+    let (status, _, _) = invoke(
+        &[
+            "create-check",
+            "--name",
+            "Probe",
+            "--url",
+            "https://example.test/",
+            "--locations",
+            "loc-1",
+            "--cli-input-json",
+            r#"{"Assertions":[null]}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+    assert!(
+        body["config"]["assertions"] == serde_json::json!([{"type":"","operator":"","target":""}])
+    );
+}

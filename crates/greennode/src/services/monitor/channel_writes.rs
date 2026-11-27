@@ -130,14 +130,16 @@ const HEADERS_INPUT: InputField<Input> = InputField {
     set_flag: None,
     requirement: Requirement::Optional,
     set_json: |input, value| {
-        input.headers = Some(super::decode_nested_list(
-            value,
-            &["Key", "Value"],
-            |header: Header| sdk::ChannelHeader {
-                key: header.key,
-                value: header.value,
-            },
-        )?);
+        let headers: Vec<Header> = serde_json::from_value(value).map_err(|_| ())?;
+        input.headers = Some(
+            headers
+                .into_iter()
+                .map(|header| sdk::ChannelHeader {
+                    key: header.key,
+                    value: header.value,
+                })
+                .collect(),
+        );
         Ok(())
     },
 };
@@ -266,7 +268,7 @@ macro_rules! write {
                             })
                         },
                         OutputView::default(),
-                        None,
+                        Some(super::write_input::CHANNEL),
                     ))
                 },
             )),

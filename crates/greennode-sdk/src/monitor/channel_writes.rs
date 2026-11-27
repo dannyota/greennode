@@ -1,3 +1,4 @@
+mod ack;
 mod privacy;
 
 use http::Method;
@@ -11,10 +12,12 @@ use super::response_times::{safe_time, serialize_time};
 use super::wire::{check_path_id, input_error, requires_failure};
 use super::{Channel, ChannelHeader, Client};
 use crate::model::wire::{Field, WireField};
+use crate::quote::request::monitor::privacy_limit;
 use crate::wire::product::evidence::Evidence;
 use crate::wire::product::{options::PathIds, redirect::Retry};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
+use ack::{CREATED, CreateAck};
 use privacy::channel_values;
 
 const CHANNEL: &str = "notification-gateway/api/v1/notification";
@@ -182,38 +185,6 @@ const CHALLENGE: Shape<'static> = Shape::Object(&[
         shape: Shape::Any,
     },
 ]);
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct CreateAck {
-    id: Option<Field<String>>,
-    name: Option<Field<String>>,
-    address: Option<Field<String>>,
-    header: Option<Field<String>>,
-    created_date: Option<Field<String>>,
-}
-
-const CREATED: Shape<'static> = Shape::Object(&[
-    ShapeField {
-        name: "id",
-        shape: Shape::Any,
-    },
-    ShapeField {
-        name: "name",
-        shape: Shape::Any,
-    },
-    ShapeField {
-        name: "address",
-        shape: Shape::Any,
-    },
-    ShapeField {
-        name: "header",
-        shape: Shape::Any,
-    },
-    ShapeField {
-        name: "createdDate",
-        shape: Shape::Any,
-    },
-]);
 
 impl Client {
     /// Creates a notification channel, validating an optional OTP first.
@@ -260,7 +231,8 @@ impl Client {
             &header,
             &input.otp_ref,
             &input.otp,
-        );
+        )
+        .map_err(|()| not_sent(privacy_limit(CREATE.id, &evidence)))?;
         let code = self
             .channel_code(
                 ctx,
@@ -293,16 +265,7 @@ impl Client {
         let ack: CreateAck = reply
             .decode(&CREATE, &CREATED, &evidence)
             .map_err(maybe_sent)?;
-        let header = ack.header.map(|value| value.0).unwrap_or_default();
-        let mut channel = Channel {
-            id: ack.id.map(|value| value.0).unwrap_or_default(),
-            name: ack.name.map(|value| value.0).unwrap_or_default(),
-            address: ack.address.map(|value| value.0).unwrap_or_default(),
-            headers: super::channels::decoded_headers(&header),
-            raw_header: header,
-            created_date: ack.created_date.map(|value| value.0).unwrap_or_default(),
-            ..Channel::default()
-        };
+        let mut channel = ack.into_channel();
         if channel.id.is_empty() {
             return Err(maybe_sent(CREATE.error(
                 Some(reply.status),
@@ -356,9 +319,15 @@ impl Client {
             replacement_header.as_deref().unwrap_or_default(),
             &input.otp_ref,
             &input.otp,
-        );
+        )
+        .map_err(|()| not_sent(privacy_limit(UPDATE.id, &evidence)))?;
         let mut channel = self
-            .find_channel(ctx, &input.channel_id, &mut evidence, true)
+            .find_channel(
+                ctx,
+                &input.channel_id,
+                &mut evidence,
+                Some((UPDATE.id, &privacy)),
+            )
             .await
             .map_err(|error| not_sent(screen_error(error, &privacy)))?;
         let existing = channel_values(
@@ -367,7 +336,8 @@ impl Client {
             &channel.raw_header,
             "",
             &Secret::new(""),
-        );
+        )
+        .map_err(|()| not_sent(privacy_limit(UPDATE.id, &evidence)))?;
         privacy.absorb(existing.credentials());
         if channel.r#type.is_empty() {
             return Err(not_sent(UPDATE.invalid(200, &evidence)));
@@ -491,7 +461,8 @@ impl Client {
             &header,
             "",
             &Secret::new(""),
-        );
+        )
+        .map_err(|()| not_sent(privacy_limit(SEND.id, &evidence)))?;
         let body = json!({"type":input.r#type,"address":input.address,"header":header});
         let reply = self
             .mutate_guarded(

@@ -210,7 +210,7 @@ impl Client {
         privacy: &mut Privacy,
     ) -> Result<Check, Error> {
         let check = self
-            .read_check_guard(ctx, mutation.id, id, evidence)
+            .read_check_guard(ctx, mutation.id, id, evidence, None)
             .await?;
         privacy.add_request(&check.config.request);
         privacy.validate(mutation, 200, &check, evidence)?;

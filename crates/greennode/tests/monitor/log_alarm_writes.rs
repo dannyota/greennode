@@ -169,3 +169,72 @@ fn superseded_filter_value_is_ignored() {
     assert_eq!(status, ExitCode::SUCCESS);
     assert_eq!(server.requests(), 2);
 }
+
+#[test]
+fn create_alarm_rejects_explicit_null_filter_before_name_lookup() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", PAGE),
+        response_with_status("200 OK", PROJECT),
+        response_with_status("201 Created", "{}"),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "create-log-alarm",
+            "--name",
+            "Probe",
+            "--log-project-id",
+            "project-1",
+            "--threshold-value",
+            "0",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Filter":null}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn resend_resolves_mixed_case_keys_in_source_order() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", ALARM),
+        response_with_status("200 OK", ""),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "update-log-alarm",
+            "--alarm-id",
+            "alarm-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Resend":{"Enabled":true,"ENABLED":false,"Statuses":["ALARM"],"Period":30}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[1]).unwrap();
+    assert!(body["resendEnabled"] == false);
+}
+
+#[test]
+fn resend_accepts_go_unicode_field_fold() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", ALARM),
+        response_with_status("200 OK", ""),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "update-log-alarm",
+            "--alarm-id",
+            "alarm-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Resend":{"Enabled":false,"ſtatuses":["ALARM"],"Period":30}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(server.requests(), 2);
+}

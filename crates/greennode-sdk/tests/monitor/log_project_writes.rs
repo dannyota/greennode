@@ -144,11 +144,40 @@ async fn retained_project_is_screened_against_bearer_from_later_page() {
     let (ctx, _) = RequestContext::new();
     let mut input = CreateLogProjectInput::new("Logs");
     input.max_price = 5.0;
-    let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+    let Err(failure) = client.create_log_project(&ctx, input).await else {
+        panic!("retained project failed credential screening");
+    };
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert_eq!(
         failure.error().api_error().map(|error| error.code()),
         Some("InvalidResponse")
     );
+    assert_eq!(server.requests(), 6);
+}
+
+#[tokio::test]
+async fn failed_project_settlement_withholds_a_retained_encoded_id() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let server = Server::start(vec![
+        response("200 OK", EMPTY),
+        response("200 OK", CLASSES),
+        response("200 OK", QUOTE),
+        response("201 Created", r#"{"orderId":4001,"paymentUrl":null}"#),
+        response(
+            "200 OK",
+            r#"{"content":[{"id":"prefixYWJjsuffix","name":"Logs","status":"CREATING"}],"currentPage":0,"pageSize":100,"totalPages":1,"totalElements":1}"#,
+        ),
+        response("403 Forbidden", "{}"),
+    ]);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer::changing_at(5, "abc")),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.max_price = 5.0;
+    let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 6);
 }

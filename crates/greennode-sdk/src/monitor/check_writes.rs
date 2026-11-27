@@ -243,6 +243,9 @@ impl Client {
         let check = input.into_check();
         let mut evidence = self.write_evidence(ctx, &[]).map_err(not_sent)?;
         let privacy = Privacy::from_request(&check.config.request);
+        privacy
+            .check_limit(CREATE.id, &evidence)
+            .map_err(not_sent)?;
         let body = check_body(&check);
         accept_request(&CREATE, &check, &body, &evidence).map_err(not_sent)?;
         let reply = self
@@ -299,10 +302,19 @@ impl Client {
             .write_evidence(ctx, &[&input.check_id])
             .map_err(not_sent)?;
         let mut privacy = Privacy::from_request(&input.request_fields());
+        privacy
+            .check_limit(UPDATE.id, &evidence)
+            .map_err(not_sent)?;
         let id = input.check_id.clone();
         let _guard = self.check_lock(ctx, &id).await.map_err(not_sent)?;
         let mut current = self
-            .read_check_guard(ctx, UPDATE.id, &id, &mut evidence)
+            .read_check_guard(
+                ctx,
+                UPDATE.id,
+                &id,
+                &mut evidence,
+                Some(privacy.diagnostics()),
+            )
             .await
             .map_err(|error| not_sent(privacy.screen_error(error)))?;
         privacy.add_request(&current.config.request);
@@ -345,7 +357,13 @@ impl Client {
             .map_err(maybe_sent)?;
         if check.id.is_empty() {
             check = self
-                .read_check_guard(ctx, UPDATE.id, &id, &mut evidence)
+                .read_check_guard(
+                    ctx,
+                    UPDATE.id,
+                    &id,
+                    &mut evidence,
+                    Some(privacy.diagnostics()),
+                )
                 .await
                 .map_err(|error| maybe_sent(privacy.screen_error(error)))?;
         }
@@ -384,9 +402,12 @@ impl Client {
         op: &'static str,
         id: &str,
         evidence: &mut Evidence,
+        privacy: Option<&Evidence>,
     ) -> Result<Check, Error> {
         let read = plain(op, CHECK_ROUTE);
-        let raw = self.read(ctx, &read, &[id], &[], evidence).await?;
+        let raw = self
+            .read_guarded(ctx, &read, &[id], &[], evidence, privacy)
+            .await?;
         Ok(decode::<Field<Check>>(&raw, &CHECK, &read, evidence)?.0)
     }
 }

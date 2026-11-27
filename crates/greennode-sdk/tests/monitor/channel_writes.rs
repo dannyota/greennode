@@ -305,3 +305,45 @@ async fn opaque_json_header_values_are_screened_recursively() {
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn exhausted_channel_query_scan_refuses_before_guard_read() {
+    let server = Server::start(vec![]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateChannelInput::new("channel-1");
+    input.address = Some(format!(
+        "https://example.test/?{}",
+        "key=repeated&".repeat(257)
+    ));
+    let failure = client(&server)
+        .update_channel(&ctx, input)
+        .await
+        .unwrap_err();
+    let api = failure
+        .error()
+        .api_error()
+        .expect("missing scoped privacy error");
+    assert_eq!(api.code(), "InvalidResponse");
+    assert_eq!(api.operation(), "monitor.UpdateChannel");
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(server.heads().is_empty());
+}
+
+#[tokio::test]
+async fn exhausted_opaque_header_depth_refuses_update() {
+    let original = serde_json::to_string(r#"[{"key":"X-Hook","value":"toy-hook"}]"#).unwrap();
+    let deep =
+        serde_json::to_string(&format!("{}null{}", "[".repeat(129), "]".repeat(129))).unwrap();
+    assert!(CHANNELS.contains(&original));
+    let current = CHANNELS.replace(&original, &deep);
+    let server = Server::start(vec![response("200 OK", &current), response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateChannelInput::new("channel-1");
+    input.name = Some("Changed".into());
+    let result = client(&server).update_channel(&ctx, input).await;
+    let Err(failure) = result else {
+        panic!("update proceeded after exhausting its privacy scan");
+    };
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}

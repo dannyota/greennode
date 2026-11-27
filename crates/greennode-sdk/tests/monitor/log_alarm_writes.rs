@@ -177,3 +177,26 @@ async fn raw_log_search_query_is_excluded_from_debug() {
         .unwrap();
     assert!(!format!("{output:?}").contains("raw_log_search_query"));
 }
+
+#[tokio::test]
+async fn failed_alarm_settlement_withholds_a_retained_raw_query() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let mut pending: serde_json::Value = serde_json::from_str(ALARM).unwrap();
+    pending["data"]["progressStatus"] = "CREATING".into();
+    pending["data"]["alarmLog"]["logSearchQuery"] = "fixture-later-bearer".into();
+    let server = Server::start(vec![
+        response("200 OK", ALARM),
+        response("200 OK", ""),
+        response("200 OK", &pending.to_string()),
+        response("403 Forbidden", "{}"),
+    ]);
+    let source = std::sync::Arc::new(DispatchBearer::changing_at(3, "fixture-later-bearer"));
+    let client = with_dispatch_bearer(&server, source);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateLogAlarmInput::new("alarm-1");
+    input.description = Some("Changed".into());
+    let failure = client.update_log_alarm(&ctx, input).await.unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 4);
+}

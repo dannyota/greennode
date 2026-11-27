@@ -225,6 +225,7 @@ fn execute<'a>(
         Some(JsonChecks {
             validate: check_json,
             read_error,
+            normalize: None,
         }),
     ))
 }

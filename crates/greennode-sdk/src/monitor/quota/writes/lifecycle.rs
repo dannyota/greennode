@@ -369,11 +369,16 @@ impl Client {
                         &attempt.evidence,
                     );
                 }
-                Ok(_) if mismatch && was_order => {
+                Ok(_) if mismatch && was_order && input.op != DELETE_SYNTH => {
                     return initial(super::synthetic::changed(input.op));
                 }
                 Ok(_) => return initial(changed_intent(input.op)),
                 Err(error) if matched || input.op == DELETE_SYNTH => {
+                    let error = if mismatch && input.op == DELETE_SYNTH {
+                        error.with_cause(changed_intent(input.op))
+                    } else {
+                        error
+                    };
                     return lifecycle_result(
                         project,
                         out,

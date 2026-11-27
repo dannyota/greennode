@@ -325,7 +325,7 @@ impl Client {
     ) -> Result<ListChannelsOutput, Failure<ListChannelsOutput>> {
         let mut evidence = Evidence::new();
         let mut page = self
-            .channel_page(ctx, &input, &mut evidence, false)
+            .channel_page(ctx, &input, &mut evidence, None)
             .await
             .map_err(failure)?;
         if !page.items.redact(&evidence) {
@@ -356,7 +356,7 @@ impl Client {
             return Err(requires_failure(OP, "ChannelID"));
         }
         let mut channel = self
-            .find_channel(ctx, &input.channel_id, &mut evidence, false)
+            .find_channel(ctx, &input.channel_id, &mut evidence, None)
             .await
             .map_err(failure)?;
         if !channel.redact(&evidence) {
@@ -370,7 +370,7 @@ impl Client {
         ctx: &RequestContext,
         id: &str,
         evidence: &mut Evidence,
-        guard: bool,
+        guard: Option<(&'static str, &Evidence)>,
     ) -> Result<Channel, Error> {
         let mut seen = 0_i64;
         for page in 1..=1000 {
@@ -407,7 +407,7 @@ impl Client {
         ctx: &RequestContext,
         input: &ListChannelsInput,
         evidence: &mut Evidence,
-        guard: bool,
+        guard: Option<(&'static str, &Evidence)>,
     ) -> Result<ListChannelsOutput, Error> {
         let (page, size) = page_values(input.page, input.size, 1, 10000);
         let query = [
@@ -417,8 +417,21 @@ impl Client {
             ("page", page.as_str()),
             ("size", size.as_str()),
         ];
-        let raw = self.read(ctx, &LIST, &[], &query, evidence).await?;
-        let wire: Option<Page<Channel>> = if guard {
+        let read = super::wire::Read {
+            id: guard.map_or(LIST.id, |(op, _)| op),
+            ..LIST
+        };
+        let raw = self
+            .read_guarded(
+                ctx,
+                &read,
+                &[],
+                &query,
+                evidence,
+                guard.map(|(_, privacy)| privacy),
+            )
+            .await?;
+        let wire: Option<Page<Channel>> = if guard.is_some() {
             super::wire::decode(&raw, &GUARD_PAGE, &LIST, evidence)?
         } else {
             output(&raw, &PAGE, &LIST, evidence)?

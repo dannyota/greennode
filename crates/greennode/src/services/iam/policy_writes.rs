@@ -162,6 +162,7 @@ const UPDATE_INPUT: InputDescriptor<PolicyInput<sdk::UpdatePolicyInput>> = Input
 const JSON_CHECKS: Option<JsonChecks> = Some(JsonChecks {
     validate: check_input_json,
     read_error: std::convert::identity,
+    normalize: None,
 });
 
 pub(super) const CREATE: Operation = Operation {
