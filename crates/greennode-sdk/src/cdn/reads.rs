@@ -35,18 +35,22 @@ const LIST_KEYS: Call = Call {
 };
 
 /// Input for listing Web Accelerators.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListWebAcceleratorsInput;
+
+crate::error::debug_record!(ListWebAcceleratorsInput unit);
 
 /// Web Accelerators in the account.
 pub type ListWebAcceleratorsOutput = List<WebAcceleratorSummary>;
 
 /// Input for a Web Accelerator detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetWebAcceleratorInput {
     /// The Web Accelerator identifier.
     pub cdn_id: String,
 }
+
+crate::error::debug_record!(GetWebAcceleratorInput { cdn_id });
 
 impl GetWebAcceleratorInput {
     /// Selects the Web Accelerator to read.
@@ -68,18 +72,22 @@ pub struct GetWebAcceleratorOutput {
 crate::wire::product::output::public_fields!(GetWebAcceleratorOutput { web_accelerator });
 
 /// Input for listing certificates.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListCertificatesInput;
+
+crate::error::debug_record!(ListCertificatesInput unit);
 
 /// Certificate metadata without PEM text.
 pub type ListCertificatesOutput = List<Certificate>;
 
 /// Input for a certificate detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetCertificateInput {
     /// The certificate identifier.
     pub certificate_id: String,
 }
+
+crate::error::debug_record!(GetCertificateInput { certificate_id });
 
 impl GetCertificateInput {
     /// Selects the certificate to read.
@@ -101,8 +109,10 @@ pub struct GetCertificateOutput {
 crate::wire::product::output::public_fields!(GetCertificateOutput { certificate });
 
 /// Input for listing API key metadata.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListApiKeysInput;
+
+crate::error::debug_record!(ListApiKeysInput unit);
 
 /// API key metadata without key values.
 pub type ListApiKeysOutput = List<ApiKey>;
@@ -227,10 +237,12 @@ impl Client {
         id: &'static str,
         cdn_id: &str,
         evidence: &mut Evidence,
-    ) -> Result<WebDetail, Failure<()>> {
+    ) -> Result<crate::wire::product::guard::Guarded<WebDetail>, Failure<()>> {
         let guard = super::wire::GuardCall(Call { id, ..GET_WEB });
         let data = self.call_guard(ctx, &guard, &[cdn_id], evidence).await?;
-        decode_web_detail(&guard.0, cdn_id, data)
+        let detail = decode_web_detail(&guard.0, cdn_id, data)?;
+        crate::wire::product::guard::Guarded::latest(detail, evidence)
+            .map_err(|error| read_failure(*error))
     }
 
     /// Lists certificate metadata without PEM text.

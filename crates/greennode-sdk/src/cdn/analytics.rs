@@ -19,7 +19,7 @@ const PERIODS: &[&str] = &[
 ];
 
 /// CDN analytics scope and time range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Range {
     /// Generated CDN domains.
     pub cdn_domains: Vec<String>,
@@ -30,6 +30,13 @@ pub struct Range {
     /// Last calendar date in `YYYY-MM-DD` format.
     pub to: String,
 }
+
+crate::error::debug_record!(Range {
+    cdn_domains,
+    period,
+    from,
+    to
+});
 
 impl Range {
     /// Creates a range for the selected CDN domains.
@@ -70,7 +77,7 @@ impl Range {
 }
 
 /// Input for a dated CDN traffic report.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetTrafficReportInput {
     /// Generated CDN domains.
     pub cdn_domains: Vec<String>,
@@ -79,6 +86,12 @@ pub struct GetTrafficReportInput {
     /// Last calendar date in `YYYY-MM-DD` format.
     pub to: String,
 }
+
+crate::error::debug_record!(GetTrafficReportInput {
+    cdn_domains,
+    from,
+    to
+});
 
 impl GetTrafficReportInput {
     /// Selects the domains and calendar dates for the report.

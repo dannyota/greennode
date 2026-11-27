@@ -28,13 +28,15 @@ const ACCOUNTS: &str = "accounts-api/v1/service-accounts";
 const ACCOUNT: &str = "accounts-api/v1/service-accounts/{}";
 
 /// Names the new service account and its optional description.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateServiceAccountInput {
     /// Name of the new service account.
     pub name: String,
     /// Description sent with the create request.
     pub description: String,
 }
+
+crate::error::debug_record!(CreateServiceAccountInput { name, description });
 
 impl CreateServiceAccountInput {
     /// Sets the required name and leaves the description empty.
@@ -125,7 +127,7 @@ pub fn redact_failed_service_account_create<'a>(
 }
 
 /// Updates only the supplied fields of an existing service account.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateServiceAccountInput {
     /// Service-account resource ID.
     pub service_account_id: String,
@@ -134,6 +136,12 @@ pub struct UpdateServiceAccountInput {
     /// Replacement access-token lifetime in seconds.
     pub access_token_life_span: Option<i64>,
 }
+
+crate::error::debug_record!(UpdateServiceAccountInput {
+    service_account_id,
+    description,
+    access_token_life_span
+});
 
 impl UpdateServiceAccountInput {
     /// Sets the required identifier without changing any optional fields.
@@ -157,12 +165,17 @@ pub struct UpdateServiceAccountOutput {
 crate::wire::product::output::public_fields!(UpdateServiceAccountOutput { service_account });
 
 /// Identifies the service account to delete.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteServiceAccountInput {
     /// Service-account resource ID.
     pub service_account_id: String,
     cleanup: Option<SentCredentials>,
 }
+
+crate::error::debug_record!(DeleteServiceAccountInput {
+    service_account_id,
+    cleanup
+});
 
 impl DeleteServiceAccountInput {
     /// Sets the required service account identifier.
@@ -389,7 +402,7 @@ impl Client {
                 .await
             {
                 if failed.write_dispatch() == WriteDispatch::MayHaveBeenSent
-                    && failed.error().detail::<StatusCode>() == Some(&StatusCode::OK)
+                    && failed.error().http_status() == Some(StatusCode::OK)
                 {
                     return Err(settle_update(
                         failed,

@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::model::wire::{WireField, go_json};
 use crate::quote::request::{self, Product, Request};
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch};
 
@@ -39,7 +40,6 @@ const RESIZE_WRITE: Write = Write {
 };
 const CREATE_ADVICE: &str = "loadbalancer.CreateLoadBalancer: create may have already reached the server; check with list-load-balancers --name and match the name exactly";
 const POLL: Duration = Duration::from_secs(10);
-
 /// Result of ordering a regional load balancer.
 #[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -74,8 +74,10 @@ crate::wire::product::output::public_fields!(ResizeLoadBalancerOutput {
 });
 
 /// A regional write could not proceed while the resource was busy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ResourceBusy;
+
+crate::error::debug_record!(ResourceBusy unit);
 
 #[expect(
     clippy::result_large_err,
@@ -242,6 +244,7 @@ impl Client {
             let mut current = self
                 .read_state(ctx, id, &mut evidence, PackageRequirement::Required)
                 .await
+                .and_then(|row| row.into_checked(&evidence))
                 .map_err(|error| not_sent(*error))?;
             if current.package_id == *package {
                 let load_balancer = GET
@@ -350,7 +353,7 @@ impl Client {
         id: &str,
         evidence: &mut Evidence,
         package_requirement: PackageRequirement,
-    ) -> Result<LoadBalancer, Box<Error>> {
+    ) -> Result<Guarded<LoadBalancer>, Box<Error>> {
         let text = self
             .read_guard_text(
                 ctx,
@@ -379,7 +382,7 @@ impl Client {
         {
             return Err(GET.decode_error(evidence, DecodeError::ReflectedCredential));
         }
-        Ok(row)
+        Guarded::latest(row, evidence)
     }
 
     async fn wait_ready(
@@ -391,7 +394,7 @@ impl Client {
         let clock = self.session.clock();
         let bound = clock.monotonic_now() + Duration::from_secs(600);
         let wait = ctx.child_with_deadline(bound);
-        loop {
+        guarded_poll!(evidence, {
             if let Some(end) = ctx.check(clock) {
                 return Err(Error::from(end));
             }
@@ -401,6 +404,7 @@ impl Client {
             match self
                 .read_state(&wait, id, evidence, PackageRequirement::Required)
                 .await
+                .and_then(|row| row.into_checked(evidence))
             {
                 Ok(row)
                     if !matches!(
@@ -417,7 +421,7 @@ impl Client {
             wait.child_with_deadline(clock.monotonic_now() + Duration::from_secs(5))
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     async fn settle(
@@ -438,7 +442,7 @@ impl Client {
             Target::Resize(_) => PackageRequirement::UnlessFailed,
         };
         let why = format!("vngcloud: write outcome not confirmed: {op}: load balancer {id}");
-        let error = loop {
+        let error = guarded_poll!(evidence, {
             if let Some(end) = wait.check(clock) {
                 let msg = format!("{why} did not reach {wanted} within {minutes}m0s; {warning}");
                 break outcome(ErrorClass::NotSettled, &msg, evidence).with_cause(Error::from(end));
@@ -446,6 +450,7 @@ impl Client {
             match self
                 .read_state(&wait, id, evidence, package_requirement)
                 .await
+                .and_then(|row| row.into_checked(evidence))
             {
                 Ok(row) => {
                     last = row;
@@ -479,7 +484,7 @@ impl Client {
             wait.child_with_deadline(clock.monotonic_now() + POLL)
                 .wait(clock)
                 .await;
-        };
+        });
         (last, Some(error))
     }
 

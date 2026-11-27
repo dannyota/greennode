@@ -38,7 +38,7 @@ const MAX_BYTES: usize = 32 << 20;
 const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Selects wallet transactions in an inclusive range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListTransactionsInput {
     /// Required start date in YYYY-MM-DD form, in fixed UTC+07:00.
     pub start_date: String,
@@ -51,6 +51,14 @@ pub struct ListTransactionsInput {
     /// Reads the full range from page 1. A page above 1 is invalid with this option.
     pub all: bool,
 }
+
+crate::error::debug_record!(ListTransactionsInput {
+    start_date,
+    end_date,
+    page,
+    size,
+    all
+});
 
 impl ListTransactionsInput {
     /// Sets the required start date and selects the first page through today.
@@ -69,7 +77,7 @@ impl ListTransactionsInput {
 pub type ListTransactionsOutput = PagedList<Transaction>;
 
 /// Selects payments in an inclusive range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListPaymentsInput {
     /// Required start date in YYYY-MM-DD form, in fixed UTC+07:00.
     pub start_date: String,
@@ -82,6 +90,14 @@ pub struct ListPaymentsInput {
     /// Reads the full range from page 1. A page above 1 is invalid with this option.
     pub all: bool,
 }
+
+crate::error::debug_record!(ListPaymentsInput {
+    start_date,
+    end_date,
+    page,
+    size,
+    all
+});
 
 impl ListPaymentsInput {
     /// Sets the required start date and selects the first page through today.

@@ -19,13 +19,18 @@ const EXTERNAL: &str =
     "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/instance-ip-address.md";
 
 /// Controls request bounds and partial results for network price discovery.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListNetworkPricesInput {
     /// Request limit. Zero selects 500, with a maximum of 2000.
     pub max_requests: i64,
     /// Whether to retain usable prices when coverage is incomplete.
     pub allow_partial: bool,
 }
+
+crate::error::debug_record!(ListNetworkPricesInput {
+    max_requests,
+    allow_partial
+});
 
 /// Network price rows and their discovery coverage.
 #[derive(Clone, PartialEq, Serialize)]

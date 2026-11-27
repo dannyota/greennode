@@ -19,7 +19,7 @@ const WHITELIST: Read = PRICE.at("vnetwork/v1/{}/{}/nats/v3-whitelist", Style::N
 const VPCS: Read = PRICE.at("vnetwork/v1/{}/{}/nats/vpcs", Style::NatCatalog);
 
 /// Selects the Public NAT package and placement to quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct QuoteCreateNatInstanceInput {
     /// Proposed NAT display name.
     pub name: String,
@@ -34,6 +34,15 @@ pub struct QuoteCreateNatInstanceInput {
     /// Optional numeric maximum from the shared creation input. Quotes do not enforce it.
     pub max_price: f64,
 }
+
+crate::error::debug_record!(QuoteCreateNatInstanceInput {
+    name,
+    zone_id,
+    availability_zone_id,
+    package_id,
+    vpc_id,
+    max_price
+});
 
 impl QuoteCreateNatInstanceInput {
     /// Selects a name, region zone, availability zone, package, and VPC.

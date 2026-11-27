@@ -43,11 +43,13 @@ const DELETE: Mutation = Mutation {
 };
 
 /// Names the SSH key GreenNode will generate.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateSshKeyInput {
     /// Name of the new key.
     pub name: String,
 }
+
+crate::error::debug_record!(CreateSshKeyInput { name });
 
 /// A generated SSH key and the one-time material for private delivery.
 #[derive(Serialize)]
@@ -67,13 +69,9 @@ pub struct CreateSshKeyOutput {
 
 crate::wire::product::output::public_fields!(custom_debug CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
 
-impl std::fmt::Debug for CreateSshKeyOutput {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        crate::error::write_debug(formatter, |f| {
-            f.debug_struct("CreateSshKeyOutput").finish_non_exhaustive()
-        })
-    }
-}
+crate::error::debug_record!(CreateSshKeyOutput => |self, f| {
+    f.debug_struct("CreateSshKeyOutput").finish_non_exhaustive()
+});
 
 impl CreateSshKeyOutput {
     /// Borrows the one-time private key for storage in a private destination.
@@ -114,13 +112,15 @@ impl CreateSshKeyOutput {
 }
 
 /// Names a public SSH key to import.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ImportSshKeyInput {
     /// Name of the imported key.
     pub name: String,
     /// Public key line to upload.
     pub public_key: String,
 }
+
+crate::error::debug_record!(ImportSshKeyInput { name, public_key });
 
 /// The public SSH key record returned by an import.
 #[derive(Clone, Serialize)]
@@ -133,11 +133,13 @@ pub struct ImportSshKeyOutput {
 crate::wire::product::output::public_fields!(ImportSshKeyOutput { ssh_key });
 
 /// Identifies an SSH key to delete.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteSshKeyInput {
     /// Identifier of the key to delete.
     pub ssh_key_id: String,
 }
+
+crate::error::debug_record!(DeleteSshKeyInput { ssh_key_id });
 
 /// An acknowledgement of SSH key deletion.
 #[derive(Clone, Default, Serialize)]

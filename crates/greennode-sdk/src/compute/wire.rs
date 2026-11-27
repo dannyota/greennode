@@ -288,7 +288,7 @@ impl Client {
             let status = error
                 .api_error()
                 .and_then(ApiError::status)
-                .or_else(|| error.detail::<StatusCode>().map(|status| status.as_u16()));
+                .or_else(|| error.http_status().map(|status| status.as_u16()));
             if error.is_body_too_large() {
                 return failure(match read.style {
                     ReadStyle::Console => api(

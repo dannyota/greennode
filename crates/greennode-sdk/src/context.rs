@@ -8,13 +8,15 @@ use tokio::{sync::watch, time::Instant};
 use crate::Clock;
 
 /// Reason an operation should stop.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum ContextEnd {
     /// Cancellation was requested.
     Cancelled,
     /// The monotonic deadline was reached.
     DeadlineExceeded,
 }
+
+crate::error::debug_record!(ContextEnd; Cancelled, DeadlineExceeded);
 
 /// Shared cancellation state and an optional monotonic deadline.
 #[derive(Clone)]

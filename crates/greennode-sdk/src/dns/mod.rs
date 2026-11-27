@@ -47,7 +47,7 @@ pub struct Client {
 }
 
 /// Selects one page of hosted zones in the account.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListHostedZonesInput {
     /// Name filter. An empty value omits the filter.
     pub name: String,
@@ -57,15 +57,19 @@ pub struct ListHostedZonesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListHostedZonesInput { name, page, size });
+
 /// A page of hosted zones.
 pub type ListHostedZonesOutput = Page<HostedZone>;
 
 /// Identifies one hosted zone to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetHostedZoneInput {
     /// Hosted zone identifier.
     pub hosted_zone_id: String,
 }
+
+crate::error::debug_record!(GetHostedZoneInput { hosted_zone_id });
 
 impl GetHostedZoneInput {
     /// Selects the zone with the given identifier.
@@ -87,13 +91,18 @@ pub struct GetHostedZoneOutput {
 crate::wire::product::output::public_fields!(GetHostedZoneOutput { hosted_zone });
 
 /// Selects the records in one hosted zone with an optional name filter.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListRecordsInput {
     /// Parent hosted zone identifier.
     pub hosted_zone_id: String,
     /// Name filter. An empty value omits the filter.
     pub name: String,
 }
+
+crate::error::debug_record!(ListRecordsInput {
+    hosted_zone_id,
+    name
+});
 
 impl ListRecordsInput {
     /// Selects records in the given zone without a name filter.
@@ -109,13 +118,18 @@ impl ListRecordsInput {
 pub type ListRecordsOutput = Page<Record>;
 
 /// Identifies one record to read in a hosted zone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetRecordInput {
     /// Parent hosted zone identifier.
     pub hosted_zone_id: String,
     /// Record identifier.
     pub record_id: String,
 }
+
+crate::error::debug_record!(GetRecordInput {
+    hosted_zone_id,
+    record_id
+});
 
 impl GetRecordInput {
     /// Selects the given record within the given zone.

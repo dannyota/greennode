@@ -9,7 +9,7 @@ pub(super) enum Presence {
     Ambiguous,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 /// The selected configuration family.
 pub enum Mode {
     /// GreenNode configuration.
@@ -18,13 +18,15 @@ pub enum Mode {
     Legacy,
 }
 
+crate::error::debug_record!(Mode; Greennode, Legacy);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConfigSlot {
     Config,
     Credentials,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 /// Selected paths and their origins.
 pub struct Paths {
     /// Selected configuration family.
@@ -39,7 +41,14 @@ pub struct Paths {
     pub credentials_named: bool,
 }
 
-#[derive(Debug)]
+crate::error::debug_record!(Paths {
+    mode,
+    config,
+    credentials,
+    config_named,
+    credentials_named
+});
+
 /// A snapshot of the selected paths and their observed presence.
 pub struct Selection {
     pub(super) paths: Paths,
@@ -49,6 +58,15 @@ pub struct Selection {
     pub(super) config_source: Option<&'static str>,
     pub(super) credentials_source: Option<&'static str>,
 }
+
+crate::error::debug_record!(Selection {
+    paths,
+    config_present,
+    credentials_present,
+    lookup_failed,
+    config_source,
+    credentials_source
+});
 
 impl Selection {
     /// Reports whether the selected slot was present when selection ran.

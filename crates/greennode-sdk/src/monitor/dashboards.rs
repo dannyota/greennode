@@ -74,7 +74,7 @@ crate::wire::product::output::public_fields!(Dashboard {
 });
 
 /// Filter and pagination for dashboard listing.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListDashboardsInput {
     /// One-based page number. Zero selects the first page.
     pub page: i64,
@@ -84,15 +84,19 @@ pub struct ListDashboardsInput {
     pub system: bool,
 }
 
+crate::error::debug_record!(ListDashboardsInput { page, size, system });
+
 /// A page of matching dashboards.
 pub type ListDashboardsOutput = PagedList<Dashboard>;
 
 /// Dashboard selection for a detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetDashboardInput {
     /// Path-safe dashboard identifier.
     pub dashboard_id: String,
 }
+
+crate::error::debug_record!(GetDashboardInput { dashboard_id });
 
 impl GetDashboardInput {
     /// Selects a dashboard by identifier.

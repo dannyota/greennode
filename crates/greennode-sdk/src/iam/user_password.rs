@@ -92,29 +92,25 @@ impl Client {
     }
 }
 
-impl fmt::Debug for CreateUserInput {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_password_input(
-            formatter,
-            "CreateUserInput",
-            ("username", &self.username),
-            self.password.as_ref(),
-            self.password_length,
-        )
-    }
-}
+crate::error::debug_record!(CreateUserInput => |self, formatter| {
+    debug_password_input(
+        formatter,
+        "CreateUserInput",
+        ("username", &self.username),
+        self.password.as_ref(),
+        self.password_length,
+    )
+});
 
-impl fmt::Debug for ResetUserPasswordInput {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_password_input(
-            formatter,
-            "ResetUserPasswordInput",
-            ("user_id", &self.user_id),
-            self.password.as_ref(),
-            self.password_length,
-        )
-    }
-}
+crate::error::debug_record!(ResetUserPasswordInput => |self, formatter| {
+    debug_password_input(
+        formatter,
+        "ResetUserPasswordInput",
+        ("user_id", &self.user_id),
+        self.password.as_ref(),
+        self.password_length,
+    )
+});
 
 fn debug_password_input(
     formatter: &mut fmt::Formatter<'_>,
@@ -137,10 +133,12 @@ fn debug_password_input(
     } else {
         &length
     };
-    formatter
-        .debug_struct(name)
-        .field(label, &operand)
-        .field("password", &password)
-        .field("password_length", length)
-        .finish()
+    crate::error::write_debug(formatter, |formatter| {
+        formatter
+            .debug_struct(name)
+            .field(label, &operand)
+            .field("password", &password)
+            .field("password_length", length)
+            .finish()
+    })
 }

@@ -30,7 +30,7 @@ pub struct Client {
 }
 
 /// Selects repository filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRepositoriesInput {
     /// Access level, defaulting to `ALL` when empty.
     pub access_level: String,
@@ -38,12 +38,16 @@ pub struct ListRepositoriesInput {
     pub name: String,
 }
 
+crate::error::debug_record!(ListRepositoriesInput { access_level, name });
+
 /// Repository list and pagination metadata.
 pub type ListRepositoriesOutput = PagedList<Repository>;
 
 /// Selects all available permissions.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPermissionsInput {}
+
+crate::error::debug_record!(ListPermissionsInput {});
 
 /// Available registry permissions.
 pub type ListPermissionsOutput = List<Permission>;
@@ -491,7 +495,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
 }
 
 /// Service-specific registry failure identities.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// The repository contains images and the delete was refused.
@@ -503,6 +507,8 @@ pub enum ErrorDetail {
     /// The SDK rejected locally invalid input.
     InvalidInput,
 }
+
+crate::error::debug_record!(ErrorDetail; RepositoryNotEmpty, UserNotFound, ImageCountUnknown, InvalidInput);
 
 fn registry_error(
     operation: &'static str,

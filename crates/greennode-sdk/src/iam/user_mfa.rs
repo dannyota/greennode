@@ -15,13 +15,15 @@ const DISABLE: &str = "iam.DisableUserMFA";
 macro_rules! mfa_input {
     ($(#[$meta:meta])* $ty:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $ty {
             /// Target IAM user resource ID.
             pub user_id: String,
             /// Factor method. The service supports google.
             pub method: String,
         }
+
+        crate::error::debug_record!($ty { user_id, method });
 
         impl $ty {
             /// Sets the target user and factor method.

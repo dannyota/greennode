@@ -217,7 +217,7 @@ fn private_http_error_retains_cancellation_after_observed_rejection_headers() {
             SafeText::new("", &[]),
             false,
         )))
-        .with_outer_detail(StatusCode::NOT_FOUND);
+        .with_http_status(StatusCode::NOT_FOUND);
     let error = private_status_error(&op, error, &Evidence::new());
     assert_eq!(error.api_error().and_then(|api| api.status()), Some(404));
     assert!(error.has_identity(ErrorClass::Cancelled));

@@ -1,11 +1,13 @@
 /// Identifies which configuration file produced a diagnostic.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum FileSlot {
     /// The settings file.
     Config,
     /// The credentials file.
     Credentials,
 }
+
+crate::error::debug_record!(FileSlot; Config, Credentials);
 
 /// Value-free details of a configuration file failure.
 #[derive(Clone, Eq, PartialEq)]
@@ -16,18 +18,14 @@ pub struct FileDiagnostic {
     line: Option<u32>,
 }
 
-impl std::fmt::Debug for FileDiagnostic {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        crate::error::write_debug(formatter, |f| {
-            f.debug_struct("FileDiagnostic")
-                .field("slot", &self.slot)
-                .field("source", &self.source)
-                .field("reason", &self.reason)
-                .field("line", &self.line)
-                .finish()
-        })
-    }
-}
+crate::error::debug_record!(FileDiagnostic => |self, f| {
+    f.debug_struct("FileDiagnostic")
+        .field("slot", &self.slot)
+        .field("source", &self.source)
+        .field("reason", &self.reason)
+        .field("line", &self.line)
+        .finish()
+});
 
 impl FileDiagnostic {
     /// Returns the affected file slot.

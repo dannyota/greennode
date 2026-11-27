@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use crate::wire::product::operation::RefusedGuard;
 use std::time::Duration;
 
@@ -80,12 +81,14 @@ impl<'a> Poll<'a> {
         if self.client.session.clock().monotonic_now() >= self.deadline {
             return Err(Error::new(ErrorClass::DeadlineExceeded));
         }
-        result.map_err(|failure| failure.into_parts().0)
+        result
+            .map_err(|failure| failure.into_parts().0)
+            .and_then(|detail| detail.into_checked(self.evidence).map_err(|error| *error))
     }
 
     async fn confirm(&mut self, target: Target) -> Result<WebDetail, Option<Error>> {
         let mut last = None;
-        for seconds in CONFIRM_OFFSETS {
+        guarded_poll!(self.evidence, for seconds in CONFIRM_OFFSETS, {
             let at = self.started + Duration::from_secs(seconds);
             if self.client.session.clock().monotonic_now() < at {
                 self.wait(at).await.map_err(Some)?;
@@ -98,7 +101,7 @@ impl<'a> Poll<'a> {
                 Err(error) if error.detail::<RefusedGuard>().is_some() => return Err(Some(error)),
                 Err(error) => last = Some(error),
             }
-        }
+        });
         Err(last)
     }
 
@@ -119,7 +122,7 @@ impl<'a> Poll<'a> {
         already_read: bool,
     ) -> (WebDetail, Option<Error>) {
         let mut observed = already_read;
-        loop {
+        guarded_poll!(self.evidence, {
             let mut cause = None;
             if !observed {
                 match self.detail().await {
@@ -169,7 +172,7 @@ impl<'a> Poll<'a> {
                 return (last, Some(error));
             }
             observed = false;
-        }
+        });
     }
 
     fn not_settled(&self, last: &WebDetail, cause: Option<Error>) -> Error {

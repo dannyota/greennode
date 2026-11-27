@@ -25,11 +25,13 @@ const DEFINITION: Read = Read {
 };
 
 /// Selects the check to read its current alarm state.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetCheckAlarmInput {
     /// Check identifier.
     pub check_id: String,
 }
+
+crate::error::debug_record!(GetCheckAlarmInput { check_id });
 
 impl GetCheckAlarmInput {
     /// Selects a check by its identifier.

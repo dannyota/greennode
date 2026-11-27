@@ -27,8 +27,10 @@ pub const RENEW_TYPE_MANUAL: &str = "MANUAL";
 pub const RENEW_TYPE_AUTO_RENEW: &str = "AUTO-RENEW";
 
 /// Reads prepaid resources across products without filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListResourcesInput {}
+
+crate::error::debug_record!(ListResourcesInput {});
 
 /// Prepaid resource renewal state and aggregate counts.
 #[derive(Clone, Default, Deserialize, Serialize)]

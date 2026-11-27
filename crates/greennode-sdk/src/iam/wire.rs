@@ -393,7 +393,7 @@ impl ObservedResponse {
     }
 
     pub(super) fn status(error: &Error) -> Option<http::StatusCode> {
-        error.detail::<http::StatusCode>().copied().or_else(|| {
+        error.http_status().or_else(|| {
             error
                 .api_error()
                 .and_then(|api| api.status())

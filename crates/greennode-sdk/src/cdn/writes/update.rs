@@ -19,7 +19,7 @@ const UPDATE: Call = Call::write("cdn.UpdateWebAccelerator", "v1/cdn/update", &M
 type Object = BTreeMap<String, Box<RawValue>>;
 
 /// Changes the value of a default rule action by name or adds a new action.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct RuleActionInput {
     /// Name of the rule action.
@@ -29,8 +29,10 @@ pub struct RuleActionInput {
     pub value: String,
 }
 
+crate::error::debug_record!(RuleActionInput { name, value });
+
 /// Adds an origin or replaces the fields of an existing origin.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct UpstreamInput {
     /// Identifies an existing origin. An empty value adds an origin.
@@ -52,8 +54,17 @@ pub struct UpstreamInput {
     pub use_ssl: bool,
 }
 
+crate::error::debug_record!(UpstreamInput {
+    id,
+    priority,
+    ip_address,
+    upstream_type,
+    origin_value,
+    use_ssl
+});
+
 /// Changes to merge into a fresh Web Accelerator read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateWebAcceleratorInput {
     /// CDN identifier.
     pub cdn_id: String,
@@ -76,6 +87,19 @@ pub struct UpdateWebAcceleratorInput {
     /// Returns after one follow-up detail read instead of waiting for settlement.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdateWebAcceleratorInput {
+    cdn_id,
+    set_rule_actions,
+    remove_rule_actions,
+    upstreams,
+    lb_type,
+    fail_over_error_codes,
+    certificate_id,
+    origin_host_header,
+    c_names,
+    no_wait
+});
 
 impl UpdateWebAcceleratorInput {
     /// Creates an input with no changes and settlement enabled.

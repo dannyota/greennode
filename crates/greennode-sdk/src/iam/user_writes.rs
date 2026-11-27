@@ -65,7 +65,7 @@ pub struct CreateUserOutput {
 }
 
 crate::wire::product::output::public_fields!(custom_debug CreateUserOutput { user, created_id, candidate_id; password_marker, password, evidence });
-crate::wire::product::output::debug_record!(CreateUserOutput {
+crate::error::debug_record!(CreateUserOutput {
     user,
     password_marker,
     created_id,

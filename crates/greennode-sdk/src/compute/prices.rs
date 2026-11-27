@@ -8,7 +8,7 @@ mod catalog;
 mod run;
 
 /// Filters and limits for flavor price discovery.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListFlavorPricesInput {
     /// Selects one returned zone; empty selects all zones in the configured region.
     pub zone_id: String,
@@ -33,6 +33,20 @@ pub struct ListFlavorPricesInput {
     /// Retains partial results and reports incomplete discovery when set.
     pub allow_partial: bool,
 }
+
+crate::error::debug_record!(ListFlavorPricesInput {
+    zone_id,
+    root_disk_type_id,
+    family,
+    platform,
+    name,
+    min_ram,
+    max_ram,
+    include_non_public,
+    available_only,
+    max_requests,
+    allow_partial
+});
 
 /// Flavor price rows and discovery metadata.
 #[derive(Clone, PartialEq, Serialize)]

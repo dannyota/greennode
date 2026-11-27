@@ -457,7 +457,7 @@ async fn send_route<T>(
                 .map(|error| *error)
                 .unwrap_or_else(|| api_error(operation.id, Some(status), crate::ErrorClass::Api));
                 let error = if refused_redirect {
-                    error.with_outer_detail(status)
+                    error.with_http_status(status)
                 } else {
                     error
                 };
@@ -475,7 +475,7 @@ async fn send_route<T>(
                     .with_cause(crate::Error::from_api(api))
                     .with_body_too_large();
                 let error = match status {
-                    Some(status) => error.with_outer_detail(status),
+                    Some(status) => error.with_http_status(status),
                     None => error,
                 };
                 return Err(crate::Failure::new(error, None, failure.dispatch));
@@ -500,7 +500,7 @@ async fn send_route<T>(
                 ),
             };
             let error = match status {
-                Some(status) => error.with_outer_detail(status),
+                Some(status) => error.with_http_status(status),
                 None => error,
             };
             return Err(crate::Failure::new(error, None, failure.dispatch));
@@ -520,7 +520,7 @@ async fn send_route<T>(
 }
 
 fn invalid_response(operation: &Operation, status: StatusCode) -> crate::Error {
-    api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status)
+    api_error(operation.id, None, crate::ErrorClass::Api).with_http_status(status)
 }
 
 pub(crate) fn decode_response<T: Output>(
@@ -928,7 +928,7 @@ mod tests {
     async fn malformed_success_keeps_observed_status() {
         let server = Server::start(vec![response("200 OK", b"{")]);
         let error = call(&server, &declaration(), &["one"]).await.unwrap_err();
-        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
+        assert_eq!(error.error().http_status(), Some(StatusCode::OK));
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
     }
 
@@ -997,10 +997,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
-            error.error().detail::<StatusCode>(),
-            Some(&StatusCode::UNAUTHORIZED)
-        );
+        assert_eq!(error.error().http_status(), Some(StatusCode::UNAUTHORIZED));
         assert_eq!(error.error().class(), crate::ErrorClass::Auth);
     }
 
@@ -1012,7 +1009,7 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
+        assert_eq!(error.error().http_status(), Some(StatusCode::OK));
     }
 
     #[tokio::test]
@@ -1024,10 +1021,7 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(
-            error.error().detail::<StatusCode>(),
-            Some(&StatusCode::NOT_FOUND)
-        );
+        assert_eq!(error.error().http_status(), Some(StatusCode::NOT_FOUND));
         assert!(!error.error().has_class(crate::ErrorClass::NotFound));
     }
 
@@ -1052,10 +1046,7 @@ mod tests {
                 panic!("reflected response accepted");
             };
             assert_eq!(failure.error().class(), crate::ErrorClass::Api);
-            assert_eq!(
-                failure.error().detail::<StatusCode>(),
-                Some(&StatusCode::OK)
-            );
+            assert_eq!(failure.error().http_status(), Some(StatusCode::OK));
         }
         let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
         let mut op = declaration();

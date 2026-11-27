@@ -197,7 +197,7 @@ async fn read_projects_with_evidence(
     .map_err(|failure| {
         let (error, _, _) = failure.into_parts();
         if error.class() == ErrorClass::Api
-            && error.detail::<StatusCode>() == Some(&StatusCode::OK)
+            && error.http_status() == Some(StatusCode::OK)
             && !error.is_body_too_large()
         {
             invalid_response(StatusCode::OK)
@@ -259,7 +259,7 @@ fn invalid_response(status: StatusCode) -> Box<Error> {
             SafeText::new("invalid discovery response; body withheld", &[]),
             false,
         ))
-        .with_outer_detail(status),
+        .with_http_status(status),
     )
 }
 

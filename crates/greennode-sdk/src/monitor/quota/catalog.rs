@@ -9,8 +9,10 @@ use crate::wire::product::options::PathIds;
 use crate::{Error, Failure, RequestContext};
 
 /// Input for reading the synthetic quota catalogs.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListSyntheticPackagesInput;
+
+crate::error::debug_record!(ListSyntheticPackagesInput unit);
 
 output! {
     /// Synthetic quota catalogs and billing settings.

@@ -22,7 +22,7 @@ const QUERY: &[(&str, &str)] = &[("autoRenewal", "false"), ("poc", "false")];
 const ACCEPTED: &[StatusCode] = &[StatusCode::OK, StatusCode::ACCEPTED];
 
 /// Describes a private cluster and its initial node group.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateClusterInput {
     /// Cluster name.
     pub name: String,
@@ -53,6 +53,23 @@ pub struct CreateClusterInput {
     /// Return after acceptance.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateClusterInput {
+    name,
+    version,
+    vpc_id,
+    subnet_id,
+    pod_cidr,
+    node_group_name,
+    num_nodes,
+    flavor_id,
+    os,
+    disk_size,
+    disk_type_id,
+    security_group_ids,
+    ssh_key_id,
+    no_wait
+});
 
 /// Reports the accepted cluster identifier and last observed status.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
@@ -344,10 +361,15 @@ impl Client {
             if evidence.id_reflects(&output.id) {
                 return Err(partial_failure(unsettled(None), output, &evidence));
             }
-            let result = wait_cluster(ctx, self.session.clock(), async |wait| {
-                let status = self.cluster_state(wait, &output.id, &mut evidence).await?;
-                observe_status(&mut output, status)
-            })
+            let result = wait_cluster(
+                ctx,
+                self.session.clock(),
+                &mut evidence,
+                async |wait, evidence| {
+                    let status = self.cluster_state(wait, &output.id, evidence).await?;
+                    observe_status(&mut output, status.into_checked(evidence)?)
+                },
+            )
             .await;
             if let Err(error) = result {
                 let error = if error.class() == ErrorClass::Failed {
@@ -628,7 +650,7 @@ mod tests {
         let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
         let (ctx, cancel) = RequestContext::new();
         let mut output = CreateClusterOutput::default();
-        let failure = wait_cluster(&ctx, &clock, async |_| {
+        let failure = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             clock.advance(Duration::from_secs(30 * 60));
             observe_status(&mut output, "CREATING".into())
         })
@@ -636,7 +658,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.class(), ErrorClass::DeadlineExceeded);
         assert_eq!(output.status, "CREATING");
-        let failure = wait_cluster(&ctx, &clock, async |_| {
+        let failure = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             cancel.cancel();
             Ok(true)
         })
@@ -644,13 +666,13 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.class(), ErrorClass::Cancelled);
         let (ctx, _) = RequestContext::new();
-        wait_cluster(&ctx, &clock, async |_| {
+        wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             observe_status(&mut output, "ACTIVE".into())
         })
         .await
         .unwrap();
         assert_eq!(output.status, "ACTIVE");
-        let error = wait_cluster(&ctx, &clock, async |_| {
+        let error = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             observe_status(&mut output, "PROVISION_FAILED".into())
         })
         .await

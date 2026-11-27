@@ -27,7 +27,7 @@ const PACKAGES: Read = Read::new(
 );
 
 /// Selects one page of Public NAT inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListNatInstancesInput {
     /// Regional zone identifier. An empty value discovers the zone.
     pub zone_id: String,
@@ -37,27 +37,40 @@ pub struct ListNatInstancesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListNatInstancesInput {
+    zone_id,
+    page,
+    size
+});
+
 /// Inventory rows and pagination for one Public NAT page.
 pub type ListNatInstancesOutput = PagedList<NatInstance>;
 
 /// Selects the regional Public NAT availability-zone catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListNatZonesInput {
     /// Regional zone identifier. An empty value discovers the zone.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListNatZonesInput { zone_id });
+
 /// Public NAT availability-zone catalog rows.
 pub type ListNatZonesOutput = List<NatAvailabilityZone>;
 
 /// Selects the Public NAT package catalog for one availability zone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListNatPackagesInput {
     /// Regional zone identifier. An empty value discovers the zone.
     pub zone_id: String,
     /// Availability-zone identifier.
     pub availability_zone_id: String,
 }
+
+crate::error::debug_record!(ListNatPackagesInput {
+    zone_id,
+    availability_zone_id
+});
 
 impl ListNatPackagesInput {
     /// Selects a package catalog by availability-zone identifier.

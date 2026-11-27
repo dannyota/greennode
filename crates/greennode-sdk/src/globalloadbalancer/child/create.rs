@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use serde_json::json;
 
 use super::model::Acceptance;
@@ -159,9 +160,7 @@ impl Client {
                 return Err(run.fail("create response has an invalid backend", partial(&run, "")));
             }
             let wait = run.0.wait_context(ctx, CREATE_WAIT);
-            let checkpoint = run.0.evidence.guard_checkpoint();
-            let reason = loop {
-                run.0.evidence.discard_guards_after(checkpoint);
+            let reason = guarded_poll!(run.0.evidence, {
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
@@ -206,7 +205,7 @@ impl Client {
                     State::Failed => break Settlement::Failed,
                     State::Unknown => break Settlement::Unknown("create status unrecognized"),
                 }
-            };
+            });
             Err(run.0.finish(reason, Some(partial(&run, &group.id))))
         })
     }
@@ -321,9 +320,7 @@ impl Client {
                 ));
             };
             let wait = run.0.wait_context(ctx, CREATE_WAIT);
-            let checkpoint = run.0.evidence.guard_checkpoint();
-            let reason = loop {
-                run.0.evidence.discard_guards_after(checkpoint);
+            let reason = guarded_poll!(run.0.evidence, {
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
@@ -348,7 +345,7 @@ impl Client {
                     State::Failed => break Settlement::Failed,
                     State::Unknown => break Settlement::Unknown("create status unrecognized"),
                 }
-            };
+            });
             let partial = CreateListenerOutput::new(
                 super::super::Listener {
                     id: safe_id(&accepted.id, &run.0.evidence),

@@ -23,7 +23,7 @@ const RESOURCES: &str = "billing.ListCostResources";
 const BALANCES: &str = "billing.GetBalances";
 
 /// Date range and optional filters for the cost overview.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetCostOverviewInput {
     /// First day of the range in YYYY-MM-DD form.
     pub start_date: String,
@@ -42,6 +42,17 @@ pub struct GetCostOverviewInput {
     /// Interval sent to the API. An empty value selects `daily`.
     pub interval: String,
 }
+
+crate::error::debug_record!(GetCostOverviewInput {
+    start_date,
+    end_date,
+    product,
+    resource_type,
+    resource_id,
+    query,
+    group_by,
+    interval
+});
 
 impl GetCostOverviewInput {
     /// Sets the two required date fields with default grouping and interval.
@@ -92,7 +103,7 @@ crate::wire::product::output::public_fields!(GetCostOverviewOutput {
 });
 
 /// Date range, filters, ordering, and pagination for resource costs.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListCostResourcesInput {
     /// First day of the range in YYYY-MM-DD form.
     pub start_date: String,
@@ -115,6 +126,19 @@ pub struct ListCostResourcesInput {
     /// Optional sort direction.
     pub order: String,
 }
+
+crate::error::debug_record!(ListCostResourcesInput {
+    start_date,
+    end_date,
+    product,
+    resource_type,
+    resource_id,
+    query,
+    page,
+    size,
+    sort,
+    order
+});
 
 impl ListCostResourcesInput {
     /// Sets the two required date fields and uses the first page by default.
@@ -159,8 +183,10 @@ impl Serialize for ListCostResourcesOutput {
 }
 
 /// Selects balances for the authenticated account.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetBalancesInput {}
+
+crate::error::debug_record!(GetBalancesInput {});
 
 /// Cash and pay-on-credit balances for the authenticated account.
 #[derive(Clone, PartialEq, Serialize)]
@@ -276,7 +302,7 @@ impl Client {
                             SafeText::new("invalid cost resource page; body withheld", &[]),
                             false,
                         ))
-                        .with_outer_detail(StatusCode::OK),
+                        .with_http_status(StatusCode::OK),
                     )
                 })?;
             Ok(ListCostResourcesOutput {
@@ -322,7 +348,7 @@ impl Client {
             .await
             .map_err(|error| {
                 let (error, _, dispatch) = error.into_parts();
-                let error = match error.detail::<StatusCode>().copied() {
+                let error = match error.http_status() {
                     Some(status)
                         if status.is_success()
                             && error.class() == ErrorClass::Api

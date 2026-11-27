@@ -33,18 +33,22 @@ const TAGS: InventoryRead = InventoryRead {
 };
 
 /// Selects the configured region's vNetwork inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVNetworkRegionsInput {}
+
+crate::error::debug_record!(ListVNetworkRegionsInput {});
 
 /// Regions returned by the vNetwork gateway.
 pub type ListVNetworkRegionsOutput = List<VNetworkRegion>;
 
 /// Selects a regional endpoint.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetEndpointInput {
     /// Endpoint identifier.
     pub endpoint_id: String,
 }
+
+crate::error::debug_record!(GetEndpointInput { endpoint_id });
 
 impl GetEndpointInput {
     /// Selects an endpoint by identifier.
@@ -69,7 +73,7 @@ pub struct GetEndpointOutput {
 crate::wire::product::output::public_fields!(GetEndpointOutput { endpoint });
 
 /// Selects one page of regional endpoints.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListEndpointsInput {
     /// Optional vNetwork zone identifier.
     pub zone_id: String,
@@ -83,15 +87,25 @@ pub struct ListEndpointsInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListEndpointsInput {
+    zone_id,
+    vpc_id,
+    uuid,
+    page,
+    size
+});
+
 /// A page of endpoint inventory.
 pub type ListEndpointsOutput = PagedList<Endpoint>;
 
 /// Selects the endpoint whose tags to list.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListEndpointTagsInput {
     /// Endpoint identifier.
     pub endpoint_id: String,
 }
+
+crate::error::debug_record!(ListEndpointTagsInput { endpoint_id });
 
 impl ListEndpointTagsInput {
     /// Selects an endpoint by identifier.

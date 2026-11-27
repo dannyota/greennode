@@ -30,8 +30,10 @@ pub struct Client {
 }
 
 /// Selects the current portal user without filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetUserInfoInput {}
+
+crate::error::debug_record!(GetUserInfoInput {});
 
 /// Information about the current portal user.
 #[derive(Clone, PartialEq, Serialize)]
@@ -113,11 +115,9 @@ fn redacted(value: &Value) -> Value {
     }
 }
 
-impl std::fmt::Debug for UserInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("UserInfo([REDACTED])")
-    }
-}
+crate::error::debug_record!(UserInfo => |self, f| {
+    f.write_str("UserInfo([REDACTED])")
+});
 
 #[expect(
     clippy::result_large_err,

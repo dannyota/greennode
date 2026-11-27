@@ -24,7 +24,7 @@ const STATISTICS: Read = Read {
 const METRIC: &str = "syntt.http.response_time";
 
 /// Check and optional RFC 3339 window for a timing read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListCheckResponseTimesInput {
     /// Identifier of the HTTP check.
     pub check_id: String,
@@ -33,6 +33,12 @@ pub struct ListCheckResponseTimesInput {
     /// Window end. Empty selects the current time.
     pub end: String,
 }
+
+crate::error::debug_record!(ListCheckResponseTimesInput {
+    check_id,
+    start,
+    end
+});
 
 impl ListCheckResponseTimesInput {
     /// Selects a check and the latest 24 hours.

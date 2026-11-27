@@ -34,34 +34,9 @@ impl<'a> FieldScan<'a> {
     }
 }
 
-macro_rules! debug_record {
-    ($name:ident $(<$item:ident>)? { $($field:ident),* $(,)? }) => {
-        impl $(<$item: std::fmt::Debug>)? std::fmt::Debug for $name $(<$item>)? {
-            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                crate::error::write_debug(formatter, |f| {
-                    f.debug_struct(stringify!($name))
-                        $(.field(stringify!($field).trim_start_matches("r#"), &self.$field))*
-                        .finish()
-                })
-            }
-        }
-    };
-    ($name:ident ($field:tt)) => {
-        impl std::fmt::Debug for $name {
-            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                crate::error::write_debug(formatter, |f| {
-                    f.debug_tuple(stringify!($name)).field(&self.$field).finish()
-                })
-            }
-        }
-    };
-}
-
-pub(crate) use debug_record;
-
 macro_rules! public_fields {
     ($name:ident $(<$item:ident>)? { $($field:ident),* $(; $($private:ident),* $(,)?)? }) => {
-        crate::wire::product::output::debug_record!($name $(<$item>)? { $($field,)* $($($private,)*)? });
+        crate::error::debug_record!($name $(<$item>)? { $($field,)* $($($private,)*)? });
         crate::wire::product::output::public_fields!(custom_debug $name $(<$item>)? { $($field),* $(; $($private),*)? });
     };
     (custom_debug $name:ident $(<$item:ident>)? { $($field:ident),* $(; $($private:ident),* $(,)?)? }) => {
@@ -190,6 +165,39 @@ impl PublicOutput for serde_json::value::RawValue {
 mod tests {
     use regex_lite::Regex;
     use std::{collections::BTreeSet, path::Path};
+
+    #[test]
+    fn public_debug_does_not_use_flag_forwarding_derives() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let declarations = Regex::new(r"(?ms)#\[derive\(([^)]*)\)\]\n(?:(?:[ \t]*#\[[^\n]*\]|[ \t]*///[^\n]*)\n)*[ \t]*pub (?:struct|enum) ([\w$]+)").unwrap();
+        fn inspect(path: &Path, declarations: &Regex) {
+            for entry in path.read_dir().unwrap() {
+                let file = entry.unwrap().path();
+                if file.file_name().is_some_and(|name| {
+                    matches!(
+                        name.to_str(),
+                        Some("tests" | "tests.rs" | "testing.rs" | "test_server.rs")
+                    )
+                }) {
+                    continue;
+                }
+                if file.is_dir() {
+                    inspect(&file, declarations);
+                } else if file.extension().is_some_and(|extension| extension == "rs") {
+                    let source = std::fs::read_to_string(&file).unwrap();
+                    for declaration in declarations.captures_iter(&source) {
+                        assert!(
+                            !declaration[1].split(',').any(|name| name.trim() == "Debug"),
+                            "{} {}",
+                            file.display(),
+                            &declaration[2]
+                        );
+                    }
+                }
+            }
+        }
+        inspect(&root, &declarations);
+    }
 
     #[test]
     fn typed_output_registrations_visit_every_public_field() {

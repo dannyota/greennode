@@ -37,17 +37,19 @@ const ENCRYPTION: Read = Read::vserver(
 );
 
 /// Optional filter for volume-type zones by network zone ID.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumeTypeZonesInput {
     /// Network zone used by the provider's `zoneId` filter.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListVolumeTypeZonesInput { zone_id });
+
 /// Volume-type zones in the project.
 pub type ListVolumeTypeZonesOutput = List<VolumeTypeZone>;
 
 /// Selects the catalog and an optional exact IOPS filter.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumeTypesInput {
     /// Volume-type zone to read. Mutually exclusive with `zone_id`.
     pub volume_type_zone_id: String,
@@ -57,15 +59,23 @@ pub struct ListVolumeTypesInput {
     pub iops: i64,
 }
 
+crate::error::debug_record!(ListVolumeTypesInput {
+    volume_type_zone_id,
+    zone_id,
+    iops
+});
+
 /// Available volume types.
 pub type ListVolumeTypesOutput = List<VolumeType>;
 
 /// Identifies a volume type to read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetVolumeTypeInput {
     /// Volume type identifier.
     pub volume_type_id: String,
 }
+
+crate::error::debug_record!(GetVolumeTypeInput { volume_type_id });
 
 /// The requested volume type.
 #[derive(Clone, PartialEq, Serialize)]
@@ -78,18 +88,22 @@ pub struct GetVolumeTypeOutput {
 crate::wire::product::output::public_fields!(GetVolumeTypeOutput { volume_type });
 
 /// Selects the network zone for a default volume type read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetDefaultVolumeTypeInput {
     /// Network zone identifier.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(GetDefaultVolumeTypeInput { zone_id });
+
 /// The default volume type and its zone identifiers.
 pub type GetDefaultVolumeTypeOutput = GetVolumeTypeOutput;
 
 /// Input for the encryption catalog, which takes no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListEncryptionTypesInput;
+
+crate::error::debug_record!(ListEncryptionTypesInput unit);
 
 /// Encryption types offered by the project.
 pub type ListEncryptionTypesOutput = List<EncryptionType>;

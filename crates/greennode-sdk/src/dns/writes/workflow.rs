@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::future::{Future, poll_fn};
 use std::task::Poll;
 use std::time::Duration;
@@ -29,12 +30,14 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_BOUND: Duration = Duration::from_secs(60);
 
 /// A local DNS write failure with a stable reason.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// The hosted zone did not become ready before the preflight deadline.
     ZoneBusy,
 }
+
+crate::error::debug_record!(ErrorDetail; ZoneBusy);
 
 pub(super) struct Workflow<'a> {
     client: &'a Client,
@@ -382,9 +385,10 @@ impl<'a> Workflow<'a> {
         let clock = self.client.session.clock();
         let bound = clock.monotonic_now() + POLL_BOUND;
         let child = self.ctx.child_with_deadline(bound);
-        let checkpoint = self.evidence.guard_checkpoint();
-        while child.check(clock).is_none() {
-            self.evidence.discard_guards_after(checkpoint);
+        guarded_poll!(self.evidence, {
+            if child.check(clock).is_some() {
+                break;
+            }
             let result = step(self, &child).await;
             if child.check(clock).is_some() {
                 break;
@@ -396,7 +400,7 @@ impl<'a> Workflow<'a> {
             if until(&child, clock, clock.sleep_until(wake)).await.is_err() {
                 break;
             }
-        }
+        });
         Err(Box::new(
             self.ctx
                 .check(clock)

@@ -39,7 +39,7 @@ pub struct Client {
 }
 
 /// Selects a single zero-based page of cluster inventory.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListClustersInput {
     /// Zero-based page number, at most 2,147,483,647.
     pub page: i64,
@@ -47,19 +47,25 @@ pub struct ListClustersInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListClustersInput { page, size });
+
 /// A cluster page. The page number is zero-based.
 pub type ListClustersOutput = PagedList<Cluster>;
 
 /// Requests the version catalog with no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListClusterVersionsInput;
+
+crate::error::debug_record!(ListClusterVersionsInput unit);
 
 /// The available cluster versions.
 pub type ListClusterVersionsOutput = List<ClusterVersion>;
 
 /// Requests the account quota with no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct GetQuotaInput;
+
+crate::error::debug_record!(GetQuotaInput unit);
 
 /// The configured region's account quota.
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -284,7 +290,7 @@ fn safe_error(operation: &'static str, error: &Error) -> Error {
     let api = error.api_error();
     let status = api.and_then(ApiError::status);
     if status == Some(200)
-        || (error.is_body_too_large() && error.detail::<StatusCode>() == Some(&StatusCode::OK))
+        || (error.is_body_too_large() && error.http_status() == Some(StatusCode::OK))
     {
         return malformed(operation);
     }

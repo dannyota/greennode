@@ -41,11 +41,13 @@ const DELETE: Mutation = Mutation {
 };
 
 /// The requested server group is in use.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct ServerGroupInUse;
 
+crate::error::debug_record!(ServerGroupInUse unit);
+
 /// Name, placement policy and description for a new server group.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateServerGroupInput {
     /// Unique group name within the project.
     pub name: String,
@@ -55,8 +57,14 @@ pub struct CreateServerGroupInput {
     pub description: String,
 }
 
+crate::error::debug_record!(CreateServerGroupInput {
+    name,
+    policy_id,
+    description
+});
+
 /// Mutable fields of a server group. Omitted fields retain their current values.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct UpdateServerGroupInput {
     /// Group to update.
     pub server_group_id: String,
@@ -66,12 +74,20 @@ pub struct UpdateServerGroupInput {
     pub description: Option<String>,
 }
 
+crate::error::debug_record!(UpdateServerGroupInput {
+    server_group_id,
+    name,
+    description
+});
+
 /// Identifies a server group to delete.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteServerGroupInput {
     /// Group to delete.
     pub server_group_id: String,
 }
+
+crate::error::debug_record!(DeleteServerGroupInput { server_group_id });
 
 /// The group returned by a successful create.
 #[derive(Clone, Serialize)]

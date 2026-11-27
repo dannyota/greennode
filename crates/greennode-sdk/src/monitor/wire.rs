@@ -72,8 +72,8 @@ impl Read {
     fn failure(&self, error: Error, evidence: &Evidence) -> Error {
         let api = error.api_error();
         let status = error
-            .detail::<StatusCode>()
-            .map(StatusCode::as_u16)
+            .http_status()
+            .map(|status| status.as_u16())
             .or_else(|| api.and_then(ApiError::status));
         if error.is_body_too_large() {
             return self.overflow(status, evidence);
@@ -81,7 +81,7 @@ impl Read {
         if matches!(self.family, Family::Quota { .. }) && status.is_some() && api.is_some() {
             let kept_redirect =
                 self.no_redirect() && status.is_some_and(|status| (300..400).contains(&status));
-            if error.detail::<StatusCode>().is_some() && !kept_redirect {
+            if error.http_status().is_some() && !kept_redirect {
                 return self
                     .request_failed(None, false, evidence)
                     .with_outer_detail(BodyReadFailure);

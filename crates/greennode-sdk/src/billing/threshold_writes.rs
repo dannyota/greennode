@@ -10,7 +10,7 @@ const THRESHOLDS: &str = "gateway/api/v1/budgets/{}/thresholds";
 const THRESHOLD: &str = "gateway/api/v1/budgets/{}/thresholds/{}";
 
 /// Creates an alert threshold on a budget.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateBudgetThresholdInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
@@ -23,6 +23,14 @@ pub struct CreateBudgetThresholdInput {
     /// Reminder interval in hours. Zero sends 648.
     pub reminder_interval_hours: i64,
 }
+
+crate::error::debug_record!(CreateBudgetThresholdInput {
+    budget_uuid,
+    threshold_type,
+    threshold_percentage,
+    max_alerts_per_period,
+    reminder_interval_hours
+});
 
 impl CreateBudgetThresholdInput {
     /// Sets the required fields and uses the console's alert and reminder defaults.
@@ -52,7 +60,7 @@ pub struct CreateBudgetThresholdOutput {
 crate::wire::product::output::public_fields!(CreateBudgetThresholdOutput { threshold });
 
 /// Changes selected fields on an existing budget threshold.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateBudgetThresholdInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
@@ -67,6 +75,15 @@ pub struct UpdateBudgetThresholdInput {
     /// Replacement reminder interval in hours when set.
     pub reminder_interval_hours: Option<i64>,
 }
+
+crate::error::debug_record!(UpdateBudgetThresholdInput {
+    budget_uuid,
+    threshold_uuid,
+    threshold_percentage,
+    enabled,
+    max_alerts_per_period,
+    reminder_interval_hours
+});
 
 impl UpdateBudgetThresholdInput {
     /// Selects a threshold. Set at least one change before calling the API.
@@ -89,13 +106,18 @@ pub struct UpdateBudgetThresholdOutput {}
 crate::wire::product::output::public_fields!(UpdateBudgetThresholdOutput {});
 
 /// Selects a threshold to delete.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteBudgetThresholdInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
     /// Threshold UUID, using only ASCII letters, digits, and hyphens.
     pub threshold_uuid: String,
 }
+
+crate::error::debug_record!(DeleteBudgetThresholdInput {
+    budget_uuid,
+    threshold_uuid
+});
 
 impl DeleteBudgetThresholdInput {
     /// Stores both UUIDs for validation by [`Client::delete_budget_threshold`].

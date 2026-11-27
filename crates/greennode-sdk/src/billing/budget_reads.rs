@@ -8,8 +8,10 @@ use crate::{Failure, List, RequestContext};
 use serde::{Deserialize, Serialize, Serializer};
 
 /// Selects the account's current billing period without filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetCurrentPeriodCostInput {}
+
+crate::error::debug_record!(GetCurrentPeriodCostInput {});
 
 /// The account's actual and forecasted cost for its current period.
 #[derive(Clone, PartialEq, Serialize)]
@@ -49,11 +51,13 @@ crate::wire::product::output::public_fields!(PeriodCost {
 });
 
 /// Selects the budget whose thresholds to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListBudgetThresholdsInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(ListBudgetThresholdsInput { budget_uuid });
 
 impl ListBudgetThresholdsInput {
     /// Stores the UUID for validation by [`Client::list_budget_thresholds`].
@@ -116,13 +120,18 @@ crate::wire::product::output::public_fields!(Threshold {
 });
 
 /// Selects a budget and optionally filters its alerts by period.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListBudgetAlertsInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
     /// Billing period in `YYYY-MM` form. An empty string includes all periods.
     pub period_key: String,
 }
+
+crate::error::debug_record!(ListBudgetAlertsInput {
+    budget_uuid,
+    period_key
+});
 
 impl ListBudgetAlertsInput {
     /// Selects all periods for the budget. The request validates the UUID.

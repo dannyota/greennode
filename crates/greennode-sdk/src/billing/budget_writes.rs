@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 /// Creates an account-wide budget with a limit in billing credits.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateBudgetInput {
     /// Budget name, validated by the API.
     pub name: String,
@@ -27,6 +27,14 @@ pub struct CreateBudgetInput {
     /// An empty status sends `ACTIVE`.
     pub status: String,
 }
+
+crate::error::debug_record!(CreateBudgetInput {
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    status
+});
 
 impl CreateBudgetInput {
     /// Sets the required fields and uses the default active status.
@@ -57,7 +65,7 @@ pub struct CreateBudgetOutput {
 crate::wire::product::output::public_fields!(CreateBudgetOutput { budget });
 
 /// Changes selected fields on an existing account-wide budget.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
@@ -72,6 +80,15 @@ pub struct UpdateBudgetInput {
     /// Replacement status, such as `PAUSED`, when set.
     pub status: Option<String>,
 }
+
+crate::error::debug_record!(UpdateBudgetInput {
+    budget_uuid,
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    status
+});
 
 impl UpdateBudgetInput {
     /// Selects a budget. Set at least one change before calling the API.
@@ -94,11 +111,13 @@ pub struct UpdateBudgetOutput {}
 crate::wire::product::output::public_fields!(UpdateBudgetOutput {});
 
 /// Selects a budget and its API-managed thresholds for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(DeleteBudgetInput { budget_uuid });
 
 impl DeleteBudgetInput {
     /// Stores the UUID for validation by [`Client::delete_budget`].
@@ -277,8 +296,7 @@ pub(super) fn not_sent<T>(error: Error) -> Failure<T> {
 fn reconcile(operation: &Operation, error: Error) -> Error {
     let api = error.api_error();
     let status = error
-        .detail::<StatusCode>()
-        .copied()
+        .http_status()
         .or_else(|| api.and_then(|api| StatusCode::from_u16(api.status()?).ok()));
     let code = api.map_or("", ApiError::code);
     let message = if let Some(status) = status.filter(StatusCode::is_client_error) {

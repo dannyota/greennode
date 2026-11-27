@@ -114,8 +114,8 @@ pub(super) fn withheld(operation: &Operation, error: Error) -> Error {
         None
     } else {
         error
-            .detail::<StatusCode>()
-            .map(StatusCode::as_u16)
+            .http_status()
+            .map(|status| status.as_u16())
             .or_else(|| api.and_then(ApiError::status))
     };
     let retryable = api.is_some_and(ApiError::retryable);

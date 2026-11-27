@@ -1,4 +1,4 @@
-use super::{Diagnostic, RecoveryAdvice, SystemTagText};
+use super::{Diagnostic, HttpStatus, RecoveryAdvice, SystemTagText};
 use std::{any::Any, fmt::Debug};
 use zeroize::Zeroizing;
 
@@ -26,8 +26,12 @@ pub(super) struct Detail {
 
 impl Detail {
     pub(super) fn new(value: impl Any + Send + Sync + Debug) -> Self {
+        let value: Box<dyn Erased> = match (&value as &dyn Any).downcast_ref::<http::StatusCode>() {
+            Some(status) => Box::new(HttpStatus(*status)),
+            None => Box::new(value),
+        };
         Self {
-            value: Box::new(value),
+            value,
             withheld: false,
         }
     }
@@ -68,8 +72,8 @@ impl Detail {
             .downcast_ref::<Diagnostic>()
             .is_some_and(|value| reflects(value.message()))
             || value
-                .downcast_ref::<http::StatusCode>()
-                .is_some_and(|value| reflects(value.as_str()));
+                .downcast_ref::<HttpStatus>()
+                .is_some_and(|value| reflects(value.0.as_str()));
     }
 
     pub(super) fn screen_public(&mut self, reflects: &impl Fn(&str) -> bool) {
@@ -83,28 +87,8 @@ impl Detail {
             }
             self.withheld |= reflects(arithmetic.stage) || reflects(&arithmetic.item_key);
         }
-        self.withheld |= value
-            .downcast_ref::<http::StatusCode>()
-            .is_some_and(|status| status_reflects(*status, reflects))
-            || debug_reflects(self.value.as_ref(), reflects);
+        self.withheld |= debug_reflects(self.value.as_ref(), reflects);
     }
-}
-
-fn status_reflects(status: http::StatusCode, reflects: &impl Fn(&str) -> bool) -> bool {
-    [
-        status.to_string(),
-        format!("{status:+?}"),
-        format!("{status:x?}"),
-        format!("{status:X?}"),
-        format!("{status:+x?}"),
-        format!("{status:+X?}"),
-        format!("{status:#x?}"),
-        format!("{status:#X?}"),
-        format!("{status:+#x?}"),
-        format!("{status:+#X?}"),
-    ]
-    .iter()
-    .any(|text| reflects(text))
 }
 
 pub(crate) fn debug_reflects(
@@ -153,3 +137,71 @@ fn render_debug(value: &(impl Debug + ?Sized), alternate: bool) -> Option<Zeroiz
     }
     Some(buffer.0)
 }
+
+macro_rules! debug_record {
+    ($name:ident $(<$item:ident>)? { $($field:ident),* $(,)? }) => {
+        impl $(<$item: std::fmt::Debug>)? std::fmt::Debug for $name $(<$item>)? {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| {
+                    let Self { $($field,)* } = self;
+                    f.debug_struct(stringify!($name))
+                        $(.field(stringify!($field).trim_start_matches("r#"), $field))*
+                        .finish()
+                })
+            }
+        }
+    };
+    ($name:ident; $($variant:ident),* $(,)?) => {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(match self { $(Self::$variant => stringify!($variant),)* })
+            }
+        }
+    };
+    ($name:ident<$item:ident>; $value:ident, $empty:ident) => {
+        impl<$item: std::fmt::Debug> std::fmt::Debug for $name<$item> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| match self {
+                    Self::$value(value) => f.debug_tuple(stringify!($value)).field(value).finish(),
+                    Self::$empty => f.write_str(stringify!($empty)),
+                })
+            }
+        }
+    };
+    ($name:ident [ $($variant:ident { $($field:ident),* }),* $(,)? ]) => {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| match self {
+                    $(Self::$variant { $($field),* } => f.debug_struct(stringify!($variant))
+                        $(.field(stringify!($field), $field))*
+                        .finish(),)*
+                })
+            }
+        }
+    };
+    ($name:ident $(<$item:ident>)? => |$value:ident, $formatter:ident| $body:block) => {
+        impl $(<$item>)? std::fmt::Debug for $name $(<$item>)? {
+            fn fmt(&$value, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |$formatter| $body)
+            }
+        }
+    };
+    ($name:ident unit) => {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(stringify!($name))
+            }
+        }
+    };
+    ($name:ident ($field:tt)) => {
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                crate::error::write_debug(formatter, |f| {
+                    f.debug_tuple(stringify!($name)).field(&self.$field).finish()
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use debug_record;

@@ -22,11 +22,13 @@ const BY_SUBNET: InventoryRead = InventoryRead {
 };
 
 /// Selects the security group whose server membership to list.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListServersBySecurityGroupInput {
     /// Security-group identifier.
     pub security_group_id: String,
 }
+
+crate::error::debug_record!(ListServersBySecurityGroupInput { security_group_id });
 
 impl ListServersBySecurityGroupInput {
     /// Selects a security group by identifier.
@@ -41,11 +43,13 @@ impl ListServersBySecurityGroupInput {
 pub type ListServersBySecurityGroupOutput = List<Server>;
 
 /// Selects the subnet whose attached servers to list.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListServersBySubnetInput {
     /// Subnet identifier.
     pub subnet_id: String,
 }
+
+crate::error::debug_record!(ListServersBySubnetInput { subnet_id });
 
 impl ListServersBySubnetInput {
     /// Selects a subnet by identifier.

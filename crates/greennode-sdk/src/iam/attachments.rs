@@ -21,13 +21,15 @@ macro_rules! attachment {
     ($(#[$doc:meta])* $method:ident, $input:ident, $output:ident, $first:ident, $second:ident,
      $guard:ident, $op:literal, $field1:literal, $field2:literal, $method_type:ident, $retry:ident, $route:literal) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $input {
             /// Required IAM identifier using ASCII letters, digits, or hyphens.
             pub $first: String,
             /// Required IAM identifier using ASCII letters, digits, or hyphens.
             pub $second: String,
         }
+
+        crate::error::debug_record!($input { $first, $second });
 
         impl $input {
             /// Sets both required identifiers.

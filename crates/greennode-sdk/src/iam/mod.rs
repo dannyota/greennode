@@ -54,7 +54,7 @@ const LIST_CAP: usize = 4 << 20;
 const DEFAULT_CAP: usize = 8 << 20;
 
 /// Cause of a failed IAM success-body decode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body could not be read as one JSON value.
@@ -62,6 +62,8 @@ pub enum DecodeError {
     /// The JSON did not have the response's expected shape.
     InvalidShape,
 }
+
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape);
 
 /// IAM client sharing its configuration's authentication session.
 #[derive(Clone)]
@@ -308,11 +310,13 @@ impl PageQuery {
 macro_rules! id_input {
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
         }
+
+        crate::error::debug_record!($name { $field });
 
         impl $name {
             /// Sets the required identifier.
@@ -326,7 +330,7 @@ macro_rules! id_input {
 macro_rules! page_input {
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident, filtered) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, Default, PartialEq, Eq)]
+        #[derive(Clone, Default, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
@@ -335,10 +339,12 @@ macro_rules! page_input {
             /// Page size. Nonpositive values use the service default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { $field, page, size });
     };
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident, required) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
@@ -347,6 +353,8 @@ macro_rules! page_input {
             /// Page size. Nonpositive values use the service default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { $field, page, size });
 
         impl $name {
             /// Sets the required identifier and uses the default page.

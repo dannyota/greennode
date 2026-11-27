@@ -25,7 +25,7 @@ const SOURCE_QUOTA: &str = "billing-api/v1/synthetic/quota";
 const PRICE_ROUTE: &str = "billing-api/v2/synthetic/prices/created-price";
 
 /// Selects the class, package and quantity for a synthetic quota quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateSyntheticQuotaInput {
     /// Class whose unit package will be priced.
     pub class_id: String,
@@ -38,6 +38,14 @@ pub struct CreateSyntheticQuotaInput {
     /// Settlement preference for an order. The quote ignores it.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateSyntheticQuotaInput {
+    class_id,
+    package_id,
+    quantity,
+    max_price,
+    no_wait
+});
 
 impl CreateSyntheticQuotaInput {
     /// Selects a class, package and quantity to price.
@@ -53,7 +61,7 @@ impl CreateSyntheticQuotaInput {
 }
 
 /// Selects the active quota expiry for a renewal quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RenewSyntheticQuotaInput {
     /// Expected RFC 3339 expiry of the active quota.
     pub expected_end_time: String,
@@ -64,6 +72,13 @@ pub struct RenewSyntheticQuotaInput {
     /// Settlement preference for renewal. The quote ignores it.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(RenewSyntheticQuotaInput {
+    expected_end_time,
+    max_price,
+    max_days_left,
+    no_wait
+});
 
 impl RenewSyntheticQuotaInput {
     /// Selects the quota expiry to check before pricing.
@@ -102,7 +117,7 @@ output! {
 }
 
 /// Selects an Email or SMS package for a notification quota quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateNotificationQuotaInput {
     /// Email or SMS, matched case insensitively.
     pub kind: String,
@@ -113,6 +128,13 @@ pub struct CreateNotificationQuotaInput {
     /// Settlement preference for an order. The quote ignores it.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateNotificationQuotaInput {
+    kind,
+    package_id,
+    max_price,
+    no_wait
+});
 
 impl CreateNotificationQuotaInput {
     /// Selects the notification quota kind to price.

@@ -10,8 +10,10 @@ use crate::wire::product::evidence::Evidence;
 use crate::{ErrorClass, Failure, RequestContext};
 
 /// Inputs for reading the current caller's identity.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct GetCallerIdentityInput;
+
+crate::error::debug_record!(GetCallerIdentityInput unit);
 
 id_input!(
     /// Inputs for reading one IAM user.

@@ -121,7 +121,7 @@ pub(super) fn invalid_response(operation: &Operation) -> Error {
         SafeText::new("invalid response; body withheld", &[]),
         false,
     ))
-    .with_outer_detail(StatusCode::OK)
+    .with_http_status(StatusCode::OK)
 }
 
 pub(super) const fn field(name: &'static str, shape: Shape<'static>) -> ShapeField<'static> {

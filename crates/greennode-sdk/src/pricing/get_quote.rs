@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 const OP: &str = "pricing.GetQuote";
 
 /// Describes a resource to quote on the regional gateway.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetQuoteInput {
     /// Resource type sent to the quote gateway.
     pub resource_type: String,
@@ -21,6 +21,12 @@ pub struct GetQuoteInput {
     /// Optional gateway resource details.
     pub resource_info: Option<BTreeMap<String, Value>>,
 }
+
+crate::error::debug_record!(GetQuoteInput {
+    resource_type,
+    action,
+    resource_info
+});
 
 impl GetQuoteInput {
     /// Creates an input for the given resource type using the default action.
@@ -165,7 +171,7 @@ impl Client {
         match raw {
             Err(error) => {
                 let observed = error
-                    .detail::<http::StatusCode>()
+                    .http_status()
                     .map(|status| status.as_u16())
                     .or_else(|| error.api_error().and_then(|api| api.status()));
                 if numeric || observed.is_some_and(|status| (200..400).contains(&status)) {

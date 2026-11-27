@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
@@ -128,21 +129,23 @@ impl<'a> ChildWriter<'a> {
     ) -> Result<Ready, Box<Error>> {
         let clock = self.client.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
-        loop {
+        guarded_poll!(self.evidence, {
             self.ready_time(ctx, &wait, child)?;
             let lb = self.parent(&wait).await;
             self.ready_time(ctx, &wait, child)?;
-            let (status, lb_type) = lb?;
-            if !lb_busy(&status) {
+            let lb = lb?;
+            let (status, lb_type) = lb.recheck(&self.evidence)?;
+            if !lb_busy(status) {
                 let Some(child) = child else {
                     return Ok(Ready {
-                        lb_type,
+                        lb_type: lb_type.clone(),
                         child: None,
                     });
                 };
                 let row = self.read_data(&wait, child.read, child.ids).await;
                 self.ready_time(ctx, &wait, Some(child))?;
                 let row = row?;
+                let (_, lb_type) = lb.recheck(&self.evidence)?;
                 if let Some(field) = child.guard_field {
                     validate_guard_string(child.read, &row, field, &self.evidence)?;
                 }
@@ -151,7 +154,7 @@ impl<'a> ChildWriter<'a> {
                 (child.validate)(child.read, &row, &self.evidence)?;
                 if !child_busy(&progress(child.read, &row, child.id, &self.evidence)?) {
                     return Ok(Ready {
-                        lb_type,
+                        lb_type: lb_type.clone(),
                         child: Some(row),
                     });
                 }
@@ -159,7 +162,7 @@ impl<'a> ChildWriter<'a> {
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     pub(super) fn ready_time(
@@ -192,18 +195,91 @@ impl<'a> ChildWriter<'a> {
     pub(super) async fn parent(
         &mut self,
         ctx: &RequestContext,
-    ) -> Result<(String, String), Box<Error>> {
+    ) -> Result<Guarded<(String, String)>, Box<Error>> {
         let data = self
             .read_data(ctx, &LOAD_BALANCER, &[("LoadBalancerID", self.lb_id)])
             .await?;
+        let evidence = &self.evidence;
         let ZonedLoadBalancer(parent) =
-            guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, &self.evidence)?;
-        validate_guard_string(&LOAD_BALANCER, &data, "type", &self.evidence)?;
-        screen_input(&self.evidence, [parent.r#type.as_str()])?;
-        Ok((
-            progress(&LOAD_BALANCER, &data, self.lb_id, &self.evidence)?,
-            parent.r#type,
-        ))
+            guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, evidence)?;
+        validate_guard_string(&LOAD_BALANCER, &data, "type", evidence)?;
+        screen_input(evidence, [parent.r#type.as_str()])?;
+        let status = progress(&LOAD_BALANCER, &data, self.lb_id, evidence)?;
+        Guarded::latest((status, parent.r#type), evidence)
+    }
+
+    pub(super) async fn settle_child<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        wait: &RequestContext,
+        target: &ChildTarget<'_>,
+        creating: bool,
+        last: &mut T,
+        fields: impl Fn(&T) -> (&str, &str),
+    ) -> Result<(), Box<Error>> {
+        let clock = self.client.session.clock();
+        guarded_poll!(self.evidence, {
+            wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
+                .wait(clock)
+                .await;
+            self.confirm_time(ctx, wait, target)?;
+            let data = self.read_data(wait, target.read, target.ids).await;
+            self.confirm_time(ctx, wait, target)?;
+            let data = match data {
+                Ok(data) => data,
+                Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
+                Err(error) => return Err(self.unconfirmed(target, *error)),
+            };
+            let row: T = guard::parse(target.read, &data, target.shape, &self.evidence)
+                .map_err(|error| self.unconfirmed(target, *error))?;
+            let (id, status) = fields(&row);
+            if id != target.id || status.is_empty() {
+                let error = target
+                    .read
+                    .decode_error(&self.evidence, DecodeError::InvalidShape);
+                return Err(self.unconfirmed(target, *error));
+            }
+            screen_input(&self.evidence, [id, status])
+                .map_err(|error| self.unconfirmed(target, *error))?;
+            let created = status == "CREATED";
+            let row = Guarded::latest(row, &self.evidence)?;
+            let parent = if created {
+                let parent = self.parent(wait).await;
+                self.confirm_time(ctx, wait, target)?;
+                Some(parent.map_err(|error| self.unconfirmed(target, *error))?)
+            } else {
+                None
+            };
+            if self.child_settled(target, row, parent, last, &fields)? {
+                return Ok(());
+            }
+        });
+    }
+
+    fn child_settled<T>(
+        &self,
+        target: &ChildTarget<'_>,
+        row: Guarded<T>,
+        parent: Option<Guarded<(String, String)>>,
+        last: &mut T,
+        fields: impl Fn(&T) -> (&str, &str),
+    ) -> Result<bool, Box<Error>> {
+        let unconfirmed = |error: Box<Error>| self.unconfirmed(target, *error);
+        let row = row.into_checked(&self.evidence).map_err(unconfirmed)?;
+        let parent = parent
+            .map(|parent| parent.into_checked(&self.evidence))
+            .transpose()
+            .map_err(unconfirmed)?;
+        let failed = fields(&row).1 == "ERROR";
+        *last = row;
+        if failed {
+            return Err(self.failed(target.kind, target.id));
+        }
+        match parent {
+            Some((status, _)) if status == "ERROR" => Err(self.failed("load balancer", self.lb_id)),
+            Some((status, _)) => Ok(!lb_busy(&status)),
+            None => Ok(false),
+        }
     }
 
     pub(super) async fn send<O>(

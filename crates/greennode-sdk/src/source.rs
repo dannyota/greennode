@@ -15,8 +15,10 @@ pub trait ConfigSource: Send + Sync {
 }
 
 /// Reads configuration values from the process environment.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ProcessConfigSource;
+
+crate::error::debug_record!(ProcessConfigSource unit);
 
 impl ConfigSource for ProcessConfigSource {
     fn var_os(&self, name: &OsStr) -> Option<OsString> {

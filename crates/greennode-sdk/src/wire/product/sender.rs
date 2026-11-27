@@ -193,7 +193,7 @@ impl Failure {
             _ => error,
         };
         let error = match self.status {
-            Some(status) => error.with_outer_detail(status),
+            Some(status) => error.with_http_status(status),
             None => error,
         };
         crate::Failure::new(error, None, self.dispatch)

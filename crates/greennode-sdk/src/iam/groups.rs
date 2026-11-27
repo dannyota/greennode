@@ -25,13 +25,15 @@ const UPDATE: &str = "iam.UpdateGroup";
 const DELETE: &str = "iam.DeleteGroup";
 
 /// Creates an IAM-mode group with no members or policies.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateGroupInput {
     /// Required group name.
     pub name: String,
     /// Group description.
     pub description: String,
 }
+
+crate::error::debug_record!(CreateGroupInput { name, description });
 
 impl CreateGroupInput {
     /// Sets the name and leaves the description empty.
@@ -54,7 +56,7 @@ pub struct CreateGroupOutput {
 crate::wire::product::output::public_fields!(CreateGroupOutput { group });
 
 /// Updates a group's name or description.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateGroupInput {
     /// Group ID using ASCII letters, digits, or hyphens.
     pub group_id: String,
@@ -63,6 +65,12 @@ pub struct UpdateGroupInput {
     /// When absent, omits the description from the update.
     pub description: Option<String>,
 }
+
+crate::error::debug_record!(UpdateGroupInput {
+    group_id,
+    name,
+    description
+});
 
 impl UpdateGroupInput {
     /// Selects the group and preserves its name and description by default.

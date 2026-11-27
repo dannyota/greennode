@@ -71,7 +71,7 @@ macro_rules! record {
             }
         }
 
-        crate::wire::product::output::debug_record!($name $(<$item>)? { $($field),* });
+        crate::error::debug_record!($name $(<$item>)? { $($field,)* masked });
 
         impl $(<$item: crate::wire::product::output::PublicOutput>)? crate::wire::product::output::PublicOutput for $name $(<$item>)? {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

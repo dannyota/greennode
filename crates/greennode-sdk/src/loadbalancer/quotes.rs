@@ -10,7 +10,7 @@ use super::wire::{invalid_input, screen_input, validate_ids};
 use super::{Client, failure};
 
 /// Parameters for pricing a new regional load balancer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateLoadBalancerInput {
     /// Display name, which does not affect the quote.
     pub name: String,
@@ -30,8 +30,19 @@ pub struct CreateLoadBalancerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateLoadBalancerInput {
+    name,
+    package_id,
+    r#type,
+    scheme,
+    subnet_id,
+    zone_id,
+    max_price,
+    no_wait
+});
+
 /// Parameters for pricing a new package for an existing regional load balancer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeLoadBalancerInput {
     /// ID of the load balancer to price.
     pub load_balancer_id: String,
@@ -42,6 +53,13 @@ pub struct ResizeLoadBalancerInput {
     /// Settlement option used when ordering. A quote ignores this field.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeLoadBalancerInput {
+    load_balancer_id,
+    package_id,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,

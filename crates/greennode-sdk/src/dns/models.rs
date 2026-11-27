@@ -7,13 +7,15 @@ use crate::wire::strict_json::{Shape, ShapeField};
 const REDACTED: &str = "<redacted>";
 
 /// A typed DNS field whose rendered value can be redacted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field<T> {
     /// The original value did not contain a credential sent for the request.
     Value(T),
     /// The original value was removed and projects to `<redacted>`.
     Redacted,
 }
+
+crate::error::debug_record!(Field<T>; Value, Redacted);
 
 impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
     for Field<T>
@@ -66,7 +68,7 @@ impl<T> Field<T> {
 #[serde(transparent)]
 pub struct Timestamp(#[serde(with = "rfc3339")] pub OffsetDateTime);
 
-crate::wire::product::output::debug_record!(Timestamp(0));
+crate::error::debug_record!(Timestamp(0));
 
 impl crate::wire::product::output::PublicOutput for Timestamp {
     fn public_reflects(

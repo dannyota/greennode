@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use std::time::Duration;
 
 use http::{Method, StatusCode};
@@ -24,7 +25,7 @@ const CREATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const DELETE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// Selects the name and package for a credit-funded Layer 4 load balancer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateLoadBalancerInput {
     /// Name for the new load balancer.
     pub name: String,
@@ -33,6 +34,12 @@ pub struct CreateLoadBalancerInput {
     /// Optional description. Omitted from the request when empty.
     pub description: String,
 }
+
+crate::error::debug_record!(CreateLoadBalancerInput {
+    name,
+    package_id,
+    description
+});
 
 impl CreateLoadBalancerInput {
     /// Creates input for a named load balancer with the selected package.
@@ -89,11 +96,13 @@ impl Serialize for ConfirmedLoadBalancer<'_> {
 }
 
 /// Selects the load balancer to delete.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteLoadBalancerInput {
     /// Target load balancer identifier.
     pub load_balancer_id: String,
 }
+
+crate::error::debug_record!(DeleteLoadBalancerInput { load_balancer_id });
 
 impl DeleteLoadBalancerInput {
     /// Selects the target load balancer by its identifier.
@@ -187,16 +196,19 @@ impl Client {
                 id: id.clone(),
                 ..Default::default()
             };
-            let reason = loop {
+            let reason = guarded_poll!(write.evidence, {
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
-                let Ok(detail) = write.load_balancer_detail(&wait, &id).await else {
+                let Ok(guarded) = write.load_balancer_detail(&wait, &id).await else {
                     break Settlement::Unknown("create confirmation interrupted");
                 };
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
+                let Ok(detail) = guarded.into_checked(&write.evidence) else {
+                    break Settlement::Unknown("create confirmation interrupted");
+                };
                 if detail.id.0 != id
                     || detail.name.0 != input.name
                     || detail.package.0 != input.package_id
@@ -219,7 +231,7 @@ impl Client {
                     _ => break Settlement::Unknown("create status unrecognized"),
                 }
                 write.pause(&wait).await;
-            };
+            });
             Err(write.finish(reason, Some(create_output(observed, &write.evidence))))
         })
     }
@@ -239,6 +251,7 @@ impl Client {
             let detail = write
                 .load_balancer_detail(ctx, id)
                 .await
+                .and_then(|detail| detail.into_checked(&write.evidence))
                 .map_err(|error| not_sent(*error))?;
             if detail.id.0 != *id
                 || detail.kind.0 != LAYER_FOUR
@@ -276,7 +289,7 @@ impl Client {
                 ));
             }
             let wait = write.wait_context(ctx, DELETE_TIMEOUT);
-            let reason = loop {
+            let reason = guarded_poll!(write.evidence, {
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("delete confirmation interrupted");
                 }
@@ -284,7 +297,7 @@ impl Client {
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("delete confirmation interrupted");
                 }
-                match current {
+                match current.and_then(|detail| detail.into_checked(&write.evidence)) {
                     Err(error) if error.detail::<ConfirmedAbsence>().is_some() => {
                         let output = output(&write, true);
                         if write.safe_output(&output) {
@@ -298,7 +311,7 @@ impl Client {
                     Ok(_) => write.pause(&wait).await,
                     Err(_) => break Settlement::Unknown("delete confirmation interrupted"),
                 }
-            };
+            });
             Err(write.finish(reason, Some(output(&write, false))))
         })
     }
@@ -357,7 +370,7 @@ impl Write<'_> {
         &mut self,
         ctx: &RequestContext,
         id: &str,
-    ) -> Result<Detail, Box<Error>> {
+    ) -> Result<Guarded<Detail>, Box<Error>> {
         let operation = guard_operation("globalloadbalancer.WriteDetail", RESOURCE);
         let reply = self
             .guard_on(
@@ -373,9 +386,7 @@ impl Write<'_> {
             .await
             .map_err(|failure| {
                 let error = failure.into_parts().0;
-                if error.is_body_too_large()
-                    && error.detail::<StatusCode>() == Some(&StatusCode::NOT_FOUND)
-                {
+                if error.is_body_too_large() && error.http_status() == Some(StatusCode::NOT_FOUND) {
                     Box::new(
                         super::write::status_rejection(
                             operation.id,
@@ -389,7 +400,10 @@ impl Write<'_> {
                 }
             })?;
         match reply.status {
-            StatusCode::OK => decode(&operation, &reply.body, &DETAIL_SHAPE),
+            StatusCode::OK => Guarded::latest(
+                decode(&operation, &reply.body, &DETAIL_SHAPE)?,
+                &self.evidence,
+            ),
             status => {
                 let error = rejected_response(&operation, &reply, None, Some("response withheld"));
                 if status == StatusCode::NOT_FOUND {

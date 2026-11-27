@@ -301,8 +301,8 @@ impl Client {
                 };
                 let (error, _, _) = failure.into_parts();
                 let status = error
-                    .detail::<StatusCode>()
-                    .map(StatusCode::as_u16)
+                    .http_status()
+                    .map(|status| status.as_u16())
                     .or_else(|| error.api_error().and_then(ApiError::status));
                 let error = match status {
                     Some(status) if let Some(message) = key_message(status) => {

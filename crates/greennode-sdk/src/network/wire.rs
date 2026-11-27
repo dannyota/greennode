@@ -280,7 +280,7 @@ impl Client {
         .map_err(|error: Failure<()>| {
             let error = error.into_parts().0;
             let api = error.api_error();
-            let status = error.detail::<StatusCode>().copied().or_else(|| {
+            let status = error.http_status().or_else(|| {
                 api.and_then(ApiError::status)
                     .and_then(|status| StatusCode::from_u16(status).ok())
             });

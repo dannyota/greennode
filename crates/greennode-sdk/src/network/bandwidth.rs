@@ -21,8 +21,10 @@ const PROJECTS: Read = PACKAGES.at(
 );
 
 /// Selects the configured region and project for the bandwidth catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListBandwidthPackagesInput {}
+
+crate::error::debug_record!(ListBandwidthPackagesInput {});
 
 /// Bandwidth packages in provider order.
 pub type ListBandwidthPackagesOutput = List<BandwidthPackage>;

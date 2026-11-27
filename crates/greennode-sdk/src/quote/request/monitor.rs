@@ -1,6 +1,5 @@
 use std::{future::Future, pin::Pin};
 
-use http::StatusCode;
 use serde_json::value::RawValue;
 
 use super::{Request, response_body};
@@ -159,8 +158,8 @@ fn failure_error(
 ) -> Error {
     let api = failure.api_error();
     let status = failure
-        .detail::<StatusCode>()
-        .map(StatusCode::as_u16)
+        .http_status()
+        .map(|status| status.as_u16())
         .or_else(|| api.and_then(ApiError::status));
     let result = if failure.is_body_too_large() {
         error(
@@ -179,7 +178,7 @@ fn failure_error(
     } else if (!no_redirect || status.is_some_and(|status| !(300..400).contains(&status)))
         && status.is_some()
         && api.is_some()
-        && failure.detail::<StatusCode>().is_some()
+        && failure.http_status().is_some()
     {
         error(
             op,

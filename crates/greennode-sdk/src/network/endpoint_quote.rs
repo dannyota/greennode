@@ -16,7 +16,7 @@ pub(super) const OP: &str = "network.QuoteCreateEndpoint";
 const PRICE: Read = Read::new(OP, "vnetwork/billing/v1/{}/{}/price", Style::EndpointQuote);
 
 /// Selects a private Gateway endpoint and its placement to quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct QuoteCreateEndpointInput {
     /// Proposed endpoint name.
     pub name: String,
@@ -35,6 +35,17 @@ pub struct QuoteCreateEndpointInput {
     /// Optional creation limit. The quote validates the number and ignores its value.
     pub max_price: f64,
 }
+
+crate::error::debug_record!(QuoteCreateEndpointInput {
+    name,
+    vpc_id,
+    subnet_id,
+    availability_zone_id,
+    category_id,
+    service_id,
+    package_id,
+    max_price
+});
 
 impl QuoteCreateEndpointInput {
     /// Selects the endpoint name, VPC, and subnet with the default offer.

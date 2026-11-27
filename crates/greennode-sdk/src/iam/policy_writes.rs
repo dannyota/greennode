@@ -26,7 +26,7 @@ const CREATE_ADVICE: &str = "iam.CreatePolicy: create may have already reached t
 const UPDATE_ADVICE: &str = "iam.UpdatePolicy: vngcloud: write outcome not confirmed: replacement outcome is uncertain; read the policy before another write";
 
 /// Defines a new customer IAM policy.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreatePolicyInput {
     /// Name of the new policy.
     pub name: String,
@@ -35,6 +35,12 @@ pub struct CreatePolicyInput {
     /// Required policy statements, in evaluation order.
     pub statements: Vec<Statement>,
 }
+
+crate::error::debug_record!(CreatePolicyInput {
+    name,
+    description,
+    statements
+});
 
 impl CreatePolicyInput {
     /// Sets the required name and statements, with an empty description.
@@ -58,7 +64,7 @@ pub struct CreatePolicyOutput {
 crate::wire::product::output::public_fields!(CreatePolicyOutput { policy });
 
 /// Replaces a customer IAM policy, preserving each omitted field.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdatePolicyInput {
     /// ID of the policy to replace.
     pub policy_id: String,
@@ -69,6 +75,13 @@ pub struct UpdatePolicyInput {
     /// Replacement statements, or absent to preserve the current statements.
     pub statements: Option<Vec<Statement>>,
 }
+
+crate::error::debug_record!(UpdatePolicyInput {
+    policy_id,
+    name,
+    description,
+    statements
+});
 
 impl UpdatePolicyInput {
     /// Selects a policy and preserves all fields by default.
@@ -415,8 +428,8 @@ fn uncertain_create<O>(failure: Failure<O>, evidence: &Evidence) -> Failure<O> {
         return Failure::new(error, None, dispatch);
     }
     if error
-        .detail::<StatusCode>()
-        .is_some_and(StatusCode::is_client_error)
+        .http_status()
+        .is_some_and(|status| status.is_client_error())
     {
         if !error.is_body_too_large() {
             let message = if error.has_identity(crate::ErrorClass::Cancelled) {
@@ -476,7 +489,7 @@ fn uncertain_update(
 
 fn observed_status(error: &Error) -> Option<u16> {
     error
-        .detail::<StatusCode>()
-        .map(StatusCode::as_u16)
+        .http_status()
+        .map(|status| status.as_u16())
         .or_else(|| error.api_error().and_then(ApiError::status))
 }

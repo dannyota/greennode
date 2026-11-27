@@ -7,13 +7,15 @@ use crate::wire::product::evidence::Evidence;
 const REDACTED: &str = "<redacted>";
 
 /// A typed field that can withhold a reflected credential.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field<T> {
     /// The response value was retained.
     Value(T),
     /// The response value matched credential material.
     Redacted,
 }
+
+crate::error::debug_record!(Field<T>; Value, Redacted);
 
 impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
     for Field<T>
@@ -65,7 +67,7 @@ impl<T: Serialize> Field<T> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp(pub OffsetDateTime);
 
-crate::wire::product::output::debug_record!(Timestamp(0));
+crate::error::debug_record!(Timestamp(0));
 
 impl crate::wire::product::output::PublicOutput for Timestamp {
     fn public_reflects(

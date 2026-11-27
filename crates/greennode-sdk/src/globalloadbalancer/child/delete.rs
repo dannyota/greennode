@@ -1,4 +1,5 @@
 use super::*;
+use crate::wire::product::guard::guarded_poll;
 use serde_json::json;
 
 const DELETE_POOL: &str = "globalloadbalancer.DeletePool";
@@ -56,8 +57,8 @@ impl Client {
             listeners.recheck(evidence).map_err(preflight)?;
             let listener = listener.recheck(evidence).map_err(preflight)?;
             pool.recheck(evidence).map_err(preflight)?;
-            let group = group.recheck(evidence).map_err(preflight)?;
-            if group.region != *region.recheck(evidence).map_err(preflight)? {
+            let group_row = group.recheck(evidence).map_err(preflight)?;
+            if group_row.region != *region.recheck(evidence).map_err(preflight)? {
                 return Err(preflight(refuse(
                     "the member group is not the expected private group in the configured region",
                 )));
@@ -67,7 +68,7 @@ impl Client {
                 glb,
                 id,
                 pool: &listener.pool,
-                group: &group.id,
+                group: &group,
             };
             run.delete(ctx, plan, DeleteListenerOutput::new).await
         })
@@ -95,13 +96,14 @@ impl Client {
             let group = run.sole_group(ctx, glb, id).await.map_err(preflight)?;
             let evidence = &run.0.evidence;
             pool.recheck(evidence).map_err(preflight)?;
-            let group = group.recheck(evidence).map_err(preflight)?;
-            if group.region != *region.recheck(evidence).map_err(preflight)? {
+            let group_row = group.recheck(evidence).map_err(preflight)?;
+            if group_row.region != *region.recheck(evidence).map_err(preflight)? {
                 return Err(preflight(refuse(
                     "the member group is not the expected private group with one backend",
                 )));
             }
-            if !healthy(&group.status) || !member(group).is_some_and(|m| healthy(&m.status)) {
+            if !healthy(&group_row.status) || !member(group_row).is_some_and(|m| healthy(&m.status))
+            {
                 return Err(preflight(refuse(
                     "the backend row is not settled; wait for a health status",
                 )));
@@ -111,7 +113,7 @@ impl Client {
                 glb,
                 id,
                 pool: id,
-                group: &group.id,
+                group: &group,
             };
             run.delete(ctx, plan, DeletePoolOutput::new).await
         })
@@ -129,7 +131,7 @@ struct DeletePlan<'a> {
     glb: &'a str,
     id: &'a str,
     pool: &'a str,
-    group: &'a str,
+    group: &'a Guarded<Group>,
 }
 
 impl Child<'_> {
@@ -196,9 +198,7 @@ impl Child<'_> {
         )
         .await?;
         let wait = self.0.wait_context(ctx, DELETE_WAIT);
-        let checkpoint = self.0.evidence.guard_checkpoint();
-        let reason = loop {
-            self.0.evidence.discard_guards_after(checkpoint);
+        let reason = guarded_poll!(self.0.evidence, {
             if self.0.interrupted(&wait) {
                 break "delete confirmation interrupted";
             }
@@ -216,7 +216,7 @@ impl Child<'_> {
                 }
                 Err(reason) => break reason,
             }
-        };
+        });
         Err(self.fail(reason, result(self, false)))
     }
 
@@ -291,9 +291,10 @@ impl Child<'_> {
                 let reply = self
                     .read_guard_reply::<Vec<Group>>(ctx, GROUPS, &[plan.glb, plan.pool], false)
                     .await?;
+                let expected = &plan.group.recheck(&self.0.evidence)?.id;
                 if let GuardReply::Present(groups) = reply.recheck(&self.0.evidence)? {
                     self.unique(groups.iter().map(|row| row.id.as_str()), PathIds::Strict)?;
-                    if groups.iter().any(|row| row.id == plan.group) {
+                    if groups.iter().any(|row| row.id == *expected) {
                         return Err(refuse("the member group is still listed"));
                     }
                 }
@@ -302,10 +303,11 @@ impl Child<'_> {
                 let pool = self.in_pool(ctx, plan.glb, plan.pool).await?;
                 let groups = self.groups(ctx, plan.glb, plan.pool).await?;
                 pool.recheck(&self.0.evidence)?;
+                let expected = &plan.group.recheck(&self.0.evidence)?.id;
                 if !groups
                     .recheck(&self.0.evidence)?
                     .iter()
-                    .any(|row| row.id == plan.group)
+                    .any(|row| row.id == *expected)
                 {
                     return Err(refuse("the member group did not survive"));
                 }
@@ -367,6 +369,37 @@ mod tests {
     };
 
     #[tokio::test]
+    async fn glb_pool_absence_rechecks_the_preflight_group_before_comparison() {
+        let fixture = child_fixture();
+        for (note, expected) in [("ordinary-note", true), ("toy-final-bearer", false)] {
+            let mut group = fixture["group"].clone();
+            group["note"] = json!(note);
+            let replies = vec![
+                ok(&json!([group])),
+                ok(&group),
+                empty(),
+                response("404 Not Found", "{}"),
+                ok(&fixture["parent"]),
+                empty(),
+            ];
+            let (client, glb, _) =
+                servers_with_auth(replies, vec![], true, rotating_at(6, "toy-final-bearer"));
+            let mut child = child(&client);
+            let ctx = RequestContext::new().0;
+            let group = child.sole_group(&ctx, "glb-1", "pool-1").await.unwrap();
+            let plan = DeletePlan {
+                kind: Kind::Pool,
+                glb: "glb-1",
+                id: "pool-1",
+                pool: "pool-1",
+                group: &group,
+            };
+            assert_eq!(child.check_delete(&ctx, &plan).await == Ok(true), expected);
+            assert_eq!(glb.requests(), 6);
+        }
+    }
+
+    #[tokio::test]
     async fn glb_final_survivor_read_rechecks_the_original_absence_reply() {
         let fixture = child_fixture();
         for (body, expected) in [
@@ -377,27 +410,27 @@ mod tests {
             ),
         ] {
             let replies = vec![
+                ok(&json!([fixture["group"]])),
+                ok(&fixture["group"]),
                 empty(),
                 response("500 Internal Server Error", body.to_string()),
                 ok(&fixture["parent"]),
                 empty(),
             ];
             let (client, glb, _) =
-                servers_with_auth(replies, vec![], true, rotating_at(4, "toy-final-bearer"));
+                servers_with_auth(replies, vec![], true, rotating_at(6, "toy-final-bearer"));
+            let ctx = RequestContext::new().0;
+            let mut child = child(&client);
+            let group = child.sole_group(&ctx, "glb-1", "pool-1").await.unwrap();
             let plan = DeletePlan {
                 kind: Kind::Pool,
                 glb: "glb-1",
                 id: "pool-1",
                 pool: "pool-1",
-                group: "group-1",
+                group: &group,
             };
-            assert_eq!(
-                child(&client)
-                    .check_delete(&RequestContext::new().0, &plan)
-                    .await,
-                expected
-            );
-            assert_eq!(glb.requests(), 4);
+            assert_eq!(child.check_delete(&ctx, &plan).await, expected);
+            assert_eq!(glb.requests(), 6);
         }
     }
 }

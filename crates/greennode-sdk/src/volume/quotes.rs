@@ -12,7 +12,7 @@ use super::wire::{failure, invalid, screen};
 use super::{Client, path_id};
 
 /// Parameters for the price of a new volume.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateVolumeInput {
     /// Volume name, ignored by the quote.
     pub name: String,
@@ -32,8 +32,19 @@ pub struct CreateVolumeInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateVolumeInput {
+    name,
+    zone_id,
+    size,
+    volume_type_id,
+    encryption_type_id,
+    auto_renew,
+    max_price,
+    no_wait
+});
+
 /// Parameters for the price of growing an existing volume.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -44,6 +55,13 @@ pub struct ResizeVolumeInput {
     /// Settlement selection, ignored by the quote.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeVolumeInput {
+    volume_id,
+    size,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,

@@ -452,7 +452,7 @@ pub(super) fn ids_reflect<T: serde::Serialize>(value: &T, evidence: &Evidence) -
 macro_rules! paged_input {
     ($(#[$meta:meta])* $input:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, Default)]
+        #[derive(Clone, Default)]
         pub struct $input {
             /// Optional display-name filter.
             pub name: String,
@@ -461,17 +461,21 @@ macro_rules! paged_input {
             /// Page size. Nonpositive values use the default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($input { name, page, size });
     };
 }
 
 macro_rules! required_id_input {
     ($(#[$meta:meta])* $input:ident, $id:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $input {
             /// Identifies the resource in the selected project.
             pub $id: String,
         }
+
+        crate::error::debug_record!($input { $id });
 
         impl $input {
             /// Selects the resource by identifier.

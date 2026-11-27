@@ -20,7 +20,7 @@ macro_rules! row {
             $($(#[$field_doc])* #[serde(rename = $key)] pub $field: $ty,)*
         }
 
-        crate::wire::product::output::debug_record!($name { $($field),* });
+        crate::error::debug_record!($name { $($field),* });
 
         impl crate::wire::product::output::PublicOutput for $name {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

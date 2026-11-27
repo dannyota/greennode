@@ -41,13 +41,15 @@ impl Client {
 }
 
 /// A typed response field whose value may be a reflected credential.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ResponseField<T> {
     /// The response value was safe to retain.
     Value(T),
     /// The response value matched credential material.
     Redacted,
 }
+
+crate::error::debug_record!(ResponseField<T>; Value, Redacted);
 
 impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
     for ResponseField<T>

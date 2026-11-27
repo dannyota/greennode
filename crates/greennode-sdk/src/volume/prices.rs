@@ -20,7 +20,7 @@ const OP: &str = "volume.ListVolumePrices";
 const QUOTE: &str = "pricing.GetQuote";
 
 /// Selects offerings, quoted size and encryption, and discovery limits.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumePricesInput {
     /// Exact catalog zone. Empty includes all catalog zones.
     pub zone_id: String,
@@ -37,6 +37,16 @@ pub struct ListVolumePricesInput {
     /// Return safe completed rows alongside an incomplete-discovery error.
     pub allow_partial: bool,
 }
+
+crate::error::debug_record!(ListVolumePricesInput {
+    zone_id,
+    volume_type_id,
+    iops,
+    size,
+    encryption,
+    max_requests,
+    allow_partial
+});
 
 /// Available volume offerings with their quoted prices and coverage.
 #[derive(Clone, PartialEq, Serialize)]

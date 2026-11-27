@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use std::{
     collections::{BTreeMap, BTreeSet},
     future::{Future, poll_fn},
@@ -34,13 +35,18 @@ const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const DELETE_BOUND: Duration = Duration::from_secs(15 * 60);
 
 /// Identifies the load balancer to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteLoadBalancerInput {
     /// Target load balancer identifier.
     pub load_balancer_id: String,
     /// Returns after the delete is accepted or already in progress.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteLoadBalancerInput {
+    load_balancer_id,
+    no_wait
+});
 
 /// A load balancer delete has no output fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
@@ -49,11 +55,13 @@ pub struct DeleteLoadBalancerOutput {}
 crate::wire::product::output::public_fields!(DeleteLoadBalancerOutput {});
 
 /// Identifies the certificate to delete.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteCertificateInput {
     /// Target certificate identifier.
     pub certificate_id: String,
 }
+
+crate::error::debug_record!(DeleteCertificateInput { certificate_id });
 
 /// A certificate delete has no output fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
@@ -62,7 +70,7 @@ pub struct DeleteCertificateOutput {}
 crate::wire::product::output::public_fields!(DeleteCertificateOutput {});
 
 /// Regional load balancer failure identities used in service operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WriteError {
     /// A listener is using the pool or certificate.
@@ -70,6 +78,8 @@ pub enum WriteError {
     /// A load balancer or child did not become ready before the preflight bound.
     ResourceBusy,
 }
+
+crate::error::debug_record!(WriteError; ResourceInUse, ResourceBusy);
 
 #[derive(Default)]
 pub(super) struct WriteLocks(Mutex<BTreeMap<String, Weak<AsyncMutex<()>>>>);
@@ -95,7 +105,11 @@ impl Client {
                 .load_balancer_progress(ctx, id, &mut evidence)
                 .await
                 .map_err(|error| not_sent(*error))?;
-            let dispatch = if current == "DELETING" {
+            let dispatch = if current
+                .recheck(&evidence)
+                .map_err(|error| not_sent(*error))?
+                == "DELETING"
+            {
                 WriteDispatch::NotSent
             } else {
                 self.send_delete(
@@ -116,8 +130,7 @@ impl Client {
             let clock = self.session.clock();
             let settlement_deadline = clock.monotonic_now() + DELETE_BOUND;
             let wait = ctx.child_with_deadline(settlement_deadline);
-            let was_error = current == "ERROR";
-            let (class, reason, cause) = loop {
+            let (class, reason, cause) = guarded_poll!(evidence, {
                 let poll = self.load_balancer_progress(&wait, id, &mut evidence).await;
                 if let Some(end) = wait.check(clock) {
                     let reason = match end {
@@ -137,12 +150,9 @@ impl Client {
                         Some(context_error(end)),
                     );
                 }
-                match poll {
+                match poll.and_then(|status| status.into_checked(&evidence)) {
                     Err(error) if error.detail::<CompleteNotFound>().is_some() => {
                         return Ok(DeleteLoadBalancerOutput {});
-                    }
-                    Ok(progress) if progress == "ERROR" && !was_error => {
-                        break (ErrorClass::Failed, "is ERROR".into(), None);
                     }
                     Err(error) => {
                         let reason = error
@@ -155,13 +165,28 @@ impl Client {
                             );
                         break (ErrorClass::NotSettled, reason, Some(*error));
                     }
-                    Ok(_) => {
+                    Ok(progress) => {
+                        if progress == "ERROR" {
+                            match current.recheck(&evidence) {
+                                Ok(status) if status != "ERROR" => {
+                                    break (ErrorClass::Failed, "is ERROR".into(), None);
+                                }
+                                Err(error) => {
+                                    break (
+                                        ErrorClass::NotSettled,
+                                        "confirmation read failed".into(),
+                                        Some(*error),
+                                    );
+                                }
+                                Ok(_) => {}
+                            }
+                        }
                         wait.child_with_deadline(clock.monotonic_now() + POLL_INTERVAL)
                             .wait(clock)
                             .await;
                     }
                 }
-            };
+            });
             let (prefix, advice) = match (class, dispatch) {
                 (ErrorClass::Failed, _) => ("vngcloud: write failed", ""),
                 (_, WriteDispatch::NotSent) => (
@@ -283,7 +308,7 @@ impl Client {
         ctx: &RequestContext,
         id: &str,
         evidence: &mut Evidence,
-    ) -> Result<String, Box<Error>> {
+    ) -> Result<Guarded<String>, Box<Error>> {
         let read = Read {
             id: "loadbalancer.GetLoadBalancer",
             route: LB_ROUTE,
@@ -303,7 +328,7 @@ impl Client {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
         screen_input(evidence, [&*row.uuid, &row.progress_status])?;
-        Ok(row.progress_status)
+        Guarded::latest(row.progress_status, evidence)
     }
 
     async fn check_certificate(

@@ -19,7 +19,7 @@ use crate::{ApiError, Error, ErrorClass, PagedList, RequestContext};
 use super::Client;
 
 /// Failure decoding or screening a successful regional response.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body was not valid JSON.
@@ -29,6 +29,8 @@ pub enum DecodeError {
     /// The response reflected a credential in a field that could not be redacted.
     ReflectedCredential,
 }
+
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape, ReflectedCredential);
 
 #[derive(Debug)]
 pub(super) struct CompleteNotFound;

@@ -361,22 +361,45 @@ mod tests {
         assert!(format!("{:x?}", result.items[0]) == format!("{:?}", result.items[0]));
     }
 
+    #[test]
+    fn public_form_fields_do_not_use_caller_debug_flags() {
+        fn check(value: impl std::fmt::Debug) {
+            assert!(format!("{value:x?}") == format!("{value:?}"));
+            assert!(format!("{value:06x?}") == format!("{value:?}"));
+        }
+        let zone = crate::dns::HostedZone {
+            count_records: crate::dns::Field::Value(403_i64),
+            ..Default::default()
+        };
+        check(zone.count_records);
+        check(zone);
+        check(crate::cdn::Field::Value(403_i64));
+        check(crate::monitor::ResponseField::Value(403_i64));
+    }
+
     #[tokio::test]
-    async fn foreign_status_detail_is_withheld_if_its_hex_debug_reflects() {
-        for (marker, exposed) in [("193", false), ("different-marker", true)] {
+    async fn foreign_http_status_is_not_a_public_detail() {
+        for (marker, exposed) in [("000193", true), ("403", false)] {
             let credentials = SentCredentials::for_test(vec![crate::Secret::new(marker)]);
             let failure = finish!(async {
                 record(&credentials, &credentials, WriteDispatch::NotAWrite);
-                let error = Error::new(ErrorClass::PermissionDenied)
-                    .with_outer_detail(http::StatusCode::FORBIDDEN);
-                Err::<(), _>(Failure::new(error, None, WriteDispatch::NotAWrite))
+                Err::<(), _>(Failure::new(
+                    Error::new(ErrorClass::PermissionDenied)
+                        .with_http_status(http::StatusCode::FORBIDDEN),
+                    None,
+                    WriteDispatch::NotAWrite,
+                ))
             })
             .unwrap_err();
             assert!(failure.error().has_class(ErrorClass::PermissionDenied));
-            assert_eq!(
-                failure.error().detail::<http::StatusCode>().is_some(),
-                exposed
-            );
+            assert!(failure.error().detail::<http::StatusCode>().is_none());
+            let status = failure.error().detail::<crate::HttpStatus>();
+            assert_eq!(status.is_some(), exposed);
+            if let Some(status) = status {
+                assert_eq!(status.as_u16(), 403);
+                assert_eq!(format!("{status:06x?}"), "403");
+                assert_eq!(format!("{status:Z>6?}"), "403");
+            }
         }
     }
 

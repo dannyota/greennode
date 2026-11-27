@@ -211,5 +211,5 @@ pub(super) fn invalid_response(operation: &Operation, status: StatusCode, overfl
         SafeText::new(message, &[]),
         false,
     ))
-    .with_outer_detail(status)
+    .with_http_status(status)
 }

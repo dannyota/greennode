@@ -269,7 +269,7 @@ impl Client {
         .await;
         if let Err(failure) = result {
             let dispatch = failure.write_dispatch();
-            let status = failure.error().detail::<StatusCode>().copied().or_else(|| {
+            let status = failure.error().http_status().or_else(|| {
                 failure
                     .error()
                     .api_error()

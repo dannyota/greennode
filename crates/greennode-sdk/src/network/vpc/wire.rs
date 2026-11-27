@@ -335,9 +335,7 @@ impl<'a> Reads<'a> {
                             api.retryable(),
                         ));
                     }
-                    if let Some(status) = err
-                        .detail::<StatusCode>()
-                        .filter(|status| status.is_redirection())
+                    if let Some(status) = err.http_status().filter(|status| status.is_redirection())
                     {
                         return self.screen(read.api(Some(status.as_u16()), "", WITHHELD, false));
                     }

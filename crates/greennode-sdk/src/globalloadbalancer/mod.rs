@@ -42,21 +42,25 @@ pub struct Client {
 }
 
 /// Selects all global load balancer packages.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPackagesInput {}
+
+crate::error::debug_record!(ListPackagesInput {});
 
 /// Packages available to the account.
 pub type ListPackagesOutput = List<Package>;
 
 /// Selects all global load balancer regions.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRegionsInput {}
+
+crate::error::debug_record!(ListRegionsInput {});
 
 /// Regions available to the account.
 pub type ListRegionsOutput = List<Region>;
 
 /// Selects a page of global load balancers.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListLoadBalancersInput {
     /// Name filter sent to the service, even when empty.
     pub name: String,
@@ -66,12 +70,20 @@ pub struct ListLoadBalancersInput {
     pub limit: i64,
 }
 
+crate::error::debug_record!(ListLoadBalancersInput {
+    name,
+    offset,
+    limit
+});
+
 /// Selects a global load balancer by ID.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetLoadBalancerInput {
     /// Target load balancer identifier.
     pub load_balancer_id: String,
 }
+
+crate::error::debug_record!(GetLoadBalancerInput { load_balancer_id });
 
 impl GetLoadBalancerInput {
     /// Selects the load balancer with the given identifier.
@@ -93,11 +105,13 @@ pub struct GetLoadBalancerOutput {
 crate::wire::product::output::public_fields!(GetLoadBalancerOutput { load_balancer });
 
 /// Selects all pools in a global load balancer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListPoolsInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
 }
+
+crate::error::debug_record!(ListPoolsInput { load_balancer_id });
 
 impl ListPoolsInput {
     /// Selects pools under the given load balancer.
@@ -112,11 +126,13 @@ impl ListPoolsInput {
 pub type ListPoolsOutput = List<Pool>;
 
 /// Selects all listeners in a global load balancer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListListenersInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
 }
+
+crate::error::debug_record!(ListListenersInput { load_balancer_id });
 
 impl ListListenersInput {
     /// Selects listeners under the given load balancer.
@@ -131,13 +147,18 @@ impl ListListenersInput {
 pub type ListListenersOutput = List<Listener>;
 
 /// Selects an individual listener in a global load balancer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetListenerInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
     /// Target listener identifier.
     pub listener_id: String,
 }
+
+crate::error::debug_record!(GetListenerInput {
+    load_balancer_id,
+    listener_id
+});
 
 impl GetListenerInput {
     /// Selects the listener under the given load balancer.
@@ -160,13 +181,18 @@ pub struct GetListenerOutput {
 crate::wire::product::output::public_fields!(GetListenerOutput { listener });
 
 /// Selects all member groups of a global pool.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListPoolMembersInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
     /// Target pool identifier.
     pub pool_id: String,
 }
+
+crate::error::debug_record!(ListPoolMembersInput {
+    load_balancer_id,
+    pool_id
+});
 
 impl ListPoolMembersInput {
     /// Selects member groups under the given load balancer and pool.
@@ -182,7 +208,7 @@ impl ListPoolMembersInput {
 pub type ListPoolMembersOutput = List<PoolMember>;
 
 /// Selects an individual member group of a global pool.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetPoolMemberInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -191,6 +217,12 @@ pub struct GetPoolMemberInput {
     /// Target member group identifier.
     pub pool_member_id: String,
 }
+
+crate::error::debug_record!(GetPoolMemberInput {
+    load_balancer_id,
+    pool_id,
+    pool_member_id
+});
 
 impl GetPoolMemberInput {
     /// Selects the member group under the given load balancer and pool.
@@ -218,7 +250,7 @@ pub struct GetPoolMemberOutput {
 crate::wire::product::output::public_fields!(GetPoolMemberOutput { pool_member });
 
 /// Selects a load balancer's usage history and optional filters.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListUsageHistoriesInput {
     /// Target load balancer identifier.
     pub load_balancer_id: String,
@@ -229,6 +261,13 @@ pub struct ListUsageHistoriesInput {
     /// Usage type filter sent when nonempty.
     pub r#type: String,
 }
+
+crate::error::debug_record!(ListUsageHistoriesInput {
+    load_balancer_id,
+    from,
+    to,
+    r#type
+});
 
 impl ListUsageHistoriesInput {
     /// Selects usage history under the given load balancer without filters.

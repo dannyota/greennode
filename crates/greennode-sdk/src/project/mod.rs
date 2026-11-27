@@ -18,11 +18,13 @@ pub struct Client {
 }
 
 /// Filters the project inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListProjectsInput {
     /// Region to include. An empty value uses the configured region.
     pub region: String,
 }
+
+crate::error::debug_record!(ListProjectsInput { region });
 
 /// Projects visible to the configured account in the selected region.
 pub type ListProjectsOutput = List<Project>;

@@ -446,8 +446,7 @@ fn create_failure<T, O>(operation: &'static str) -> impl FnOnce(Failure<T>) -> F
 
 fn observed_status(error: &Error) -> Option<StatusCode> {
     error
-        .detail::<StatusCode>()
-        .copied()
+        .http_status()
         .or_else(|| StatusCode::from_u16(error.api_error()?.status()?).ok())
 }
 

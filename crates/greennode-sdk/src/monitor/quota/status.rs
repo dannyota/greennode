@@ -14,7 +14,7 @@ use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 const OPERATION: &str = "monitor.GetQuotaStatus";
 
 /// Service-specific Monitor failure identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// At least one row of the quota status snapshot was unavailable.
@@ -27,18 +27,22 @@ pub enum ErrorDetail {
     UnexpectedStatus,
 }
 
+crate::error::debug_record!(ErrorDetail; QuotaStatusIncomplete, InvalidQuotaKind, QuotaChanged, UnexpectedStatus);
+
 /// Selects which quotas to include in a status snapshot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetQuotaStatusInput {
     /// Optional kind, matched case insensitively. Empty selects all quotas.
     pub kind: String,
 }
 
+crate::error::debug_record!(GetQuotaStatusInput { kind });
+
 /// A timestamp returned by a Monitor quota read.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct QuotaTimestamp(pub OffsetDateTime);
 
-crate::wire::product::output::debug_record!(QuotaTimestamp(0));
+crate::error::debug_record!(QuotaTimestamp(0));
 
 impl crate::wire::product::output::PublicOutput for QuotaTimestamp {
     fn public_reflects(

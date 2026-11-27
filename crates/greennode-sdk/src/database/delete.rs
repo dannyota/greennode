@@ -23,11 +23,13 @@ const INTERRUPTED: Settlement = Settlement::NotSettled(
 );
 
 /// Selects an exact database instance ID for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteDatabaseInstanceInput {
     /// Exact instance ID.
     pub id: String,
 }
+
+crate::error::debug_record!(DeleteDatabaseInstanceInput { id });
 
 impl DeleteDatabaseInstanceInput {
     /// Selects the instance to check and delete.
@@ -50,8 +52,10 @@ pub struct DeleteDatabaseInstanceOutput {
 crate::wire::product::output::public_fields!(DeleteDatabaseInstanceOutput { id, deleted });
 
 /// Delete preflight found an ineligible instance and sent no mutation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DeleteRefused;
+
+crate::error::debug_record!(DeleteRefused unit);
 
 #[expect(
     clippy::result_large_err,

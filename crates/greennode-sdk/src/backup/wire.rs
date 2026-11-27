@@ -195,7 +195,7 @@ pub(super) fn withhold(operation: &Operation, error: Error) -> Error {
                 .with_detail("transport: response body exceeds limit")
                 .with_body_too_large();
         }
-        return match error.detail::<StatusCode>() {
+        return match error.http_status() {
             Some(status) => {
                 response_error(operation, status.as_u16(), "", WITHHELD, false).with_cause(error)
             }

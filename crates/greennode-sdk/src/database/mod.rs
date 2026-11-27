@@ -35,17 +35,21 @@ pub struct Client {
 }
 
 /// Selects the engine version catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseEngineVersionsInput;
+
+crate::error::debug_record!(ListDatabaseEngineVersionsInput unit);
 /// Engine versions available to the account.
 pub type ListDatabaseEngineVersionsOutput = List<EngineVersion>;
 /// Selects the zone catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseZonesInput;
+
+crate::error::debug_record!(ListDatabaseZonesInput unit);
 /// Database zones available to the account.
 pub type ListDatabaseZonesOutput = List<Zone>;
 /// Selects flavors for an engine and zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseFlavorsInput {
     /// Datastore engine type.
     pub engine: String,
@@ -54,14 +58,22 @@ pub struct ListDatabaseFlavorsInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseFlavorsInput {
+    engine,
+    engine_version,
+    zone_id
+});
 /// Flavors available for the selected engine and zone.
 pub type ListDatabaseFlavorsOutput = List<Flavor>;
 /// Selects storage types for a zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseStorageTypesInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseStorageTypesInput { zone_id });
 /// Storage types and the project reported by the service.
 #[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseStorageTypesOutput {
@@ -75,21 +87,28 @@ pub struct ListDatabaseStorageTypesOutput {
 
 crate::wire::product::output::public_fields!(ListDatabaseStorageTypesOutput { project_id, items });
 /// Selects networks for a zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseNetworksInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseNetworksInput { zone_id });
 /// Networks available in the selected zone.
 pub type ListDatabaseNetworksOutput = List<Network>;
 /// Selects one page of database instances.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseInstancesInput {
     /// One-based page number; zero selects one.
     pub page_number: i32,
     /// Page size; zero selects 100.
     pub page_size: i32,
 }
+
+crate::error::debug_record!(ListDatabaseInstancesInput {
+    page_number,
+    page_size
+});
 /// One page of database instances and its metadata.
 #[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseInstancesOutput {
@@ -111,11 +130,13 @@ crate::wire::product::output::public_fields!(ListDatabaseInstancesOutput {
 });
 
 /// Selects one relational instance by ID.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetDatabaseInstanceInput {
     /// Exact instance ID, using ASCII letters, digits, hyphens, or underscores.
     pub id: String,
 }
+
+crate::error::debug_record!(GetDatabaseInstanceInput { id });
 
 /// The requested relational database instance.
 #[derive(Clone, PartialEq, Serialize)]

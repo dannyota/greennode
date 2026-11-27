@@ -17,13 +17,15 @@ const VPN: InventoryRead = InventoryRead::new(
 );
 
 /// Selects a page of VPN connections.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVpnConnectionsInput {
     /// Page number. Zero uses the first page.
     pub page: i64,
     /// Page size. Zero uses ten connections.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListVpnConnectionsInput { page, size });
 
 /// One page of VPN connections, with inline sites and tunnels.
 pub type ListVpnConnectionsOutput = PagedList<VpnConnection>;

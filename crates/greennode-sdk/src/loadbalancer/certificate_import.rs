@@ -64,12 +64,10 @@ impl ImportCertificateInput {
     }
 }
 
-impl std::fmt::Debug for ImportCertificateInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ImportCertificateInput")
-            .finish_non_exhaustive()
-    }
-}
+crate::error::debug_record!(ImportCertificateInput => |self, f| {
+    f.debug_struct("ImportCertificateInput")
+        .finish_non_exhaustive()
+});
 
 /// Metadata returned by certificate import.
 #[derive(Clone, PartialEq, Serialize)]

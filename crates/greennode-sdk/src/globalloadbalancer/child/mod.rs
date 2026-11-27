@@ -28,7 +28,11 @@ use super::{Client, invalid_input};
 use crate::endpoint::Base;
 use crate::quote::{catalog::unique, request};
 use crate::wire::product::{
-    evidence::Evidence, guard::Guarded, operation::Operation, options::PathIds, sender::Response,
+    evidence::Evidence,
+    guard::Guarded,
+    operation::{Operation, RefusedGuard},
+    options::PathIds,
+    sender::Response,
 };
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
@@ -138,6 +142,9 @@ impl Child<'_> {
             .await
             .map_err(|failure| {
                 let error = failure.into_parts().0;
+                if error.detail::<RefusedGuard>().is_some() {
+                    return Box::new(error);
+                }
                 if error
                     .api_error()
                     .is_some_and(|api| api.operation() == self.0.id && api.status().is_none())

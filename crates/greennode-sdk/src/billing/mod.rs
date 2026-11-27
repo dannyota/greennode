@@ -56,21 +56,25 @@ pub struct Client {
 }
 
 /// Filters a budget summary list.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListBudgetsInput {
     /// Budget status to send to the API. An empty value includes all statuses.
     pub status: String,
 }
 
+crate::error::debug_record!(ListBudgetsInput { status });
+
 /// Budget summaries without pagination metadata.
 pub type ListBudgetsOutput = List<Budget>;
 
 /// Identifies a budget to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(GetBudgetInput { budget_uuid });
 
 impl GetBudgetInput {
     /// Stores the UUID for validation by [`Client::get_budget`].
@@ -176,7 +180,7 @@ impl Client {
         .map(|(_, envelope)| envelope.data)
         .map_err(|error| {
             let (error, _, dispatch) = error.into_parts();
-            let error = match error.detail::<StatusCode>().copied() {
+            let error = match error.http_status() {
                 Some(status)
                     if status.is_success()
                         && error.class() == ErrorClass::Api

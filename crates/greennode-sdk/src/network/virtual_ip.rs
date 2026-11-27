@@ -69,8 +69,10 @@ required_id_input!(
 pub type ListAddressPairsByVirtualSubnetOutput = List<AddressPair>;
 
 /// Lists the address pairs for the default page of virtual IPs.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListAllVirtualIpAddressAddressPairsInput {}
+
+crate::error::debug_record!(ListAllVirtualIpAddressAddressPairsInput {});
 
 /// Address pairs from the default page of virtual IPs, in provider order.
 pub type ListAllVirtualIpAddressAddressPairsOutput = List<AddressPair>;

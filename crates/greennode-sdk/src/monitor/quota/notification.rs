@@ -17,11 +17,13 @@ use crate::{Error, Failure, RequestContext};
 macro_rules! kind_input {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $name {
             /// Notification quota kind, matched case insensitively.
             pub kind: String,
         }
+
+        crate::error::debug_record!($name { kind });
         impl $name {
             /// Selects the notification quota kind.
             pub fn new(kind: impl Into<String>) -> Self {

@@ -1,5 +1,6 @@
 use super::Client;
 use crate::config::session::AuthKind;
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Output},
@@ -40,7 +41,7 @@ impl Client {
         ctx: &RequestContext,
         id: &str,
         evidence: &mut Evidence,
-    ) -> Result<String, Box<Error>> {
+    ) -> Result<Guarded<String>, Box<Error>> {
         let base = self
             .base::<()>()
             .map_err(|failure| Box::new(failure.into_parts().0))?;
@@ -62,11 +63,12 @@ impl Client {
             )
             .await
             .map_err(|failure| Box::new(super::safe_error(op.id, failure.error())))?;
-        let state = state.into_checked(evidence)?;
-        if state.id != id || !valid_status(&state.status) {
-            return Err(Box::new(super::malformed(op.id)));
-        }
-        Ok(state.status)
+        state.try_map(evidence, |state| {
+            if state.id != id || !valid_status(&state.status) {
+                return Err(Box::new(super::malformed(op.id)));
+            }
+            Ok(state.status)
+        })
     }
 
     pub(super) fn write_base<T>(&self) -> Result<&crate::endpoint::Base, Failure<T>> {
@@ -123,15 +125,16 @@ pub(super) fn not_sent<T>(error: Error) -> Failure<T> {
 pub(super) async fn wait_cluster(
     ctx: &RequestContext,
     clock: &dyn Clock,
-    mut read: impl AsyncFnMut(&RequestContext) -> Result<bool, Box<Error>>,
+    evidence: &mut Evidence,
+    mut read: impl AsyncFnMut(&RequestContext, &mut Evidence) -> Result<bool, Box<Error>>,
 ) -> Result<(), Box<Error>> {
     let deadline = clock.monotonic_now() + Duration::from_secs(30 * 60);
     let wait = ctx.child_with_deadline(deadline);
-    loop {
+    guarded_poll!(evidence, {
         if let Some(end) = wait.check(clock) {
             return Err(Box::new(end.into()));
         }
-        let result = read(&wait).await;
+        let result = read(&wait, evidence).await;
         if let Some(end) = wait.check(clock) {
             return Err(Box::new(end.into()));
         }
@@ -155,5 +158,54 @@ pub(super) async fn wait_cluster(
         if let Some(end) = stopped {
             return Err(Box::new(end.into()));
         }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn vks_polls_thirty_minutes_with_one_mib_receipts() {
+        use crate::TestClock;
+        let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+        let start = clock.monotonic_now();
+        let ctx = RequestContext::new().0;
+        let mut evidence = Evidence::new();
+        let mut body = br#"{"id":"cluster-1","status":"CREATING"}"#.to_vec();
+        body.resize(1 << 20, b' ');
+        let completed = std::cell::Cell::new(0);
+        let result = tokio::task::unconstrained(wait_cluster(
+            &ctx,
+            &clock,
+            &mut evidence,
+            async |_, evidence| {
+                if !evidence.keep_guard_for_test("vks.GetCluster", &body) {
+                    return Err(Box::new(Error::new(ErrorClass::Api)));
+                }
+                completed.set(completed.get() + 1);
+                Ok(false)
+            },
+        ));
+        tokio::pin!(result);
+        for tick in 0..180 {
+            assert!(
+                std::future::poll_fn(|cx| std::task::Poll::Ready(
+                    std::future::Future::poll(result.as_mut(), cx).is_pending()
+                ))
+                .await,
+                "poll exited at tick {tick}"
+            );
+            clock.advance(Duration::from_secs(10));
+        }
+        assert_eq!(
+            result.await.unwrap_err().class(),
+            ErrorClass::DeadlineExceeded
+        );
+        assert_eq!(completed.get(), 180);
+        assert_eq!(
+            clock.monotonic_now().duration_since(start),
+            Duration::from_secs(1800)
+        );
     }
 }

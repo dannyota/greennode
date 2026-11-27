@@ -21,7 +21,7 @@ const ALL: &str = "volume.ListAllSnapshots";
 const MAX_PAGES: i64 = 50;
 
 /// Volume and page selection for its snapshots.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotsInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -31,28 +31,38 @@ pub struct ListSnapshotsInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListSnapshotsInput {
+    volume_id,
+    page,
+    size
+});
+
 /// One page of snapshots.
 pub type ListSnapshotsOutput = PagedList<Snapshot>;
 
 /// Input for collecting all snapshots in the project.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListAllSnapshotsInput;
+
+crate::error::debug_record!(ListAllSnapshotsInput unit);
 
 /// Complete set of snapshots reached through the project's volumes.
 pub type ListAllSnapshotsOutput = List<Snapshot>;
 
 /// Selects Backup Center snapshot backends by name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotBackendsInput {
     /// Backend name, such as `HAN-01`.
     pub name: String,
 }
 
+crate::error::debug_record!(ListSnapshotBackendsInput { name });
+
 /// Backends matching the requested name.
 pub type ListSnapshotBackendsOutput = List<SnapshotBackend>;
 
 /// Selects a snapshot backend and a page of its policies.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotPoliciesInput {
     /// Snapshot backend identifier.
     pub backend_id: String,
@@ -61,6 +71,12 @@ pub struct ListSnapshotPoliciesInput {
     /// Requested page size. Zero selects 10 items.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListSnapshotPoliciesInput {
+    backend_id,
+    page,
+    size
+});
 
 /// One page of policies at the selected snapshot backend.
 pub type ListSnapshotPoliciesOutput = PagedList<SnapshotPolicy>;

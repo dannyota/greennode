@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::time::Duration;
 
 use http::{Method, StatusCode};
@@ -151,7 +152,7 @@ impl Client {
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(300));
-        loop {
+        guarded_poll!(evidence, {
             check(&wait, clock)?;
             let next = self.volume(&wait, id, evidence).await;
             check(&wait, clock)?;
@@ -181,7 +182,7 @@ impl Client {
             if tick.wait(clock).await == ContextEnd::Cancelled {
                 return Err(Box::new(ContextEnd::Cancelled.into()));
             }
-        }
+        });
     }
 }
 

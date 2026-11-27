@@ -42,11 +42,9 @@ pub(super) struct Settings {
     pub profile_settings: std::collections::BTreeMap<String, String>,
 }
 
-impl std::fmt::Debug for Settings {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("Settings([REDACTED])")
-    }
-}
+crate::error::debug_record!(Settings => |self, formatter| {
+    formatter.write_str("Settings([REDACTED])")
+});
 
 pub(super) fn parse_latch(value: Option<&str>, validate: bool) -> Result<bool, SettingsError> {
     match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {

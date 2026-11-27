@@ -18,7 +18,7 @@ fn nullable_rows<'de, D: serde::Deserializer<'de>, T: Deserialize<'de> + Default
 }
 
 /// Setup to price using independent monthly unit quotes.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimateInput {
     #[serde(deserialize_with = "nullable_rows")]
@@ -47,8 +47,17 @@ pub struct EstimateInput {
     pub allow_partial: bool,
 }
 
+crate::error::debug_record!(EstimateInput {
+    servers,
+    volumes,
+    public_ips,
+    storage,
+    max_requests,
+    allow_partial
+});
+
 /// Identical server units with root and optional bundled data disks.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimateServer {
     #[serde(deserialize_with = "nullable")]
@@ -97,8 +106,22 @@ pub struct EstimateServer {
     pub data_disk_encryption_type_id: String,
 }
 
+crate::error::debug_record!(EstimateServer {
+    key,
+    zone_id,
+    flavor_id,
+    image_id,
+    quantity,
+    root_disk_size,
+    root_disk_type_id,
+    root_disk_encryption_type_id,
+    data_disk_size,
+    data_disk_type_id,
+    data_disk_encryption_type_id
+});
+
 /// Identical additional disks, counted separately from servers.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimateVolume {
     #[serde(deserialize_with = "nullable")]
@@ -131,8 +154,18 @@ pub struct EstimateVolume {
     pub encryption_type_id: String,
 }
 
+crate::error::debug_record!(EstimateVolume {
+    key,
+    server_key,
+    zone_id,
+    volume_type_id,
+    quantity,
+    size,
+    encryption_type_id
+});
+
 /// Independent public IP products.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimatePublicIp {
     #[serde(deserialize_with = "nullable")]
@@ -153,8 +186,15 @@ pub struct EstimatePublicIp {
     pub quantity: i64,
 }
 
+crate::error::debug_record!(EstimatePublicIp {
+    key,
+    kind,
+    r#type,
+    quantity
+});
+
 /// Independent monthly storage packages.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimateStorage {
     #[serde(deserialize_with = "nullable")]
@@ -178,6 +218,14 @@ pub struct EstimateStorage {
     #[serde(rename = "QuotaGB")]
     pub quota_gb: i64,
 }
+
+crate::error::debug_record!(EstimateStorage {
+    key,
+    region,
+    r#type,
+    quantity,
+    quota_gb
+});
 
 /// Ordered quote rows, VND totals, coverage and processing metadata.
 #[derive(Clone, PartialEq, Serialize)]
@@ -414,10 +462,12 @@ impl EstimateStorage {
 }
 
 /// Identifies a local estimate arithmetic overflow.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EstimateArithmeticError {
     /// Multiplication or subtotal stage.
     pub stage: &'static str,
     /// Component key when multiplication failed.
     pub item_key: String,
 }
+
+crate::error::debug_record!(EstimateArithmeticError { stage, item_key });

@@ -18,7 +18,7 @@ use crate::wire::product::{
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
 /// IAM-specific write outcome, available through [`Error::detail`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WriteError {
     /// The target could be the current caller.
@@ -40,6 +40,8 @@ pub enum WriteError {
     /// A resource still has an attachment that prevents deletion.
     ResourceInUse,
 }
+
+crate::error::debug_record!(WriteError; SelfChange, PrivilegedChange, CreateUnconfirmed, NoSecret, OriginNotIam, UserCreateUncertain, UserWriteUncertain, ManagedPolicy, ResourceInUse);
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {

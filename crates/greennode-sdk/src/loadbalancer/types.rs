@@ -3,7 +3,7 @@ use crate::{List, PagedList};
 use serde::Serialize;
 
 /// Parameters for ListLoadBalancers.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListLoadBalancersInput {
     /// Name filter sent to the API.
     pub name: String,
@@ -13,22 +13,28 @@ pub struct ListLoadBalancersInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListLoadBalancersInput { name, page, size });
+
 /// Parameters for GetLoadBalancer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetLoadBalancerInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
 }
 
+crate::error::debug_record!(GetLoadBalancerInput { load_balancer_id });
+
 /// Parameters for ListPackages.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPackagesInput {
     /// Optional zone filter.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListPackagesInput { zone_id });
+
 /// Parameters for ListCertificates.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListCertificatesInput {
     /// Name filter sent to the API.
     pub name: String,
@@ -38,15 +44,19 @@ pub struct ListCertificatesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListCertificatesInput { name, page, size });
+
 /// Parameters for ListListeners.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListListenersInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
 }
 
+crate::error::debug_record!(ListListenersInput { load_balancer_id });
+
 /// Parameters for GetListener.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetListenerInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -54,15 +64,22 @@ pub struct GetListenerInput {
     pub listener_id: String,
 }
 
+crate::error::debug_record!(GetListenerInput {
+    load_balancer_id,
+    listener_id
+});
+
 /// Parameters for ListPools.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPoolsInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
 }
 
+crate::error::debug_record!(ListPoolsInput { load_balancer_id });
+
 /// Parameters for GetPool.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetPoolInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -70,8 +87,13 @@ pub struct GetPoolInput {
     pub pool_id: String,
 }
 
+crate::error::debug_record!(GetPoolInput {
+    load_balancer_id,
+    pool_id
+});
+
 /// Parameters for GetPoolHealthMonitor.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetPoolHealthMonitorInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -79,8 +101,13 @@ pub struct GetPoolHealthMonitorInput {
     pub pool_id: String,
 }
 
+crate::error::debug_record!(GetPoolHealthMonitorInput {
+    load_balancer_id,
+    pool_id
+});
+
 /// Parameters for ListPoolMembers.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPoolMembersInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -88,8 +115,13 @@ pub struct ListPoolMembersInput {
     pub pool_id: String,
 }
 
+crate::error::debug_record!(ListPoolMembersInput {
+    load_balancer_id,
+    pool_id
+});
+
 /// Parameters for ListPolicies.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPoliciesInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -97,8 +129,13 @@ pub struct ListPoliciesInput {
     pub listener_id: String,
 }
 
+crate::error::debug_record!(ListPoliciesInput {
+    load_balancer_id,
+    listener_id
+});
+
 /// Parameters for GetPolicy.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetPolicyInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
@@ -108,19 +145,29 @@ pub struct GetPolicyInput {
     pub policy_id: String,
 }
 
+crate::error::debug_record!(GetPolicyInput {
+    load_balancer_id,
+    listener_id,
+    policy_id
+});
+
 /// Parameters for ListTags.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListTagsInput {
     /// Identifier of the load balancer.
     pub load_balancer_id: String,
 }
 
+crate::error::debug_record!(ListTagsInput { load_balancer_id });
+
 /// Parameters for GetCertificate.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetCertificateInput {
     /// Identifier of the certificate.
     pub certificate_id: String,
 }
+
+crate::error::debug_record!(GetCertificateInput { certificate_id });
 
 /// LoadBalancer items returned by the service.
 pub type ListLoadBalancersOutput = PagedList<LoadBalancer>;

@@ -21,7 +21,7 @@ const BY_SERVER: Read = Read::vserver(
 );
 
 /// Name filter and page selection for the volume inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumesInput {
     /// Volume name filter.
     pub name: String,
@@ -31,19 +31,25 @@ pub struct ListVolumesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListVolumesInput { name, page, size });
+
 /// Indicates that the service did not return a volume status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct UnexpectedStatus;
+
+crate::error::debug_record!(UnexpectedStatus unit);
 
 /// One page of volumes.
 pub type ListVolumesOutput = PagedList<Volume>;
 
 /// Identifies a volume to read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
 }
+
+crate::error::debug_record!(GetVolumeInput { volume_id });
 
 /// The requested volume.
 #[derive(Clone, PartialEq, Serialize)]
@@ -56,21 +62,25 @@ pub struct GetVolumeOutput {
 crate::wire::product::output::public_fields!(GetVolumeOutput { volume });
 
 /// Identifies a volume whose backing volume should be read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetUnderlyingVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
 }
 
+crate::error::debug_record!(GetUnderlyingVolumeInput { volume_id });
+
 /// The requested backing volume.
 pub type GetUnderlyingVolumeOutput = GetVolumeOutput;
 
 /// Identifies the server whose attached volumes should be read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumesByServerInput {
     /// Server UUID.
     pub server_id: String,
 }
+
+crate::error::debug_record!(ListVolumesByServerInput { server_id });
 
 /// Volumes attached to the server, including the boot volume.
 pub type ListVolumesByServerOutput = List<Volume>;

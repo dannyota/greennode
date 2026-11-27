@@ -9,11 +9,9 @@ use crate::wire::{
 };
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
-use super::child_writes::{
-    BOUND, ChildTarget, ChildWriter, INTERVAL, WriteResult, encode_body, lb_busy, not_sent,
-};
+use super::child_writes::{BOUND, ChildTarget, ChildWriter, WriteResult, encode_body, not_sent};
 use super::listener_output::ListenerProjection;
-use super::wire::{CompleteNotFound, DecodeError, Read, invalid_input, screen_input, validate_ids};
+use super::wire::{DecodeError, Read, invalid_input, screen_input, validate_ids};
 use super::{Client, Listener, ListenerInsertHeader, guard};
 use guard::shape;
 
@@ -35,7 +33,7 @@ const LISTENER: Shape<'_> = shape!("uuid", "name", "description", "protocol", "p
     "insertHeaders" => Shape::Array(&HEADER));
 
 /// Creates a regional load balancer listener.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct CreateListenerInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -69,6 +67,23 @@ pub struct CreateListenerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateListenerInput {
+    load_balancer_id,
+    name,
+    protocol,
+    port,
+    default_pool_id,
+    timeout_client,
+    timeout_member,
+    timeout_connection,
+    allowed_cidrs,
+    certificate_ids,
+    default_certificate_id,
+    client_certificate_id,
+    insert_headers,
+    no_wait
+});
+
 /// Holds the listener returned by the create or its confirmation.
 #[derive(Clone, PartialEq)]
 pub struct CreateListenerOutput {
@@ -92,7 +107,7 @@ impl Serialize for CreateListenerOutput {
 }
 
 /// Updates a regional load balancer listener.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UpdateListenerInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -131,6 +146,21 @@ pub struct UpdateListenerInput {
     #[serde(skip)]
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdateListenerInput {
+    load_balancer_id,
+    listener_id,
+    default_pool_id,
+    timeout_client,
+    timeout_member,
+    timeout_connection,
+    allowed_cidrs,
+    certificate_ids,
+    default_certificate_id,
+    client_certificate_id,
+    insert_headers,
+    no_wait
+});
 
 /// Holds the listener returned by the update or its confirmation.
 #[derive(Clone, PartialEq)]
@@ -583,44 +613,97 @@ async fn settle(
 ) -> Result<(), Box<Error>> {
     let clock = write.client.session.clock();
     let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
-    loop {
-        wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
-            .wait(clock)
-            .await;
-        write.confirm_time(ctx, &wait, target)?;
-        let row = write.read_data(&wait, &GET_LISTENER, target.ids).await;
-        write.confirm_time(ctx, &wait, target)?;
-        let row = match row {
-            Ok(row) => row,
-            Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
-            Err(error) => return Err(write.unconfirmed(target, *error)),
-        };
-        let listener: Listener = guard::parse(&GET_LISTENER, &row, &LISTENER, &write.evidence)
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        if listener.uuid != target.id || listener.progress_status.is_empty() {
-            let error = GET_LISTENER.decode_error(&write.evidence, DecodeError::InvalidShape);
-            return Err(write.unconfirmed(target, *error));
+    write
+        .settle_child(ctx, &wait, target, creating, last, |row: &Listener| {
+            (&row.uuid, &row.progress_status)
+        })
+        .await
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use super::*;
+    use crate::wire::test_server::{Response, Server};
+    use crate::{Config, ConfigOptions, EndpointOverrides, Secret, TestClock, Token};
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct Rotating(AtomicUsize);
+
+    impl crate::CredentialsProvider for Rotating {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+            let bearer = if self.0.fetch_add(1, Ordering::Relaxed) == 0 {
+                "toy-first"
+            } else {
+                "toy-parent-bearer"
+            };
+            Box::pin(ready(Ok(Token::new(Secret::new(bearer), None))))
         }
-        screen_input(
-            &write.evidence,
-            [listener.uuid.as_str(), &listener.progress_status],
-        )
-        .map_err(|error| write.unconfirmed(target, *error))?;
-        *last = listener;
-        match last.progress_status.as_str() {
-            "ERROR" => return Err(write.failed(target.kind, target.id)),
-            "CREATED" => {
-                let parent = write.parent(&wait).await;
-                write.confirm_time(ctx, &wait, target)?;
-                let (status, _) = parent.map_err(|error| write.unconfirmed(target, *error))?;
-                if status == "ERROR" {
-                    return Err(write.failed("load balancer", write.lb_id));
-                }
-                if !lb_busy(&status) {
-                    return Ok(());
-                }
-            }
-            _ => {}
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn listener_created_is_rechecked_after_the_parent_read() {
+        for (note, accepted) in [("ordinary-note", true), ("toy-parent-bearer", false)] {
+            let replies = [
+                serde_json::json!({"data":{"uuid":"listener-1","progressStatus":"CREATED","note":note}}),
+                serde_json::json!({"data":{"uuid":"lb-1","progressStatus":"CREATED","type":"LAYER4"}}),
+            ].map(|value| {
+                let body = value.to_string().into_bytes();
+                Response::Http { status: "200 OK".into(), headers: vec![("Content-Length".into(), body.len().to_string())], body }
+            });
+            let server = Server::start(replies.into());
+            let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
+            let config = Config::new(
+                ConfigOptions::default()
+                    .with_project_id("proj-1".into())
+                    .with_region("hcm-3".into())
+                    .with_credentials_provider(Arc::new(Rotating(0.into())))
+                    .with_clock(Arc::new(clock.clone()))
+                    .with_endpoint_overrides(EndpointOverrides {
+                        vlb: Some(format!("{}/regional/", server.origin)),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
+            config
+                .session()
+                .set_test_product_root(server.root_der.clone());
+            let client = Client::new(&config);
+            let ctx = RequestContext::new().0;
+            let ids = [("LoadBalancerID", "lb-1"), ("ListenerID", "listener-1")];
+            let mut write =
+                ChildWriter::new(&client, &ctx, "loadbalancer.CreateListener", "lb-1", &ids)
+                    .unwrap();
+            let target = listener_target("listener-1", &ids);
+            let mut last = Listener::default();
+            let future = settle(&ctx, &mut write, &target, true, &mut last);
+            tokio::pin!(future);
+            assert!(
+                std::future::poll_fn(|cx| std::task::Poll::Ready(
+                    future.as_mut().poll(cx).is_pending()
+                ))
+                .await
+            );
+            clock.advance(super::super::child_writes::INTERVAL);
+            assert_eq!(future.await.is_ok(), accepted);
+            assert_eq!(server.requests(), 2);
         }
     }
 }

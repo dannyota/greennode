@@ -31,7 +31,7 @@ const DELETE: Mutation = Mutation {
 };
 
 /// Identifies the volume and server for an attachment.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct AttachVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -41,8 +41,14 @@ pub struct AttachVolumeInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(AttachVolumeInput {
+    volume_id,
+    server_id,
+    no_wait
+});
+
 /// Identifies the volume and server for a detachment.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DetachVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -53,6 +59,13 @@ pub struct DetachVolumeInput {
     /// Returns current state once the detachment is accepted.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DetachVolumeInput {
+    volume_id,
+    server_id,
+    allow_running,
+    no_wait
+});
 
 /// The attachment state and whether the request changed it.
 #[derive(Clone, PartialEq, Serialize)]
@@ -76,13 +89,15 @@ impl Redact for AttachVolumeOutput {
 }
 
 /// Identifies a detached volume whose data should be deleted.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
     /// Returns once the deletion is accepted.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteVolumeInput { volume_id, no_wait });
 
 /// The deletion acknowledgement has no result fields.
 #[derive(Clone, Copy, Default, Eq, PartialEq, Serialize)]
@@ -95,7 +110,7 @@ impl Redact for DeleteVolumeOutput {
 }
 
 /// Safety check that stopped a volume write before dispatch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WriteRefusal {
     /// The volume is attached to a server.
@@ -105,6 +120,8 @@ pub enum WriteRefusal {
     /// The server must be stopped before detachment.
     ServerRunning,
 }
+
+crate::error::debug_record!(WriteRefusal; VolumeInUse, BootVolume, ServerRunning);
 
 struct Attachment<'a> {
     volume: &'a str,

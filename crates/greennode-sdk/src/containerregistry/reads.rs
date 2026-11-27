@@ -1,7 +1,7 @@
 use super::*;
 
 /// Filters and selects a page of registry users.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListUsersInput {
     /// User name filter.
     pub name: String,
@@ -10,11 +10,13 @@ pub struct ListUsersInput {
     /// Page size, defaulting to 10000 when not positive.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListUsersInput { name, page, size });
 /// A page of registry users.
 pub type ListUsersOutput = PagedList<User>;
 
 /// Selects a repository and a page of its users.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRepositoryUsersInput {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
@@ -25,15 +27,24 @@ pub struct ListRepositoryUsersInput {
     /// Page size, defaulting to 10000 when not positive.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListRepositoryUsersInput {
+    repository_id,
+    name,
+    page,
+    size
+});
 /// A page of users attached to a repository.
 pub type ListRepositoryUsersOutput = PagedList<User>;
 
 /// Selects a repository by identifier.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetRepositoryInput {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
 }
+
+crate::error::debug_record!(GetRepositoryInput { repository_id });
 impl GetRepositoryInput {
     /// Stores the identifier for validation by the read.
     pub fn new(id: impl Into<String>) -> Self {

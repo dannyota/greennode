@@ -4,11 +4,9 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
-use super::child_writes::{
-    BOUND, ChildTarget, ChildWriter, INTERVAL, WriteResult, encode_body, lb_busy, not_sent,
-};
+use super::child_writes::{BOUND, ChildTarget, ChildWriter, WriteResult, encode_body, not_sent};
 use super::pool_output::PoolProjection;
-use super::wire::{CompleteNotFound, DecodeError, Read, invalid_input, screen_input};
+use super::wire::{DecodeError, Read, invalid_input, screen_input};
 use super::{Client, HealthMonitor, Pool, guard};
 use guard::shape;
 
@@ -28,7 +26,7 @@ const GET_MONITOR: Read = Read {
 };
 
 /// Creates a pool and its health monitor.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreatePoolInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -66,6 +64,26 @@ pub struct CreatePoolInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreatePoolInput {
+    load_balancer_id,
+    name,
+    protocol,
+    health_check_protocol,
+    algorithm,
+    stickiness,
+    tls_encryption,
+    health_check_path,
+    health_check_method,
+    health_check_http_version,
+    health_check_domain_name,
+    health_check_success_code,
+    healthy_threshold,
+    unhealthy_threshold,
+    health_check_interval,
+    health_check_timeout,
+    no_wait
+});
+
 /// Holds the pool returned by the create or its confirmation.
 #[derive(Clone, PartialEq)]
 pub struct CreatePoolOutput {
@@ -90,7 +108,7 @@ impl Serialize for CreatePoolOutput {
 }
 
 /// Changes a pool or its health monitor while preserving fields left unset.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UpdatePoolInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -138,6 +156,24 @@ pub struct UpdatePoolInput {
     #[serde(skip)]
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdatePoolInput {
+    load_balancer_id,
+    pool_id,
+    algorithm,
+    stickiness,
+    tls_encryption,
+    health_check_path,
+    health_check_method,
+    health_check_http_version,
+    health_check_domain_name,
+    health_check_success_code,
+    healthy_threshold,
+    unhealthy_threshold,
+    health_check_interval,
+    health_check_timeout,
+    no_wait
+});
 
 /// Holds the pool returned by the update or its confirmation.
 #[derive(Clone, PartialEq)]
@@ -635,42 +671,9 @@ pub(super) async fn settle_until(
     creating: bool,
     last: &mut Pool,
 ) -> Result<(), Box<Error>> {
-    let clock = write.client.session.clock();
-    loop {
-        wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
-            .wait(clock)
-            .await;
-        write.confirm_time(ctx, wait, target)?;
-        let row = write.read_data(wait, &GET_POOL, target.ids).await;
-        write.confirm_time(ctx, wait, target)?;
-        let row = match row {
-            Ok(row) => row,
-            Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
-            Err(error) => return Err(write.unconfirmed(target, *error)),
-        };
-        let pool: Pool = guard::parse(&GET_POOL, &row, &POOL, &write.evidence)
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        if pool.uuid != target.id || pool.progress_status.is_empty() {
-            let error = GET_POOL.decode_error(&write.evidence, DecodeError::InvalidShape);
-            return Err(write.unconfirmed(target, *error));
-        }
-        screen_input(&write.evidence, [pool.uuid.as_str(), &pool.progress_status])
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        *last = pool;
-        match last.progress_status.as_str() {
-            "ERROR" => return Err(write.failed(target.kind, target.id)),
-            "CREATED" => {
-                let parent = write.parent(wait).await;
-                write.confirm_time(ctx, wait, target)?;
-                let (status, _) = parent.map_err(|error| write.unconfirmed(target, *error))?;
-                if status == "ERROR" {
-                    return Err(write.failed("load balancer", write.lb_id));
-                }
-                if !lb_busy(&status) {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
-    }
+    write
+        .settle_child(ctx, wait, target, creating, last, |row: &Pool| {
+            (&row.uuid, &row.progress_status)
+        })
+        .await
 }

@@ -4,20 +4,28 @@ use crate::wire::strict_json::{Shape, field_matches};
 use serde::{Deserialize, Deserializer, de};
 
 /// Selects all project zones.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListZonesInput {}
+
+crate::error::debug_record!(ListZonesInput {});
 /// Selects all project quota entries.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListQuotaUsedInput {}
+
+crate::error::debug_record!(ListQuotaUsedInput {});
 /// Selects a project quota by name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetQuotaInput {
     /// Quota name, matched without ASCII case distinctions.
     pub name: String,
 }
+
+crate::error::debug_record!(GetQuotaInput { name });
 /// Selects the project tag quota.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetTagQuotaInput {}
+
+crate::error::debug_record!(GetTagQuotaInput {});
 /// Zone properties returned by the service.
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]

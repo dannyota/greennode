@@ -191,13 +191,10 @@ fn status_detail_preserves_identity_and_api_error() {
     let sdk: crate::Failure<()> = failure.into_failure(mapped);
     assert!(!sdk.error().has_identity(crate::ErrorClass::Auth));
     assert_eq!(sdk.error().api_error().map(ApiError::operation), before);
-    assert_eq!(
-        sdk.error().detail::<StatusCode>(),
-        Some(&StatusCode::UNAUTHORIZED)
-    );
+    assert_eq!(sdk.error().http_status(), Some(StatusCode::UNAUTHORIZED));
     let explicit = SdkError::new(crate::ErrorClass::Auth)
         .with_detail(17u32)
-        .with_outer_detail(StatusCode::UNAUTHORIZED);
+        .with_http_status(StatusCode::UNAUTHORIZED);
     assert!(explicit.has_identity(crate::ErrorClass::Auth));
     assert_eq!(explicit.detail::<u32>(), Some(&17));
     assert!(explicit.api_error().is_none());
@@ -603,10 +600,7 @@ async fn once_invalidation_error_keeps_status_and_dispatch() {
         source = error.source();
     }
     assert!(sdk.error().has_identity(crate::ErrorClass::Auth));
-    assert_eq!(
-        sdk.error().detail::<StatusCode>(),
-        Some(&StatusCode::UNAUTHORIZED)
-    );
+    assert_eq!(sdk.error().http_status(), Some(StatusCode::UNAUTHORIZED));
     assert_eq!(sdk.write_dispatch(), WriteDispatch::MayHaveBeenSent);
 }
 #[tokio::test]

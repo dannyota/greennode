@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Guarded, guarded_poll};
 mod timing;
 
 use timing::{check_confirm_time, check_ready_time};
@@ -71,7 +72,7 @@ const POLICY: Shape<'_> = shape!("uuid", "name", "description", "redirectPoolId"
 struct BusyRefusal;
 
 /// Identifies a pool to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeletePoolInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -81,6 +82,12 @@ pub struct DeletePoolInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(DeletePoolInput {
+    load_balancer_id,
+    pool_id,
+    no_wait
+});
+
 /// A pool delete has no output fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePoolOutput {}
@@ -88,7 +95,7 @@ pub struct DeletePoolOutput {}
 crate::wire::product::output::public_fields!(DeletePoolOutput {});
 
 /// Identifies a listener to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteListenerInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -98,6 +105,12 @@ pub struct DeleteListenerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(DeleteListenerInput {
+    load_balancer_id,
+    listener_id,
+    no_wait
+});
+
 /// A listener delete has no output fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteListenerOutput {}
@@ -105,7 +118,7 @@ pub struct DeleteListenerOutput {}
 crate::wire::product::output::public_fields!(DeleteListenerOutput {});
 
 /// Identifies a policy to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeletePolicyInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -116,6 +129,13 @@ pub struct DeletePolicyInput {
     /// Returns after the provider accepts the delete.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeletePolicyInput {
+    load_balancer_id,
+    listener_id,
+    policy_id,
+    no_wait
+});
 
 /// A policy delete has no output fields.
 #[derive(Clone, Default, PartialEq, Eq, Serialize)]
@@ -361,7 +381,7 @@ impl Client {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
         let lb_ids = [("LoadBalancerID", child.load_balancer)];
-        loop {
+        guarded_poll!(evidence, {
             check_ready_time(ctx, &wait, clock, child, evidence)?;
             let lb = self
                 .read_progress(
@@ -373,19 +393,20 @@ impl Client {
                 )
                 .await;
             check_ready_time(ctx, &wait, clock, child, evidence)?;
-            if !busy(&lb?, true) {
+            let lb = lb?;
+            if !busy(lb.recheck(evidence)?, true) {
                 let status = self
                     .read_progress(&wait, &child.read, child.ids, child.id, evidence)
                     .await;
                 check_ready_time(ctx, &wait, clock, child, evidence)?;
-                if !busy(&status?, false) {
+                if !busy(status?.recheck(evidence)?, false) && !busy(lb.recheck(evidence)?, true) {
                     return Ok(());
                 }
             }
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     async fn confirm_child_deleted(
@@ -397,14 +418,17 @@ impl Client {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
         let lb_ids = [("LoadBalancerID", child.load_balancer)];
-        loop {
+        guarded_poll!(evidence, {
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
+            let checkpoint = evidence.guard_checkpoint();
             let status = self
                 .read_progress(&wait, &child.read, child.ids, child.id, evidence)
                 .await;
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
             match status {
                 Err(error) if error.detail::<CompleteNotFound>().is_some() => {
+                    let absence = Guarded::from_checkpoint((), evidence, checkpoint)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
                     let lb = self
                         .read_progress(
                             &wait,
@@ -415,7 +439,12 @@ impl Client {
                         )
                         .await;
                     check_confirm_time(ctx, &wait, clock, child, evidence)?;
-                    let lb = lb.map_err(|error| child.unconfirmed(evidence, *error))?;
+                    absence
+                        .recheck(evidence)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
+                    let lb = lb
+                        .and_then(|lb| lb.into_checked(evidence))
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
                     if lb == "ERROR" {
                         return Err(child.failed("load balancer", child.load_balancer, evidence));
                     }
@@ -424,15 +453,20 @@ impl Client {
                     }
                 }
                 Err(error) => return Err(child.unconfirmed(evidence, *error)),
-                Ok(status) if status == "ERROR" => {
-                    return Err(child.failed(child.kind, child.id, evidence));
+                Ok(status) => {
+                    if status
+                        .recheck(evidence)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?
+                        == "ERROR"
+                    {
+                        return Err(child.failed(child.kind, child.id, evidence));
+                    }
                 }
-                Ok(_) => {}
             }
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     async fn read_progress(
@@ -442,7 +476,7 @@ impl Client {
         ids: &[(&str, &str)],
         id: &str,
         evidence: &mut Evidence,
-    ) -> Result<String, Box<Error>> {
+    ) -> Result<Guarded<String>, Box<Error>> {
         let text = self
             .read_guard_text(ctx, super::wire::GuardRead(read), ids, &[], evidence)
             .await?;
@@ -464,7 +498,7 @@ impl Client {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
         screen_input(evidence, [uuid.as_str(), progress.as_str()])?;
-        Ok(progress)
+        Guarded::latest(progress, evidence)
     }
 
     async fn send_child_delete(

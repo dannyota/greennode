@@ -15,13 +15,18 @@ const FIND: &str = "containerregistry.listUsersExactMatch";
 const MAX_USER_LIST_PAGES: i64 = 100;
 
 /// Selects a repository and the service-defined actions to grant on it.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UserPermission {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
     /// Exact action names from the service's permission list.
     pub actions: Vec<String>,
 }
+
+crate::error::debug_record!(UserPermission {
+    repository_id,
+    actions
+});
 
 impl UserPermission {
     /// Sets the repository and its requested actions.
@@ -34,7 +39,7 @@ impl UserPermission {
 }
 
 /// Creates a registry user with permissions for at least one repository.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateUserInput {
     /// Name that must be absent from the exact-name search.
     pub name: String,
@@ -45,6 +50,13 @@ pub struct CreateUserInput {
     /// Repository permissions to grant.
     pub permissions: Vec<UserPermission>,
 }
+
+crate::error::debug_record!(CreateUserInput {
+    name,
+    description,
+    duration_days,
+    permissions
+});
 
 impl CreateUserInput {
     /// Sets the name and permissions without a description or expiry.
@@ -98,11 +110,13 @@ pub fn issued_user_secret(failure: &Failure<CreateUserOutput>) -> Option<&Secret
 }
 
 /// Identifies a registry user by UUID for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteUserInput {
     /// Registry user UUID, distinct from the account's `UserID` field.
     pub user_id: String,
 }
+
+crate::error::debug_record!(DeleteUserInput { user_id });
 
 impl DeleteUserInput {
     /// Selects the registry user UUID.

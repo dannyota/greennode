@@ -16,7 +16,7 @@ use crate::wire::strict_json::{self, Shape};
 use crate::{ApiError, Error, output_number};
 
 /// Failure while decoding a successful global load balancer response.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body was not valid JSON.
@@ -26,6 +26,8 @@ pub enum DecodeError {
     /// A retained credential could not be removed without changing its field type.
     ReflectedCredential,
 }
+
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape, ReflectedCredential);
 
 pub(super) trait WireField: Default + DeserializeOwned {
     const SHAPE: Shape<'static> = Shape::Any;

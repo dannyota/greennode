@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -181,13 +182,13 @@ impl Client {
         };
         let wait =
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
-        loop {
+        guarded_poll!(evidence, {
             check(&wait, clock)?;
             let result = self.server_guard::<()>(&wait, id, evidence).await;
             check(&wait, clock)?;
             match result {
                 Err(error)
-                    if error.error().detail::<StatusCode>().is_none()
+                    if error.error().http_status().is_none()
                         && error.error().api_error().is_some_and(|api| {
                             api.operation() == "compute.GetServer" && api.status() == Some(404)
                         }) =>
@@ -229,7 +230,7 @@ impl Client {
             if tick.wait(clock).await == ContextEnd::Cancelled {
                 return Err(Box::new(ContextEnd::Cancelled.into()));
             }
-        }
+        });
     }
 
     pub(super) fn guard_write(
@@ -313,7 +314,7 @@ pub(super) fn with_screened_advice(error: Error, message: &str, evidence: &Evide
 }
 
 pub(super) fn rejected(error: &Error) -> bool {
-    error.detail::<StatusCode>().is_none()
+    error.http_status().is_none()
         && status(error).is_some_and(|status| (400..500).contains(&status))
 }
 
@@ -321,7 +322,7 @@ pub(super) fn status(error: &Error) -> Option<u16> {
     error
         .api_error()
         .and_then(ApiError::status)
-        .or_else(|| error.detail::<StatusCode>().map(|value| value.as_u16()))
+        .or_else(|| error.http_status().map(|value| value.as_u16()))
 }
 
 pub(super) fn safe_server(mut server: Server, evidence: &Evidence) -> Option<Server> {

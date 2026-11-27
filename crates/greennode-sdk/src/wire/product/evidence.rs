@@ -322,6 +322,11 @@ impl Evidence {
         true
     }
 
+    #[cfg(test)]
+    pub(crate) fn keep_guard_for_test(&mut self, id: &'static str, body: &[u8]) -> bool {
+        self.keep_guard(id, body)
+    }
+
     pub(crate) fn guard_checkpoint(&self) -> usize {
         self.guards.len()
     }

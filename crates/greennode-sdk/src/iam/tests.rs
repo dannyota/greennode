@@ -339,7 +339,7 @@ async fn reflected_observed_status_is_removed_from_typed_details() {
             .0;
         assert_eq!(error.class(), ErrorClass::Api);
         assert!(error.is_body_too_large());
-        assert_eq!(error.detail::<StatusCode>().is_some(), keeps_status);
+        assert_eq!(error.http_status().is_some(), keeps_status);
     }
 }
 

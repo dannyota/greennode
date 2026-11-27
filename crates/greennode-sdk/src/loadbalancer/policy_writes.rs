@@ -7,11 +7,9 @@ use crate::wire::{
 };
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
-use super::child_writes::{
-    BOUND, ChildTarget, ChildWriter, INTERVAL, WriteResult, encode_body, lb_busy, not_sent,
-};
+use super::child_writes::{BOUND, ChildTarget, ChildWriter, WriteResult, encode_body, not_sent};
 use super::policy_output::PolicyProjection;
-use super::wire::{CompleteNotFound, DecodeError, Read, invalid_input, screen_input, validate_ids};
+use super::wire::{DecodeError, Read, invalid_input, validate_ids};
 use super::{Client, L7Rule, Policy, guard};
 use guard::shape;
 
@@ -33,7 +31,7 @@ const TO_POOL: &str = "REDIRECT_TO_POOL";
 const TO_URL: &str = "REDIRECT_TO_URL";
 
 /// Supplies one match rule for a listener policy.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct PolicyRuleInput {
     /// Provider rule type.
     pub r#type: String,
@@ -43,8 +41,14 @@ pub struct PolicyRuleInput {
     pub value: String,
 }
 
+crate::error::debug_record!(PolicyRuleInput {
+    r#type,
+    compare_type,
+    value
+});
+
 /// Creates a layer 7 policy on a regional listener.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct CreatePolicyInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -71,6 +75,19 @@ pub struct CreatePolicyInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreatePolicyInput {
+    load_balancer_id,
+    listener_id,
+    name,
+    action,
+    redirect_pool_id,
+    redirect_url,
+    redirect_http_code,
+    keep_query_string,
+    rules,
+    no_wait
+});
+
 /// Holds the policy returned by the create or its confirmation.
 #[derive(Clone, PartialEq)]
 pub struct CreatePolicyOutput {
@@ -94,7 +111,7 @@ impl Serialize for CreatePolicyOutput {
 }
 
 /// Updates a layer 7 policy on a regional listener.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UpdatePolicyInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -127,6 +144,19 @@ pub struct UpdatePolicyInput {
     #[serde(skip)]
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdatePolicyInput {
+    load_balancer_id,
+    listener_id,
+    policy_id,
+    action,
+    redirect_pool_id,
+    redirect_url,
+    redirect_http_code,
+    keep_query_string,
+    rules,
+    no_wait
+});
 
 /// Holds the policy returned by the update or its confirmation.
 #[derive(Clone, PartialEq)]
@@ -558,44 +588,9 @@ async fn settle(
 ) -> Result<(), Box<Error>> {
     let clock = write.client.session.clock();
     let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
-    loop {
-        wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
-            .wait(clock)
-            .await;
-        write.confirm_time(ctx, &wait, target)?;
-        let row = write.read_data(&wait, &GET_POLICY, target.ids).await;
-        write.confirm_time(ctx, &wait, target)?;
-        let row = match row {
-            Ok(row) => row,
-            Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
-            Err(error) => return Err(write.unconfirmed(target, *error)),
-        };
-        let policy: Policy = guard::parse(&GET_POLICY, &row, &POLICY, &write.evidence)
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        if policy.uuid != target.id || policy.progress_status.is_empty() {
-            let error = GET_POLICY.decode_error(&write.evidence, DecodeError::InvalidShape);
-            return Err(write.unconfirmed(target, *error));
-        }
-        screen_input(
-            &write.evidence,
-            [policy.uuid.as_str(), &policy.progress_status],
-        )
-        .map_err(|error| write.unconfirmed(target, *error))?;
-        *last = policy;
-        match last.progress_status.as_str() {
-            "ERROR" => return Err(write.failed(target.kind, target.id)),
-            "CREATED" => {
-                let parent = write.parent(&wait).await;
-                write.confirm_time(ctx, &wait, target)?;
-                let (status, _) = parent.map_err(|error| write.unconfirmed(target, *error))?;
-                if status == "ERROR" {
-                    return Err(write.failed("load balancer", write.lb_id));
-                }
-                if !lb_busy(&status) {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
-    }
+    write
+        .settle_child(ctx, &wait, target, creating, last, |row: &Policy| {
+            (&row.uuid, &row.progress_status)
+        })
+        .await
 }

@@ -18,13 +18,15 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
 /// Tagging-specific failure details.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ErrorDetail {
     /// The key belongs to a system tag.
     SystemTag,
     /// The replacement could not be confirmed.
     NotSettled,
 }
+
+crate::error::debug_record!(ErrorDetail; SystemTag, NotSettled);
 
 pub use crate::error::SystemTagText;
 
@@ -50,11 +52,13 @@ crate::wire::product::output::public_fields!(Tag {
 });
 
 /// Identifies the resource whose tags should be read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListResourceTagsInput {
     /// Resource identifier.
     pub resource_id: String,
 }
+
+crate::error::debug_record!(ListResourceTagsInput { resource_id });
 impl ListResourceTagsInput {
     /// Stores the resource identifier.
     pub fn new(resource_id: impl Into<String>) -> Self {
@@ -68,7 +72,7 @@ impl ListResourceTagsInput {
 pub type ListResourceTagsOutput = List<Tag>;
 
 /// Identifies a resource and user tag to set.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TagResourceInput {
     /// Resource identifier.
     pub resource_id: String,
@@ -80,8 +84,15 @@ pub struct TagResourceInput {
     pub value: String,
 }
 
+crate::error::debug_record!(TagResourceInput {
+    resource_id,
+    resource_type,
+    key,
+    value
+});
+
 /// Identifies a resource and user tag to remove.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UntagResourceInput {
     /// Resource identifier.
     pub resource_id: String,
@@ -90,6 +101,12 @@ pub struct UntagResourceInput {
     /// User tag key.
     pub key: String,
 }
+
+crate::error::debug_record!(UntagResourceInput {
+    resource_id,
+    resource_type,
+    key
+});
 
 /// The last observed tags and the value before a replacement.
 #[derive(Clone, Serialize)]

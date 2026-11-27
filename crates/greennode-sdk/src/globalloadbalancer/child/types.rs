@@ -7,7 +7,7 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::Value;
 
 /// Selects one TCP pool, one private member group, and one backend.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreatePoolInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -26,6 +26,17 @@ pub struct CreatePoolInput {
     /// TCP service and health check port.
     pub backend_port: i64,
 }
+
+crate::error::debug_record!(CreatePoolInput {
+    load_balancer_id,
+    name,
+    member_name,
+    backend_project_id,
+    backend_server_id,
+    backend_vpc_id,
+    backend_subnet_id,
+    backend_port
+});
 impl CreatePoolInput {
     /// Builds the input with all required fields.
     #[expect(
@@ -56,7 +67,7 @@ impl CreatePoolInput {
 }
 
 /// Selects one restricted TCP listener bound to the only pool.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateListenerInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -73,6 +84,16 @@ pub struct CreateListenerInput {
     /// Backend vServer identifier.
     pub backend_server_id: String,
 }
+
+crate::error::debug_record!(CreateListenerInput {
+    load_balancer_id,
+    name,
+    pool_id,
+    port,
+    allowed_cidrs,
+    backend_project_id,
+    backend_server_id
+});
 impl CreateListenerInput {
     /// Builds the input with all required fields.
     pub fn new(
@@ -97,13 +118,18 @@ impl CreateListenerInput {
 }
 
 /// Selects the pool and its nested backend group for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeletePoolInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
     /// Pool identifier.
     pub pool_id: String,
 }
+
+crate::error::debug_record!(DeletePoolInput {
+    load_balancer_id,
+    pool_id
+});
 impl DeletePoolInput {
     /// Builds the input with all required fields.
     pub fn new(load_balancer_id: impl Into<String>, pool_id: impl Into<String>) -> Self {
@@ -115,13 +141,18 @@ impl DeletePoolInput {
 }
 
 /// Selects the listener for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteListenerInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
     /// Listener identifier.
     pub listener_id: String,
 }
+
+crate::error::debug_record!(DeleteListenerInput {
+    load_balancer_id,
+    listener_id
+});
 impl DeleteListenerInput {
     /// Builds the input with all required fields.
     pub fn new(load_balancer_id: impl Into<String>, listener_id: impl Into<String>) -> Self {
@@ -286,16 +317,12 @@ impl Serialize for DeleteListenerOutput {
 
 macro_rules! debug_projection {
     ($($output:ident),+ $(,)?) => {$(
-        impl fmt::Debug for $output {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                crate::error::write_debug(f, |f| {
-                    match serde_json::to_value(self) {
-                        Ok(value) => fmt::Debug::fmt(&value, f),
-                        Err(_) => f.write_str("<redacted>"),
-                    }
-                })
+        crate::error::debug_record!($output => |self, f| {
+            match serde_json::to_value(self) {
+                Ok(value) => fmt::Debug::fmt(&value, f),
+                Err(_) => f.write_str("<redacted>"),
             }
-        }
+        });
     )+};
 }
 

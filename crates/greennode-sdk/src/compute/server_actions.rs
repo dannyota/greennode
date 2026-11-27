@@ -70,11 +70,13 @@ const fn action(
 }
 
 /// A server status prevented the requested action.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct UnexpectedStatus;
 
+crate::error::debug_record!(UnexpectedStatus unit);
+
 /// Identifies the server to start.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StartServerInput {
     /// Server to start.
     pub server_id: String,
@@ -82,8 +84,10 @@ pub struct StartServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(StartServerInput { server_id, no_wait });
+
 /// Identifies the server to stop.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StopServerInput {
     /// Server to stop.
     pub server_id: String,
@@ -91,8 +95,10 @@ pub struct StopServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(StopServerInput { server_id, no_wait });
+
 /// Identifies the server to reboot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RebootServerInput {
     /// Server to reboot.
     pub server_id: String,
@@ -100,14 +106,18 @@ pub struct RebootServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(RebootServerInput { server_id, no_wait });
+
 /// Identifies a server and its new name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RenameServerInput {
     /// Server to rename.
     pub server_id: String,
     /// New server name.
     pub name: String,
 }
+
+crate::error::debug_record!(RenameServerInput { server_id, name });
 
 /// Result of starting a server.
 #[derive(Clone, Serialize)]

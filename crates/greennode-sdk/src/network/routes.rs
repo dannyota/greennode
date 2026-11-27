@@ -42,8 +42,10 @@ paged_input!(
 pub type ListRouteTablesOutput = PagedList<RouteTable>;
 
 /// Lists the routes from the default page of route tables.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRouteTableRoutesInput {}
+
+crate::error::debug_record!(ListRouteTableRoutesInput {});
 
 /// Flattened routes from the default page of route tables, in provider order.
 pub type ListRouteTableRoutesOutput = List<RouteTableRoute>;

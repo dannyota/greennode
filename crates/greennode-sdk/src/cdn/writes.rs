@@ -43,13 +43,15 @@ const PURGE: Call = Call {
 macro_rules! toggle_types {
     ($input:ident, $output:ident) => {
         /// Input for changing a Web Accelerator's enabled state.
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $input {
             /// CDN identifier.
             pub cdn_id: String,
             /// Skips settlement after a read confirms the toggle began.
             pub no_wait: bool,
         }
+
+        crate::error::debug_record!($input { cdn_id, no_wait });
 
         impl $input {
             /// Creates the input with settlement enabled.
@@ -82,11 +84,13 @@ toggle_types!(EnableWebAcceleratorInput, EnableWebAcceleratorOutput);
 toggle_types!(DisableWebAcceleratorInput, DisableWebAcceleratorOutput);
 
 /// Input for deleting a Web Accelerator.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteWebAcceleratorInput {
     /// CDN identifier.
     pub cdn_id: String,
 }
+
+crate::error::debug_record!(DeleteWebAcceleratorInput { cdn_id });
 
 impl DeleteWebAcceleratorInput {
     /// Creates the input with the CDN identifier.
@@ -104,13 +108,15 @@ pub struct DeleteWebAcceleratorOutput {}
 crate::wire::product::output::public_fields!(DeleteWebAcceleratorOutput {});
 
 /// Input for purging exact cached paths.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PurgePathsInput {
     /// Generated CDN domain.
     pub cdn_domain: String,
     /// Nonempty paths without wildcard asterisks.
     pub paths: Vec<String>,
 }
+
+crate::error::debug_record!(PurgePathsInput { cdn_domain, paths });
 
 impl PurgePathsInput {
     /// Creates the input with a generated CDN domain and its paths.
@@ -284,6 +290,9 @@ impl Client {
             .read_guard_detail(ctx, call.id, cdn_id, evidence)
             .await
             .map_err(|failure| before_send(failure.into_parts().0))?;
+        let detail = detail
+            .into_checked(evidence)
+            .map_err(|error| before_send(*error))?;
         let send = match detail.status {
             0 if kind == WriteKind::Update => {
                 return Err(invalid(

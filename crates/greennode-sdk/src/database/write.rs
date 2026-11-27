@@ -3,6 +3,7 @@ use super::{Client, Instance};
 use crate::config::session::AuthKind;
 use crate::endpoint::Base;
 use crate::error::SafeText;
+use crate::wire::product::guard::guarded_poll;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -99,7 +100,10 @@ impl Client {
         let clock = self.session.clock();
         let deadline = clock.monotonic_now() + POLL_BOUND;
         let ctx = context.child_with_deadline(deadline);
-        while ctx.check(clock).is_none() {
+        guarded_poll!(evidence, {
+            if ctx.check(clock).is_some() {
+                break;
+            }
             let instance = match self.get_instance::<()>(&ctx, id, evidence).await {
                 Ok(instance) => Some(instance),
                 Err(failure) if failure.error().detail::<CompletedNotFound>().is_some() => None,
@@ -113,7 +117,7 @@ impl Client {
             }
             let wake = clock.monotonic_now() + POLL_INTERVAL;
             ctx.child_with_deadline(wake).wait(clock).await;
-        }
+        });
         Err(interrupted)
     }
 }
@@ -185,7 +189,7 @@ pub(super) fn safe_rejection(operation: &'static str, error: &Error, message: &s
 pub(super) fn rejection<T, O>(failure: Failure<T>, operation: &'static str) -> Option<Failure<O>> {
     let (error, _, dispatch) = failure.into_parts();
     let api_status = error.api_error().and_then(ApiError::status);
-    let status = api_status.or_else(|| error.detail::<StatusCode>().map(StatusCode::as_u16));
+    let status = api_status.or_else(|| error.http_status().map(|status| status.as_u16()));
     if dispatch != WriteDispatch::NotSent
         && !status.is_some_and(|status| (400..500).contains(&status))
     {

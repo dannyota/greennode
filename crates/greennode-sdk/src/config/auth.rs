@@ -8,11 +8,9 @@ pub struct ServiceAccountAuth {
     pub(super) client_secret: Secret,
 }
 
-impl std::fmt::Debug for ServiceAccountAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ServiceAccountAuth([REDACTED])")
-    }
-}
+crate::error::debug_record!(ServiceAccountAuth => |self, f| {
+    f.write_str("ServiceAccountAuth([REDACTED])")
+});
 
 impl ServiceAccountAuth {
     /// Creates a service-account credential snapshot.
@@ -60,8 +58,10 @@ where
 }
 
 /// Generates time-based one-time codes from a secret seed.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SecretTotp(Secret);
+
+crate::error::debug_record!(SecretTotp(0));
 
 impl SecretTotp {
     /// Creates a provider from a base32-encoded seed.
@@ -100,11 +100,9 @@ pub struct IamUserAuth {
     pub(super) dashboard_uri: Option<String>,
 }
 
-impl std::fmt::Debug for IamUserAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("IamUserAuth([REDACTED])")
-    }
-}
+crate::error::debug_record!(IamUserAuth => |self, f| {
+    f.write_str("IamUserAuth([REDACTED])")
+});
 
 impl IamUserAuth {
     /// Creates an IAM-user credential snapshot.

@@ -1,5 +1,6 @@
 use super::reads::{RepositoryRead, valid_id};
 use super::*;
+use crate::wire::product::guard::guarded_poll;
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -14,7 +15,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_BOUND: Duration = Duration::from_secs(60);
 
 /// Creates a private repository with a positive quota in gigabytes.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateRepositoryInput {
     /// Repository name, validated by the service.
     pub name: String,
@@ -23,6 +24,12 @@ pub struct CreateRepositoryInput {
     /// Returns the accepted repository without waiting for visibility.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateRepositoryInput {
+    name,
+    quota_limit_gb,
+    no_wait
+});
 
 impl CreateRepositoryInput {
     /// Sets the required fields and enables the confirmation wait.
@@ -119,13 +126,18 @@ impl CreateRepositoryOutput {
 }
 
 /// Identifies a repository to delete after checking it holds no images.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteRepositoryInput {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
     /// Skips the absence wait after the delete is accepted.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteRepositoryInput {
+    repository_id,
+    no_wait
+});
 
 impl DeleteRepositoryInput {
     /// Selects the repository and enables the absence wait.
@@ -287,7 +299,7 @@ impl Client {
     ) -> Result<Option<Repository>, Failure<()>> {
         let clock = self.session.clock();
         let ctx = ctx.child_with_deadline(clock.monotonic_now() + POLL_BOUND);
-        loop {
+        guarded_poll!(evidence, {
             if let Some(end) = ctx.check(clock) {
                 return Err(failure(end.into()));
             }
@@ -304,7 +316,7 @@ impl Client {
             ctx.child_with_deadline(clock.monotonic_now() + POLL_INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 }
 

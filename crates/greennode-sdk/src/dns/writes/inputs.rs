@@ -3,7 +3,7 @@ use serde::Serialize;
 use super::super::{GetHostedZoneOutput, GetRecordOutput, RecordValue};
 
 /// Creates a private hosted zone and associates it with VPCs.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateHostedZoneInput {
     /// Domain name of the hosted zone.
     pub domain_name: String,
@@ -14,6 +14,13 @@ pub struct CreateHostedZoneInput {
     /// Returns the create response without waiting for activation.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateHostedZoneInput {
+    domain_name,
+    vpc_ids,
+    description,
+    no_wait
+});
 
 impl CreateHostedZoneInput {
     /// Creates an input with the required domain name and VPC associations.
@@ -31,7 +38,7 @@ impl CreateHostedZoneInput {
 pub type CreateHostedZoneOutput = GetHostedZoneOutput;
 
 /// Replaces the description or VPC associations of a hosted zone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateHostedZoneInput {
     /// Hosted zone identifier.
     pub hosted_zone_id: String,
@@ -42,6 +49,13 @@ pub struct UpdateHostedZoneInput {
     /// Reads the zone once after the update without waiting for settlement.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdateHostedZoneInput {
+    hosted_zone_id,
+    vpc_ids,
+    description,
+    no_wait
+});
 
 impl UpdateHostedZoneInput {
     /// Selects a hosted zone. Set at least one replacement field before use.
@@ -59,13 +73,18 @@ impl UpdateHostedZoneInput {
 pub type UpdateHostedZoneOutput = GetHostedZoneOutput;
 
 /// Deletes a hosted zone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteHostedZoneInput {
     /// Hosted zone identifier.
     pub hosted_zone_id: String,
     /// Returns once deletion is accepted.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteHostedZoneInput {
+    hosted_zone_id,
+    no_wait
+});
 
 impl DeleteHostedZoneInput {
     /// Selects a hosted zone and waits for its deletion by default.
@@ -84,7 +103,7 @@ pub struct DeleteHostedZoneOutput {}
 crate::wire::product::output::public_fields!(DeleteHostedZoneOutput {});
 
 /// Creates a record inside a hosted zone.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateRecordInput {
     /// Parent hosted zone identifier.
     pub hosted_zone_id: String,
@@ -103,6 +122,17 @@ pub struct CreateRecordInput {
     /// Returns the create response without waiting for activation.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(CreateRecordInput {
+    hosted_zone_id,
+    record_type,
+    values,
+    sub_domain,
+    ttl,
+    routing_policy,
+    sticky_session,
+    no_wait
+});
 
 impl CreateRecordInput {
     /// Selects a zone, record type and values for a new record.
@@ -128,7 +158,7 @@ impl CreateRecordInput {
 pub type CreateRecordOutput = GetRecordOutput;
 
 /// Updates the supplied fields of a DNS record.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateRecordInput {
     /// Parent hosted zone identifier.
     pub hosted_zone_id: String,
@@ -149,6 +179,18 @@ pub struct UpdateRecordInput {
     /// Reads the record once after the update without waiting for settlement.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(UpdateRecordInput {
+    hosted_zone_id,
+    record_id,
+    sub_domain,
+    record_type,
+    ttl,
+    routing_policy,
+    values,
+    sticky_session,
+    no_wait
+});
 
 impl UpdateRecordInput {
     /// Selects a record. Set at least one replacement field before use.
@@ -171,7 +213,7 @@ impl UpdateRecordInput {
 pub type UpdateRecordOutput = GetRecordOutput;
 
 /// Deletes one DNS record.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteRecordInput {
     /// Parent hosted zone identifier.
     pub hosted_zone_id: String,
@@ -180,6 +222,12 @@ pub struct DeleteRecordInput {
     /// Returns once deletion is accepted.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteRecordInput {
+    hosted_zone_id,
+    record_id,
+    no_wait
+});
 
 impl DeleteRecordInput {
     /// Selects a record and waits for its deletion by default.

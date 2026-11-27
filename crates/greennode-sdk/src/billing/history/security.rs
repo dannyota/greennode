@@ -95,8 +95,7 @@ pub(super) fn safe_request_error(
         return error;
     }
     let status = error
-        .detail::<StatusCode>()
-        .copied()
+        .http_status()
         .or_else(|| StatusCode::from_u16(api?.status()?).ok());
     let overflow = error.is_body_too_large();
     let mut safe = match status {

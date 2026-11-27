@@ -12,7 +12,7 @@ use super::wire::{api, invalid_input};
 use super::{Client, failure};
 
 /// Server configuration for both an order and its quote.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateServerInput {
     /// Name of the server.
     pub name: String,
@@ -60,8 +60,33 @@ pub struct CreateServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateServerInput {
+    name,
+    zone_id,
+    flavor_id,
+    image_id,
+    vpc_id,
+    subnet_id,
+    security_group_ids,
+    ssh_key_id,
+    root_disk_size,
+    root_disk_type_id,
+    root_disk_encryption_type_id,
+    data_disk_size,
+    data_disk_type_id,
+    data_disk_name,
+    data_disk_encryption_type_id,
+    server_group_id,
+    user_data,
+    auto_renew,
+    attach_floating_ip,
+    allow_open_login,
+    max_price,
+    no_wait
+});
+
 /// Flavor change for both a resize and its quote.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeServerInput {
     /// Server being resized.
     pub server_id: String,
@@ -72,6 +97,13 @@ pub struct ResizeServerInput {
     /// Skip confirmation after resizing.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeServerInput {
+    server_id,
+    flavor_id,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,

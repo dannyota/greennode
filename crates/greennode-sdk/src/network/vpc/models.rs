@@ -234,7 +234,7 @@ model! {
 macro_rules! page_input {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, Default)]
+        #[derive(Clone, Default)]
         #[non_exhaustive]
         pub struct $name {
             /// Resource name filter.
@@ -244,6 +244,8 @@ macro_rules! page_input {
             /// Requested page size. Nonpositive values use the default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { name, page, size });
     };
 }
 
@@ -267,11 +269,13 @@ page_input!(
 macro_rules! id_input {
     ($(#[$doc:meta])* $name:ident { $($(#[$field_doc:meta])* $field:ident),+ $(,)? }) => {
         $(#[$doc])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         #[non_exhaustive]
         pub struct $name {
             $($(#[$field_doc])* pub $field: String,)+
         }
+
+        crate::error::debug_record!($name { $($field),+ });
 
         impl $name {
             /// Creates the input with its required identifiers.
@@ -335,14 +339,18 @@ id_input!(
 );
 
 /// Lists subnets across the VPCs in the default inventory page.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct ListSubnetsInput {}
 
+crate::error::debug_record!(ListSubnetsInput {});
+
 /// Lists rules across the project's complete security group inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct ListAllSecurityGroupRulesInput {}
+
+crate::error::debug_record!(ListAllSecurityGroupRulesInput {});
 
 /// One page of VPCs.
 pub type ListVpcsOutput = PagedList<Vpc>;

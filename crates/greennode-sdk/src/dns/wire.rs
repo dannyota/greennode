@@ -10,7 +10,7 @@ use crate::wire::product::{
 use crate::wire::strict_json::{Shape, ShapeField};
 
 /// The failure found while decoding a successful DNS response.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The response body was not valid JSON.
@@ -18,6 +18,8 @@ pub enum DecodeError {
     /// The JSON did not conform to the DNS response schema.
     InvalidShape,
 }
+
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape);
 
 /// A single page of DNS resources with redaction-aware pagination metadata.
 #[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]

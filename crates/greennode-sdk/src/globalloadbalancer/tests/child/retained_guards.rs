@@ -103,6 +103,33 @@ pub(super) fn child(client: &super::Client) -> Child<'_> {
 }
 
 #[tokio::test]
+async fn glb_guard_refusal_does_not_invent_an_ok_status() {
+    let mut fixture = child_fixture();
+    fixture["parent"]["note"] = json!(TOKEN);
+    let options = ConfigOptions::default().with_static_token(Secret::new(TOKEN));
+    let (client, glb, _) = servers_with_auth(vec![ok(&fixture["parent"])], vec![], true, options);
+    let failure = client
+        .create_pool(&RequestContext::new().0, pool_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        failure
+            .error()
+            .api_error()
+            .and_then(crate::ApiError::status),
+        None
+    );
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::RefusedGuard>()
+            .is_some()
+    );
+    assert_eq!(glb.requests(), 1);
+}
+
+#[tokio::test]
 async fn glb_final_catalog_read_rechecks_the_region() {
     let mut fixture = child_fixture();
     fixture["regions"][0]["note"] = json!("toy-final-bearer");

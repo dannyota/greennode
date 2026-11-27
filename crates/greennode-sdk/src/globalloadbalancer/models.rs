@@ -21,7 +21,7 @@ macro_rules! model {
             )*
         }
 
-        crate::wire::product::output::debug_record!($model { $($field),* });
+        crate::error::debug_record!($model { $($field),* });
 
         impl crate::wire::product::output::PublicOutput for $model {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {

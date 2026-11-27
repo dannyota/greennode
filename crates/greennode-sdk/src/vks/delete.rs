@@ -15,13 +15,18 @@ use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 /// Selects an exact cluster for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteClusterInput {
     /// Cluster ID containing only ASCII letters, digits, and hyphens.
     pub cluster_id: String,
     /// Return after acceptance without waiting for confirmed absence.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteClusterInput {
+    cluster_id,
+    no_wait
+});
 
 impl DeleteClusterInput {
     /// Selects the cluster and waits for confirmed absence by default.
@@ -93,14 +98,16 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|error| not_sent(*error))?;
-        if let Err(failure) = operation::execute::<Acknowledgement>(
+        if let Err(failure) = operation::execute_with_evidence::<Acknowledgement>(
             runtime,
             base,
             &operation,
+            &crate::wire::product::options::Options::DEFAULT,
             &[&input.cluster_id],
             &[],
             self.session.bearer_source(),
             bytes::Bytes::new(),
+            &mut evidence,
         )
         .await
         {
@@ -114,16 +121,24 @@ impl Client {
         if input.no_wait {
             return Ok(output);
         }
-        wait_cluster(ctx, self.session.clock(), async |wait| {
-            match self
-                .cluster_state(wait, &input.cluster_id, &mut evidence)
-                .await
-            {
-                Err(error) if error.has_class(ErrorClass::NotFound) => Ok(true),
-                Err(error) => Err(error),
-                Ok(_) => Ok(false),
-            }
-        })
+        wait_cluster(
+            ctx,
+            self.session.clock(),
+            &mut evidence,
+            async |wait, evidence| {
+                let checkpoint = evidence.guard_checkpoint();
+                match self.cluster_state(wait, &input.cluster_id, evidence).await {
+                    Err(error) if error.has_class(ErrorClass::NotFound) => {
+                        crate::wire::product::guard::Guarded::from_checkpoint(
+                            true, evidence, checkpoint,
+                        )?
+                        .into_checked(evidence)
+                    }
+                    Err(error) => Err(error),
+                    Ok(status) => status.recheck(evidence).map(|_| false),
+                }
+            },
+        )
         .await
         .map_err(|error| unsettled(*error, output, WriteDispatch::MayHaveBeenSent))?;
         Ok(DeleteClusterOutput { deleted: true })

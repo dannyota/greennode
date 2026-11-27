@@ -9,15 +9,19 @@ use crate::wire::product::evidence::Evidence;
 use crate::{Failure, List, RequestContext};
 
 /// Inputs for reading the IAM action catalog.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ListActionsInput;
+
+crate::error::debug_record!(ListActionsInput unit);
 
 /// The IAM action catalog.
 pub type ListActionsOutput = List<Action>;
 
 /// Inputs for reading the IAM groups.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ListGroupsInput;
+
+crate::error::debug_record!(ListGroupsInput unit);
 
 /// The IAM groups visible to the caller.
 pub type ListGroupsOutput = List<GroupSummary>;

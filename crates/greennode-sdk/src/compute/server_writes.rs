@@ -54,7 +54,7 @@ crate::wire::product::output::public_fields!(CreateServerOutput {
 });
 
 /// Options for deleting a server.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteServerInput {
     /// Server to delete.
     pub server_id: String,
@@ -63,6 +63,12 @@ pub struct DeleteServerInput {
     /// Return after the acknowledgement without waiting for deletion.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(DeleteServerInput {
+    server_id,
+    delete_volumes,
+    no_wait
+});
 
 /// Volumes requested for deletion or retained when a server is deleted.
 #[derive(Clone, Default, Serialize)]

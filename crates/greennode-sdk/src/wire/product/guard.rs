@@ -80,3 +80,61 @@ impl<T> Guarded<T> {
         }
     }
 }
+
+macro_rules! guarded_poll {
+    ($evidence:expr, $body:block) => {{
+        let checkpoint = $evidence.guard_checkpoint();
+        loop {
+            $evidence.discard_guards_after(checkpoint);
+            $body
+        }
+    }};
+    ($evidence:expr, for $index:ident in $steps:expr, $body:block) => {{
+        let checkpoint = $evidence.guard_checkpoint();
+        for $index in $steps {
+            $evidence.discard_guards_after(checkpoint);
+            $body
+        }
+    }};
+}
+
+pub(crate) use guarded_poll;
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn settlement_loops_use_shared_guarded_polling() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let ordinary_loop =
+            regex_lite::Regex::new(r"(?m)^\s*(?:let [^=\n]+ = )?(?:loop|while)\b.*\{").unwrap();
+        for (path, count) in [
+            ("cdn/writes/settle.rs", 2),
+            ("compute/mutation.rs", 1),
+            ("containerregistry/repository_writes.rs", 1),
+            ("database/write.rs", 1),
+            ("dns/writes/workflow.rs", 1),
+            ("globalloadbalancer/child/create.rs", 2),
+            ("globalloadbalancer/child/delete.rs", 1),
+            ("globalloadbalancer/load_balancer_writes.rs", 2),
+            ("loadbalancer/child_deletes.rs", 2),
+            ("loadbalancer/child_writes.rs", 2),
+            ("loadbalancer/deletes.rs", 1),
+            ("loadbalancer/member_writes.rs", 1),
+            ("loadbalancer/paid.rs", 2),
+            ("vks/write.rs", 1),
+            ("volume/write.rs", 1),
+        ] {
+            let source = std::fs::read_to_string(root.join(path)).unwrap();
+            let source = source.split("#[cfg(test)]\nmod ").next().unwrap();
+            assert_eq!(source.matches("guarded_poll!(").count(), count, "{path}");
+            assert!(!ordinary_loop.is_match(source), "{path}");
+        }
+        for path in ["listener_writes.rs", "pool_writes.rs", "policy_writes.rs"] {
+            let source = std::fs::read_to_string(root.join("loadbalancer").join(path)).unwrap();
+            assert_eq!(source.matches(".settle_child(").count(), 1, "{path}");
+            assert!(!ordinary_loop.is_match(&source), "{path}");
+        }
+    }
+}

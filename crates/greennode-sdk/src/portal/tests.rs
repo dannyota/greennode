@@ -50,7 +50,7 @@ async fn list_metadata_rejects_invalid_values() {
 
 #[test]
 fn failed_refresh_omits_status_but_preserves_auth() {
-    let error = Error::new(ErrorClass::Auth).with_outer_detail(StatusCode::UNAUTHORIZED);
+    let error = Error::new(ErrorClass::Auth).with_http_status(StatusCode::UNAUTHORIZED);
     let error = withheld(&user_info_operation(), error);
     assert!(error.has_class(ErrorClass::Auth));
     assert_eq!(error.api_error().unwrap().status(), None);

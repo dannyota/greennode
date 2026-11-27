@@ -32,8 +32,10 @@ pub struct Client {
 }
 
 /// Input for the backend list, which takes no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListBackendsInput;
+
+crate::error::debug_record!(ListBackendsInput unit);
 
 /// Backend list with nullable page metadata.
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -60,7 +62,7 @@ crate::wire::product::output::public_fields!(ListBackendsOutput {
 });
 
 /// Page selection for the policy list.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListPoliciesInput {
     /// One-based page number. Zero selects page 1.
     pub page: i64,
@@ -68,15 +70,19 @@ pub struct ListPoliciesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListPoliciesInput { page, size });
+
 /// One page of Backup Center policies.
 pub type ListPoliciesOutput = PagedList<Policy>;
 
 /// Identifies a Backup Center policy to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetPolicyInput {
     /// Policy ID using ASCII letters, digits, and hyphens.
     pub policy_id: String,
 }
+
+crate::error::debug_record!(GetPolicyInput { policy_id });
 
 impl GetPolicyInput {
     /// Stores the policy ID for validation by [`Client::get_policy`].

@@ -4,6 +4,7 @@ use std::fmt;
 #[path = "error/detail.rs"]
 mod detail;
 use detail::Detail;
+pub(crate) use detail::debug_record;
 pub(crate) use detail::{debug_reflects, write_debug};
 #[path = "error/parts.rs"]
 mod parts;
@@ -11,7 +12,7 @@ pub(crate) use parts::LoginFailureKind;
 pub use parts::{ApiError, LoginError, ServiceAccountLoginError};
 
 /// Stable categories for operation failures.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorClass {
     /// A write outcome could not be confirmed.
@@ -62,6 +63,32 @@ pub enum ErrorClass {
     DeadlineExceeded,
 }
 
+crate::error::debug_record!(ErrorClass;
+    NotSettled,
+    Failed,
+    Auth,
+    TokenCache,
+    Api,
+    NotFound,
+    PermissionDenied,
+    RateLimited,
+    ProjectNotFound,
+    ProjectAmbiguous,
+    MissingProjectId,
+    InvalidConfig,
+    InvalidInput,
+    NoCredentials,
+    CredentialsFile,
+    HistoryIncomplete,
+    DiscoveryIncomplete,
+    EstimateLimit,
+    EstimateOverflow,
+    PriceAboveMax,
+    Unpriced,
+    Cancelled,
+    DeadlineExceeded,
+);
+
 #[derive(Debug)]
 pub(crate) struct SafeText(String);
 
@@ -91,11 +118,13 @@ impl SafeText {
 }
 
 /// Fixed diagnostic for a failure without a service response.
-#[derive(Debug)]
+#[derive()]
 pub enum Diagnostic {
     /// No project quota matched the requested name.
     QuotaNotFound,
 }
+
+crate::error::debug_record!(Diagnostic; QuotaNotFound);
 
 impl Diagnostic {
     /// Returns the fixed diagnostic.
@@ -107,8 +136,10 @@ impl Diagnostic {
 }
 
 /// Safe recovery guidance for a write failure.
-#[derive(Debug)]
+#[derive()]
 pub struct RecoveryAdvice(SafeText);
+
+crate::error::debug_record!(RecoveryAdvice(0));
 
 impl RecoveryAdvice {
     pub(crate) fn new(message: &str) -> Self {
@@ -122,8 +153,10 @@ impl RecoveryAdvice {
 }
 
 /// Full refusal text for a system tag key, without the generic length cap.
-#[derive(Debug)]
+#[derive()]
 pub struct SystemTagText(pub(crate) String);
+
+crate::error::debug_record!(SystemTagText(0));
 
 impl SystemTagText {
     /// Returns the refusal text.
@@ -131,6 +164,21 @@ impl SystemTagText {
         &self.0
     }
 }
+
+/// HTTP response status retained in a screened SDK error.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct HttpStatus(http::StatusCode);
+
+impl HttpStatus {
+    /// Returns the numeric HTTP response status.
+    pub fn as_u16(self) -> u16 {
+        self.0.as_u16()
+    }
+}
+
+crate::error::debug_record!(HttpStatus => |self, formatter| {
+    formatter.write_str(self.0.as_str())
+});
 
 const DIAGNOSTIC_FALLBACK: &str = "request failed";
 
@@ -299,6 +347,14 @@ impl Error {
         self.service_login = Some(detail);
         self
     }
+    pub(crate) fn with_http_status(self, status: http::StatusCode) -> Self {
+        self.with_outer_detail(HttpStatus(status))
+    }
+
+    pub(crate) fn http_status(&self) -> Option<http::StatusCode> {
+        self.detail::<HttpStatus>().map(|status| status.0)
+    }
+
     pub(crate) fn with_outer_detail<T: Any + Send + Sync + fmt::Debug>(self, detail: T) -> Self {
         Self {
             class: self.class,
@@ -399,18 +455,14 @@ impl From<crate::ContextEnd> for Error {
     }
 }
 
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::error::write_debug(f, |f| {
-            if self.debug_reflected {
-                return f.write_str("");
-            }
-            f.debug_struct("Error")
-                .field("class", &self.class)
-                .finish_non_exhaustive()
-        })
+crate::error::debug_record!(Error => |self, f| {
+    if self.debug_reflected {
+        return f.write_str("");
     }
-}
+    f.debug_struct("Error")
+        .field("class", &self.class)
+        .finish_non_exhaustive()
+});
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.display_reflected {
@@ -422,7 +474,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// Whether a failed operation may have dispatched a write.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum WriteDispatch {
     /// No write was attempted.
     NotAWrite,
@@ -431,6 +483,8 @@ pub enum WriteDispatch {
     /// The write may have reached the service; its outcome is uncertain.
     MayHaveBeenSent,
 }
+
+crate::error::debug_record!(WriteDispatch; NotAWrite, NotSent, MayHaveBeenSent);
 
 /// A failure that may retain partial output and write-dispatch state.
 pub struct Failure<T> {
@@ -509,17 +563,13 @@ impl<T> Failure<T> {
         (self.error, self.partial, self.dispatch)
     }
 }
-impl<T> fmt::Debug for Failure<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        crate::error::write_debug(f, |f| {
-            if self.debug_reflected {
-                return f.write_str("");
-            }
-            f.debug_struct("Failure")
-                .field("error", &self.error)
-                .field("has_partial", &self.partial.is_some())
-                .field("write_dispatch", &self.dispatch)
-                .finish()
-        })
+crate::error::debug_record!(Failure<T> => |self, f| {
+    if self.debug_reflected {
+        return f.write_str("");
     }
-}
+    f.debug_struct("Failure")
+        .field("error", &self.error)
+        .field("has_partial", &self.partial.is_some())
+        .field("write_dispatch", &self.dispatch)
+        .finish()
+});

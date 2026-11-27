@@ -27,7 +27,7 @@ const INTERRUPTED: Settlement = Settlement::NotSettled(
 );
 
 /// Selects a private, single-node MySQL 8.0 instance with automatic backup off.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateDatabaseInstanceInput {
     /// Instance name, starting with an ASCII letter or digit.
     pub name: String,
@@ -50,6 +50,19 @@ pub struct CreateDatabaseInstanceInput {
     /// Master password sent only with the create request.
     pub password: Secret,
 }
+
+crate::error::debug_record!(CreateDatabaseInstanceInput {
+    name,
+    zone_id,
+    flavor_id,
+    storage_type_id,
+    storage_size,
+    vpc_id,
+    subnet_id,
+    database_name,
+    username,
+    password
+});
 
 impl CreateDatabaseInstanceInput {
     /// Sets the instance, catalog selections, and initial database credentials.

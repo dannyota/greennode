@@ -15,8 +15,10 @@ const OP: &str = "cdn.ListIPRanges";
 const CAP: usize = 4 << 20;
 
 /// Input for reading the public CDN IP ranges.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListIpRangesInput;
+
+crate::error::debug_record!(ListIpRangesInput unit);
 
 /// The canonical IP prefixes and their source.
 #[derive(Clone, Serialize)]
@@ -59,11 +61,11 @@ impl Client {
             .await
             .map_err(|failure| {
                 if failure.error().is_body_too_large()
-                    && failure.error().detail::<StatusCode>() == Some(&StatusCode::OK)
+                    && failure.error().http_status() == Some(StatusCode::OK)
                 {
                     return page_format(&format!("body over {CAP} bytes"), &evidence);
                 }
-                let status = failure.error().detail::<StatusCode>().copied().or_else(|| {
+                let status = failure.error().http_status().or_else(|| {
                     failure
                         .error()
                         .api_error()

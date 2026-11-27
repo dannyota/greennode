@@ -14,8 +14,10 @@ pub trait Clock: Send + Sync {
 }
 
 /// Uses the system wall clock and Tokio monotonic clock.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct SystemClock;
+
+crate::error::debug_record!(SystemClock {});
 
 impl Clock for SystemClock {
     fn utc_now(&self) -> OffsetDateTime {

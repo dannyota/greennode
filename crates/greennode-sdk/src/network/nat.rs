@@ -29,13 +29,15 @@ const REGIONS: Read = Read::new(
 );
 
 /// Identifies the Public NAT instance to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetNatInstanceInput {
     /// Path-safe NAT identifier.
     pub nat_id: String,
     /// Zone identifier. An empty value discovers the zone for the configured region.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(GetNatInstanceInput { nat_id, zone_id });
 
 impl GetNatInstanceInput {
     /// Selects a NAT instance in the configured region.
@@ -106,13 +108,15 @@ crate::wire::product::output::public_fields!(NatDetail {
 });
 
 /// Identifies the Public NAT whose inbound rules to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListNatInboundRulesInput {
     /// Path-safe NAT identifier.
     pub nat_id: String,
     /// Zone identifier. An empty value discovers the zone for the configured region.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListNatInboundRulesInput { nat_id, zone_id });
 
 impl ListNatInboundRulesInput {
     /// Selects a NAT instance in the configured region.
