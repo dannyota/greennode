@@ -213,13 +213,16 @@ Where Go itself refuses any lone case variant, as the network NAT family's
 field-name check does, refuse it too. A refused case variant is
 `InvalidResponse`.
 
-Guard values Go caches per client, the IAM caller identity and write-action
-names and the vNetwork endpoint zone, are cached per client and shared by its
-clones. Fill a cache only from a verified read, fetch it once under a lock
-bounded by the request context, and recheck a cached value against the
-operation's credentials at every send attempt, after that attempt's bearer and
-sign-in credentials are recorded. An operation that did not use a cached value
-never consults it.
+The IAM client caches the caller identity and the write-action names per client,
+shared by its clones and never expired, as Go does. A failed, refused, empty or
+reflecting read is never cached. Concurrent first uses fetch once, under a lock
+whose wait is bounded by the request context. A cached value is rechecked
+against the operation's credentials when it is read and at every attempt of the
+operation's write, after that attempt's bearer and sign-in credentials are
+recorded; this is stricter than Go, which rechecks only on a hit and only for
+operations with privacy options. A failed recheck refuses the write with Go's
+`unsafe cached guard response` text and sends nothing more. An operation that
+did not use a cached value never consults it.
 
 ### Signed S3
 
