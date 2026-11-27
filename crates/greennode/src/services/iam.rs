@@ -253,6 +253,13 @@ pub(super) const SERVICE: Service = Service {
             ]
         ),
         permission_change!(
+            AttachServiceAccountPolicyInput, attach_service_account_policy, "attach-service-account-policy", "AttachServiceAccountPolicy",
+            "Attach an IAM policy to a service account", "grants permissions", [
+                POLICY_ID => required_string!(sdk::AttachServiceAccountPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                SERVICE_ACCOUNT_ID => required_string!(sdk::AttachServiceAccountPolicyInput, service_account_id, SERVICE_ACCOUNT_ID, "ServiceAccountID"),
+            ]
+        ),
+        permission_change!(
             AttachUserPolicyInput, attach_user_policy, "attach-user-policy", "AttachUserPolicy",
             "Attach an IAM policy to a user", "grants permissions", [
                 POLICY_ID => required_string!(sdk::AttachUserPolicyInput, policy_id, POLICY_ID, "PolicyID"),
@@ -264,6 +271,13 @@ pub(super) const SERVICE: Service = Service {
             "Detach an IAM policy from a group", "removes permissions", [
                 POLICY_ID => required_string!(sdk::DetachGroupPolicyInput, policy_id, POLICY_ID, "PolicyID"),
                 GROUP_ID => required_string!(sdk::DetachGroupPolicyInput, group_id, GROUP_ID, "GroupID"),
+            ]
+        ),
+        permission_change!(
+            DetachServiceAccountPolicyInput, detach_service_account_policy, "detach-service-account-policy", "DetachServiceAccountPolicy",
+            "Detach an IAM policy from a service account", "removes permissions", [
+                POLICY_ID => required_string!(sdk::DetachServiceAccountPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                SERVICE_ACCOUNT_ID => required_string!(sdk::DetachServiceAccountPolicyInput, service_account_id, SERVICE_ACCOUNT_ID, "ServiceAccountID"),
             ]
         ),
         permission_change!(

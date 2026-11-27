@@ -201,6 +201,37 @@ impl<'a> Guard<'a> {
         Ok(protection)
     }
 
+    pub(super) fn reject_service_account_caller<O>(&self) -> Result<(), Failure<O>> {
+        if self.is_service_account() {
+            return Err(guard_refusal(
+                &format!(
+                    "iam: refused: target is the caller: {}: the caller is a service account",
+                    self.op
+                ),
+                Some(WriteError::SelfChange),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn account<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
+        let attached = self
+            .policy_summaries(
+                "policies-api/v1/user-attachments/service-accounts/{}/policies",
+                "ServiceAccountID",
+                id,
+            )
+            .await?;
+        if self
+            .any_privileged(attached.iter().map(|policy| policy.id.as_str()))
+            .await?
+        {
+            Ok(Protection::Privileged)
+        } else {
+            Ok(Protection::None)
+        }
+    }
+
     pub(super) async fn group<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
         let group: GroupAttachments = self
             .client

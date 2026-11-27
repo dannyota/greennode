@@ -28,6 +28,19 @@ Kind: Write, destructive.
 greennode iam attach-group-policy --policy-id <policy-id> --group-id <group-id> --yes
 ```
 
+## attach-service-account-policy
+
+Kind: Write, destructive.
+
+| Flag                   | Type     | Required |
+| ---------------------- | -------- | -------- |
+| `--policy-id`          | `string` | yes      |
+| `--service-account-id` | `string` | yes      |
+
+```sh
+greennode iam attach-service-account-policy --policy-id <policy-id> --service-account-id <service-account-id> --yes
+```
+
 ## attach-user-policy
 
 Kind: Write, destructive.
@@ -183,6 +196,19 @@ Kind: Write, destructive.
 
 ```sh
 greennode iam detach-group-policy --policy-id <policy-id> --group-id <group-id> --yes
+```
+
+## detach-service-account-policy
+
+Kind: Write, destructive.
+
+| Flag                   | Type     | Required |
+| ---------------------- | -------- | -------- |
+| `--policy-id`          | `string` | yes      |
+| `--service-account-id` | `string` | yes      |
+
+```sh
+greennode iam detach-service-account-policy --policy-id <policy-id> --service-account-id <service-account-id> --yes
 ```
 
 ## detach-user-policy

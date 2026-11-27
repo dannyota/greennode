@@ -21,6 +21,8 @@ pub(crate) struct Session {
     default_auth_endpoints: bool,
     #[cfg(any(test, feature = "test-support"))]
     product_fixtures: OnceLock<Vec<(crate::testing::Product, bool)>>,
+    #[cfg(test)]
+    retry_attempts: std::sync::atomic::AtomicUsize,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
@@ -312,11 +314,20 @@ impl Session {
     }
 
     pub(crate) fn retry_jitter(&self) -> u64 {
+        #[cfg(test)]
+        self.retry_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut bytes = [0; 8];
         match getrandom::fill(&mut bytes) {
             Ok(()) => u64::from_ne_bytes(bytes),
             Err(_) => 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_retry_attempts(&self) -> usize {
+        self.retry_attempts
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -506,6 +517,8 @@ impl Session {
             default_auth_endpoints,
             #[cfg(any(test, feature = "test-support"))]
             product_fixtures: OnceLock::new(),
+            #[cfg(test)]
+            retry_attempts: std::sync::atomic::AtomicUsize::new(0),
             clients: OnceLock::new(),
             clock,
             timeout,
