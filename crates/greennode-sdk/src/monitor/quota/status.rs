@@ -25,6 +25,8 @@ pub enum ErrorDetail {
     QuotaChanged,
     /// The provider returned a status without known quota semantics.
     UnexpectedStatus,
+    #[allow(missing_docs)]
+    QuotaEvidenceIncomplete,
 }
 
 /// Selects which quotas to include in a status snapshot.

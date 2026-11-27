@@ -83,3 +83,8 @@ pub fn with_fixture_clock(
     options.test_clock = Some(clock);
     options
 }
+
+pub fn incomplete_monitor_quota_evidence() -> crate::Error {
+    crate::Error::new(crate::ErrorClass::NotSettled)
+        .with_outer_detail(crate::monitor::ErrorDetail::QuotaEvidenceIncomplete)
+}

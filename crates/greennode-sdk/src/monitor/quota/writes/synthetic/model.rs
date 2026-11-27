@@ -1,6 +1,6 @@
 use super::super::super::Screen;
 use super::super::super::output;
-use super::super::state::{Attempt, Goal, RetainedRedaction, order_display, screen_quota};
+use super::super::state::{Attempt, Goal, order_display, screen_quota};
 use super::super::synthetic_settlement::Action;
 use crate::monitor::{Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::evidence::Evidence;
@@ -160,7 +160,6 @@ pub(super) struct Draft {
     pub(super) sent: &'static str,
     pub(super) stage: &'static str,
     pub(super) status: u16,
-    retained_redaction: RetainedRedaction,
     pub(super) action: Action,
     pub(super) quota: Option<Quota>,
     pub(super) order_id: String,
@@ -174,7 +173,6 @@ impl Default for Draft {
             sent: "no",
             stage: "preflight",
             status: 0,
-            retained_redaction: RetainedRedaction::default(),
             action: Action::None,
             quota: None,
             order_id: String::new(),
@@ -195,7 +193,10 @@ impl Draft {
             .goal
             .before()
             .and_then(super::super::state::Snapshot::end)
-            .map(QuotaTimestamp);
+            .map(QuotaTimestamp)
+            .or_else(|| {
+                matches!(attempt.goal, Goal::SyntheticCreate { .. }).then(QuotaTimestamp::default)
+            });
         let (sent, status) = match attempt.goal {
             Goal::RenewSetting { .. } => ("unknown", 0),
             _ => (attempt.sent(), attempt.observed_status),
@@ -204,13 +205,12 @@ impl Draft {
             sent,
             stage: "unconfirmed",
             status,
-            retained_redaction: attempt.retained_redaction,
             action,
             quota: None,
             order_id: attempt.order_id.clone(),
             payment_pending: attempt.payment_pending,
-            sent_at: sent_at.filter(|_| !attempt.credentials_exhausted),
-            previous: previous.filter(|_| !attempt.credentials_exhausted),
+            sent_at: sent_at.filter(|_| attempt.evidence.can_retain_partial()),
+            previous: previous.filter(|_| attempt.evidence.can_retain_partial()),
         }
     }
     pub(super) fn project<T>(
@@ -225,15 +225,7 @@ impl Draft {
         let outcome = QuotaMutationOutcome {
             sent: self.sent.into(),
             stage: self.stage.into(),
-            error: error.map(|error| {
-                let mut outcome = outcome_error(op, error, self.status);
-                if let ResponseField::Value(status) = outcome.status
-                    && self.retained_redaction.hides_status(status)
-                {
-                    outcome.status = ResponseField::Redacted;
-                }
-                outcome
-            }),
+            error: error.map(|error| outcome_error(op, error, self.status)),
         };
         make(std::mem::take(self), outcome)
     }

@@ -15,8 +15,9 @@ use crate::wire::product::{
 use crate::wire::strict_json::{Shape, ShapeField, validate_canonical_shape};
 use crate::{ApiError, Error, ErrorClass, RequestContext, Secret, error::SafeText};
 
-pub(crate) type CredentialObserver<'a> =
-    &'a (dyn Fn(&crate::wire::product::evidence::SentCredentials) -> Result<(), Error> + Sync);
+pub(crate) type CredentialObserver<'a> = &'a (
+        dyn Fn(&crate::wire::product::evidence::SentCredentials, bool) -> Result<(), Error> + Sync
+    );
 
 pub(crate) struct ScopedBearer<'a> {
     source: &'a dyn BearerSource,
@@ -71,7 +72,7 @@ impl BearerSource for ScopedBearer<'_> {
             }
             evidence.add_secret(&token.token.access_token);
             if let Some(observer) = self.observer {
-                observer(evidence.credentials())?;
+                observer(evidence.credentials(), !self.identifiers.is_empty())?;
             }
             if let Some(privacy) = &self.privacy {
                 let mut combined = privacy.lock().map_err(|_| Error::provider_failed())?;

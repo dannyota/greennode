@@ -6,7 +6,9 @@ use super::super::{
     status::{decode_quota, read_synthetic_detail},
     wire::{Object, Reader},
 };
-use super::state::{Attempt, Goal, Kind, Observation, POLL, Snapshot, field, unsettled};
+use super::state::{
+    Attempt, Goal, Kind, Observation, POLL, Snapshot, field, unsettled, without_quota_evidence,
+};
 use crate::model::wire::WireField;
 use crate::monitor::settlement::Wait;
 use crate::monitor::wire::{BodyReadFailure, Family};
@@ -41,10 +43,10 @@ impl Client {
                 }
             }
         };
-        match result {
+        let outcome = match result {
             Ok(Some(quota)) => {
                 self.quota_ledger.clear(attempt.kind)?;
-                Ok((!attempt.credentials_exhausted).then_some(quota))
+                Ok(attempt.evidence.can_retain_partial().then_some(quota))
             }
             Ok(None) => {
                 self.quota_ledger.put(attempt)?;
@@ -54,7 +56,14 @@ impl Client {
                 self.quota_ledger.put(attempt)?;
                 Err(unsettled(op, Some(error)))
             }
-        }
+        };
+        outcome.map_err(|error| {
+            if attempt.evidence.can_retain_partial() {
+                error
+            } else {
+                without_quota_evidence(error)
+            }
+        })
     }
 
     async fn observe_attempt(
@@ -72,8 +81,8 @@ impl Client {
             Goal::RenewSetting { .. } => true,
             goal => goal.synthetic_candidate(snapshot),
         };
-        let observe = |credentials: &crate::wire::product::evidence::SentCredentials| {
-            self.quota_ledger.observe(kind, credentials)
+        let observe = |credentials: &crate::wire::product::evidence::SentCredentials, uses_id| {
+            self.quota_ledger.observe(kind, credentials, uses_id)
         };
         let observed = self
             .observe_quota_matching(

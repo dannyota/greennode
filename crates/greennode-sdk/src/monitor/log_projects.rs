@@ -494,18 +494,17 @@ impl Client {
         if evidence.text_reflects(name) {
             return Err(read.invalid(evidence));
         }
+        let order_error = |message| super::mutation::screen_details(input_error(message), evidence);
         let quoted = crate::go_text::go_quote(name);
         let class = classes
             .iter()
             .find(|class| class.name == name)
             .filter(|class| class.status == "ACTIVE" && !class.config.items.is_empty())
-            .ok_or_else(|| input_error(format!("{op} class {quoted} is not an orderable class")))?;
-        let retention_error =
-            |message| super::mutation::screen_details(input_error(message), evidence);
+            .ok_or_else(|| order_error(format!("{op} class {quoted} is not an orderable class")))?;
         let options = &class.config.items;
         let retention = if input.retention_days == 0 {
             let [only] = options.as_slice() else {
-                return Err(retention_error(format!(
+                return Err(order_error(format!(
                     "{op} class {quoted} has {} retention options, RetentionDays must name one",
                     options.len()
                 )));
@@ -516,7 +515,7 @@ impl Client {
                 .iter()
                 .find(|option| option.amount == ResponseField::Value(input.retention_days))
                 .ok_or_else(|| {
-                    retention_error(format!(
+                    order_error(format!(
                         "{op} class {quoted} has no {}-day retention option",
                         input.retention_days
                     ))

@@ -236,3 +236,25 @@ async fn retention_errors_screen_both_day_and_option_counts() {
         assert_eq!(server.requests(), 2);
     }
 }
+
+#[tokio::test]
+async fn invalid_class_diagnostic_is_screened_after_go_quoting() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let server = Server::start(vec![response("200 OK", EMPTY), response("200 OK", CLASSES)]);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer::changing_at(1, r#"Missing\nTier"#)),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.class = "Missing\nTier".into();
+    let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::InvalidInput));
+    assert!(
+        failure
+            .error()
+            .detail::<String>()
+            .is_none_or(|message| !message.contains(r#"Missing\nTier"#))
+    );
+    assert_eq!(server.requests(), 2);
+}

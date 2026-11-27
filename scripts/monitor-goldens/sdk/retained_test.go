@@ -27,6 +27,7 @@ func TestSyntheticRetainedMutationGoldens(t *testing.T) {
 	const classes = "/billing-api/v2/synthetic/quota-class"
 	const expiry = "2099-02-01T00:00:00Z"
 	for _, test := range []struct{ name, action, mutation string }{
+		{"ensure-after-create", "create", "/billing-api/v2/synthetic/quota"},
 		{"renew-after-auto-renew", "auto-renew", quota + "/quota-1/update-auto-renew"},
 		{"ensure-after-renew", "renew", "/billing-api/v2/synthetic/quota/extend-time"},
 		{"ensure-after-recover", "recover", "/billing-api/v2/trash/synthetic/quota"},
@@ -56,6 +57,11 @@ func TestSyntheticRetainedMutationGoldens(t *testing.T) {
 						w.WriteHeader(http.StatusForbidden)
 						return
 					}
+					if test.action == "create" {
+						w.WriteHeader(http.StatusNotFound)
+						_, _ = w.Write([]byte(load("synthetic_quote_absent")))
+						return
+					}
 					reply = current
 				case "/billing-api/v2/synthetic/quota-1/quota-detail":
 					reply = load("quota_quota_detail")
@@ -81,6 +87,12 @@ func TestSyntheticRetainedMutationGoldens(t *testing.T) {
 			var out any
 			var err error
 			switch test.action {
+			case "create":
+				_, originErr = client.CreateSyntheticQuota(ctx, &CreateSyntheticQuotaInput{ClassID: "class-1", PackageID: "unit_1", Quantity: 10, NoWait: true})
+				if originErr != nil {
+					t.Fatal("fixture did not accept creation")
+				}
+				out, err = client.EnsureSyntheticQuota(ctx, &EnsureSyntheticQuotaInput{})
 			case "auto-renew":
 				enabled := true
 				_, originErr = client.SetSyntheticQuotaAutoRenew(ctx, &SetSyntheticQuotaAutoRenewInput{Enabled: &enabled})

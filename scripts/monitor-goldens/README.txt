@@ -41,3 +41,16 @@ with the same settings for the six log project write goldens.
 Run `go test ./internal/cli -run '^TestMonitorQuotaLifecycleWriteGoldens$' -count=1`
 with the same settings for the 15 lifecycle write goldens and auto-renew
 warning golden.
+
+Run the following command with the same settings and TZ=UTC to generate the
+12 synthetic order goldens, the confirmed ensure golden, and the two quota
+refusal stderr goldens. Copy them into crates/greennode/tests/fixtures/monitor/.
+
+    go test ./internal/cli -run '^TestMonitor(SyntheticOrderWriteGoldens|SyntheticConfirmationGolden|QuotaWriteErrorGoldens)$' -count=1
+
+For SDK partials, copy sdk/retained_test.go into monitor/ in the archived Go
+module. Use the same fixture directory and an empty output directory.
+
+    go test ./monitor -run '^TestSyntheticRetainedMutationGoldens$' -count=1
+
+Copy the four JSON files into crates/greennode-sdk/tests/fixtures/monitor/.

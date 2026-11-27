@@ -167,6 +167,12 @@ impl Shape {
                 (partial, Some((error, dispatch)), None)
             }
         };
+        if let Some((error, _)) = &sdk_failure
+            && let Some(exit) =
+                super::super::quota_writes::report_incomplete_quota_evidence(error, stderr)
+        {
+            return exit;
+        }
         let classified = sdk_failure
             .as_ref()
             .map(|(error, _)| errors::classify(error, super::super::SERVICE.error_rules));
@@ -461,5 +467,24 @@ mod tests {
         assert_eq!(stdout.0, 2);
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], "RequestFailed");
+    }
+
+    #[test]
+    fn incomplete_quota_order_evidence_has_no_cli_outcome() {
+        let failure = crate::cli::dispatch::OperationFailure {
+            error: greennode_sdk::testing::incomplete_monitor_quota_evidence(),
+            partial: None,
+            dispatch: greennode_sdk::WriteDispatch::MayHaveBeenSent,
+            query_partial: false,
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let code = RENEW.finish(&mut stdout, &mut stderr, Format::Json, Err(failure.into()));
+        assert_eq!(code, 1);
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "NotSettled");
+        assert!(error["error"].get("status").is_none());
+        assert!(error["error"].get("operation").is_none());
     }
 }

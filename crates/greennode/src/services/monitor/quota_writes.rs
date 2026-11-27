@@ -240,6 +240,18 @@ fn fallback_delete(stage: &str) -> DeleteEffect {
     }
 }
 
+pub(super) fn report_incomplete_quota_evidence(
+    error: &greennode_sdk::Error,
+    stderr: &mut dyn Write,
+) -> Option<u8> {
+    if error.detail::<sdk::ErrorDetail>() != Some(&sdk::ErrorDetail::QuotaEvidenceIncomplete) {
+        return None;
+    }
+    let classified = crate::cli::errors::classify(error, SERVICE.error_rules);
+    crate::cli::errors::write_error(stderr, &classified.envelope);
+    Some(classified.exit)
+}
+
 fn finish_delete(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
@@ -262,6 +274,11 @@ fn finish_delete(
         Err(ExecutionFailure::Local(error)) => return dispatch::local(stderr, error),
         Ok(_) => (None, None, true),
     };
+    if let Some((error, _)) = &failure
+        && let Some(exit) = report_incomplete_quota_evidence(error, stderr)
+    {
+        return exit;
+    }
     let dispatch_uncertain = failure
         .as_ref()
         .is_some_and(|(_, dispatch)| *dispatch == WriteDispatch::MayHaveBeenSent);
@@ -541,5 +558,24 @@ mod tests {
         assert_eq!(stdout.0, 1);
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], "RequestFailed");
+    }
+
+    #[test]
+    fn incomplete_delete_evidence_has_no_cli_outcome() {
+        let failure = crate::cli::dispatch::OperationFailure {
+            error: greennode_sdk::testing::incomplete_monitor_quota_evidence(),
+            partial: None,
+            dispatch: greennode_sdk::WriteDispatch::MayHaveBeenSent,
+            query_partial: false,
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let code = finish_delete(&mut stdout, &mut stderr, Format::Json, Err(failure.into()));
+        assert_eq!(code, 1);
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "NotSettled");
+        assert!(error["error"].get("status").is_none());
+        assert!(error["error"].get("operation").is_none());
     }
 }

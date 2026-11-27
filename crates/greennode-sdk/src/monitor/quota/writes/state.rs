@@ -1,7 +1,3 @@
-mod metadata;
-
-pub(super) use metadata::RetainedRedaction;
-
 use std::{
     collections::BTreeMap,
     future::{Future, poll_fn},
@@ -19,7 +15,7 @@ use time::OffsetDateTime;
 use super::synthetic_settlement::Action;
 use crate::monitor::mutation::{Mutation, Reply, SendGuard, screen_details};
 use crate::monitor::wire::{Family, Read, input_error};
-use crate::monitor::{Client, Quota, QuotaTimestamp, ResponseField};
+use crate::monitor::{Client, ErrorDetail, Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
@@ -140,6 +136,7 @@ impl QuotaLedger {
         &self,
         kind: Kind,
         credentials: &crate::wire::product::evidence::SentCredentials,
+        uses_id: bool,
     ) -> Result<(), Error> {
         let mut pending = self
             .pending
@@ -147,6 +144,9 @@ impl QuotaLedger {
             .map_err(|_| Error::new(ErrorClass::Api))?;
         if let Some(attempt) = pending.get_mut(&kind) {
             attempt.retain_credentials(credentials);
+            if uses_id && !attempt.evidence.can_retain_partial() {
+                return Err(without_quota_evidence(Error::new(ErrorClass::Api)));
+            }
         }
         Ok(())
     }
@@ -271,8 +271,6 @@ pub(super) struct Attempt {
     pub(super) payment_pending: bool,
     pub(super) observed_status: u16,
     pub(super) evidence: Evidence,
-    pub(super) credentials_exhausted: bool,
-    pub(super) retained_redaction: RetainedRedaction,
 }
 impl Attempt {
     pub(super) fn new(op: &'static str, kind: Kind, goal: Goal, evidence: Evidence) -> Self {
@@ -284,8 +282,6 @@ impl Attempt {
             payment_pending: false,
             observed_status: 0,
             evidence,
-            credentials_exhausted: false,
-            retained_redaction: RetainedRedaction::default(),
         }
     }
     pub(super) fn sent(&self) -> &'static str {
@@ -299,27 +295,16 @@ impl Attempt {
         &mut self,
         credentials: &crate::wire::product::evidence::SentCredentials,
     ) {
-        let mut dropped = Evidence::new();
-        if !self
-            .evidence
-            .absorb_bounded(credentials, CREDENTIAL_LIMIT, |secret| {
-                dropped.add_secret(secret)
-            })
-        {
-            self.credentials_exhausted = true;
-            if !self.retained_redaction.observe(&dropped) {
-                self.evidence.withhold_partial();
-            }
+        if !self.evidence.absorb_bounded(credentials, CREDENTIAL_LIMIT) {
+            self.evidence.withhold_partial();
         }
-        if self.credentials_exhausted {
+        if !self.evidence.can_retain_partial() {
             self.order_id.clear();
         }
     }
 
     pub(super) fn merge_retained(&mut self, retained: &Self) {
         let evidence = std::mem::take(&mut self.evidence);
-        self.credentials_exhausted |= retained.credentials_exhausted;
-        self.retained_redaction.merge(&retained.retained_redaction);
         self.retain_credentials(retained.evidence.credentials());
         self.retain_credentials(evidence.credentials());
     }
@@ -333,8 +318,6 @@ impl Attempt {
             payment_pending: self.payment_pending,
             observed_status: self.observed_status,
             evidence: Evidence::new(),
-            credentials_exhausted: self.credentials_exhausted,
-            retained_redaction: self.retained_redaction,
         };
         copy.retain_credentials(self.evidence.credentials());
         copy
@@ -631,9 +614,11 @@ pub(super) fn result<T: Screen>(
     dispatch: WriteDispatch,
     evidence: &Evidence,
 ) -> Result<T, Failure<T>> {
-    let retain = evidence.credentials().values().len() <= CREDENTIAL_LIMIT
-        && evidence.can_retain_partial()
-        && value.screen(evidence);
+    if !evidence.can_retain_partial() || evidence.credentials().values().len() > CREDENTIAL_LIMIT {
+        let error = result.err().unwrap_or_else(|| Error::new(ErrorClass::Api));
+        return Err(Failure::new(without_quota_evidence(error), None, dispatch));
+    }
+    let retain = value.screen(evidence);
     match result {
         Ok(()) if retain => Ok(value),
         Ok(()) => Err(Failure::new(
@@ -651,6 +636,12 @@ pub(super) fn result<T: Screen>(
         )),
     }
 }
+pub(super) fn without_quota_evidence(error: Error) -> Error {
+    error
+        .without_metadata()
+        .with_outer_detail(ErrorDetail::QuotaEvidenceIncomplete)
+}
+
 pub(super) fn screen_quota(quota: &mut Option<Quota>, evidence: &Evidence) {
     if let Some(quota) = quota {
         for id in [&mut quota.id, &mut quota.package_id] {

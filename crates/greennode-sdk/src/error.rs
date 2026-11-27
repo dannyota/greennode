@@ -342,6 +342,19 @@ impl Error {
         self
     }
 
+    pub(crate) fn without_metadata(mut self) -> Self {
+        let mut node = Some(&mut self);
+        while let Some(error) = node {
+            error.identity = true;
+            error.api = None;
+            error.login = None;
+            error.service_login = None;
+            error.detail = None;
+            node = error.cause.as_deref_mut();
+        }
+        self
+    }
+
     pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
         if let Some(api) = self.api.as_mut() {
             if api

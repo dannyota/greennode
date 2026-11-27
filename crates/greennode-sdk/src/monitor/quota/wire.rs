@@ -72,6 +72,10 @@ impl<'a> Reader<'a> {
                 )
                 .with_body_too_large());
         }
+        if !segments.is_empty() && !self.evidence.can_retain_partial() {
+            return Err(Error::new(crate::ErrorClass::Api)
+                .with_outer_detail(crate::monitor::ErrorDetail::QuotaEvidenceIncomplete));
+        }
         let read = Read { route, ..self.read };
         let response = self
             .client

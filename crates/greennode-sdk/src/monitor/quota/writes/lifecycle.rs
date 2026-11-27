@@ -386,7 +386,7 @@ impl Client {
                 }
                 Ok(_) => return initial(changed_intent(input.op)),
                 Err(error) if matched || input.op == DELETE_SYNTH => {
-                    if attempt.credentials_exhausted {
+                    if !attempt.evidence.can_retain_partial() {
                         out.quota = None;
                     }
                     let error = if mismatch && input.op == DELETE_SYNTH {
@@ -610,7 +610,7 @@ impl Client {
                 )
             }
             Err(error) => {
-                if attempt.credentials_exhausted {
+                if !attempt.evidence.can_retain_partial() {
                     out.quota = None;
                 }
                 lifecycle_result(

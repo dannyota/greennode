@@ -1,0 +1,16 @@
+{
+  "Sent": "yes",
+  "Stage": "unconfirmed",
+  "Error": {
+    "Code": "NotSettled",
+    "Operation": "monitor.EnsureSyntheticQuota",
+    "Status": 200
+  },
+  "Action": "none",
+  "Quota": null,
+  "PreviousEndTime": "0001-01-01T00:00:00Z",
+  "Renewed": false,
+  "Recovered": false,
+  "OrderID": "synth-order",
+  "PaymentPending": false
+}

@@ -146,3 +146,33 @@ async fn standalone_order_to_ensure_matches_the_complete_go_partials() {
         assert_eq!(server.requests(), 15);
     }
 }
+
+#[tokio::test]
+async fn pending_create_to_ensure_matches_the_complete_go_partial() {
+    let mut replies = vec![response("404 Not Found", ABSENT)];
+    replies.extend(catalog(SETTINGS));
+    replies.push(response("200 OK", FREE));
+    replies.extend(catalog(SETTINGS));
+    replies.extend([
+        response("404 Not Found", ABSENT),
+        response("200 OK", ACK),
+        response("403 Forbidden", "{}"),
+    ]);
+    let server = Server::start(replies);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateSyntheticQuotaInput::new("class-1", "unit_1", 10);
+    input.no_wait = true;
+    client.create_synthetic_quota(&ctx, input).await.unwrap();
+    let failure = client
+        .ensure_synthetic_quota(&ctx, EnsureSyntheticQuotaInput::default())
+        .await
+        .unwrap_err();
+    let actual = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    let expected: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/monitor/ensure-after-create.json"
+    ))
+    .unwrap();
+    assert!(actual == expected);
+    assert_eq!(server.requests(), 13);
+}
