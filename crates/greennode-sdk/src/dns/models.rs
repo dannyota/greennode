@@ -257,7 +257,7 @@ impl Resource for HostedZone {
             redact_string(value, credentials);
         }
         for association in &mut self.assoc_vpc_map_region {
-            redact_string(&mut association.vpc_id, credentials);
+            redact_id(&mut association.vpc_id, &|id| !credentials.id_reflects(id));
             redact_string(&mut association.region, credentials);
         }
         for value in [&mut self.count_records, &mut self.portal_user_id] {

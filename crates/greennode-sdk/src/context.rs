@@ -44,6 +44,12 @@ impl RequestContext {
         crate::wire::product::exit::scope(future).await
     }
 
+    /// Checks the exact bounded bytes an operation is about to publish.
+    #[doc(hidden)]
+    pub fn response_bytes_reflect(bytes: &[u8]) -> bool {
+        crate::wire::product::exit::bytes_reflect(bytes)
+    }
+
     /// Withholds a diagnostic that reflects credentials observed in this operation.
     #[doc(hidden)]
     pub fn screened_response_text(text: &str) -> &str {

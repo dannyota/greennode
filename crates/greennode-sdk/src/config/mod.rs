@@ -298,7 +298,13 @@ impl Config {
         reason = "The public API returns Error by value"
     )]
     pub async fn authenticate(&self, ctx: &crate::RequestContext) -> Result<(), crate::Error> {
-        self.session.authenticate(ctx).await
+        let evidence = crate::wire::product::evidence::Evidence::from_credentials(
+            self.session.configured_credentials(),
+        );
+        self.session
+            .authenticate(ctx)
+            .await
+            .map_err(|error| evidence.screen_error(error))
     }
     /// Loads configuration offline; requires a Tokio runtime with timers.
     #[expect(

@@ -311,7 +311,9 @@ impl Client {
                     created_id: id,
                     candidate_id: String::new(),
                     password_marker: "[redacted]",
-                    password: generated.then_some(password),
+                    password: generated
+                        .then_some(password)
+                        .filter(crate::wire::product::exit::private_safe),
                     evidence,
                 }),
                 Err(failure) => Err(create_failed(
@@ -378,7 +380,9 @@ impl Client {
             {
                 Ok(_) => Ok(ResetUserPasswordOutput {
                     password_marker: generated.then_some("[redacted]"),
-                    password: generated.then_some(password),
+                    password: generated
+                        .then_some(password)
+                        .filter(crate::wire::product::exit::private_safe),
                     evidence,
                 }),
                 Err(failure) if definite_refusal(&failure) => Err(failure),
@@ -640,7 +644,7 @@ fn create_failed(
 }
 
 fn retain_password<T>(failure: Failure<T>, password: Option<Secret>) -> Failure<T> {
-    match password {
+    match password.filter(crate::wire::product::exit::private_safe) {
         Some(password) => failure.with_private_delivery(password),
         None => failure,
     }

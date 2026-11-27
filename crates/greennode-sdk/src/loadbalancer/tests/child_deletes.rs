@@ -64,12 +64,7 @@ async fn pool_delete_ignores_lone_case_variants_and_refuses_collisions() {
 
 #[tokio::test]
 async fn a_busy_refusal_rereads_then_resends_the_delete_only_once() {
-    let busy = || {
-        response(
-            "409 Conflict",
-            r#"{"message":"listener is not ready: toy%2Dsecret"}"#,
-        )
-    };
+    let busy = || response("409 Conflict", r#"{"message":"listener is not ready"}"#);
     let server = Server::start(vec![
         lb_status("CREATED"),
         response("200 OK", LISTENER_READY),
@@ -384,4 +379,25 @@ async fn busy_delete_validates_the_full_child_before_resending() {
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn child_delete_does_not_retry_for_busy_text_that_reflects_a_bearer() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response(
+            "409 Conflict",
+            r#"{"message":"listener is not ready: toy%2Dsecret"}"#,
+        ),
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("204 No Content", ""),
+    ]);
+    let result = client(&server, CANARY)
+        .delete_listener(&RequestContext::new().0, listener_input(true))
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
 }

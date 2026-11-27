@@ -659,3 +659,32 @@ async fn billing_withholds_iam_secrets_and_signin_material_after_cached_login() 
 }
 
 mod pricing;
+
+#[tokio::test]
+async fn authenticate_withholds_reflected_service_login_reason_and_status() {
+    use crate::wire::test_server::Server;
+    for (credential, expected_status, expected_reason) in [
+        ("401", None, "token endpoint rejected request"),
+        ("rejected", Some(401), ""),
+    ] {
+        let login = Server::start(vec![response("401 Unauthorized", None, "{}")]);
+        let mut config = Config::new(options().with_service_account(ServiceAccountAuth::new(
+            "client-canary".into(),
+            Secret::new(credential),
+        )))
+        .unwrap();
+        let session = Arc::get_mut(&mut config.session).unwrap();
+        let Auth::ServiceAccount(source) = &mut session.auth else {
+            panic!("wrong auth kind");
+        };
+        source.set_test_endpoint(login.origin.clone(), login.root_der.clone());
+        let result = config
+            .authenticate(&RequestContext::new().0)
+            .await
+            .unwrap_err();
+        let login_error = result.service_account_login_error().unwrap();
+        assert!(login_error.reason() == expected_reason);
+        assert_eq!(login_error.status(), expected_status);
+        assert_eq!(login.requests(), 1);
+    }
+}

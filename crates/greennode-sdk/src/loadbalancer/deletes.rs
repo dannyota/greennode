@@ -467,11 +467,11 @@ impl Client {
         let status = reply.status;
         let in_use = id == DELETE_CERT
             && status != StatusCode::NO_CONTENT
-            && response::error_message_matches(&reply.body, |message| {
-                certificate_in_use(
-                    response::sanitize_error_text(message, evidence.credentials()).as_str(),
-                )
-            });
+            && response::error_message_matches(
+                &reply.body,
+                evidence.credentials(),
+                certificate_in_use,
+            );
         response::classify(
             id,
             status,

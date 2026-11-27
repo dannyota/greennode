@@ -38,6 +38,16 @@ pub(super) fn record_secret(secret: &crate::Secret) {
     let _ = OBSERVED.try_with(|state| state.borrow_mut().public.record(secret));
 }
 
+pub(crate) fn bytes_reflect(bytes: &[u8]) -> bool {
+    !bytes.is_empty()
+        && OBSERVED
+            .try_with(|state| {
+                super::response::BodyMatcher::for_output(&state.borrow().public, bytes.len())
+                    .reflects(bytes, false)
+            })
+            .unwrap_or(false)
+}
+
 pub(crate) fn screen_text(text: &str) -> &str {
     if OBSERVED
         .try_with(|state| state.borrow().public.text_reflects(text))

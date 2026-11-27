@@ -6,7 +6,7 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, false, &|text, identifier, _| {
+    check_decoded(body, &|text, identifier, _| {
         matcher.reflects(text.as_bytes(), identifier)
     })
 }
@@ -16,7 +16,7 @@ pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option
     if matcher.literal(std::str::from_utf8(body).ok()?) {
         return Some(true);
     }
-    check_decoded(body, true, &|text, identifier, number| {
+    check_decoded(body, &|text, identifier, number| {
         matcher.reflects(text.as_bytes(), identifier)
             || (number && output_number_reflects(&matcher, text, identifier))
     })
@@ -37,15 +37,10 @@ fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: boo
     })
 }
 
-fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
-    body: &[u8],
-    projected: bool,
-    matches: &F,
-) -> Option<bool> {
+fn check_decoded<F: Fn(&str, bool, bool) -> bool>(body: &[u8], matches: &F) -> Option<bool> {
     let raw: &RawValue = serde_json::from_slice(body).ok()?;
     Walker {
         matches,
-        projected,
         identifier: false,
         depth: 0,
     }
@@ -55,7 +50,6 @@ fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
 
 struct Walker<'a, F> {
     matches: &'a F,
-    projected: bool,
     identifier: bool,
     depth: usize,
 }
@@ -82,7 +76,6 @@ impl<F: Fn(&str, bool, bool) -> bool> Walker<'_, F> {
     fn child(&self, identifier: bool) -> Self {
         Self {
             matches: self.matches,
-            projected: self.projected,
             identifier,
             depth: self.depth + 1,
         }
@@ -103,15 +96,7 @@ impl<'de, F: Fn(&str, bool, bool) -> bool> Visitor<'de> for Walker<'_, F> {
             if !reflects {
                 reflects = (self.matches)(&key, self.identifier, false)
                     || self
-                        .child(
-                            self.identifier
-                                || identifier_key(&key)
-                                || (self.projected
-                                    && matches!(
-                                        key.as_str(),
-                                        "CDNID" | "DNSID" | "NATID" | "VPCID" | "VPCIDs"
-                                    )),
-                        )
+                        .child(self.identifier || identifier_key(&key))
                         .check(raw)
                         .map_err(serde::de::Error::custom)?;
             }

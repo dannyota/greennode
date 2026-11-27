@@ -521,7 +521,7 @@ impl Client {
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
         let busy = status.is_client_error()
-            && response::inspect_error_message(&body, |message| {
+            && response::inspect_error_message(&body, evidence.credentials(), |message| {
                 message_has_phrase(
                     message,
                     &[

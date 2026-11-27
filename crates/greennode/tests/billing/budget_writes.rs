@@ -500,3 +500,14 @@ fn created_threshold_redacts_reflected_strings_before_rendering() {
     }
     assert_eq!(server.requests(), 4);
 }
+
+#[test]
+fn authenticated_writer_refuses_a_reflected_post_request_debug_line() {
+    let server = Server::start(vec![response("204 No Content", String::new())]);
+    let args = [DELETE, &["--yes", "--debug"]].concat();
+    let (exit, stdout, stderr) = invoke_with_source(&args, Some(&server), "finished", &WRITABLE);
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("OutputWithheld"));
+}

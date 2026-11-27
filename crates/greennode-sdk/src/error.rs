@@ -75,7 +75,6 @@ impl SafeText {
         Self(cleaned[..end].to_owned())
     }
 
-    #[allow(dead_code)]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -219,7 +218,6 @@ pub struct LoginError {
     captcha_suspected: bool,
 }
 impl LoginError {
-    #[allow(dead_code)]
     pub(crate) fn new(reason: &'static str, status: Option<u16>, captcha_suspected: bool) -> Self {
         Self {
             reason,
@@ -255,7 +253,6 @@ pub struct ServiceAccountLoginError {
     status: Option<u16>,
 }
 impl ServiceAccountLoginError {
-    #[allow(dead_code)]
     pub(crate) fn new(reason: &'static str, status: Option<u16>) -> Self {
         Self { reason, status }
     }
@@ -383,6 +380,11 @@ impl Error {
             }
         }
         if let Some(detail) = self.detail.as_mut() {
+            if let Some(text) = detail.downcast_mut::<&'static str>()
+                && reflects(text)
+            {
+                *text = "";
+            }
             if let Some(text) = detail.downcast_mut::<String>()
                 && reflects(text)
             {
@@ -608,7 +610,6 @@ impl<T> Failure<T> {
     pub(crate) fn private_delivery(&self) -> Option<&crate::Secret> {
         self.private_delivery.as_deref()
     }
-    #[allow(dead_code)]
     pub(crate) fn wrap<U>(
         error: Error,
         partial: Option<T>,

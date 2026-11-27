@@ -275,12 +275,16 @@ impl Client {
             );
             let (status, raw) = result.map_err(|failure| advise(failure, &advice, &evidence))?;
             let busy = status.is_client_error()
-                && crate::wire::product::response::error_message_matches(&raw, |message| {
-                    let message = message.to_ascii_lowercase();
-                    ["is not ready", "is updating", "is creating", "is deleting"]
-                        .iter()
-                        .any(|part| message.contains(part))
-                });
+                && crate::wire::product::response::error_message_matches(
+                    &raw,
+                    evidence.credentials(),
+                    |message| {
+                        let message = message.to_ascii_lowercase();
+                        ["is not ready", "is updating", "is creating", "is deleting"]
+                            .iter()
+                            .any(|part| message.contains(part))
+                    },
+                );
             let acknowledgement = match reject(&RESIZE_WRITE, status, raw, &evidence, None) {
                 Ok(acknowledgement) => acknowledgement,
                 Err(failure) => {

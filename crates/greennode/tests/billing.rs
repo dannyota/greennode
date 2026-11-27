@@ -297,3 +297,15 @@ fn non_null_cost_matches_the_go_json_golden() {
 
 #[path = "billing/history.rs"]
 mod history;
+
+#[test]
+fn authenticated_error_writer_refuses_credential_created_by_escaping() {
+    let server = Server::start(vec![response("403 Forbidden", r#"{"message":"<"}"#.into())]);
+    let (exit, stdout, stderr) =
+        invoke_with_bearer(&["billing", "get-balances"], Some(&server), "u003c");
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "OutputWithheld");
+}

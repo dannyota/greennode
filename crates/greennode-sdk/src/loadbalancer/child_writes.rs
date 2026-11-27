@@ -304,11 +304,8 @@ impl<'a> ChildWriter<'a> {
         let body = Bytes::from(reply.reply.body);
         let refusal = status.is_client_error();
         let busy = refusal
-            && response::inspect_error_message(&body, |message| {
-                !response::reflects_credential_forms(message, self.evidence.credentials())
-                    && busy_message(message)
-            })
-            .unwrap_or(false);
+            && response::inspect_error_message(&body, self.evidence.credentials(), busy_message)
+                .unwrap_or(false);
         let body = response::classify(
             op.id,
             status,

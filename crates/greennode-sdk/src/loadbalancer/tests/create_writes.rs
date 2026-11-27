@@ -475,3 +475,25 @@ async fn resize_reports_the_redirect_status_and_message() {
     assert_reported_redirect(&failure);
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn resize_ignores_busy_text_that_reflects_a_bearer() {
+    let mut replies: Vec<_> = resize_replies("").into_iter().take(3).collect();
+    replies.push(response(
+        "409 Conflict",
+        r#"{"message":"load balancer is updating: toy%2Dsecret"}"#,
+    ));
+    let server = Server::start(replies);
+    let failure = client(&server, CANARY)
+        .resize_load_balancer(&RequestContext::new().0, resize(true))
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .detail::<crate::loadbalancer::ResourceBusy>()
+            .is_none()
+    );
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+    assert_eq!(server.requests(), 4);
+}

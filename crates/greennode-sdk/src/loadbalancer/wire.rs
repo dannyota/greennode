@@ -35,9 +35,7 @@ pub(super) struct CompleteNotFound;
 pub(super) struct PoolInUseRefusal(pub(super) SafeText);
 
 pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<PoolInUseRefusal> {
-    response::inspect_error_message(body, |message| {
-        let screened = response::sanitize_error_text(message, evidence.credentials());
-        let message = screened.as_str();
+    response::inspect_error_message(body, evidence.credentials(), |message| {
         let phrase = b"is used in listener";
         message
             .as_bytes()

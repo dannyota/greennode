@@ -31,11 +31,20 @@ fn invoke(server: &Server, args: &[&str]) -> (ExitCode, Vec<u8>, Vec<u8>) {
 }
 
 fn invoke_command(server: &Server, command: &str, args: &[&str]) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_bearer(server, command, args, BEARER)
+}
+
+fn invoke_with_bearer(
+    server: &Server,
+    command: &str,
+    args: &[&str],
+    bearer: &str,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let config_options = with_billing_loopback(
         ConfigOptions::default()
-            .with_static_token(Secret::new(BEARER))
+            .with_static_token(Secret::new(bearer))
             .with_project_id("proj-1".into())
             .with_endpoint_overrides(EndpointOverrides {
                 portal: Some(server.origin.clone()),
@@ -216,4 +225,73 @@ fn user_info_reports_permission_error_with_fixed_diagnostic() {
     assert_eq!(error["error"]["message"], "portal response withheld");
     assert_eq!(error["error"]["status"], 403);
     assert_eq!(error["error"]["operation"], "portal.GetUserInfo");
+}
+
+#[test]
+fn authenticated_writer_refuses_numbers_reformatted_by_query() {
+    let server = Server::start(vec![response("200 OK", r#"{"data":{"count":1e6}}"#)]);
+    let (exit, stdout, stderr) = invoke_with_bearer(
+        &server,
+        "get-user-info",
+        &["--query", "UserInfo.count"],
+        "1000000",
+    );
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(!stderr.is_empty());
+}
+
+#[test]
+fn authenticated_writer_refuses_credential_created_by_json_escaping() {
+    let server = Server::start(vec![response("200 OK", r#"{"data":{"shape":"<"}}"#)]);
+    let (exit, stdout, stderr) = invoke_with_bearer(&server, "get-user-info", &[], "u003c");
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(!stderr.is_empty());
+}
+
+#[test]
+fn authenticated_writer_refuses_a_reflected_query_error() {
+    let server = Server::start(vec![response("200 OK", r#"{"data":{"count":1}}"#)]);
+    let (exit, stdout, stderr) = invoke_with_bearer(
+        &server,
+        "get-user-info",
+        &["--query", "length(UserInfo.count)"],
+        "QueryFailed",
+    );
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains("QueryFailed"));
+    assert!(!stderr.is_empty());
+}
+
+#[test]
+fn dynamic_map_acronym_does_not_get_typed_identifier_screening() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"VPCID":"pre6A6B6Cpost"}}"#,
+    )]);
+    let (exit, stdout, stderr) = invoke_with_bearer(&server, "get-user-info", &[], "jkl");
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::SUCCESS);
+    assert!(String::from_utf8_lossy(&stdout).contains("pre6A6B6Cpost"));
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn authenticated_writer_withholds_a_reflected_fallback_diagnostic() {
+    let server = Server::start(vec![response("200 OK", r#"{"data":{"count":1}}"#)]);
+    let (exit, stdout, stderr) = invoke_with_bearer(
+        &server,
+        "get-user-info",
+        &["--query", "'withheld'"],
+        "withheld",
+    );
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
 }

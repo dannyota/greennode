@@ -530,3 +530,26 @@ async fn backup_exit_screens_the_locally_selected_forbidden_code() {
     assert_eq!(failure.error().class(), ErrorClass::PermissionDenied);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn backup_overflow_screens_a_reflected_static_detail() {
+    let body = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![response("200 OK", &body)]);
+    let client = configured_client(
+        &server,
+        "han-1",
+        ConfigOptions::default().with_static_token(Secret::new("exceeds")),
+    );
+    let failure = client
+        .list_backends(&RequestContext::new().0, ListBackendsInput)
+        .await
+        .unwrap_err();
+    assert!(failure.error().is_body_too_large());
+    assert!(
+        failure
+            .error()
+            .detail::<&'static str>()
+            .is_none_or(|detail| !detail.contains("exceeds"))
+    );
+    assert_eq!(server.requests(), 1);
+}

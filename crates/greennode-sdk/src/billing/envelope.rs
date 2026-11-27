@@ -66,8 +66,8 @@ impl<T: BudgetData> Output for Envelope<T> {
     fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
         if let Ok(header) = serde_json::from_slice::<Header<'_>>(&response.body)
             && header
-                .code
-                .is_some_and(|code| success_code(code.get()) == Some(false))
+                .screened_code(&response.credentials)
+                .is_some_and(|code| success_code(code) == Some(false))
         {
             return api_error(operation, response, header.not_found(&response.credentials));
         }
@@ -78,8 +78,10 @@ impl<T: BudgetData> Output for Envelope<T> {
         let status = response.status;
         let invalid = || Box::new(invalid_response(operation, status, false));
         if status == StatusCode::BAD_REQUEST
-            && serde_json::from_slice::<Header<'_>>(&response.body)
-                .is_ok_and(|header| header.not_found(&response.credentials))
+            && serde_json::from_slice::<Header<'_>>(&response.body).is_ok_and(|header| {
+                (header.code.is_none() || header.screened_code(&response.credentials).is_some())
+                    && header.not_found(&response.credentials)
+            })
         {
             return Err(api_error(operation, response, true));
         }
@@ -93,7 +95,9 @@ impl<T: BudgetData> Output for Envelope<T> {
             return Ok(Self::default());
         }
         let header: Header<'_> = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-        let code = header.code.ok_or_else(invalid)?.get();
+        let code = header
+            .screened_code(&response.credentials)
+            .ok_or_else(invalid)?;
         if !success_code(code).ok_or_else(invalid)? {
             strict_json::validate_shape(&response.body, &HEADER_SCHEMA, operation.cap)
                 .map_err(|_| invalid())?;
@@ -129,6 +133,18 @@ struct Header<'a> {
 }
 
 impl Header<'_> {
+    fn screened_code(&self, credentials: &SentCredentials) -> Option<&str> {
+        let wire = self.code?.get();
+        if credentials.text_reflects(wire) {
+            return None;
+        }
+        if wire.starts_with('"') {
+            let decoded = serde_json::from_str::<String>(wire).ok()?;
+            response::decision_text(&decoded, credentials)?;
+        }
+        Some(wire)
+    }
+
     fn not_found(&self, credentials: &SentCredentials) -> bool {
         self.message.as_deref().is_some_and(|message| {
             let safe = response::sanitize_error_text(message, credentials);

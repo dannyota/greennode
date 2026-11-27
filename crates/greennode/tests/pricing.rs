@@ -234,3 +234,17 @@ fn pricing_text_and_table_screen_amounts_after_two_decimal_rounding() {
         assert_eq!(server.requests(), 3);
     }
 }
+
+#[test]
+fn authenticated_writer_refuses_reflected_pricing_coverage_diagnostics() {
+    let server = Server::start(vec![response("200 OK", VIP)]);
+    let (exit, stdout, stderr) = invoke_with_bearer(
+        &["estimate", "--output", "text", "--cli-input-json", ESTIMATE],
+        &server,
+        "Processing",
+    );
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("OutputWithheld"));
+}

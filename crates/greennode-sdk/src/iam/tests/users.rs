@@ -277,3 +277,70 @@ async fn create_refuses_confirmation_redirect_reflecting_hex_encoded_password() 
     );
     assert_eq!(server.requests(), 2);
 }
+
+struct ConfirmationPasswordProvider(std::sync::Arc<Server>);
+
+impl crate::CredentialsProvider for ConfirmationPasswordProvider {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let body = self.0.bodies();
+            let token = match body.first() {
+                None => Secret::new("toy-initial-token"),
+                Some(request) => {
+                    let fields: serde_json::Value = serde_json::from_slice(request).unwrap();
+                    Secret::new(fields["password"].as_str().unwrap())
+                }
+            };
+            Ok(crate::Token::new(token, None))
+        })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::Error>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn confirmed_create_withholds_password_reused_as_the_confirmation_bearer() {
+    let server = std::sync::Arc::new(Server::start(vec![
+        response("201 Created", br#"{"id":"user-1"}"#),
+        response(
+            "200 OK",
+            br#"{"id":"user-1","username":"worker","from":"iam"}"#,
+        ),
+    ]));
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("han-1".into())
+            .with_project_id("unscoped".into())
+            .with_credentials_provider(std::sync::Arc::new(ConfirmationPasswordProvider(
+                server.clone(),
+            )))
+            .with_endpoint_overrides(EndpointOverrides {
+                dashboard: Some(format!("{}/dashboard/", server.origin)),
+                iam: Some(format!("{}/iam/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let output = Client::new(&config)
+        .create_user(&RequestContext::new().0, CreateUserInput::new("worker"))
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 2);
+    assert_eq!(output.created_id, "user-1");
+    assert!(output.generated_password().is_none());
+}

@@ -7,7 +7,7 @@ mod patterns;
 use super::{redirect::Retry, sender::SentCredentials};
 use bytes::Bytes;
 use full_error::full_error;
-pub(crate) use full_error::inspect_error_message;
+
 use http::StatusCode;
 pub(crate) use marker::has_credential_marker;
 pub(super) use matching::BodyMatcher;
@@ -110,7 +110,11 @@ fn classify_with_decoder(
     Err(Box::new(error))
 }
 
-pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) -> bool) -> bool {
+pub(crate) fn error_message_matches(
+    body: &[u8],
+    credentials: &SentCredentials,
+    predicate: impl FnOnce(&str) -> bool,
+) -> bool {
     let fields = [crate::wire::strict_json::Field {
         name: "message",
         children: &[],
@@ -119,7 +123,18 @@ pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) ->
         return false;
     }
     let (_, message) = decode(body, true);
-    predicate(&Zeroizing::new(message))
+    decision_text(&Zeroizing::new(message), credentials).is_some_and(predicate)
+}
+
+pub(crate) fn inspect_error_message<T>(
+    body: &[u8],
+    credentials: &SentCredentials,
+    predicate: impl FnOnce(&str) -> T,
+) -> Option<T> {
+    full_error::inspect_error_message(body, |message| {
+        decision_text(message, credentials).map(predicate)
+    })
+    .flatten()
 }
 
 pub(crate) fn sanitize_error_text(
@@ -135,6 +150,10 @@ pub(crate) fn sanitize_error_text(
     } else {
         sanitized
     }
+}
+
+pub(crate) fn decision_text<'a>(text: &'a str, credentials: &SentCredentials) -> Option<&'a str> {
+    (!sanitize_error_text(text, credentials).as_str().is_empty()).then_some(text)
 }
 
 fn contains_address_marker(text: &str) -> bool {
