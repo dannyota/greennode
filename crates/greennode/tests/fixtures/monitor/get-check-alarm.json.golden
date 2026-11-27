@@ -1,0 +1,18 @@
+{
+  "Alarm": {
+    "ID": "alarm-1",
+    "Status": "OK",
+    "StatusUpdatedAt": "2000-01-03T00:00:00Z",
+    "Locations": [
+      {
+        "AlarmID": "sub-1",
+        "LocationID": "loc-1",
+        "LocationName": "Probe",
+        "State": "OK",
+        "StateUpdatedAt": "2000-01-03T00:00:00Z",
+        "UpdatedAt": "2000-01-02T00:00:00Z",
+        "CreatedAt": "2000-01-01T00:00:00Z"
+      }
+    ]
+  }
+}

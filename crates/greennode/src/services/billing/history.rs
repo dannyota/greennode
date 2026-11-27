@@ -170,6 +170,7 @@ pub(super) const LIST_TRANSACTIONS: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    project_non_json: None,
                     transform_query_cells: None,
                     use_for_partial: false,
                     table: Some(TableView {
@@ -213,6 +214,7 @@ pub(super) const LIST_PAYMENTS: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    project_non_json: None,
                     transform_query_cells: None,
                     use_for_partial: false,
                     table: Some(TableView {
@@ -253,6 +255,7 @@ pub(super) const LIST_RESOURCES: Operation = Operation {
                 OutputView {
                     custom: None,
                     raw_text: None,
+                    project_non_json: None,
                     transform_query_cells: None,
                     use_for_partial: false,
                     table: Some(TableView {

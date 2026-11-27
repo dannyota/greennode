@@ -1,0 +1,7 @@
+{
+  "id": "chk-1",
+  "history_alarm": "alarm-1",
+  "options": {
+    "test_frequency": 5
+  }
+}

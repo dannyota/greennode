@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize, Serializer};
 use time::{Duration, OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use super::wire::{Family, Read, decode, failure, invalid_input};
+use super::wire::{Family, Read, check_path_id, decode, failure};
 use super::{Client, ResponseField};
 use crate::model::wire::WireField;
 use crate::wire::product::{evidence::Evidence, options::PathIds};
@@ -159,9 +159,7 @@ impl Client {
         ctx: &RequestContext,
         input: ListCheckResponseTimesInput,
     ) -> Result<ListCheckResponseTimesOutput, Failure<ListCheckResponseTimesOutput>> {
-        if !PathIds::Strict.allows(&input.check_id) {
-            return Err(invalid_input());
-        }
+        check_path_id(CHECK.id, "CheckID", &input.check_id)?;
         let mut evidence = Evidence::new();
         let Some(window) = Window::parse(&input, self.session.clock().utc_now()) else {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(
@@ -327,12 +325,15 @@ fn milliseconds(time: OffsetDateTime) -> i128 {
     time.unix_timestamp_nanos().div_euclid(1_000_000)
 }
 
-fn serialize_time<S: Serializer>(value: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error> {
+pub(super) fn serialize_time<S: Serializer>(
+    value: &OffsetDateTime,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     let text = value.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
     serializer.serialize_str(&text)
 }
 
-fn safe_time(time: OffsetDateTime, evidence: &Evidence) -> bool {
+pub(super) fn safe_time(time: OffsetDateTime, evidence: &Evidence) -> bool {
     time.format(&Rfc3339)
         .is_ok_and(|text| !evidence.text_reflects(&text))
 }

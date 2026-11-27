@@ -3,13 +3,15 @@ mod quota;
 use std::io::Write;
 
 use greennode_sdk::monitor::{
-    Client, ErrorDetail, GetDashboardInput, GetQuotaStatusInput, ListCheckResponseTimesInput,
-    ListDashboardsInput, ListSyntheticPackagesInput,
+    Client, CreateNotificationQuotaInput, CreateSyntheticQuotaInput, ErrorDetail,
+    GetCheckAlarmInput, GetDashboardInput, GetNotificationQuotaInput,
+    GetNotificationQuotaUsageInput, GetQuotaStatusInput, ListCheckResponseTimesInput,
+    ListDashboardsInput, ListSyntheticPackagesInput, RenewSyntheticQuotaInput,
 };
 
 use crate::cli::dispatch::{self, Format, OutputView};
 use crate::cli::errors::{Rule, RuleExit, RuleName, RuleOperation};
-use crate::cli::input::{InputDescriptor, InputError, InputField, Requirement};
+use crate::cli::input::{InputDescriptor, InputError, InputField, JsonChecks, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation, Service};
 use crate::cli::render::{self, Value};
 
@@ -18,6 +20,10 @@ struct Input {
     dashboard_id: String,
     kind: String,
     check_id: String,
+    class_id: String,
+    package_id: String,
+    quantity: i64,
+    expected_end_time: String,
     start: String,
     end: String,
     page: i64,
@@ -74,7 +80,106 @@ macro_rules! field {
 const DASHBOARD_ID: InputField<Input> =
     field!("dashboard-id", "DashboardID", dashboard_id, required);
 const CHECK_ID: InputField<Input> = field!("check-id", "CheckID", check_id, required);
+const NOTIFICATION_KIND: InputField<Input> = field!("kind", "Kind", kind, required);
+const NOTIFICATION_QUOTA: InputDescriptor<Input> = descriptor(&[NOTIFICATION_KIND]);
 const KIND: InputField<Input> = field!("kind", "Kind", kind, "string", String);
+const CLASS_ID: InputField<Input> = field!("class-id", "ClassID", class_id, required);
+const PACKAGE_ID: InputField<Input> = field!("package-id", "PackageID", package_id, required);
+const QUANTITY: InputField<Input> = field!(
+    "quantity",
+    "Quantity",
+    quantity,
+    "int",
+    i64,
+    true,
+    Requirement::Nonzero(|input| input.quantity != 0)
+);
+const EXPECTED_END_TIME: InputField<Input> = field!(
+    "expected-end-time",
+    "ExpectedEndTime",
+    expected_end_time,
+    required
+);
+
+const fn ignored(name: &'static str) -> InputField<Input> {
+    InputField {
+        json_name: name,
+        flag: None,
+        secret: false,
+        nullable: false,
+        set_json: |_, _| Ok(()),
+        set_flag: None,
+        requirement: Requirement::Optional,
+    }
+}
+
+const OPTIONAL_PACKAGE: InputField<Input> =
+    field!("package-id", "PackageID", package_id, "string", String);
+const NOTIFICATION_QUOTE: InputDescriptor<Input> = descriptor(&[
+    NOTIFICATION_KIND,
+    OPTIONAL_PACKAGE,
+    ignored(MAX_PRICE.name),
+    ignored(NO_WAIT.name),
+]);
+
+const MAX_PRICE: Field = Field {
+    name: "MaxPrice",
+    go_type: "float64",
+    required: false,
+};
+const MAX_DAYS_LEFT: Field = Field {
+    name: "MaxDaysLeft",
+    go_type: "int",
+    required: false,
+};
+const NO_WAIT: Field = Field {
+    name: "NoWait",
+    go_type: "bool",
+    required: false,
+};
+const CREATE_QUOTE: InputDescriptor<Input> = descriptor(&[
+    CLASS_ID,
+    PACKAGE_ID,
+    QUANTITY,
+    ignored(MAX_PRICE.name),
+    ignored(NO_WAIT.name),
+]);
+const RENEW_QUOTE: InputDescriptor<Input> = descriptor(&[
+    EXPECTED_END_TIME,
+    ignored(MAX_PRICE.name),
+    ignored(MAX_DAYS_LEFT.name),
+    ignored(NO_WAIT.name),
+]);
+const QUOTE_INPUT_CHECKS: JsonChecks = JsonChecks {
+    validate: check_quote_json,
+    read_error: |error| error,
+};
+
+fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
+    #[derive(serde::Deserialize)]
+    struct Fields {
+        #[serde(rename = "Kind")]
+        _kind: Option<String>,
+        #[serde(rename = "ClassID")]
+        _class_id: Option<String>,
+        #[serde(rename = "PackageID")]
+        _package_id: Option<String>,
+        #[serde(rename = "Quantity")]
+        _quantity: Option<i64>,
+        #[serde(rename = "ExpectedEndTime")]
+        _expected_end_time: Option<String>,
+        #[serde(rename = "MaxPrice")]
+        _max_price: Option<f64>,
+        #[serde(rename = "MaxDaysLeft")]
+        _max_days_left: Option<i64>,
+        #[serde(rename = "NoWait")]
+        _no_wait: Option<bool>,
+    }
+    serde_json::from_slice::<Option<Fields>>(bytes)
+        .map(|_| ())
+        .map_err(|_| InputError("--cli-input-json: invalid quote field"))
+}
+
 const START: InputField<Input> = field!("start", "Start", start, "string", String);
 const END: InputField<Input> = field!("end", "End", end, "string", String);
 const PAGE: InputField<Input> = field!("page", "Page", page, "int", i64);
@@ -108,12 +213,13 @@ const fn descriptor(fields: &'static [InputField<Input>]) -> InputDescriptor<Inp
 
 const LIST_SYNTHETIC_PACKAGES: InputDescriptor<Input> = descriptor(&[]);
 const QUOTA_STATUS: InputDescriptor<Input> = descriptor(&[KIND]);
+const GET_CHECK_ALARM: InputDescriptor<Input> = descriptor(&[CHECK_ID]);
 const GET_DASHBOARD: InputDescriptor<Input> = descriptor(&[DASHBOARD_ID]);
 const LIST_DASHBOARDS: InputDescriptor<Input> = descriptor(&[PAGE, SIZE, SYSTEM]);
 const LIST_RESPONSE_TIMES: InputDescriptor<Input> = descriptor(&[CHECK_ID, START, END]);
 
 macro_rules! read {
-    ($name:literal, $sdk:literal, $help:literal, $method:ident, $input:ident, [$($field:ident),*], $value:expr, $view:expr, $notes:expr, $example:literal) => {
+    ($name:literal, $sdk:literal, $help:literal, $method:ident, $input:ident, [$($field:ident),*], $value:expr, $view:expr, $notes:expr, $example:literal $(, [$($json:ident),*], $checks:expr)?) => {
         Operation {
             name: $name,
             sdk_operation: concat!("monitor.", $sdk),
@@ -123,16 +229,16 @@ macro_rules! read {
             inherited_bindings: &[],
             kind: Kind::Read,
             flags: &[$(flag(&$field)),*],
-            json_fields: &[],
+            json_fields: &[$($($json),*)?],
             extra_flags: &[],
             notes: $notes,
             handler: Some(Handler::new(&$input, |operation, matches, invocation| {
-                Box::pin(dispatch::management_with_view(invocation, operation, matches, &$input, |ctx, config, input| {
+                Box::pin(dispatch::management_custom(invocation, operation, matches, &$input, |ctx, config, input| {
                     Box::pin(async move {
                         let value = ($value)(input);
                         dispatch::project_result(Client::new(config).$method(ctx, value).await, std::convert::identity)
                     })
-                }, $view))
+                }, $view, None $(.or(Some($checks)))?))
             })),
         }
     };
@@ -190,6 +296,32 @@ pub(super) const SERVICE: Service = Service {
             ),
         },
         Rule {
+            identity: "monitor-quota-changed",
+            matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::QuotaChanged),
+            name: Some(RuleName {
+                rank: 2,
+                code: "QuotaChanged",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: Some("quota guard changed"),
+        },
+        Rule {
+            identity: "monitor-unexpected-quota-status",
+            matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::UnexpectedStatus),
+            name: Some(RuleName {
+                rank: 3,
+                code: "UnexpectedStatus",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: Some(
+                "monitor.QuoteRenewSyntheticQuota: unknown quota status: monitor: unexpected check status",
+            ),
+        },
+        Rule {
             identity: "monitor-quota-status-incomplete",
             matches: |error| {
                 error.detail::<ErrorDetail>() == Some(&ErrorDetail::QuotaStatusIncomplete)
@@ -206,6 +338,20 @@ pub(super) const SERVICE: Service = Service {
     ],
     operations: &[
         read!(
+            "get-check-alarm",
+            "GetCheckAlarm",
+            "Read check alarm and location states",
+            get_check_alarm,
+            GET_CHECK_ALARM,
+            [CHECK_ID],
+            |input: &Input| GetCheckAlarmInput::new(&input.check_id),
+            OutputView::default(),
+            &[
+                "Reads the current alarm and its location states through the check's HistoryAlarmID. An empty alarm reference is NotFound (exit 4). An unknown definition can return server error 500 (exit 1). A check's Status reports whether it runs. MonitorStatus reports its alarm state."
+            ],
+            "get-check-alarm --check-id <check-id> --query Alarm"
+        ),
+        read!(
             "get-dashboard",
             "GetDashboard",
             "Read dashboard metadata",
@@ -216,6 +362,34 @@ pub(super) const SERVICE: Service = Service {
             dashboard_view(),
             &["Reads one dashboard without widgets. There is no delete command."],
             "get-dashboard --dashboard-id <dashboard-id> --query Dashboard"
+        ),
+        read!(
+            "get-notification-quota",
+            "GetNotificationQuota",
+            "Read Email or SMS quota",
+            get_notification_quota,
+            NOTIFICATION_QUOTA,
+            [NOTIFICATION_KIND],
+            |input: &Input| GetNotificationQuotaInput::new(&input.kind),
+            quota::notification_view(),
+            &[
+                "--kind accepts Email or SMS, case insensitively. Reads quota identity, status, expiry, and AutoRenew. Table and text timestamps show UTC. A missing quota is NotFound (exit 4)."
+            ],
+            "get-notification-quota --kind Email --query Quota"
+        ),
+        read!(
+            "get-notification-quota-usage",
+            "GetNotificationQuotaUsage",
+            "Read Email quota usage",
+            get_notification_quota_usage,
+            NOTIFICATION_QUOTA,
+            [NOTIFICATION_KIND],
+            |input: &Input| GetNotificationQuotaUsageInput::new(&input.kind),
+            quota::notification_usage_view(),
+            &[
+                "--kind accepts Email, case insensitively. Reads message consumption and descriptions. A missing quota is NotFound (exit 4). SMS usage is refused before requests."
+            ],
+            "get-notification-quota-usage --kind Email --query Usage"
         ),
         read!(
             "list-check-response-times",
@@ -283,6 +457,62 @@ pub(super) const SERVICE: Service = Service {
                 "--kind optionally selects synthetic, email, or sms, case insensitively. Omitted means all three. Returns a sequential snapshot with one UTC AsOf. Synthetic uses quota, detail, class catalog, and settings reads, with detail price and class and an unknown package name. Notification price is the current list price. Missing quotas produce none rows and exit 0. Failed rows print partial output, ignore --query, and exit 1 as QuotaStatusIncomplete. Null means unknown. False and zero remain distinct. RenewWindowOpen describes the catalog-eligible free Synthetic timing window. NextSafeCommand suggests renewal inside the free window or recovery for expired free trash, only with POC and auto-renew off. Suggested writes require explicit guards from a fresh read. Table and text show time left in days, hours, and minutes. Rows without errors have a blank Error cell. Read-only settings allow this read."
             ],
             "quota-status --kind synthetic"
+        ),
+        read!(
+            "quote-create-notification-quota",
+            "QuoteCreateNotificationQuota",
+            "Quote one month of Email or SMS quota",
+            quote_create_notification_quota,
+            NOTIFICATION_QUOTE,
+            [NOTIFICATION_KIND, OPTIONAL_PACKAGE],
+            |input: &Input| {
+                let mut value = CreateNotificationQuotaInput::new(&input.kind);
+                value.package_id.clone_from(&input.package_id);
+                value
+            },
+            OutputView::default(),
+            &[
+                "Estimates one month of Email or SMS capacity without ordering. Omitting --package-id selects the unique zero-price package. An existing quota is refused. MaxPrice and NoWait are ignored. Prices are in VND. Email pre-VAT treatment is inferred and SMS VAT treatment is unverified. GuardPrice is the higher of list and quote prices."
+            ],
+            "quote-create-notification-quota --kind Email",
+            [MAX_PRICE, NO_WAIT],
+            QUOTE_INPUT_CHECKS
+        ),
+        read!(
+            "quote-create-synthetic-quota",
+            "QuoteCreateSyntheticQuota",
+            "Quote one month of new synthetic quota",
+            quote_create_synthetic_quota,
+            CREATE_QUOTE,
+            [CLASS_ID, PACKAGE_ID, QUANTITY],
+            |input: &Input| CreateSyntheticQuotaInput::new(
+                &input.class_id,
+                &input.package_id,
+                input.quantity
+            ),
+            OutputView::default(),
+            &[
+                "Estimates one month of a selected free package after verifying quota absence and eligibility in the class catalog. Uses class unit prices. Paid offers are refused. MaxPrice and NoWait are ignored. Read-only permits this quote."
+            ],
+            "quote-create-synthetic-quota --class-id <class-id> --package-id <package-id> --quantity <quantity>",
+            [MAX_PRICE, NO_WAIT],
+            QUOTE_INPUT_CHECKS
+        ),
+        read!(
+            "quote-renew-synthetic-quota",
+            "QuoteRenewSyntheticQuota",
+            "Quote one month of synthetic quota renewal",
+            quote_renew_synthetic_quota,
+            RENEW_QUOTE,
+            [EXPECTED_END_TIME],
+            |input: &Input| RenewSyntheticQuotaInput::new(&input.expected_end_time),
+            OutputView::default(),
+            &[
+                "Estimates one month from the active quota and its identity-checked detail. ExpectedEndTime must be RFC 3339 and match the quota expiry. MaxPrice, MaxDaysLeft, and NoWait are ignored. Read-only permits this quote."
+            ],
+            "quote-renew-synthetic-quota --expected-end-time <expected-end-time>",
+            [MAX_PRICE, MAX_DAYS_LEFT, NO_WAIT],
+            QUOTE_INPUT_CHECKS
         ),
     ],
 };

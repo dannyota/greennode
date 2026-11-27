@@ -1,8 +1,14 @@
 mod catalog;
+mod notification;
+mod quotes;
 mod status;
 mod wire;
 
+pub(super) use wire::integer;
+
 pub use catalog::*;
+pub use notification::*;
+pub use quotes::*;
 pub use status::*;
 
 use std::collections::HashSet;

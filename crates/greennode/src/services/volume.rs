@@ -120,6 +120,7 @@ const DEFAULT_VIEW: dispatch::OutputView = dispatch::OutputView {
     withhold: None,
     custom: None,
     raw_text: None,
+    project_non_json: None,
     transform_query_cells: None,
     use_for_partial: false,
 };

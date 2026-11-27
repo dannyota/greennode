@@ -6,6 +6,7 @@ use serde_json::value::RawValue;
 use super::Client;
 use crate::error::SafeText;
 use crate::model::wire::go_json;
+use crate::wire::product::options::PathIds;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{Operation, RouteAuth, execute_raw},
@@ -20,7 +21,7 @@ use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch}
 pub(super) enum Family {
     Dashboard,
     CheckAlarm,
-    Quota,
+    Quota { no_redirect: bool },
 }
 
 pub(super) struct BodyReadFailure;
@@ -33,10 +34,18 @@ pub(super) struct Read {
 }
 
 impl Read {
+    fn no_redirect(&self) -> bool {
+        match self.family {
+            Family::Dashboard => true,
+            Family::CheckAlarm => false,
+            Family::Quota { no_redirect } => no_redirect,
+        }
+    }
+
     pub(super) fn invalid(&self, evidence: &Evidence) -> Error {
         let message = match self.family {
             Family::Dashboard => "vMonitor response withheld",
-            Family::Quota => "quota response had invalid structure",
+            Family::Quota { .. } => "quota response had invalid structure",
             Family::CheckAlarm => "check alarm response rejected; body withheld",
         };
         self.error(Some(200), "InvalidResponse", message, false, evidence)
@@ -69,8 +78,10 @@ impl Read {
         if error.is_body_too_large() {
             return self.overflow(status, evidence);
         }
-        if matches!(self.family, Family::Quota) && status.is_some() && api.is_some() {
-            if error.detail::<StatusCode>().is_some() {
+        if matches!(self.family, Family::Quota { .. }) && status.is_some() && api.is_some() {
+            let kept_redirect =
+                self.no_redirect() && status.is_some_and(|status| (300..400).contains(&status));
+            if error.detail::<StatusCode>().is_some() && !kept_redirect {
                 return self
                     .request_failed(None, false, evidence)
                     .with_outer_detail(BodyReadFailure);
@@ -86,7 +97,7 @@ impl Read {
     fn overflow(&self, status: Option<u16>, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
             Family::Dashboard => ("", "vMonitor response withheld"),
-            Family::Quota => ("ResponseTooLarge", "quota response exceeded size limit"),
+            Family::Quota { .. } => ("ResponseTooLarge", "quota response exceeded size limit"),
             Family::CheckAlarm => (
                 "ResponseLimitExceeded",
                 "check alarm response exceeds safety limit",
@@ -99,14 +110,14 @@ impl Read {
     fn request_failed(&self, status: Option<u16>, retryable: bool, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
             Family::Dashboard => ("", "vMonitor response withheld"),
-            Family::CheckAlarm | Family::Quota => (
+            Family::CheckAlarm | Family::Quota { .. } => (
                 if status.is_some_and(|status| status >= 400) {
                     ""
                 } else {
                     "InvalidResponse"
                 },
                 match self.family {
-                    Family::Quota => "quota response withheld",
+                    Family::Quota { .. } => "quota response withheld",
                     _ => "check alarm request failed; response withheld",
                 },
             ),
@@ -124,6 +135,20 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
     ) -> Result<Box<RawValue>, Error> {
+        self.read_status(ctx, read, path, query, evidence, false)
+            .await
+            .map(|(_, raw)| raw)
+    }
+
+    pub(super) async fn read_status(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        path: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        accept_not_found: bool,
+    ) -> Result<(StatusCode, Box<RawValue>), Error> {
         let base = self
             .session
             .endpoints()
@@ -147,7 +172,11 @@ impl Client {
             method: Method::GET,
             class: Classification::Read,
             retry: Retry::Repeatable,
-            success: &[StatusCode::OK],
+            success: if accept_not_found {
+                &[StatusCode::OK, StatusCode::NOT_FOUND]
+            } else {
+                &[StatusCode::OK]
+            },
             cap: read.limit,
             allow_recovery: true,
             allow_empty: false,
@@ -156,7 +185,7 @@ impl Client {
             overflow_overrides_status: false,
             sensitive: true,
             reject_reflected_credentials: false,
-            no_redirect: !matches!(read.family, Family::CheckAlarm),
+            no_redirect: read.no_redirect(),
             retry_config: retry::Config::default(),
         };
         let reply = match execute_raw(
@@ -183,15 +212,33 @@ impl Client {
             Ok(reply) => reply,
             Err(failure) => return Err(read.failure(failure.into_parts().0, evidence)),
         };
-        if reply.status != StatusCode::OK {
+        if !operation.success.contains(&reply.status) {
             let retryable = matches!(reply.status.as_u16(), 429 | 502 | 503 | 504);
             return Err(read.request_failed(Some(reply.status.as_u16()), retryable, evidence));
         }
+        if reply.body.is_empty() && matches!(read.family, Family::Quota { .. }) {
+            let status = reply.status.as_u16();
+            let code = if status == 404 {
+                "NotFound"
+            } else {
+                "InvalidResponse"
+            };
+            return Err(read.error(
+                Some(status),
+                code,
+                "quota response had invalid structure",
+                false,
+                evidence,
+            ));
+        }
         let text = go_json(&reply.body);
-        serde_json::from_str(&text).map_err(|_| match read.family {
+        let raw = serde_json::from_str(&text).map_err(|_| match read.family {
             Family::Dashboard => read.invalid(evidence),
-            Family::CheckAlarm | Family::Quota => read.request_failed(Some(200), false, evidence),
-        })
+            Family::CheckAlarm | Family::Quota { .. } => {
+                read.request_failed(Some(reply.status.as_u16()), false, evidence)
+            }
+        })?;
+        Ok((reply.status, raw))
     }
 }
 
@@ -210,6 +257,28 @@ pub(super) fn failure<T>(error: Error) -> Failure<T> {
     Failure::new(error, None, WriteDispatch::NotAWrite)
 }
 
-pub(super) fn invalid_input<T>() -> Failure<T> {
-    failure(Error::new(ErrorClass::InvalidInput))
+pub(super) fn input_error(text: String) -> Error {
+    Error::new(ErrorClass::InvalidInput).with_outer_detail(text)
+}
+
+pub(super) fn requires_failure<T>(op: &str, field: &str) -> Failure<T> {
+    failure(input_error(format!(
+        "vngcloud: invalid input: {op} requires {field}"
+    )))
+}
+
+pub(super) fn path_id_failure<T>(op: &str, field: &str) -> Failure<T> {
+    failure(input_error(format!(
+        "vngcloud: invalid input: {op} requires {field} to match ^[A-Za-z0-9-]+$"
+    )))
+}
+
+pub(super) fn check_path_id<T>(op: &str, field: &str, value: &str) -> Result<(), Failure<T>> {
+    if value.is_empty() {
+        return Err(requires_failure(op, field));
+    }
+    if !PathIds::Strict.allows(value) {
+        return Err(path_id_failure(op, field));
+    }
+    Ok(())
 }

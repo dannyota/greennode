@@ -1,0 +1,11 @@
+{
+  "PackageID": "emailplus",
+  "Quantity": 1,
+  "MonthPeriod": 1,
+  "ResourceID": "",
+  "ExpectedEndTime": null,
+  "OptimumPrice": 120,
+  "ListPrice": 100,
+  "GuardPrice": 120,
+  "Currency": "VND"
+}
