@@ -1,0 +1,23 @@
+{
+  "Items": [
+    {
+      "ID": "channel-1",
+      "Name": "Probe alerts",
+      "Address": "https://example.test/\u003credacted\u003e",
+      "Type": "Webhook",
+      "Headers": [
+        {
+          "Key": "X-Hook",
+          "Value": "\u003credacted\u003e"
+        }
+      ],
+      "MetricMappingID": "mapping-1",
+      "CreatedDate": "2000-01-01T00:00:00",
+      "UpdatedDate": ""
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10000,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

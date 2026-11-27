@@ -1,0 +1,32 @@
+{
+  "logUsages": [
+    {}
+  ],
+  "metricUsages": [],
+  "smsUsages": [],
+  "syntheticUsages": [
+    {
+      "api": 3,
+      "location": 1,
+      "email": 0,
+      "sms": 0,
+      "slack": 0,
+      "webhook": 0,
+      "telegram": 0,
+      "teams": 0
+    }
+  ],
+  "emailUsages": [
+    {
+      "amount": 2
+    }
+  ],
+  "freeEmailQuota": 10,
+  "freeSmsQuota": 0,
+  "logSeverity": null,
+  "metricSeverity": null,
+  "syntheticSeverity": "OK",
+  "emailSeverity": "OK",
+  "smsSeverity": null,
+  "notificationSeverity": null
+}

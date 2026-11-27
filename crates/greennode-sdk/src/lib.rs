@@ -20,6 +20,9 @@ mod error;
 mod event;
 mod file_diagnostic;
 pub mod globalloadbalancer;
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub mod go_float;
 mod go_text;
 pub mod iam;
 pub mod loadbalancer;

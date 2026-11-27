@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use serde::Serializer;
 use serde_json::value::RawValue;
 
 use super::super::{
@@ -59,10 +58,12 @@ output! {
 output! {
     /// Detailed usage for a Monitor quota.
     struct QuotaUsageDetail {
+        /// Synthetic counters when reported.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        counts: Option<super::usage::UsageCounts> => "Counts",
         /// Amount of quota used.
         amount: ResponseField<i64> => "Amount",
         /// Provider descriptions keyed by field.
-        #[serde(serialize_with = "serialize_descriptions")]
         descriptions: BTreeMap<String, UsageDescription> => "Descriptions",
     }
 }
@@ -175,22 +176,30 @@ pub(super) fn notification_kind(op: &'static str, kind: &str) -> Result<Notifica
 fn notification_usage(raw: &RawValue) -> Option<QuotaUsageDetail> {
     let object = Object::of(raw)?;
     let usage = Object::of(object.required("usage")?)?;
-    let descriptions = Object::of(object.required("description")?)?
+    Some(QuotaUsageDetail {
+        counts: None,
+        amount: ResponseField::Value(usage.integer("amount")?),
+        descriptions: usage_descriptions(&object)?,
+    })
+}
+
+pub(super) fn usage_descriptions(
+    object: &Object<'_>,
+) -> Option<BTreeMap<String, UsageDescription>> {
+    Object::of(object.required("description")?)?
         .entries()
         .map(|(key, raw)| {
             let item = Object::of(raw)?;
-            let description = UsageDescription {
-                name: item.text("name")?,
-                specs: item.text("specs")?,
-                unit: item.text("unit")?,
-            };
-            Some((key, description))
+            Some((
+                key,
+                UsageDescription {
+                    name: item.text("name")?,
+                    specs: item.text("specs")?,
+                    unit: item.text("unit")?,
+                },
+            ))
         })
-        .collect::<Option<_>>()?;
-    Some(QuotaUsageDetail {
-        amount: ResponseField::Value(usage.integer("amount")?),
-        descriptions,
-    })
+        .collect()
 }
 
 impl Screen for BTreeMap<String, UsageDescription> {
@@ -199,11 +208,4 @@ impl Screen for BTreeMap<String, UsageDescription> {
         self.values_mut()
             .all(|description| description.screen(evidence))
     }
-}
-
-fn serialize_descriptions<S: Serializer>(
-    descriptions: &BTreeMap<String, UsageDescription>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_newtype_struct("$greennode::dynamic-map", descriptions)
 }

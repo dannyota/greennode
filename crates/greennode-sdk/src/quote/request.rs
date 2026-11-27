@@ -230,6 +230,8 @@ pub(crate) async fn exchange(
     pacing: Option<&Pacing>,
 ) -> Result<Box<RawValue>, Box<Error>> {
     let direct = pacing.is_none();
+    let monitor_log =
+        matches!(req.product, Product::Monitor { .. }) && req.operation == monitor::LOG_QUOTE;
     let vnetwork = matches!(req.product, Product::Vnetwork(_));
     let base = req
         .product
@@ -259,7 +261,7 @@ pub(crate) async fn exchange(
         success: &[StatusCode::OK],
         cap: if vnetwork {
             4 << 20
-        } else if direct {
+        } else if direct && !monitor_log {
             1 << 20
         } else {
             8 << 20
@@ -267,7 +269,7 @@ pub(crate) async fn exchange(
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: !monitor_log,
         overflow_overrides_status: false,
         sensitive: !direct,
         reject_reflected_credentials: false,

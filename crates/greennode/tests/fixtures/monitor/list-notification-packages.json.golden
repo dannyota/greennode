@@ -1,0 +1,16 @@
+{
+  "Items": [
+    {
+      "ID": "emailfree",
+      "Name": "Free",
+      "Price": 0,
+      "Amount": 20
+    },
+    {
+      "ID": "emailplus",
+      "Name": "Plus",
+      "Price": 100,
+      "Amount": 50
+    }
+  ]
+}

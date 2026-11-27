@@ -131,9 +131,27 @@ pub(crate) fn reflects(
     let Ok(shortest) = serde_json::to_string(&value) else {
         return true;
     };
-    (include_sdk_json && credentials.reflects(shortest.as_bytes()))
+    let mut evidence = crate::wire::product::evidence::Evidence::new();
+    evidence.absorb(credentials);
+    (include_sdk_json && evidence.text_reflects(&shortest))
         || [Style::Json, Style::Fixed].into_iter().any(|style| {
             format(&shortest, json_scientific(value), style)
-                .is_none_or(|text| credentials.reflects(text.as_bytes()))
+                .is_none_or(|text| evidence.text_reflects(&text))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reflects;
+    use crate::Secret;
+    use crate::wire::product::sender::SentCredentials;
+
+    #[test]
+    fn screens_encoded_credentials_in_rendered_numbers() {
+        let credentials = SentCredentials::for_test(vec![Secret::new("abc")]);
+        assert!(reflects(616263.0, &credentials, false));
+        assert!(!reflects(717273.0, &credentials, false));
+        let ordinary = SentCredentials::for_test(vec![Secret::new("toy30token")]);
+        assert!(!reflects(0.0, &ordinary, true));
+    }
 }

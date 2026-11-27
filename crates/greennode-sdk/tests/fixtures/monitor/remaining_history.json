@@ -1,0 +1,1 @@
+{"data":[{"id":"transition-1","alarm_id":"sub-1","old_state":"OK","new_state":"ALARM","timestamp":"2000-01-04T00:00:00Z","sub_alarms":[{"sub_alarm_state":"ALARM","current_values":[2.5]}]}]}

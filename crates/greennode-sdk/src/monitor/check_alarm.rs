@@ -164,49 +164,66 @@ impl Client {
         input: GetCheckAlarmInput,
     ) -> Result<GetCheckAlarmOutput, Failure<GetCheckAlarmOutput>> {
         check_path_id(UPTIME.id, "CheckID", &input.check_id)?;
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &UPTIME, &[&input.check_id], &[], &mut evidence)
+        let (alarm, _) = self
+            .read_alarm(ctx, UPTIME.id, &input.check_id, &mut Evidence::new())
             .await
             .map_err(failure)?;
-        let snapshot: Snapshot = decode(&raw, &SNAPSHOT, &UPTIME, &evidence).map_err(failure)?;
-        if snapshot.id != input.check_id
-            || evidence.id_reflects(&snapshot.id)
-            || !integer(&snapshot.options.test_frequency).is_some_and(|value| value > 0)
-        {
-            return Err(failure(UPTIME.invalid(&evidence)));
+        Ok(GetCheckAlarmOutput { alarm })
+    }
+
+    pub(super) async fn read_alarm(
+        &self,
+        ctx: &RequestContext,
+        op: &'static str,
+        check_id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<(CheckAlarm, i64), Error> {
+        let uptime = Read { id: op, ..UPTIME };
+        let definition = Read {
+            id: op,
+            ..DEFINITION
+        };
+        let raw = self.read(ctx, &uptime, &[check_id], &[], evidence).await?;
+        let snapshot: Snapshot = decode(&raw, &SNAPSHOT, &uptime, evidence)?;
+        let frequency = integer(&snapshot.options.test_frequency)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| uptime.invalid(evidence))?;
+        if snapshot.id != check_id || evidence.id_reflects(&snapshot.id) {
+            return Err(uptime.invalid(evidence));
         }
         let reference = snapshot.history_alarm;
         if reference.is_empty() {
-            return Err(failure(Error::new(ErrorClass::NotFound).with_cause(
-                UPTIME.error(
-                    None,
-                    "NotFound",
-                    "check has no alarm reference",
-                    false,
-                    &evidence,
-                ),
+            return Err(Error::new(ErrorClass::NotFound).with_cause(uptime.error(
+                None,
+                "NotFound",
+                "check has no alarm reference",
+                false,
+                evidence,
             )));
         }
-        if !safe_id(&reference, &evidence) {
-            return Err(failure(UPTIME.invalid(&evidence)));
+        if !safe_id(&reference, evidence) {
+            return Err(uptime.invalid(evidence));
         }
         let raw = self
-            .read(ctx, &DEFINITION, &[&reference], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let envelope: Envelope =
-            decode(&raw, &ENVELOPE, &DEFINITION, &evidence).map_err(failure)?;
-        if !safe_id(&reference, &evidence) || evidence.id_reflects(&snapshot.id) {
-            return Err(failure(DEFINITION.invalid(&evidence)));
+            .read(ctx, &definition, &[&reference], &[], evidence)
+            .await?;
+        let envelope: Envelope = decode(&raw, &ENVELOPE, &definition, evidence)?;
+        if !safe_id(&reference, evidence) || evidence.id_reflects(&snapshot.id) {
+            return Err(definition.invalid(evidence));
         }
-        let alarm = project_alarm(envelope.data, &evidence).map_err(failure)?;
-        Ok(GetCheckAlarmOutput { alarm })
+        Ok((
+            project_alarm(envelope.data, &definition, evidence)?,
+            frequency,
+        ))
     }
 }
 
-fn project_alarm(definition: Definition, evidence: &Evidence) -> Result<CheckAlarm, Error> {
-    let invalid = || DEFINITION.invalid(evidence);
+fn project_alarm(
+    definition: Definition,
+    read: &Read,
+    evidence: &Evidence,
+) -> Result<CheckAlarm, Error> {
+    let invalid = || read.invalid(evidence);
     let mut status = definition.status.status;
     if !safe_id(&definition.id, evidence) || status.is_empty() || !status.redact(evidence) {
         return Err(invalid());
@@ -214,7 +231,7 @@ fn project_alarm(definition: Definition, evidence: &Evidence) -> Result<CheckAla
     let status_updated_at =
         timestamp(&definition.status.status_updated_at, evidence).ok_or_else(invalid)?;
     if definition.alarms.len() > 64 {
-        return Err(DEFINITION.error(
+        return Err(read.error(
             Some(200),
             "FanOutLimitExceeded",
             "check alarm response rejected; body withheld",
@@ -250,7 +267,8 @@ fn project_location(wire: Location, evidence: &Evidence) -> Option<CheckLocation
     } = metrics.next()?.dimensions;
     let mut state = wire.state;
     if !safe_id(&wire.id, evidence)
-        || !safe_id(&location_id, evidence)
+        || !PathIds::WithUnderscore.allows(&location_id)
+        || evidence.id_reflects(&location_id)
         || location_name.is_empty()
         || state.is_empty()
         || metrics.any(|metric| {
@@ -273,14 +291,22 @@ fn project_location(wire: Location, evidence: &Evidence) -> Option<CheckLocation
     })
 }
 
-fn timestamp(text: &str, evidence: &Evidence) -> Option<OffsetDateTime> {
-    let value = OffsetDateTime::parse(text, &Rfc3339).ok()?;
+pub(super) fn parse_timestamp(text: &str) -> Option<OffsetDateTime> {
+    let bytes = text.as_bytes();
+    if bytes.get(10) != Some(&b'T') || bytes.get(17..19) == Some(b"60") {
+        return None;
+    }
+    OffsetDateTime::parse(&text.replace(',', "."), &Rfc3339).ok()
+}
+
+pub(super) fn timestamp(text: &str, evidence: &Evidence) -> Option<OffsetDateTime> {
+    let value = parse_timestamp(text)?;
     (value != QuotaTimestamp::default().0
         && !evidence.text_reflects(text)
         && safe_time(value, evidence))
     .then_some(value)
 }
 
-fn safe_id(id: &str, evidence: &Evidence) -> bool {
+pub(super) fn safe_id(id: &str, evidence: &Evidence) -> bool {
     PathIds::Strict.allows(id) && !evidence.id_reflects(id)
 }

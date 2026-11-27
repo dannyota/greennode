@@ -5,9 +5,16 @@
     reason = "SDK methods return Failure with the typed output"
 )]
 
+mod alarms;
+mod channels;
 mod check_alarm;
+mod checks;
 mod dashboards;
+mod history;
+mod inventory;
+mod log_projects;
 mod quota;
+mod raw_json;
 mod response_times;
 mod wire;
 
@@ -20,8 +27,13 @@ use crate::config::Session;
 use crate::model::wire::{Field, WireField};
 use crate::wire::product::evidence::Evidence;
 
+pub use alarms::*;
+pub use channels::*;
 pub use check_alarm::*;
+pub use checks::*;
 pub use dashboards::*;
+pub use history::*;
+pub use log_projects::*;
 pub use quota::*;
 pub use response_times::*;
 
@@ -82,5 +94,22 @@ impl<T: WireField> WireField for ResponseField<T> {
             *self = Self::Redacted;
         }
         !matches!(self, Self::Redacted) || !evidence.text_reflects("<redacted>")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResponseField;
+    use crate::Secret;
+    use crate::model::wire::WireField;
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn numeric_response_redacts_encoded_credential() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("abc"));
+        let mut field = ResponseField::Value(616263_i64);
+        assert!(field.redact(&evidence));
+        assert_eq!(field, ResponseField::Redacted);
     }
 }

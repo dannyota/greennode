@@ -1,0 +1,16 @@
+{
+  "OptimumPrice": 5,
+  "OriginalPrice": 6,
+  "DiscountPrice": 1,
+  "DiscountPercent": null,
+  "Properties": [
+    {
+      "Name": "monitor-platform-log",
+      "Description": null,
+      "OptimumPrice": 5,
+      "OriginalPrice": 6,
+      "DiscountPrice": 1,
+      "DiscountPercent": null
+    }
+  ]
+}

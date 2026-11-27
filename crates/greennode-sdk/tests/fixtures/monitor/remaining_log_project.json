@@ -1,0 +1,9 @@
+{
+  "id": "project-1",
+  "name": "Project",
+  "description": "Logs",
+  "status": "ACTIVE",
+  "billingStatus": "ACTIVE",
+  "projectType": "BASIC",
+  "createdAt": "2000-01-01"
+}

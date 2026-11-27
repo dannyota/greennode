@@ -1,0 +1,27 @@
+[
+  {
+    "id": "class-1",
+    "name": "Basic",
+    "description": "Basic logs",
+    "priority": 1,
+    "status": "ACTIVE",
+    "config": {
+      "retentions": [
+        {
+          "amount": 7,
+          "minSize": 1,
+          "maxSize": 20,
+          "step": 1,
+          "packageId": "retention-1"
+        }
+      ]
+    }
+  },
+  {
+    "id": "class-2",
+    "name": "Disabled",
+    "description": "",
+    "priority": 2,
+    "status": "DISABLED"
+  }
+]

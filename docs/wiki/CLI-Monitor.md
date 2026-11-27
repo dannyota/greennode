@@ -2,6 +2,49 @@
 
 # CLI: Monitor
 
+## get-alarm
+
+Kind: Read.
+
+A missing alarm exits 1, not 4: the API answers an unknown ID with a 500, not a
+404, so this command never reports the NotFound error class.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--alarm-id` | `string` | yes      |
+
+```sh
+greennode monitor get-alarm --alarm-id <alarm-id> --query Alarm
+```
+
+## get-channel
+
+Kind: Read.
+
+Redacts every header value and every Address except an Email, SMS, or Telegram
+channel's, since a Webhook, Slack, or other channel's Address can carry a bearer
+token; only Email, SMS, and Telegram addresses print in full.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--channel-id` | `string` | yes      |
+
+```sh
+greennode monitor get-channel --channel-id <channel-id> --query Channel
+```
+
+## get-check
+
+Kind: Read.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--check-id` | `string` | yes      |
+
+```sh
+greennode monitor get-check --check-id <check-id> --query Check
+```
+
 ## get-check-alarm
 
 Kind: Read.
@@ -31,6 +74,18 @@ Reads one dashboard without widgets. There is no delete command.
 
 ```sh
 greennode monitor get-dashboard --dashboard-id <dashboard-id> --query Dashboard
+```
+
+## get-log-project
+
+Kind: Read.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--log-project-id` | `string` | yes      |
+
+```sh
+greennode monitor get-log-project --log-project-id <log-project-id> --query LogProject
 ```
 
 ## get-notification-quota
@@ -65,6 +120,122 @@ requests.
 greennode monitor get-notification-quota-usage --kind Email --query Usage
 ```
 
+## get-quota-usage
+
+Kind: Read.
+
+Reads composite usage and freeEmailQuota/freeSmsQuota. UnmodeledKinds names
+nonempty usage arrays whose item shapes are unknown; they contribute no invented
+totals. Alert emails consume Email quota usage, while the synthetic email
+counter can stay zero. Allowances depend on the account and package. See Monitor
+Quotas.
+
+No fields.
+
+```sh
+greennode monitor get-quota-usage --query Usage
+```
+
+## get-synthetic-quota
+
+Kind: Read.
+
+Reads quota identity, status, expiry, AutoRenew, and package detail. Table/text
+timestamps show UTC and absent prices show unknown; JSON preserves SDK values.
+ChannelLimits preserves null versus explicit zero; legacy integer limits
+collapse null to zero. Synthetic quota expiry stops checks. A missing quota is
+NotFound; check monitor quota-status --kind synthetic and use monitor
+create-synthetic-quota for a free quota. Auto-renew enable sends once; the
+observed free Basic quota returned BadRequest (400, exit 1). Disable remains
+unavailable. Guarded free create, recovery, renewal, and destructive delete are
+available. See Monitor Synthetic Quota.
+
+No fields.
+
+```sh
+greennode monitor get-synthetic-quota --query Quota
+```
+
+## get-synthetic-quota-usage
+
+Kind: Read.
+
+Reads synthetic usage counters and their descriptions. Alert emails consume the
+Email quota, rather than the synthetic email counter. See Monitor Quotas.
+
+No fields.
+
+```sh
+greennode monitor get-synthetic-quota-usage --query Usage
+```
+
+## list-alarms
+
+Kind: Read.
+
+| Flag         | Type     | Required |
+| ------------ | -------- | -------- |
+| `--kind`     | `string` | yes      |
+| `--name`     | `string` |          |
+| `--status`   | `string` |          |
+| `--severity` | `string` |          |
+| `--page`     | `int`    |          |
+| `--size`     | `int`    |          |
+
+```sh
+greennode monitor list-alarms --kind Log
+```
+
+## list-channel-types
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode monitor list-channel-types
+```
+
+## list-channels
+
+Kind: Read.
+
+Redacts every header value and every Address except an Email, SMS, or Telegram
+channel's, since a Webhook, Slack, or other channel's Address can carry a bearer
+token; only Email, SMS, and Telegram addresses print in full.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--type` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode monitor list-channels
+```
+
+## list-check-alarm-history
+
+Kind: Read.
+
+--start and --end are RFC 3339 strings. End defaults to now and Start to 24
+hours before End. Invalid, empty, or reversed ranges at millisecond precision
+exit 2 before requests. --location-id selects one probe location. Items contains
+only returned transitions: paging and truncation are unknown, and no state at
+the window start is supplied. Empty Items proves neither that no transition
+occurred nor that an alarm exists. Use get-check-alarm for current state.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--check-id`    | `string` | yes      |
+| `--start`       | `string` |          |
+| `--end`         | `string` |          |
+| `--location-id` | `string` |          |
+
+```sh
+greennode monitor list-check-alarm-history --check-id <check-id>
+```
+
 ## list-check-response-times
 
 Kind: Read.
@@ -84,6 +255,16 @@ for a 24-hour window. Use get-check-alarm for location names.
 greennode monitor list-check-response-times --check-id <check-id>
 ```
 
+## list-checks
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode monitor list-checks
+```
+
 ## list-dashboards
 
 Kind: Read.
@@ -99,6 +280,58 @@ generates per resource. The read omits widgets. There is no delete command.
 
 ```sh
 greennode monitor list-dashboards
+```
+
+## list-locations
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode monitor list-locations
+```
+
+## list-log-project-classes
+
+Kind: Read.
+
+No fields.
+
+```sh
+greennode monitor list-log-project-classes
+```
+
+## list-log-projects
+
+Kind: Read.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--search`         | `string` |          |
+| `--billing-status` | `string` |          |
+| `--page`           | `int`    |          |
+| `--size`           | `int`    |          |
+
+```sh
+greennode monitor list-log-projects
+```
+
+## list-notification-packages
+
+Kind: Read.
+
+--kind accepts Email or SMS, case insensitively. Prices are in VND; absent
+prices print unknown in table/text and null in JSON. A zero-price package is not
+an automatic allowance. Email and SMS quota reads, quotes, and orders are
+available; SMS usage refuses locally.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--kind` | `string` | yes      |
+
+```sh
+greennode monitor list-notification-packages --kind Email
 ```
 
 ## list-synthetic-packages
@@ -142,6 +375,29 @@ Read-only settings allow this read.
 
 ```sh
 greennode monitor quota-status --kind synthetic
+```
+
+## quote-create-log-project
+
+Kind: Read.
+
+Ignores MaxPrice and NoWait even when an inline --cli-input-json value sets
+them: both govern only create-log-project's own price ceiling and wait, never
+this read, which neither orders anything nor waits. Prices are VND totals that
+include VAT; the API gives no VAT breakdown.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--name`                                 | `string`  | yes      |
+| `--description`                          | `string`  |          |
+| `--class`                                | `string`  |          |
+| `--retention-days`                       | `int`     |          |
+| `--gb-per-day`                           | `int`     |          |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+| `NoWait` (via `--cli-input-json` only)   | `bool`    |          |
+
+```sh
+greennode monitor quote-create-log-project --name <name>
 ```
 
 ## quote-create-notification-quota

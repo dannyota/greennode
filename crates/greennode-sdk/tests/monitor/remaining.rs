@@ -1,0 +1,459 @@
+use super::{client, response, target};
+use greennode_sdk::monitor::ListCheckAlarmHistoryInput;
+use greennode_sdk::testing::Server;
+use greennode_sdk::{ErrorClass, RequestContext};
+
+const SNAPSHOT: &str = include_str!("../fixtures/monitor/check_alarm_snapshot.json");
+const DEFINITION: &str = include_str!("../fixtures/monitor/check_alarm_definition.json");
+const HISTORY: &str = include_str!("../fixtures/monitor/remaining_history.json");
+
+fn history_input() -> ListCheckAlarmHistoryInput {
+    let mut input = ListCheckAlarmHistoryInput::new("chk-1");
+    input.start = "2000-01-01T07:00:00+07:00".into();
+    input.end = "2000-01-05T00:00:00Z".into();
+    input
+}
+
+#[tokio::test]
+async fn check_alarm_refused_redirect_does_not_keep_status() {
+    use greennode_sdk::testing::Response;
+    let server = Server::start(vec![Response::Http {
+        status: "302 Found".into(),
+        headers: vec![
+            ("Location".into(), "https://other.invalid/path".into()),
+            ("Content-Length".into(), "0".into()),
+        ],
+        body: Vec::new(),
+    }]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn check_alarm_history_charges_original_json_value_length() {
+    let mut definition: serde_json::Value = serde_json::from_str(DEFINITION).unwrap();
+    let original = definition["data"]["alarms"][0].clone();
+    let mut locations = Vec::new();
+    for i in 0..3 {
+        let mut location = original.clone();
+        location["id"] = format!("sub-{i}").into();
+        location["metrics"][0]["dimensions"]["location_id"] = format!("loc-{i}").into();
+        locations.push(location);
+    }
+    definition["data"]["alarms"] = locations.into();
+    let body = format!(
+        r#"{{"data":[],"filler":"{}"}}"#,
+        r"\ud800".repeat(2_000_000)
+    );
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", &definition.to_string()),
+        response("200 OK", &body),
+        response("200 OK", &body),
+        response("200 OK", &body),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .list_check_alarm_history(&ctx, history_input())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn check_alarm_truncation_does_not_keep_status() {
+    let oversized = "x".repeat((1 << 20) + 1);
+    let server = Server::start(vec![response("200 OK", &oversized)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn empty_check_alarm_success_is_a_structure_refusal() {
+    let server = Server::start(vec![response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    let error = failure.error().api_error().unwrap();
+    assert_eq!(error.code(), "InvalidResponse");
+    assert_eq!(
+        error.message(),
+        "check alarm response rejected; body withheld"
+    );
+}
+
+#[tokio::test]
+async fn alarm_history_reads_the_location_route_and_keeps_the_reported_window() {
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", DEFINITION),
+        response("200 OK", HISTORY),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap();
+    let json = serde_json::to_value(output).unwrap();
+    assert_eq!(json["Start"], "2000-01-01T07:00:00+07:00");
+    assert_eq!(json["Items"][0]["SubAlarms"][0]["CurrentValues"][0], 2.5);
+    let route = target(&server.heads()[2]);
+    assert_eq!(
+        route.path(),
+        "/vmonitor-api/api/v1/alarms/synthetic/metrics/mona/sub-1/histories"
+    );
+    assert_eq!(
+        route.query(),
+        Some("end_time=947030400000&interval=5&start_time=946684800000")
+    );
+}
+
+#[tokio::test]
+async fn alarm_history_accepts_underscore_in_location_selector() {
+    let definition = DEFINITION.replace("loc-1", "loc_1");
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", &definition),
+        response("200 OK", HISTORY),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = history_input();
+    input.location_id = "loc_1".into();
+    assert!(
+        client(&server)
+            .list_check_alarm_history(&ctx, input)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn alarm_history_refuses_nonmatching_alarm_identity_without_partial_output() {
+    let body = HISTORY.replace("sub-1", "sub-2");
+    let server = Server::start(vec![
+        response("200 OK", SNAPSHOT),
+        response("200 OK", DEFINITION),
+        response("200 OK", &body),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, history_input())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert!(failure.partial().is_none());
+    let server = Server::start(vec![]);
+    let mut range = history_input();
+    range.end = range.start.clone();
+    let failure = client(&server)
+        .list_check_alarm_history(&ctx, range)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn channel_list_ignores_wrong_case_list_field() {
+    use greennode_sdk::monitor::ListChannelsInput;
+    let server = Server::start(vec![response("200 OK", r#"{"LstData":42}"#)]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .list_channels(&ctx, ListChannelsInput::default())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn missing_channel_reports_resource_not_found() {
+    use greennode_sdk::monitor::GetChannelInput;
+    let server = Server::start(vec![response("200 OK", r#"{"lstData":[],"totalItem":0}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_channel(&ctx, GetChannelInput::new("missing"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<String>().map(String::as_str),
+        Some("vngcloud: resource not found: channel missing")
+    );
+}
+
+#[tokio::test]
+async fn channel_lookup_walks_past_underreported_page_counts() {
+    use greennode_sdk::monitor::GetChannelInput;
+    let channel = include_str!("../fixtures/monitor/remaining_channels.json");
+    let first = channel
+        .replace("channel-1", "different")
+        .replace("\"totalItem\": 1", "\"totalItem\": 2");
+    let server = Server::start(vec![
+        response("200 OK", &first),
+        response("200 OK", channel),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server)
+        .get_channel(&ctx, GetChannelInput::new("channel-1"))
+        .await
+        .unwrap();
+    let shown = result.channel.for_display();
+    assert_eq!(shown.address, "https://example.test/<redacted>");
+    assert_eq!(shown.headers[0].value, "<redacted>");
+    assert_eq!(
+        target(&server.heads()[1])
+            .query_pairs()
+            .find(|(key, _)| key == "page")
+            .unwrap()
+            .1,
+        "2"
+    );
+}
+
+#[tokio::test]
+async fn output_reads_ignore_lone_aliases_and_reject_nested_collisions() {
+    use greennode_sdk::monitor::GetCheckInput;
+    let check = include_str!("../fixtures/monitor/remaining_check.json");
+    let alias = check.replace("\"test_frequency\"", "\"TEST_FREQUENCY\"");
+    let collision = check.replace(
+        "\"test_frequency\"",
+        "\"TEST_FREQUENCY\": 1, \"test_frequency\"",
+    );
+    let server = Server::start(vec![
+        response("200 OK", &alias),
+        response("200 OK", &collision),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server);
+    let result = client
+        .get_check(&ctx, GetCheckInput::new("chk-1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result).unwrap()["Check"]["Options"]["TestFrequency"],
+        0
+    );
+    let error = client
+        .get_check(&ctx, GetCheckInput::new("chk-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().api_error().unwrap().code(), "InvalidResponse");
+}
+
+#[tokio::test]
+async fn log_quote_refusal_screens_numeric_token_and_keeps_prefix() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let server = Server::start(vec![response("200 OK", classes)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.retention_days = 23;
+    let failure = super::client_with_token(&server, "23")
+        .quote_create_log_project(&ctx, input)
+        .await
+        .unwrap_err();
+    let message = failure.error().detail::<String>().unwrap();
+    assert!(message.contains("vngcloud: invalid input:"));
+    assert!(!message.contains("23"));
+}
+
+#[tokio::test]
+async fn malformed_log_quote_shape_is_not_reported_as_quota_error() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let server = Server::start(vec![
+        response("200 OK", classes),
+        response("200 OK", r#"{"optimumPrice":1,"propertiesPrice":{}}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "response failed to decode; body withheld"
+    );
+}
+
+#[tokio::test]
+async fn oversized_log_quote_has_transport_error_without_status_or_operation() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let oversized = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![
+        response("200 OK", classes),
+        response("200 OK", &oversized),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.message()),
+        ("", None, "transport: response body exceeds limit")
+    );
+}
+
+#[tokio::test]
+async fn log_quote_distinguishes_missing_and_negative_prices() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let (ctx, _) = RequestContext::new();
+    for (body, code, message) in [
+        ("{\"optimumPrice\":null}", "", "quote response had no price"),
+        (
+            "{\"optimumPrice\":-1}",
+            "InvalidResponse",
+            "quote response had an invalid create price",
+        ),
+    ] {
+        let server = Server::start(vec![response("200 OK", classes), response("200 OK", body)]);
+        let error = client(&server)
+            .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+            .await
+            .unwrap_err();
+        let api = error.error().api_error().unwrap();
+        assert_eq!(
+            (api.status(), api.code(), api.message()),
+            (Some(200), code, message)
+        );
+        let body: serde_json::Value = serde_json::from_slice(&server.bodies()[1]).unwrap();
+        assert!(
+            body == serde_json::json!({"redirectUrl":"https://vmonitor.console.vngcloud.vn/quota-usages/log","packageId":"retention-1","quantity":7,"buyWith":{},"monthPeriod":1,"projectName":"Logs","projectDescription":"","pay":true})
+        );
+    }
+}
+
+#[tokio::test]
+async fn ordinary_inventory_decode_error_names_operation() {
+    use greennode_sdk::monitor::GetCheckInput;
+    let server = Server::start(vec![response("200 OK", r#"{"id":42}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_check(&ctx, GetCheckInput::new("chk-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "monitor.GetCheck: request failed: response failed to decode"
+    );
+}
+
+#[tokio::test]
+async fn plain_http_failure_screens_status_against_sent_credentials() {
+    use greennode_sdk::monitor::ListChecksInput;
+    let server = Server::start(vec![response("404 Not Found", "{}")]);
+    let (ctx, _) = RequestContext::new();
+    let error = super::client_with_token(&server, "404")
+        .list_checks(&ctx, ListChecksInput)
+        .await
+        .unwrap_err();
+    assert_eq!(error.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn alarm_threshold_preserves_nonfinite_go_value() {
+    use greennode_sdk::monitor::{GetAlarmInput, ResponseField};
+    let body =
+        include_str!("../fixtures/monitor/remaining_alarm.json").replace("\"2.5\"", "\"NaN\"");
+    let server = Server::start(vec![response("200 OK", &body)]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server)
+        .get_alarm(&ctx, GetAlarmInput::new("alarm-1"))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.alarm.log.unwrap().threshold_value, ResponseField::Value(value) if value.is_nan())
+    );
+}
+
+#[tokio::test]
+async fn get_alarm_empty_success_returns_zero_alarm() {
+    use greennode_sdk::monitor::GetAlarmInput;
+    let server = Server::start(vec![response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .get_alarm(&ctx, GetAlarmInput::new("alarm-1"))
+        .await
+        .unwrap();
+    assert_eq!(output.alarm.id, "");
+}
+
+#[tokio::test]
+async fn inventory_empty_body_defaults_only_for_ordinary_output_reads() {
+    use greennode_sdk::monitor::{ListAlarmsInput, ListChecksInput};
+    let server = Server::start(vec![response("200 OK", ""), response("200 OK", "")]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server);
+    assert!(
+        client
+            .list_checks(&ctx, ListChecksInput)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let failure = client
+        .list_alarms(&ctx, ListAlarmsInput::new("Log"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
+async fn log_quote_accepts_class_without_id() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json")
+        .replace("\"id\": \"class-1\",", "");
+    let server = Server::start(vec![
+        response("200 OK", &classes),
+        response("200 OK", r#"{"optimumPrice":1}"#),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    assert!(
+        client(&server)
+            .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+            .await
+            .is_ok()
+    );
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn log_quote_never_skips_an_unorderable_first_matching_class() {
+    use greennode_sdk::monitor::CreateLogProjectInput;
+    let classes = include_str!("../fixtures/monitor/remaining_log_classes.json");
+    let first = serde_json::json!({"id":"other","name":"Basic","description":"Unavailable","priority":0,"status":"DISABLED"});
+    let mut classes: Vec<serde_json::Value> = serde_json::from_str(classes).unwrap();
+    classes.insert(0, first);
+    let server = Server::start(vec![response(
+        "200 OK",
+        &serde_json::to_string(&classes).unwrap(),
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .quote_create_log_project(&ctx, CreateLogProjectInput::new("Logs"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert_eq!(server.requests(), 1);
+}

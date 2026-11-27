@@ -1,0 +1,28 @@
+{
+  "Items": [
+    {
+      "ID": "class-1",
+      "Name": "Basic",
+      "Description": "Basic logs",
+      "Priority": 1,
+      "Status": "ACTIVE",
+      "Retentions": [
+        {
+          "Amount": 7,
+          "MinSize": 1,
+          "MaxSize": 20,
+          "Step": 1,
+          "PackageID": "retention-1"
+        }
+      ]
+    },
+    {
+      "ID": "class-2",
+      "Name": "Disabled",
+      "Description": "",
+      "Priority": 2,
+      "Status": "DISABLED",
+      "Retentions": []
+    }
+  ]
+}
