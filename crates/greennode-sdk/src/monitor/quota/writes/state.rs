@@ -132,6 +132,21 @@ impl QuotaLedger {
             .insert(attempt.kind, attempt.copy());
         Ok(())
     }
+    pub(super) fn observe(
+        &self,
+        kind: Kind,
+        credentials: &crate::wire::product::evidence::SentCredentials,
+    ) -> Result<(), Error> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| Error::new(ErrorClass::Api))?;
+        if let Some(attempt) = pending.get_mut(&kind) {
+            attempt.evidence.absorb(credentials);
+        }
+        Ok(())
+    }
+
     pub(super) fn clear(&self, kind: Kind) -> Result<(), Error> {
         self.pending
             .lock()

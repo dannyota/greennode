@@ -277,17 +277,24 @@ fn finish_delete(
     let stage = stage
         .as_deref()
         .unwrap_or(if dispatch_uncertain { "sent" } else { "" });
-    let may_have_sent = dispatch_uncertain || matches!(stage, "sent" | "settled");
+    let needs_reconciliation = matches!(stage, "sent" | "settled");
     let mut output_failed = projection_failed;
     if let Some(output) = output.as_ref() {
         match encode(output, format) {
             Ok(bytes) => {
                 if stdout.write_all(&bytes).is_err() && failure.is_none() {
-                    output_failed = true;
+                    return dispatch::local(
+                        stderr,
+                        dispatch::LocalError {
+                            code: "RequestFailed",
+                            message: "output failed".into(),
+                            exit: 1,
+                        },
+                    );
                 }
             }
             Err(_) => {
-                output_failed = may_have_sent || failure.is_none();
+                output_failed = needs_reconciliation || failure.is_none();
                 write_delete_fallback(stdout, format, stage);
             }
         }
@@ -295,7 +302,7 @@ fn finish_delete(
         write_delete_fallback(stdout, format, stage);
     }
     if output_failed {
-        let code = if may_have_sent {
+        let code = if needs_reconciliation {
             "NotSettled"
         } else {
             "RequestFailed"
@@ -489,5 +496,50 @@ mod tests {
         assert_eq!(code, 3);
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], "LoginFailed");
+    }
+
+    #[test]
+    fn delete_fallback_preserves_a_definitive_auth_refusal() {
+        let mut fields =
+            std::collections::BTreeMap::from([("Stage".into(), Value::String("prepared".into()))]);
+        fields.extend((0..101).map(|index| (format!("column-{index}"), Value::Null)));
+        let failure = dispatch::OperationFailure {
+            error: greennode_sdk::Error::provider_failed(),
+            partial: Some(render::project(&Value::Object(fields)).unwrap()),
+            dispatch: greennode_sdk::WriteDispatch::MayHaveBeenSent,
+            query_partial: false,
+        };
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let code = finish_delete(&mut stdout, &mut stderr, Format::Table, Err(failure.into()));
+        assert_eq!(code, 3);
+        assert!(String::from_utf8(stdout).unwrap().contains("prepared"));
+    }
+
+    #[test]
+    fn broken_stdout_after_success_returns_output_error_without_fallback() {
+        struct Broken(usize);
+        impl Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                self.0 += 1;
+                Err(std::io::Error::other("fixture output failure"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let projected = render::project(&fallback_delete("settled")).unwrap();
+        let mut stdout = Broken(0);
+        let mut stderr = Vec::new();
+        let code = finish_delete(
+            &mut stdout,
+            &mut stderr,
+            Format::Json,
+            Ok(Some(Ok(projected))),
+        );
+        assert_eq!(code, 1);
+        assert_eq!(stdout.0, 1);
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "RequestFailed");
     }
 }

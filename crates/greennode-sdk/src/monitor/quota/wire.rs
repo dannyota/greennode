@@ -5,7 +5,7 @@ use serde_json::value::RawValue;
 
 use super::super::{
     Client,
-    wire::{Family, Read},
+    wire::{Family, Read, ReadGuards},
 };
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::{field_matches, validate};
@@ -21,6 +21,7 @@ pub(super) struct Reader<'a> {
     exhausted: bool,
     pub(super) decision_ids: Vec<String>,
     pub(super) read: Read,
+    pub(super) observe: Option<crate::quote::request::monitor::CredentialObserver<'a>>,
     pub(super) evidence: Evidence,
 }
 
@@ -39,6 +40,7 @@ impl<'a> Reader<'a> {
                 family: Family::Quota { no_redirect: true },
             },
             evidence: Evidence::new(),
+            observe: None,
         }
     }
 
@@ -73,13 +75,17 @@ impl<'a> Reader<'a> {
         let read = Read { route, ..self.read };
         let response = self
             .client
-            .read_status(
+            .read_status_guarded(
                 self.ctx,
                 &read,
                 segments,
                 &[],
                 &mut self.evidence,
-                accept_not_found,
+                ReadGuards {
+                    accept_not_found,
+                    observe: self.observe,
+                    ..Default::default()
+                },
             )
             .await;
         if self.evidence.credentials().values().len() > CREDENTIAL_LIMIT {

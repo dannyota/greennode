@@ -212,6 +212,9 @@ impl greennode_sdk::CredentialsProvider for DispatchBearer {
                 wait.notify_one();
                 std::future::pending::<()>().await;
             }
+            if third && self.third.is_empty() {
+                return Err(greennode_sdk::Error::provider_failed());
+            }
             Ok(greennode_sdk::Token::new(
                 greennode_sdk::Secret::new(if third {
                     self.third

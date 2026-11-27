@@ -521,8 +521,9 @@ fn finish<T>(
 ) -> Result<T, Failure<T>> {
     if let Err(cause) = result {
         let (alarm, id) = retained(&output);
-        let safe =
-            !evidence.id_reflects(id) && check_alarm_output(alarm, mutation, evidence).is_ok();
+        let safe = evidence.can_retain_partial()
+            && !evidence.id_reflects(id)
+            && check_alarm_output(alarm, mutation, evidence).is_ok();
         let error = uncertain(mutation, "log alarm was accepted", cause);
         return Err(Failure::new(
             screen_details(error, evidence),

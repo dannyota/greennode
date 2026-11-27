@@ -295,3 +295,26 @@ fn null_assertion_entry_is_a_zero_valued_struct() {
         body["config"]["assertions"] == serde_json::json!([{"type":"","operator":"","target":""}])
     );
 }
+
+#[test]
+fn null_probe_header_and_query_values_become_empty_strings() {
+    let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+    let (status, _, _) = invoke(
+        &[
+            "create-check",
+            "--name",
+            "Probe",
+            "--url",
+            "https://example.test/",
+            "--locations",
+            "loc-1",
+            "--cli-input-json",
+            r#"{"Headers":{"X-Foo":null},"Query":{"search":null}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+    assert!(body["config"]["request"]["headers"]["X-Foo"] == "");
+    assert!(body["config"]["request"]["query"]["search"] == "");
+}

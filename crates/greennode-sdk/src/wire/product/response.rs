@@ -657,7 +657,7 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
     (envelope.code, message)
 }
 
-fn percent_decode(data: &[u8]) -> Vec<u8> {
+pub(crate) fn percent_decode(data: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity(data.len());
     let mut index = 0;
     while index < data.len() {

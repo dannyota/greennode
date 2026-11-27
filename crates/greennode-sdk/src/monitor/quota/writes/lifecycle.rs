@@ -1,3 +1,4 @@
+use crate::wire::product::options::PathIds;
 use http::{Method, StatusCode};
 use serde_json::json;
 
@@ -287,9 +288,20 @@ impl Client {
         let initial = |error: Error| {
             if input.op == DELETE_SYNTH {
                 if let Ok(Some(attempt)) = self.quota_ledger.get(input.kind) {
+                    let error = if !input.expected.is_empty()
+                        && PathIds::Strict.allows(input.expected)
+                        && input.expected != attempt.goal.id()
+                    {
+                        error.with_cause(changed_intent(input.op))
+                    } else {
+                        error
+                    };
                     return lifecycle_result(
                         project,
-                        LifecycleResult::from_goal(&attempt.goal),
+                        LifecycleResult {
+                            stage: "sent".into(),
+                            ..Default::default()
+                        },
                         Err(unsettled(input.op, Some(error))),
                         WriteDispatch::MayHaveBeenSent,
                         &attempt.evidence,

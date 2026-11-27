@@ -406,7 +406,14 @@ impl Client {
     ) -> Result<Check, Error> {
         let read = plain(op, CHECK_ROUTE);
         let raw = self
-            .read_guarded(ctx, &read, &[id], &[], evidence, privacy)
+            .read_guarded(
+                ctx,
+                &read,
+                &[id],
+                &[],
+                evidence,
+                privacy.map(|evidence| (op, evidence)),
+            )
             .await?;
         Ok(decode::<Field<Check>>(&raw, &CHECK, &read, evidence)?.0)
     }

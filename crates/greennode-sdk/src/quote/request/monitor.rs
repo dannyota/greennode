@@ -15,11 +15,15 @@ use crate::wire::product::{
 use crate::wire::strict_json::{Shape, ShapeField, validate_canonical_shape};
 use crate::{ApiError, Error, ErrorClass, RequestContext, Secret, error::SafeText};
 
+pub(crate) type CredentialObserver<'a> =
+    &'a (dyn Fn(&crate::wire::product::evidence::SentCredentials) -> Result<(), Error> + Sync);
+
 pub(crate) struct ScopedBearer<'a> {
     source: &'a dyn BearerSource,
     identifiers: &'a [&'a str],
     operation: &'static str,
     privacy: Option<std::sync::Mutex<crate::wire::product::evidence::SentCredentials>>,
+    observer: Option<CredentialObserver<'a>>,
 }
 
 impl<'a> ScopedBearer<'a> {
@@ -33,8 +37,14 @@ impl<'a> ScopedBearer<'a> {
             identifiers,
             operation,
             privacy: None,
+            observer: None,
         }
     }
+    pub(crate) fn with_observer(mut self, observer: Option<CredentialObserver<'a>>) -> Self {
+        self.observer = observer;
+        self
+    }
+
     pub(crate) fn with_privacy(
         mut self,
         values: crate::wire::product::evidence::SentCredentials,
@@ -60,6 +70,9 @@ impl BearerSource for ScopedBearer<'_> {
                 evidence.absorb(credentials);
             }
             evidence.add_secret(&token.token.access_token);
+            if let Some(observer) = self.observer {
+                observer(evidence.credentials())?;
+            }
             if let Some(privacy) = &self.privacy {
                 let mut combined = privacy.lock().map_err(|_| Error::provider_failed())?;
                 combined.extend(evidence.credentials());
@@ -91,7 +104,7 @@ pub(crate) fn privacy_limit(operation: &'static str, evidence: &Evidence) -> Err
         operation,
         None,
         SafeText::new("InvalidResponse", &[]),
-        SafeText::new("monitor: credential safety limit exceeded", &[]),
+        SafeText::new("credential observation failed; response withheld", &[]),
         false,
     ))
     .screen_api(&|text| evidence.text_reflects(text))
@@ -180,6 +193,7 @@ pub(super) async fn exchange(
         identifiers,
         operation: operation.id,
         privacy: None,
+        observer: None,
     };
     let result = operation::execute_with_evidence::<MonitorDocument>(
         runtime,

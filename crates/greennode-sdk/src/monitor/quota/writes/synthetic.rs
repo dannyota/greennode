@@ -140,7 +140,9 @@ impl Client {
                     return error;
                 };
                 state.adopt(&attempt);
-                let cause = if spec.guard_mismatch(&attempt.goal, state.expected_end) {
+                state.draft.order_id.clear();
+                state.draft.payment_pending = false;
+                let cause = if spec.early_guard_mismatch(&attempt.goal) {
                     error.with_cause(changed(spec.op))
                 } else {
                     error
@@ -326,7 +328,10 @@ impl Client {
             && detail.price == Some(0.0)
             && offer.list_price == 0.0
             && spec.days > 0
-            && now
+            && self
+                .session
+                .clock()
+                .utc_now()
                 .checked_add(Duration::days(spec.days))
                 .zip(before.end())
                 .is_some_and(|(due, end)| end > due)

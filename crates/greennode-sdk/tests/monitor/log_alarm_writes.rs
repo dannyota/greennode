@@ -200,3 +200,24 @@ async fn failed_alarm_settlement_withholds_a_retained_raw_query() {
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn unfinished_credential_observation_withholds_alarm_partial() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let pending = ALARM.replace("ACTIVE", "CREATING");
+    let server = Server::start(vec![
+        response("200 OK", ALARM),
+        response("200 OK", ""),
+        response("200 OK", &pending),
+    ]);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer::changing_at(3, "")),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateLogAlarmInput::new("alarm-1");
+    input.description = Some("Changed".into());
+    let failure = client.update_log_alarm(&ctx, input).await.unwrap_err();
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 3);
+}

@@ -417,19 +417,8 @@ impl Client {
             ("page", page.as_str()),
             ("size", size.as_str()),
         ];
-        let read = super::wire::Read {
-            id: guard.map_or(LIST.id, |(op, _)| op),
-            ..LIST
-        };
         let raw = self
-            .read_guarded(
-                ctx,
-                &read,
-                &[],
-                &query,
-                evidence,
-                guard.map(|(_, privacy)| privacy),
-            )
+            .read_guarded(ctx, &LIST, &[], &query, evidence, guard)
             .await?;
         let wire: Option<Page<Channel>> = if guard.is_some() {
             super::wire::decode(&raw, &GUARD_PAGE, &LIST, evidence)?

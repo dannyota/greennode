@@ -164,6 +164,22 @@ impl Spec<'_> {
         }
         Ok(())
     }
+    pub(super) fn early_guard_mismatch(&self, goal: &Goal) -> bool {
+        let expected = match self.intent {
+            Intent::Renew { end } => match parse_expiry(end) {
+                Some(end) => Some(end),
+                None => return false,
+            },
+            Intent::Recover { id }
+                if !crate::wire::product::options::PathIds::Strict.allows(id) =>
+            {
+                return false;
+            }
+            _ => None,
+        };
+        self.guard_mismatch(goal, expected)
+    }
+
     pub(super) fn guard_mismatch(&self, goal: &Goal, expected_end: Option<OffsetDateTime>) -> bool {
         match (&self.intent, goal) {
             (Intent::Renew { .. }, Goal::SyntheticChange { before, .. }) => {

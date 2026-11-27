@@ -147,8 +147,11 @@ async fn exhausted_check_query_scan_refuses_before_guard_read() {
     let (ctx, _) = RequestContext::new();
     let mut input = greennode_sdk::monitor::UpdateCheckInput::new("chk-1");
     input.url = Some(format!(
-        "https://example.test/?{}",
-        "key=repeated&".repeat(257)
+        "https://example.test/?{}{}",
+        "key=repeated&".repeat(270),
+        (0..257)
+            .map(|index| format!("key=separate-{index}&"))
+            .collect::<String>()
     ));
     let failure = client(&server).update_check(&ctx, input).await.unwrap_err();
     let api = failure
@@ -156,7 +159,41 @@ async fn exhausted_check_query_scan_refuses_before_guard_read() {
         .api_error()
         .expect("missing scoped privacy error");
     assert_eq!(api.code(), "InvalidResponse");
+    assert_eq!(
+        api.message(),
+        "credential observation failed; response withheld"
+    );
     assert_eq!(api.operation(), "monitor.UpdateCheck");
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert!(server.heads().is_empty());
+}
+
+#[tokio::test]
+async fn exhausted_probe_json_depth_refuses_the_write() {
+    let server = Server::start(vec![response("201 Created", CHECK)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = greennode_sdk::monitor::CreateCheckInput::new(
+        "Probe",
+        "https://example.test",
+        vec!["loc-1".into()],
+    );
+    input.body = format!("{}null{}", "[".repeat(129), "]".repeat(129));
+    let Err(failure) = client(&server).create_check(&ctx, input).await else {
+        panic!("the exhausted scan allowed the check write");
+    };
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(server.heads().is_empty());
+}
+
+#[tokio::test]
+async fn repeats_do_not_consume_the_distinct_privacy_budget() {
+    let server = Server::start(vec![response("201 Created", CHECK)]);
+    let (ctx, _) = RequestContext::new();
+    let input = greennode_sdk::monitor::CreateCheckInput::new(
+        "Probe",
+        format!("https://example.test/?{}", "key=repeated&".repeat(270)),
+        vec!["loc-1".into()],
+    );
+    assert!(client(&server).create_check(&ctx, input).await.is_ok());
+    assert_eq!(server.requests(), 1);
 }

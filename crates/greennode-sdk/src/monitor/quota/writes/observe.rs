@@ -72,6 +72,9 @@ impl Client {
             Goal::RenewSetting { .. } => true,
             goal => goal.synthetic_candidate(snapshot),
         };
+        let observe = |credentials: &crate::wire::product::evidence::SentCredentials| {
+            self.quota_ledger.observe(kind, credentials)
+        };
         let observed = self
             .observe_quota_matching(
                 ctx,
@@ -79,9 +82,13 @@ impl Client {
                 attempt.op,
                 &mut attempt.evidence,
                 detail,
-                strict_absence,
+                (strict_absence, Some(&observe)),
             )
-            .await?;
+            .await;
+        if let Some(retained) = self.quota_ledger.get(kind)? {
+            attempt.evidence.absorb(retained.evidence.credentials());
+        }
+        let observed = observed?;
         let Observation::Present(fresh) = observed else {
             if let Goal::Delete { before } = &attempt.goal {
                 return Ok(Some(before.quota.clone()));
@@ -106,7 +113,7 @@ impl Client {
         detail: bool,
         strict_absence: bool,
     ) -> Result<Observation, Error> {
-        self.observe_quota_matching(ctx, kind, op, evidence, |_| detail, strict_absence)
+        self.observe_quota_matching(ctx, kind, op, evidence, |_| detail, (strict_absence, None))
             .await
     }
     async fn observe_quota_matching(
@@ -116,9 +123,13 @@ impl Client {
         op: &'static str,
         evidence: &mut Evidence,
         detail: impl FnOnce(&Snapshot) -> bool,
-        strict_absence: bool,
+        (strict_absence, observe): (
+            bool,
+            Option<crate::quote::request::monitor::CredentialObserver<'_>>,
+        ),
     ) -> Result<Observation, Error> {
         let mut reader = Reader::new(self, ctx, op);
+        reader.observe = observe;
         reader.read.family = Family::Quota {
             no_redirect: strict_absence && kind == Kind::Synthetic,
         };

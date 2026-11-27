@@ -238,3 +238,24 @@ fn resend_accepts_go_unicode_field_fold() {
     assert_eq!(status, ExitCode::SUCCESS);
     assert_eq!(server.requests(), 2);
 }
+
+#[test]
+fn nested_resend_negative_zero_is_an_integer_zero() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", ALARM),
+        response_with_status("200 OK", ""),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "update-log-alarm",
+            "--alarm-id",
+            "alarm-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Resend":{"Enabled":false,"Times":-0}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(server.requests(), 2);
+}

@@ -1,4 +1,5 @@
 use super::{Check, CheckRequest, Mutation, check_ids};
+use crate::monitor::privacy::{check_budget, collect_url};
 use crate::wire::product::evidence::Evidence;
 use crate::{Error, Failure, Secret};
 use serde_json::Value;
@@ -27,7 +28,8 @@ impl Privacy {
         }
         add(&mut self.diagnostics, &request.body, true)?;
         add(&mut self.operands, &request.body, false)?;
-        if let Ok(json) = serde_json::from_str::<Value>(&request.body) {
+        if serde_json::from_str::<&serde_json::value::RawValue>(&request.body).is_ok() {
+            let json = serde_json::from_str::<Value>(&request.body).map_err(|_| ())?;
             visit(&mut self.diagnostics, &json, true)?;
             visit(&mut self.operands, &json, false)?;
         }
@@ -98,20 +100,9 @@ fn add(evidence: &mut Evidence, value: &str, sensitive: bool) -> Result<(), ()> 
     if sensitive || auth {
         evidence.add_redaction(&Secret::new(value));
     }
-    if let Ok(url) = url::Url::parse(value) {
-        evidence.add_redaction(&Secret::new(url.username()));
-        if let Some(password) = url.password() {
-            evidence.add_redaction(&Secret::new(password));
-        }
-        for (index, (key, value)) in url.query_pairs().enumerate() {
-            if index >= 256 {
-                return Err(());
-            }
-            if sensitive || auth || is_credential_key(&key) {
-                evidence.add_redaction(&Secret::new(value.into_owned()));
-            }
-        }
-    }
+    collect_url(evidence, value, |key| {
+        sensitive || auth || is_credential_key(key)
+    })?;
     if let Some((_, token)) = pair.filter(|_| auth) {
         evidence.add_redaction(&Secret::new(token.trim()));
         if scheme.eq_ignore_ascii_case("Basic")
@@ -125,7 +116,7 @@ fn add(evidence: &mut Evidence, value: &str, sensitive: bool) -> Result<(), ()> 
             }
         }
     }
-    Ok(())
+    check_budget(evidence)
 }
 fn visit(evidence: &mut Evidence, value: &Value, sensitive: bool) -> Result<(), ()> {
     if evidence.credentials().values().len() > 256 {

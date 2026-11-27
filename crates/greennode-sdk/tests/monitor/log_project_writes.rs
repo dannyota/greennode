@@ -181,3 +181,28 @@ async fn failed_project_settlement_withholds_a_retained_encoded_id() {
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 6);
 }
+
+#[tokio::test]
+async fn unfinished_credential_observation_withholds_project_partial() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let server = Server::start(vec![
+        response("200 OK", EMPTY),
+        response("200 OK", CLASSES),
+        response("200 OK", QUOTE),
+        response("201 Created", r#"{"orderId":4001,"paymentUrl":null}"#),
+        response(
+            "200 OK",
+            r#"{"content":[{"id":"project-1","name":"Logs","status":"CREATING"}],"currentPage":0,"pageSize":100,"totalPages":1,"totalElements":1}"#,
+        ),
+    ]);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer::changing_at(5, "")),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.max_price = 5.0;
+    let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 5);
+}

@@ -163,7 +163,8 @@ impl Client {
             return Err(maybe_sent(ORDER.invalid(reply.status, &evidence)));
         }
         if let Err(cause) = result {
-            let safe = super::log_projects::safe_project_guard(&output.log_project, &evidence);
+            let safe = evidence.can_retain_partial()
+                && super::log_projects::safe_project_guard(&output.log_project, &evidence);
             return Err(Failure::new(
                 screen_details(
                     uncertain(&ORDER, "log project order was accepted", cause),

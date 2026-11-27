@@ -32,18 +32,27 @@ const RESEND: &[(&str, Field)] = &[
     ("Times", Field::Integer),
 ];
 
+enum Shape {
+    Object(&'static [(&'static str, Field)]),
+    List(&'static [(&'static str, Field)]),
+    TextMap,
+}
+
 pub(super) const CHECK: JsonChecks = checks(|bytes| {
     normalize(
         bytes,
         &[
-            ("Assertions", ASSERTIONS, true),
-            ("Notifications", NOTIFICATIONS, false),
+            ("Assertions", Shape::List(ASSERTIONS)),
+            ("Notifications", Shape::Object(NOTIFICATIONS)),
+            ("Headers", Shape::TextMap),
+            ("Query", Shape::TextMap),
         ],
     )
 });
 pub(super) const CHANNEL: JsonChecks =
-    checks(|bytes| normalize(bytes, &[("Headers", HEADERS, true)]));
-pub(super) const ALARM: JsonChecks = checks(|bytes| normalize(bytes, &[("Resend", RESEND, false)]));
+    checks(|bytes| normalize(bytes, &[("Headers", Shape::List(HEADERS))]));
+pub(super) const ALARM: JsonChecks =
+    checks(|bytes| normalize(bytes, &[("Resend", Shape::Object(RESEND))]));
 
 const fn checks(normalize: JsonNormalization) -> JsonChecks {
     JsonChecks {
@@ -53,25 +62,41 @@ const fn checks(normalize: JsonNormalization) -> JsonChecks {
     }
 }
 
-type FieldShape = (&'static str, &'static [(&'static str, Field)], bool);
+type FieldShape = (&'static str, Shape);
 
 fn normalize(bytes: &[u8], shapes: &[FieldShape]) -> Result<Vec<u8>, InputError> {
     let mut root: Option<HashMap<String, Box<RawValue>>> =
         serde_json::from_slice(bytes).map_err(|_| INVALID)?;
     if let Some(root) = &mut root {
-        for &(name, fields, list) in shapes {
-            if let Some(raw) = root.get_mut(name).filter(|raw| raw.get() != "null") {
-                let decoded = if list {
-                    let items: Vec<&RawValue> =
-                        serde_json::from_str(raw.get()).map_err(|_| INVALID)?;
-                    Value::Array(
-                        items
-                            .into_iter()
-                            .map(|item| object(item, fields))
-                            .collect::<Result<_, _>>()?,
-                    )
-                } else {
-                    object(raw, fields)?
+        for raw in root.values_mut().filter(|raw| raw.get() == "-0") {
+            *raw = RawValue::from_string("0".into()).map_err(|_| INVALID)?;
+        }
+        for (name, shape) in shapes {
+            if let Some(raw) = root.get_mut(*name).filter(|raw| raw.get() != "null") {
+                let decoded = match shape {
+                    Shape::List(fields) => {
+                        let items: Vec<&RawValue> =
+                            serde_json::from_str(raw.get()).map_err(|_| INVALID)?;
+                        Value::Array(
+                            items
+                                .into_iter()
+                                .map(|item| object(item, fields))
+                                .collect::<Result<_, _>>()?,
+                        )
+                    }
+                    Shape::Object(fields) => object(raw, fields)?,
+                    Shape::TextMap => {
+                        let fields: HashMap<String, Option<String>> =
+                            serde_json::from_str(raw.get()).map_err(|_| INVALID)?;
+                        Value::Object(
+                            fields
+                                .into_iter()
+                                .map(|(name, value)| {
+                                    (name, Value::String(value.unwrap_or_default()))
+                                })
+                                .collect(),
+                        )
+                    }
                 };
                 *raw = serde_json::value::to_raw_value(&decoded).map_err(|_| INVALID)?;
             }
@@ -103,7 +128,10 @@ fn object(raw: &RawValue, fields: &[(&str, Field)]) -> Result<Value, InputError>
         let value = match kind {
             Field::Text => Value::String(serde_json::from_str(text).map_err(|_| INVALID)?),
             Field::Bool => Value::Bool(serde_json::from_str(text).map_err(|_| INVALID)?),
-            Field::Integer => Value::from(serde_json::from_str::<i64>(text).map_err(|_| INVALID)?),
+            Field::Integer => Value::from(
+                serde_json::from_str::<i64>(if text == "-0" { "0" } else { text })
+                    .map_err(|_| INVALID)?,
+            ),
             Field::TextList => Value::Array(
                 serde_json::from_str::<Vec<Option<String>>>(text)
                     .map_err(|_| INVALID)?

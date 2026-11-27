@@ -19,6 +19,7 @@ mod log_alarm_writes;
 mod log_project_writes;
 mod log_projects;
 mod mutation;
+mod privacy;
 mod quota;
 mod response_times;
 mod settlement;

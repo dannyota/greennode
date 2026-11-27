@@ -133,6 +133,13 @@ impl Read {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ReadGuards<'a> {
+    pub(super) accept_not_found: bool,
+    pub(super) privacy: Option<(&'static str, &'a Evidence)>,
+    pub(super) observe: Option<crate::quote::request::monitor::CredentialObserver<'a>>,
+}
+
 impl Client {
     pub(super) async fn read(
         &self,
@@ -156,8 +163,18 @@ impl Client {
         evidence: &mut Evidence,
         accept_not_found: bool,
     ) -> Result<(StatusCode, Box<RawValue>), Error> {
-        self.read_status_guarded(ctx, read, path, query, evidence, (accept_not_found, None))
-            .await
+        self.read_status_guarded(
+            ctx,
+            read,
+            path,
+            query,
+            evidence,
+            ReadGuards {
+                accept_not_found,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     pub(super) async fn read_guarded(
@@ -167,21 +184,31 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        privacy: Option<&Evidence>,
+        privacy: Option<(&'static str, &Evidence)>,
     ) -> Result<Box<RawValue>, Error> {
-        self.read_status_guarded(ctx, read, path, query, evidence, (false, privacy))
-            .await
-            .map(|(_, raw)| raw)
+        self.read_status_guarded(
+            ctx,
+            read,
+            path,
+            query,
+            evidence,
+            ReadGuards {
+                privacy,
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|(_, raw)| raw)
     }
 
-    async fn read_status_guarded(
+    pub(super) async fn read_status_guarded(
         &self,
         ctx: &RequestContext,
         read: &Read,
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        (accept_not_found, privacy): (bool, Option<&Evidence>),
+        guards: ReadGuards<'_>,
     ) -> Result<(StatusCode, Box<RawValue>), Error> {
         let base = self
             .session
@@ -206,7 +233,7 @@ impl Client {
             method: Method::GET,
             class: Classification::Read,
             retry: Retry::Repeatable,
-            success: if accept_not_found {
+            success: if guards.accept_not_found {
                 &[StatusCode::OK, StatusCode::NOT_FOUND]
             } else {
                 &[StatusCode::OK]
@@ -223,14 +250,19 @@ impl Client {
             retry_config: retry::Config::default(),
         };
         let bearer = self.session.bearer_source();
-        let scoped = privacy
-            .map(|private| {
-                super::mutation::privacy_credentials(read.id, evidence, private).map(|values| {
-                    crate::quote::request::monitor::ScopedBearer::new(bearer, path, read.id)
-                        .with_privacy(values)
-                })
-            })
-            .transpose()?;
+        let scoped = if guards.privacy.is_some() || guards.observe.is_some() {
+            let owner = guards.privacy.map_or(read.id, |(operation, _)| operation);
+            let mut scoped = crate::quote::request::monitor::ScopedBearer::new(bearer, path, owner)
+                .with_observer(guards.observe);
+            if let Some((_, privacy)) = guards.privacy {
+                scoped = scoped.with_privacy(super::mutation::privacy_credentials(
+                    owner, evidence, privacy,
+                )?);
+            }
+            Some(scoped)
+        } else {
+            None
+        };
         let bearer = scoped.as_ref().map_or(bearer, |source| source);
         let reply = match execute_raw(
             runtime,

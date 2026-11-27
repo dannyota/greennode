@@ -532,3 +532,150 @@ async fn synthetic_create_uses_the_retained_auto_renew_settlement_bound() {
     );
     assert_eq!(server.requests(), 7);
 }
+
+#[tokio::test]
+async fn dropped_settlement_retains_the_later_bearer() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let (started, receipt) = tokio::sync::oneshot::channel();
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    let extended = ACTIVE.replace("2099-02-01", "2099-03-01");
+    replies.extend([
+        response("200 OK", ACK),
+        Response::StallBeforeHead(started),
+        response("200 OK", &extended),
+        response("200 OK", DETAIL),
+    ]);
+    let server = Server::start(replies);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer::changing_at(14, "synth-order")),
+    );
+    let (ctx, _) = RequestContext::new();
+    let mut input = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    input.no_wait = true;
+    client
+        .renew_synthetic_quota(&ctx, input.clone())
+        .await
+        .unwrap();
+    {
+        let mut settle = std::pin::pin!(client.renew_synthetic_quota(&ctx, input.clone()));
+        tokio::select! {
+            arrived = receipt => arrived.unwrap(),
+            _ = &mut settle => panic!("the settlement finished before its response was held"),
+        }
+    }
+    let output = client.renew_synthetic_quota(&ctx, input).await.unwrap();
+    assert!(output.renewed);
+    assert!(output.order_id == "<redacted>");
+    assert_eq!(server.requests(), 17);
+}
+
+#[tokio::test]
+async fn early_settlement_failure_exposes_no_previous_order_or_payment() {
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.push(response(
+        "200 OK",
+        r#"{"orderId":"synth-order","paymentUrl":"https://example.test/pay"}"#,
+    ));
+    let server = Server::start(replies);
+    let client = client(&server);
+    let (ctx, cancel) = RequestContext::new();
+    let input = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    assert!(
+        client
+            .renew_synthetic_quota(&ctx, input.clone())
+            .await
+            .is_err()
+    );
+    cancel.cancel();
+    let failure = client.renew_synthetic_quota(&ctx, input).await.unwrap_err();
+    let output = failure.partial().unwrap();
+    assert_eq!(output.outcome.sent, "yes");
+    assert!(output.order_id.is_empty());
+    assert!(!output.payment_pending);
+    assert!(output.quota.is_none());
+    assert_eq!(server.requests(), 14);
+}
+
+#[tokio::test]
+async fn cancelled_delete_keeps_stale_guard_cause_without_snapshot() {
+    let server = Server::start(vec![
+        response("200 OK", ACTIVE),
+        response("200 OK", DETAIL),
+        response("200 OK", ACTIVE),
+        response("200 OK", DETAIL),
+        response("503 Service Unavailable", "{}"),
+    ]);
+    let client = client(&server);
+    let (ctx, cancel) = RequestContext::new();
+    let input = greennode_sdk::monitor::DeleteSyntheticQuotaInput::new("quota-1");
+    assert!(client.delete_synthetic_quota(&ctx, input).await.is_err());
+    cancel.cancel();
+    let failure = client
+        .delete_synthetic_quota(
+            &ctx,
+            greennode_sdk::monitor::DeleteSyntheticQuotaInput::new("other-quota"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .has_class(greennode_sdk::ErrorClass::NotSettled)
+    );
+    assert!(
+        failure
+            .error()
+            .has_class(greennode_sdk::ErrorClass::InvalidInput)
+    );
+    let result = failure.partial().unwrap();
+    assert_eq!(result.stage, "sent");
+    assert!(result.quota.is_none());
+    assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn renewal_checks_the_current_clock_after_catalog_reads() {
+    use greennode_sdk::{Clock, SystemClock};
+    use std::sync::Arc;
+    struct CatalogClock(Arc<Server>);
+    impl Clock for CatalogClock {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            let day = if self.0.requests() < 6 { 22 } else { 27 };
+            time::Date::from_calendar_date(2099, time::Month::January, day)
+                .unwrap()
+                .midnight()
+                .assume_utc()
+        }
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            SystemClock.monotonic_now()
+        }
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            SystemClock.sleep_until(deadline)
+        }
+    }
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.push(response("200 OK", ACK));
+    let server = Arc::new(Server::start(replies));
+    let options = greennode_sdk::ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(greennode_sdk::Secret::new("fixture-clock-bearer"));
+    let options =
+        greennode_sdk::testing::with_fixture_clock(options, Arc::new(CatalogClock(server.clone())));
+    let options = greennode_sdk::testing::with_write_loopback(
+        greennode_sdk::testing::Product::Monitor,
+        options,
+        &server,
+    );
+    let client = greennode_sdk::monitor::Client::new(&greennode_sdk::Config::new(options).unwrap());
+    let (ctx, _) = RequestContext::new();
+    let mut input = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    input.max_days_left = 7;
+    input.no_wait = true;
+    let output = client.renew_synthetic_quota(&ctx, input).await.unwrap();
+    assert_eq!(output.outcome.stage, "accepted");
+    assert_eq!(server.requests(), 14);
+}

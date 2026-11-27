@@ -312,8 +312,11 @@ async fn exhausted_channel_query_scan_refuses_before_guard_read() {
     let (ctx, _) = RequestContext::new();
     let mut input = UpdateChannelInput::new("channel-1");
     input.address = Some(format!(
-        "https://example.test/?{}",
-        "key=repeated&".repeat(257)
+        "https://example.test/?{}{}",
+        "key=repeated&".repeat(270),
+        (0..257)
+            .map(|index| format!("key=separate-{index}&"))
+            .collect::<String>()
     ));
     let failure = client(&server)
         .update_channel(&ctx, input)
@@ -324,6 +327,10 @@ async fn exhausted_channel_query_scan_refuses_before_guard_read() {
         .api_error()
         .expect("missing scoped privacy error");
     assert_eq!(api.code(), "InvalidResponse");
+    assert_eq!(
+        api.message(),
+        "credential observation failed; response withheld"
+    );
     assert_eq!(api.operation(), "monitor.UpdateChannel");
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert!(server.heads().is_empty());
@@ -346,4 +353,38 @@ async fn exhausted_opaque_header_depth_refuses_update() {
     };
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn channel_screens_secrets_in_decoded_userinfo_and_relative_queries() {
+    for (address, enclosed) in [
+        ("https://user:some%2Fsecret@example.test", "some/secret"),
+        ("path?key=some%2Fsecret", "some/secret"),
+    ] {
+        let body =
+            serde_json::json!({"id":"channel-new","name":enclosed,"address":address}).to_string();
+        let server = Server::start(vec![response("200 OK", &body)]);
+        let (ctx, _) = RequestContext::new();
+        let out = client(&server)
+            .create_channel(&ctx, CreateChannelInput::new("Fixture", "Webhook", address))
+            .await;
+        assert!(out.is_err());
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn channel_guard_http_error_keeps_the_list_operation() {
+    let server = Server::start(vec![response("403 Forbidden", "{}")]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateChannelInput::new("channel-1");
+    input.name = Some("Changed".into());
+    let failure = client(&server)
+        .update_channel(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().operation(),
+        "monitor.ListChannels"
+    );
 }

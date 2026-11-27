@@ -1,4 +1,5 @@
 use super::{ChannelHeader, Evidence, Secret};
+use crate::monitor::privacy::{check_budget, collect_url};
 use serde_json::value::RawValue;
 
 pub(super) fn channel_values(
@@ -29,18 +30,7 @@ fn add(evidence: &mut Evidence, value: &str) -> Result<(), ()> {
         return Err(());
     }
     evidence.add_redaction(&Secret::new(value));
-    if let Ok(url) = url::Url::parse(value) {
-        evidence.add_redaction(&Secret::new(url.username()));
-        if let Some(password) = url.password() {
-            evidence.add_redaction(&Secret::new(password));
-        }
-        for (index, (_, value)) in url.query_pairs().enumerate() {
-            if index >= 256 {
-                return Err(());
-            }
-            evidence.add_redaction(&Secret::new(value.into_owned()));
-        }
-    }
+    collect_url(evidence, value, |_| true)?;
     if let Some((scheme, value)) = value.trim().split_once(' ') {
         if scheme.eq_ignore_ascii_case("Bearer") {
             evidence.add_redaction(&Secret::new(value.trim()));
@@ -56,7 +46,7 @@ fn add(evidence: &mut Evidence, value: &str) -> Result<(), ()> {
             }
         }
     }
-    Ok(())
+    check_budget(evidence)
 }
 
 fn visit(evidence: &mut Evidence, raw: &RawValue, depth: usize) -> Result<(), ()> {
