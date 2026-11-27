@@ -49,6 +49,45 @@ fn write(check: AttemptCheck<'_>) -> Operation<'_> {
 }
 
 #[tokio::test]
+async fn known_route_reflection_refuses_before_signin() {
+    let server = Server::start(vec![response("200 OK", &[])]);
+    let (ctx, clock, deadline) = ctx();
+    let source = Provider {
+        empty: true,
+        ..Provider::default()
+    };
+    let configured = SentCredentials::for_test(vec![Secret::new("jkl")]);
+    let failure = super::super::run(
+        Runtime {
+            configured_credentials: Some(&configured),
+            client: &client(&server),
+            ctx: &ctx,
+            clock: &clock,
+            deadline,
+            sleeper: &Immediate::default(),
+            jitter: &mut || 0,
+        },
+        &Operation {
+            class: redirect::Classification::Write,
+            ..operation(Method::POST, redirect::Retry::Once)
+        },
+        Auth::Bearer(&PublicSource(&source)),
+        &request(&format!("{}/pre6A6B6Cpost", server.origin)),
+        RouteInputs {
+            path: &["pre6A6B6Cpost"],
+            ..RouteInputs::default()
+        },
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(source.count.load(Ordering::SeqCst), 0);
+    assert!(matches!(failure.error, Error::InvalidRequest));
+    assert_eq!(failure.dispatch, crate::WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
 async fn first_attempt_compares_the_sign_in_credentials() {
     let server = Server::start(vec![response("200 OK", &[])]);
     let (ctx, clock, deadline) = ctx();

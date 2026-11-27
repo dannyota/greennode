@@ -149,6 +149,52 @@ async fn write_route_and_body_cannot_reflect_the_full_credential_header() {
 }
 
 #[tokio::test]
+async fn raw_uri_and_header_checks_refuse_uncompiled_credentials() {
+    let credentials = SentCredentials::for_test(vec![Secret::new("x".repeat(64 << 10))]);
+    let mut refused = [false; 2];
+    for (index, raw_header) in [false, true].into_iter().enumerate() {
+        let server = Server::start(vec![response("200 OK", &[])]);
+        let (ctx, clock, deadline) = ctx();
+        let mut req = request(&format!("{}/ordinary?path=ordinary", server.origin));
+        let auth = if raw_header {
+            req.headers.insert(
+                "x-note",
+                http::HeaderValue::from_bytes(b"\xffordinary").unwrap(),
+            );
+            Auth::None
+        } else {
+            req.credentials.push(CredentialHeader {
+                name: http::header::AUTHORIZATION,
+                value: credentials.values()[0].clone(),
+                bearer: true,
+            });
+            Auth::Key
+        };
+        let result = super::super::run(
+            Runtime {
+                configured_credentials: Some(&credentials),
+                client: &client(&server),
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &Immediate::default(),
+                jitter: &mut || 0,
+            },
+            &operation(Method::GET, redirect::Retry::Once),
+            auth,
+            &req,
+            RouteInputs::default(),
+        )
+        .await;
+        refused[index] = result
+            .err()
+            .is_some_and(|failure| matches!(failure.error, Error::InvalidRequest))
+            && server.requests() == 0;
+    }
+    assert_eq!(refused, [true, true]);
+}
+
+#[tokio::test]
 async fn plain_headers_reject_credentials() {
     for name in ["authorization", "x-api-key"] {
         let server = Server::start(vec![response("200 OK", &[])]);

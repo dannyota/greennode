@@ -1,6 +1,21 @@
 use super::*;
 
 #[tokio::test]
+async fn authenticate_screens_the_assembled_context_display() {
+    let config = Config::new(options().with_iam_user(IamUserAuth::new(
+        "toy-root@example.test".into(),
+        "toy-user".into(),
+        Secret::new("greennode: Cancelled"),
+    )))
+    .unwrap();
+    let (ctx, cancel) = RequestContext::new();
+    cancel.cancel();
+    let error = config.authenticate(&ctx).await.unwrap_err();
+    assert!(error.has_identity(ErrorClass::Cancelled));
+    assert!(error.to_string() == "request failed");
+}
+
+#[tokio::test]
 async fn authenticate_withholds_reflected_service_login_reason_and_status() {
     use crate::wire::test_server::Server;
     for (credential, expected_status, expected_reason) in [

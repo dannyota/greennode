@@ -64,6 +64,33 @@ impl<'a> BodyMatcher<'a> {
         reflects
     }
 
+    pub(in crate::wire::product) fn raw(&self, bytes: &[u8]) -> bool {
+        if bytes.is_empty() || self.credentials.values().is_empty() {
+            return false;
+        }
+        let Some(patterns) = self.credentials.patterns() else {
+            return true;
+        };
+        let mut work = self.remaining.get();
+        let reflects = patterns.raw(bytes, &mut work);
+        self.remaining.set(work);
+        reflects
+    }
+
+    pub(in crate::wire::product) fn raw_or_percent_decoded(&self, bytes: &[u8]) -> bool {
+        if self.raw(bytes) {
+            return true;
+        }
+        if self.credentials.values().is_empty() {
+            return false;
+        }
+        let Some(remaining) = self.remaining.get().checked_sub(bytes.len()) else {
+            return true;
+        };
+        self.remaining.set(remaining);
+        self.raw(&Zeroizing::new(percent_decode(bytes)))
+    }
+
     pub(in crate::wire::product) fn reflects(&self, bytes: &[u8], identifier: bool) -> bool {
         if self.credentials.values().is_empty() {
             return false;

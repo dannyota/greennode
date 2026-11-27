@@ -11,6 +11,7 @@ const MAX_COMPILED_BYTES: usize = 4 << 20;
 pub(in crate::wire::product) struct Patterns {
     folded: Automaton,
     base64: Automaton,
+    raw: Automaton,
     minimum_base64: [Option<usize>; 2],
 }
 
@@ -114,11 +115,17 @@ impl Patterns {
         let base64 = encoded_needles
             .iter()
             .map(|needle| (needle.value.as_bytes(), needle.flags));
+        let raw = secrets
+            .iter()
+            .map(|secret| secret.expose_secret().as_bytes())
+            .filter(|value| !value.is_empty())
+            .map(|value| (value, LITERAL));
         let mut compiled_bytes = MAX_COMPILED_BYTES;
         let mut compile_work = 32 << 20;
         Some(Self {
             folded: Automaton::build(literal.chain(hex), &mut compiled_bytes, &mut compile_work)?,
             base64: Automaton::build(base64, &mut compiled_bytes, &mut compile_work)?,
+            raw: Automaton::build(raw, &mut compiled_bytes, &mut compile_work)?,
             minimum_base64,
         })
     }
@@ -129,6 +136,10 @@ impl Patterns {
 
     pub(super) fn can_decode_base64(&self, len: usize, strict: bool) -> bool {
         self.minimum_base64[usize::from(strict)].is_some_and(|minimum| len >= minimum)
+    }
+
+    pub(super) fn raw(&self, input: &[u8], work: &mut usize) -> bool {
+        !self.raw.is_empty() && self.raw.contains(input, work).unwrap_or(true)
     }
 
     pub(super) fn literal(

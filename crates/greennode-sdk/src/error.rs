@@ -313,6 +313,7 @@ pub struct Error {
     class: ErrorClass,
     identity: bool,
     fallback_message_reflected: bool,
+    display_reflected: bool,
     api: Option<ApiError>,
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
@@ -333,6 +334,7 @@ impl Error {
             class,
             identity: true,
             fallback_message_reflected: false,
+            display_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -360,14 +362,9 @@ impl Error {
             _ => ErrorClass::Api,
         };
         Self {
-            class,
             identity: false,
-            fallback_message_reflected: false,
             api: Some(api),
-            login: None,
-            service_login: None,
-            detail: None,
-            cause: None,
+            ..Self::new(class)
         }
     }
     pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
@@ -440,6 +437,8 @@ impl Error {
             self.detail = None;
         }
         self.cause = self.cause.map(|cause| Box::new(cause.screen_api(reflects)));
+        self.display_reflected =
+            self.display_reflected || reflects(&zeroize::Zeroizing::new(self.to_string()));
         self
     }
 
@@ -494,6 +493,7 @@ impl Error {
             class: self.class,
             identity: false,
             fallback_message_reflected: false,
+            display_reflected: false,
             api: None,
             login: None,
             service_login: None,
@@ -596,6 +596,9 @@ impl fmt::Debug for Error {
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.display_reflected {
+            return f.write_str(self.diagnostic_fallback());
+        }
         write!(f, "greennode: {:?}", self.class)
     }
 }

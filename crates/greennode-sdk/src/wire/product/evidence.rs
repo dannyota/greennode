@@ -159,10 +159,7 @@ impl SentCredentials {
     }
 
     pub(crate) fn reflects(&self, data: &[u8]) -> bool {
-        self.values.iter().any(|secret| {
-            let value = secret.expose_secret().as_bytes();
-            !value.is_empty() && data.windows(value.len()).any(|part| part == value)
-        })
+        response::BodyMatcher::new(self, data.len()).raw(data)
     }
 }
 impl std::fmt::Debug for SentCredentials {
@@ -528,6 +525,16 @@ mod tests {
             evidence.add_secret(&crate::Secret::new(*secret));
         }
         evidence
+    }
+
+    #[test]
+    fn literal_byte_scan_keeps_its_rules_and_refuses_uncompiled_credentials() {
+        let exact = SentCredentials::for_test(vec![crate::Secret::new("Toy-A\nlong-line")]);
+        assert!(exact.reflects(b"\xffToy-A\nlong-line\xff"));
+        assert!(!exact.reflects(b"toy-a\nlong-line"));
+        assert!(!exact.reflects(b"long-line"));
+        let oversized = SentCredentials::for_test(vec![crate::Secret::new("x".repeat(64 << 10))]);
+        assert!(oversized.reflects(b"ordinary"));
     }
 
     #[test]

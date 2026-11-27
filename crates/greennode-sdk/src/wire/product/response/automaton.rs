@@ -151,6 +151,18 @@ impl Automaton {
         }
     }
 
+    pub(super) fn contains(&self, input: &[u8], work: &mut usize) -> Option<bool> {
+        charge(work, input.len())?;
+        let mut state = 0;
+        for &byte in input {
+            state = self.advance(state, byte, work)?;
+            if self.accepts(state, work, |_, _| true)? {
+                return Some(true);
+            }
+        }
+        Some(false)
+    }
+
     pub(super) fn accepts(
         &self,
         mut state: u32,

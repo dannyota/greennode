@@ -196,6 +196,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn error_exit_checks_display_and_final_diagnostic_values() {
+        use crate::error::SafeText;
+        let credentials = SentCredentials::for_test(
+            [
+                "greennode: Cancelled",
+                "403)",
+                "billing.CreateBudget",
+                "context canceled",
+            ]
+            .into_iter()
+            .map(crate::Secret::new)
+            .collect(),
+        );
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotSent);
+            let cause = Error::from_api(crate::ApiError::new(
+                "billing.CreateBudget",
+                Some(403),
+                SafeText::new("Forbidden", &[]),
+                SafeText::new("permission denied (403)", &[]),
+                false,
+            ));
+            let error = Error::from(crate::ContextEnd::Cancelled)
+                .with_detail(crate::RecoveryAdvice::new(
+                    "lookup failed: context canceled",
+                ))
+                .with_cause(cause);
+            Err::<(), _>(Failure::new(error, None, WriteDispatch::NotSent))
+        })
+        .unwrap_err();
+        let error = failure.error();
+        assert!(error.to_string() == "request failed");
+        assert!(error.has_identity(ErrorClass::Cancelled));
+        assert!(error.has_class(ErrorClass::PermissionDenied));
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        let api = error.api_error().unwrap();
+        assert!(api.operation().is_empty());
+        assert!(api.message().is_empty());
+        assert_eq!(api.status(), Some(403));
+        assert!(
+            error
+                .detail::<crate::RecoveryAdvice>()
+                .unwrap()
+                .message()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn error_exit_withholds_a_reflecting_display_fallback() {
+        let credentials = SentCredentials::for_test(
+            ["greennode: Api", "request failed"]
+                .into_iter()
+                .map(crate::Secret::new)
+                .collect(),
+        );
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Err::<(), _>(Failure::new(
+                Error::new(ErrorClass::Api),
+                None,
+                WriteDispatch::NotAWrite,
+            ))
+        })
+        .unwrap_err();
+        assert!(failure.error().to_string().is_empty());
+    }
+
+    #[tokio::test]
     async fn joined_futures_contribute_evidence_before_finishing() {
         let result = finish!(async {
             let (value, ()) = tokio::join!(async { "toy-final" }, async {

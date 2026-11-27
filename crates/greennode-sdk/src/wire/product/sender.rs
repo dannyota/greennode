@@ -437,6 +437,7 @@ async fn run_inner(
         })
         || (matches!(auth, Auth::None) && !request.credentials.is_empty())
         || (matches!(auth, Auth::Key) && request.credentials.is_empty())
+        || route_inputs.reflects(&reflection.transport_only())
     {
         return Err(Error::InvalidRequest);
     }
@@ -486,9 +487,10 @@ async fn run_inner(
                 && name == http::header::ACCEPT
                 && value.as_bytes() == b"text/html";
             !(fixed_json || fixed_html)
-                && (std::str::from_utf8(value.as_bytes()).is_ok_and(|text| {
-                    super::response::reflects_credential_forms(text, &credentials)
-                }) || credentials.reflects(value.as_bytes()))
+                && match std::str::from_utf8(value.as_bytes()) {
+                    Ok(text) => super::response::reflects_credential_forms(text, &credentials),
+                    Err(_) => credentials.reflects(value.as_bytes()),
+                }
         }) || uri_contains_credential(&request.url, &outgoing_credentials)
         {
             return Err(Error::InvalidRequest);
