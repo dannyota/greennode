@@ -546,3 +546,50 @@ async fn cdn_settlement_exit_refuses_reflection_created_by_reserializing_rules()
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert!(failure.partial().is_none());
 }
+
+#[tokio::test]
+async fn purge_accepts_only_clean_success_envelopes() {
+    for (note, allowed) in [
+        ("ordinary-note", true),
+        (CDN_KEY, false),
+        ("%252541", false),
+    ] {
+        let envelope = json!({"success":true,"note":note}).to_string();
+        let server = Server::start(vec![reply(&envelope)]);
+        let result = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/page".into()]),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        if let Err(failure) = result {
+            assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        }
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn toggle_confirmation_never_retries_a_guard_refusal_with_an_observed_status() {
+    let server = Server::start(vec![
+        reply(DISABLED),
+        reply(TOGGLED),
+        reply("{"),
+        reply(ACTIVE),
+    ]);
+    let mut input = EnableWebAcceleratorInput::new("cdn-1");
+    input.no_wait = true;
+    let result = client(&server, Some(CDN_KEY))
+        .enable_web_accelerator(&RequestContext::new().0, input)
+        .await;
+    let Err(failure) = result else {
+        panic!("confirmation retried the guard refusal");
+    };
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::StatusUnconfirmed)
+    );
+    assert_eq!(server.requests(), 3);
+}

@@ -168,30 +168,6 @@ fn guard_bandwidth(
     })
 }
 
-fn guard_bandwidth_project(
-    id: &'static str,
-    status: StatusCode,
-    body: &[u8],
-    known: &SentCredentials,
-    sent: &SentCredentials,
-) -> Option<Box<Error>> {
-    let body = go_json(body);
-    (operation::unsafe_json_response(body.as_bytes(), known, sent)
-        || (!status.is_success()
-            && [known, sent]
-                .into_iter()
-                .any(|credentials| reflects_credential_forms(&body, credentials))))
-    .then(|| {
-        Box::new(api(
-            id,
-            Some(status),
-            "InvalidResponse",
-            "invalid discovery response; body withheld",
-            false,
-        ))
-    })
-}
-
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     pub(super) fn request_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Error> {
@@ -257,10 +233,14 @@ impl Client {
             retry_config: retry::Config::default(),
         };
         let options = Options {
+            project_discovery: read.style == Style::BandwidthProject,
             response_guard: match read.style {
-                Style::Nat | Style::NatCatalog | Style::NatList | Style::EndpointQuote => None,
+                Style::Nat
+                | Style::NatCatalog
+                | Style::NatList
+                | Style::EndpointQuote
+                | Style::BandwidthProject => None,
                 Style::Bandwidth => Some(guard_bandwidth),
-                Style::BandwidthProject => Some(guard_bandwidth_project),
             },
             ..Options::DEFAULT
         };

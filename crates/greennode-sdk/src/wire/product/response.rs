@@ -20,18 +20,6 @@ impl Screen {
         self.clean().is_some()
     }
 
-    pub(crate) fn untrusted_error<T>(
-        self,
-        reflected: impl FnOnce() -> T,
-        indeterminate: impl FnOnce() -> T,
-    ) -> Option<T> {
-        match self {
-            Self::Clean => None,
-            Self::Reflected => Some(reflected()),
-            Self::Indeterminate => Some(indeterminate()),
-        }
-    }
-
     pub(super) fn diagnostic_status(
         self,
         status: Option<http::StatusCode>,
@@ -62,7 +50,13 @@ mod marker;
 mod matching;
 mod patterns;
 
-use super::{redirect::Retry, sender::SentCredentials};
+use super::{
+    evidence::Evidence,
+    operation::RefusedGuard,
+    redirect::Retry,
+    sender::{self, SentCredentials},
+};
+use crate::wire::send;
 use bytes::Bytes;
 use full_error::full_error;
 
@@ -435,6 +429,64 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
         envelope.text().to_owned()
     };
     (envelope.code, message)
+}
+
+impl sender::Operation<'_> {
+    pub(super) fn screen_reply(
+        &self,
+        opaque: bool,
+        reply: &send::Reply,
+        known: &sender::SentCredentials,
+        sent: &sender::SentCredentials,
+    ) -> Screen {
+        let mut evidence = Evidence::from_credentials(known);
+        evidence.absorb(sent);
+        if self.guard.is_some() {
+            evidence = evidence.transport_only();
+        }
+        if opaque
+            || (self.project_discovery.is_some()
+                && !reply.status.is_success()
+                && serde_json::from_str::<&serde_json::value::RawValue>(
+                    &crate::model::wire::go_json(&reply.body),
+                )
+                .is_err())
+        {
+            evidence.opaque_body_screen(&reply.body)
+        } else {
+            evidence.go_peer_body_screen(&reply.body)
+        }
+    }
+
+    pub(super) fn refuse_before_retry(
+        &self,
+        reply: &send::Reply,
+        screen: Screen,
+        known: &sender::SentCredentials,
+        sent: &sender::SentCredentials,
+    ) -> Option<Box<crate::Error>> {
+        if let Some(id) = self.project_discovery
+            && !screen.is_clean()
+        {
+            return Some(project_discovery_error(id, reply.status));
+        }
+        let (id, guard) = self.response_guard?;
+        guard(id, reply.status, &reply.body, known, sent)
+    }
+}
+
+pub(crate) fn project_discovery_error(id: &'static str, status: StatusCode) -> Box<crate::Error> {
+    Box::new(
+        crate::Error::from_api(crate::ApiError::without_fallback(
+            id,
+            Some(status.as_u16()),
+            crate::error::SafeText::new("InvalidResponse", &[]),
+            crate::error::SafeText::new("invalid discovery response; body withheld", &[]),
+            false,
+        ))
+        .with_detail(RefusedGuard)
+        .with_http_status(status),
+    )
 }
 
 #[cfg(test)]

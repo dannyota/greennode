@@ -109,7 +109,6 @@ impl Client {
         }
         let mut evidence = self.write_evidence(ctx, op, &[("UserID", id)], &[method])?;
         let target = self.guard_user(ctx, op, id, true, &mut evidence).await?;
-        let (verified, active) = google_state(&target).ok_or_else(|| unavailable(op))?;
         let output = |enabled, changed, evidence: &Evidence| UserMfaWriteOutput {
             method: if evidence.text_reflects(method) {
                 "<redacted>"
@@ -120,11 +119,17 @@ impl Client {
             enabled,
             changed,
         };
-        if enable && !verified || evidence.text_reflects(method) {
-            return Err(unavailable(op));
-        }
-        if active == enable {
-            return Ok(output(Some(active), false, &evidence));
+        let noop = crate::wire::product::guard::decide(&evidence, |decision| {
+            let (verified, active) = google_state(&target).ok_or_else(|| unavailable(op))?;
+            let evidence = decision.evidence();
+            if enable && !verified || evidence.text_reflects(method) {
+                return Err(unavailable(op));
+            }
+            Ok((active == enable).then(|| output(Some(active), false, evidence)))
+        })
+        .map_err(|error| not_sent(*error))??;
+        if let Some(noop) = noop {
+            return Ok(noop);
         }
         let route = if enable {
             "accounts-api/v1/iam-users/{}/activate-google"

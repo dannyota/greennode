@@ -85,6 +85,7 @@ pub(crate) type ResponseGuard = fn(
 pub(crate) struct Operation<'a> {
     pub(crate) guard: Option<&'static str>,
     pub(crate) pacing: Option<&'a super::options::Pacing>,
+    pub(crate) project_discovery: Option<&'static str>,
     pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
     pub(crate) attempt_check: Option<super::options::AttemptCheck<'a>>,
     pub(crate) method: Method,
@@ -546,24 +547,15 @@ async fn run_inner(
             }
             let result = result?;
             let body_reflection = result.as_ref().map_or(Screen::Indeterminate, |reply| {
-                let mut evidence = super::evidence::Evidence::from_credentials(reflection);
-                evidence.absorb(sent);
-                if op.guard.is_some() {
-                    evidence = evidence.transport_only();
-                }
-                if matches!(auth, Auth::None) {
-                    evidence.opaque_body_screen(&reply.body)
-                } else {
-                    evidence.go_peer_body_screen(&reply.body)
-                }
+                op.screen_reply(matches!(auth, Auth::None), reply, reflection, sent)
             });
-            let refused = op
-                .guard
-                .filter(|_| result.is_ok() && !body_reflection.is_clean());
+            let refused = op.guard.filter(|_| {
+                op.project_discovery.is_none() && result.is_ok() && !body_reflection.is_clean()
+            });
             let callback_refusal = if refused.is_none()
-                && let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
+                && let Ok(reply) = &result
             {
-                guard(id, reply.status, &reply.body, reflection, sent)
+                op.refuse_before_retry(reply, body_reflection, reflection, sent)
             } else {
                 None
             };

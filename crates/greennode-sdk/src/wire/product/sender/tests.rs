@@ -98,6 +98,7 @@ fn operation(method: Method, retry: redirect::Retry) -> Operation<'static> {
     Operation {
         guard: None,
         pacing: None,
+        project_discovery: None,
         response_guard: None,
         attempt_check: None,
         method,

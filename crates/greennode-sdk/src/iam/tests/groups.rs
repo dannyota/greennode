@@ -572,3 +572,50 @@ async fn iam_group_member_receipt_uses_identifier_rules_at_dispatch() {
         assert_eq!(server.requests(), if allowed { 8 } else { 7 });
     }
 }
+
+#[tokio::test]
+async fn mfa_noop_rechecks_the_target_proof_with_the_last_guard_bearer() {
+    for (note, allowed) in [("ordinary-note", true), ("toy-last-guard", false)] {
+        let target = json!({"id":"user-1","from":"iam","twoFactorAuth":{"googleAuthenticator":{"verified":true,"enabled":true}},"note":note}).to_string();
+        let server = Server::start(vec![
+            response("200 OK", br#"{"userId":"caller-1","userType":"iam-user"}"#),
+            response("200 OK", target.as_bytes()),
+            response("200 OK", br#"[{"action":"CreatePolicy","label":"Write"}]"#),
+            response("200 OK", br#"{"data":[],"totalItems":0}"#),
+            response("200 OK", b"[]"),
+        ]);
+        let client = confirmation_client(
+            &server,
+            Arc::new(ConfirmationProvider {
+                attempts: AtomicUsize::new(0),
+                tokens: vec![
+                    "toy-caller",
+                    "toy-user",
+                    "toy-actions",
+                    "toy-policies",
+                    "toy-last-guard",
+                ],
+            }),
+        );
+        let result = client
+            .enable_user_mfa(
+                &RequestContext::new().0,
+                crate::iam::EnableUserMfaInput::new("user-1", "google"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        match result {
+            Ok(output) => assert!(!output.changed),
+            Err(failure) => {
+                assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+                assert!(
+                    failure
+                        .error()
+                        .detail::<crate::wire::product::operation::RefusedGuard>()
+                        .is_some()
+                );
+            }
+        }
+        assert_eq!(server.requests(), 5);
+    }
+}

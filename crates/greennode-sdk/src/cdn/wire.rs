@@ -303,6 +303,12 @@ impl Client {
                     dispatch => dispatch,
                 };
                 let (error, _, _) = failure.into_parts();
+                if error
+                    .detail::<crate::wire::product::operation::RefusedGuard>()
+                    .is_some()
+                {
+                    return Failure::new(error, None, dispatch);
+                }
                 let status = error
                     .http_status()
                     .map(|status| status.as_u16())
@@ -366,8 +372,19 @@ impl Client {
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         let envelope: Envelope = serde_json::from_slice(&reply.body)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
+        let screen = if call.write {
+            let screen = evidence.transport_only().go_peer_body_screen(&reply.body);
+            screen.clean().ok_or_else(|| {
+                sent_failure(crate::wire::product::operation::unsafe_guard_response(
+                    call.id,
+                ))
+            })?;
+            screen
+        } else {
+            reply.reflection
+        };
         if !envelope.success {
-            let checked = GuardEnvelope::checked(&envelope, reply.reflection)
+            let checked = GuardEnvelope::checked(&envelope, screen)
                 .ok_or_else(|| sent_failure(call.unexpected(status)))?;
             return Err(sent_failure(call.refused(status, checked, evidence)));
         }

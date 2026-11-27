@@ -656,3 +656,115 @@ async fn nat_quote_checks_catalog_placement_before_posting_to_vnetwork() {
     assert!(heads[0].starts_with(b"GET /vnetwork/v1/zone-1/proj-1/nats/v3-whitelist "));
     assert!(heads[4].starts_with(b"POST /vnetwork/billing/v1/zone-1/proj-1/price "));
 }
+
+#[cfg(test)]
+mod discovery_retry {
+    use super::*;
+    use crate::wire::product::evidence::Evidence;
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct Provider(AtomicUsize);
+
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, Error>> + Send + 'a>> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(ready(Ok(crate::Token::new(
+                Secret::new("toy-discovery-token"),
+                None,
+            ))))
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+
+    #[tokio::test]
+    async fn project_paths_screen_error_bodies_before_recovery() {
+        for bandwidth in [false, true] {
+            for (status, clean, reflected, acquires) in [
+                (
+                    "401 Unauthorized",
+                    "authentication required",
+                    "authentication required toy-discovery-token",
+                    2,
+                ),
+                (
+                    "503 Service Unavailable",
+                    "<html>temporarily unavailable</html>",
+                    "<html>temporarily unavailable toy-discovery-token</html>",
+                    1,
+                ),
+            ] {
+                for (body, allowed) in [(reflected, false), (clean, true)] {
+                    let replies = vec![
+                        response(status, body),
+                        response(
+                            "200 OK",
+                            r#"{"projects":[{"projectId":"proj-1","region":"hcm-3"}]}"#,
+                        ),
+                    ];
+                    let server = Server::start(replies);
+                    let provider = Arc::new(Provider(AtomicUsize::new(0)));
+                    let config = Config::new(with_product_loopback(
+                        Product::Vserver,
+                        ConfigOptions::default()
+                            .with_region("hcm-3".into())
+                            .with_credentials_provider(provider.clone()),
+                        &server,
+                    ))
+                    .unwrap();
+                    let ctx = RequestContext::new().0;
+                    let result = if bandwidth {
+                        let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+                        let read = super::super::wire::Read::new(
+                            "network.ListBandwidthPackages",
+                            "vserver/iam-vserver-gateway/v1/projects",
+                            super::super::wire::Style::BandwidthProject,
+                        );
+                        Client::new(&config)
+                            .discover_project(&ctx, &base, read, &mut Evidence::new())
+                            .await
+                            .map(|_| ())
+                    } else {
+                        crate::project::Client::new(&config)
+                            .list_projects(&ctx, crate::project::ListProjectsInput::default())
+                            .await
+                            .map(|_| ())
+                            .map_err(|failure| failure.into_parts().0)
+                    };
+                    assert_eq!(
+                        result.is_ok(),
+                        allowed,
+                        "bandwidth={bandwidth} status={status}"
+                    );
+                    if let Err(error) = result {
+                        assert_eq!(
+                            error.api_error().map(crate::ApiError::code),
+                            Some("InvalidResponse")
+                        );
+                    }
+                    assert_eq!(server.requests(), if allowed { 2 } else { 1 });
+                    assert_eq!(
+                        provider.0.load(Ordering::Relaxed),
+                        if allowed { acquires } else { 1 }
+                    );
+                }
+            }
+        }
+    }
+}

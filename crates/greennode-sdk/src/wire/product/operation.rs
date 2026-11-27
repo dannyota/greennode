@@ -389,6 +389,7 @@ async fn send_route<T>(
     let policy = sender::Operation {
         guard: (operation.reflection == Reflection::Guard).then_some(operation.id),
         pacing: options.pacing,
+        project_discovery: options.project_discovery.then_some(operation.id),
         response_guard: options.response_guard.map(|guard| (operation.id, guard)),
         attempt_check: Some(super::options::AttemptCheck(&attempt_check)),
         method: operation.method.clone(),

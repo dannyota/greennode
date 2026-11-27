@@ -284,6 +284,128 @@ pub(crate) use guarded_poll;
 mod tests {
     use std::path::Path;
 
+    fn production_source(source: &str) -> String {
+        use regex_lite::Regex;
+        if !source.contains("#[cfg(test)]") {
+            return source.to_owned();
+        }
+        let declaration = Regex::new(
+            r"\A#\[cfg\(test\)\]\s*(?:#\[[^\n]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*[;{]",
+        )
+        .unwrap();
+        let literal = Regex::new(r#"(?s)\A(?:"(?:\\.|[^"\\])*"|'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|.)|[^'\\\r\n])')"#).unwrap();
+        let mut output = String::with_capacity(source.len());
+        let mut cursor = 0;
+        while cursor < source.len() {
+            let remaining = &source[cursor..];
+            if remaining.starts_with("#[cfg(test)]")
+                && let Some(module) = declaration.find(remaining)
+            {
+                let mut end = cursor + module.end();
+                if module.as_str().ends_with('{') {
+                    let mut depth = 1;
+                    while depth != 0 {
+                        let token = source_token(&source[end..], &literal);
+                        match token {
+                            "{" => depth += 1,
+                            "}" => depth -= 1,
+                            _ => {}
+                        }
+                        end += token.len();
+                    }
+                }
+                output.extend(
+                    source[cursor..end]
+                        .chars()
+                        .map(|character| if character == '\n' { '\n' } else { ' ' }),
+                );
+                cursor = end;
+                continue;
+            }
+            let token = source_token(remaining, &literal);
+            output.push_str(token);
+            cursor += token.len();
+        }
+        output
+    }
+
+    fn source_token<'a>(source: &'a str, literal: &regex_lite::Regex) -> &'a str {
+        if source.starts_with("//") {
+            return source
+                .split_once('\n')
+                .map_or(source, |(comment, _)| comment);
+        }
+        if source.starts_with("/*") {
+            let mut depth = 1;
+            let mut end = 2;
+            while depth != 0 {
+                match source.as_bytes().get(end..end + 2) {
+                    Some(b"/*") => {
+                        depth += 1;
+                        end += 2;
+                    }
+                    Some(b"*/") => {
+                        depth -= 1;
+                        end += 2;
+                    }
+                    Some(_) => end += 1,
+                    None => panic!("unterminated source comment"),
+                }
+            }
+            return &source[..end];
+        }
+        if let Some(raw) = source.strip_prefix('r') {
+            let hashes = raw.bytes().take_while(|byte| *byte == b'#').count();
+            if let Some(contents) = raw[hashes..].strip_prefix('"') {
+                let closing = format!("\"{}", &raw[..hashes]);
+                let end = contents
+                    .find(&closing)
+                    .expect("terminated raw source literal");
+                return &source[..2 + hashes + end + closing.len()];
+            }
+        }
+        if source.starts_with(['"', '\''])
+            && let Some(value) = literal.find(source)
+        {
+            return value.as_str();
+        }
+        &source[..source
+            .chars()
+            .next()
+            .expect("terminated source module")
+            .len_utf8()]
+    }
+
+    #[test]
+    fn scan_resumes_after_external_and_inline_test_modules() {
+        let source = r###"
+fn first() {}
+#[cfg(test)]
+mod external;
+fn second() {}
+#[cfg(test)]
+#[allow(dead_code)]
+mod inline {
+    fn hidden() {
+        let raw = r#"
+}
+"#;
+        let quoted = "escaped \"} strike";
+        let closing = '}';
+        /* outer /* } */ } */
+    }
+}
+fn third() {}
+"###;
+        let visible = production_source(source);
+        for name in ["first", "second", "third"] {
+            assert!(visible.contains(&format!("fn {name}()")));
+        }
+        for hidden in ["external", "inline", "hidden", "strike"] {
+            assert!(!visible.contains(hidden));
+        }
+    }
+
     fn production_files(root: &Path, mut inspect: impl FnMut(&Path, &str)) {
         let mut files = vec![root.to_owned()];
         while let Some(file) = files.pop() {
@@ -301,7 +423,30 @@ mod tests {
                 continue;
             }
             let source = std::fs::read_to_string(&file).unwrap();
-            inspect(path, source.split("#[cfg(test)]\nmod ").next().unwrap());
+            inspect(path, &production_source(&source));
+        }
+    }
+
+    #[test]
+    fn project_discovery_paths_use_the_same_pre_retry_policy() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (path, function, policy) in [
+            (
+                "discovery/mod.rs",
+                "read_projects_with_evidence",
+                "project_discovery: true",
+            ),
+            (
+                "network/wire.rs",
+                "read_query",
+                "project_discovery: read.style == Style::BandwidthProject",
+            ),
+        ] {
+            let source = production_source(&std::fs::read_to_string(root.join(path)).unwrap());
+            assert!(
+                definition(&source, function).is_some_and(|body| body.contains(policy)),
+                "{path}"
+            );
         }
     }
 
@@ -389,7 +534,8 @@ mod tests {
                     .rsplit(['.', ':'])
                     .next()
                     .unwrap();
-                let source = std::fs::read_to_string(root.join(callee)).unwrap();
+                let source =
+                    production_source(&std::fs::read_to_string(root.join(callee)).unwrap());
                 let body = definition(&source, name).unwrap_or_else(|| panic!("{callee} {name}"));
                 uses_write_evidence(root, links, Path::new(callee), body, depth - 1)
             })
@@ -671,24 +817,9 @@ mod tests {
                 "volume/attachment.rs",
             ),
         ];
-        let mut files = vec![root.clone()];
         let mut checked = 0;
-        while let Some(path) = files.pop() {
-            if path.is_dir() {
-                files.extend(path.read_dir().unwrap().map(|entry| entry.unwrap().path()));
-                continue;
-            }
-            let relative = path.strip_prefix(&root).unwrap();
-            if path.extension().is_none_or(|ext| ext != "rs")
-                || relative.iter().any(|part| part == "tests")
-                || path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
-            {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            for entry in writes.captures_iter(&text) {
+        production_files(&root, |relative, text| {
+            for entry in writes.captures_iter(text) {
                 let from = entry.get(0).unwrap().end();
                 let end = format!("\n{}}}", &entry[1]);
                 let body = text[from..].split_once(&end).unwrap().0;
@@ -717,7 +848,7 @@ mod tests {
                 );
                 checked += 1;
             }
-        }
+        });
         assert!(checked >= 75);
     }
 
@@ -744,9 +875,9 @@ mod tests {
             ("volume/write.rs", 1),
         ] {
             let source = std::fs::read_to_string(root.join(path)).unwrap();
-            let source = source.split("#[cfg(test)]\nmod ").next().unwrap();
+            let source = production_source(&source);
             assert_eq!(source.matches("guarded_poll!(").count(), count, "{path}");
-            assert!(!ordinary_loop.is_match(source), "{path}");
+            assert!(!ordinary_loop.is_match(&source), "{path}");
         }
         for path in ["listener_writes.rs", "pool_writes.rs", "policy_writes.rs"] {
             let source = std::fs::read_to_string(root.join("loadbalancer").join(path)).unwrap();
