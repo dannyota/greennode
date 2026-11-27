@@ -152,6 +152,13 @@ impl Client {
         let runtime = session
             .runtime(ctx, &mut jitter)
             .map_err(|e| not_sent(*e))?;
+        if let Some(configured) = runtime.configured_credentials {
+            evidence.absorb(configured);
+        }
+        if let Some(caller) = self.guard.caller.lock().await.as_ref() {
+            check_cached_caller(caller, evidence)?;
+        }
+        check_cached_actions(&self.guard.write_actions.lock().await, evidence)?;
         operation::execute_with_evidence::<Body<T>>(
             runtime,
             base,
@@ -184,7 +191,12 @@ impl Client {
         op: &str,
         evidence: &mut Evidence,
     ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
-        let caller: super::GetCallerIdentityOutput = self
+        let mut slot = self.guard.caller.lock().await;
+        if let Some(caller) = slot.as_ref() {
+            check_cached_caller(caller, evidence)?;
+            return self.classified(caller.clone(), op);
+        }
+        let fetched: super::GetCallerIdentityOutput = self
             .fetch::<_, O>(
                 ctx,
                 Api::Accounts,
@@ -212,18 +224,22 @@ impl Client {
             )
             .await
             .map_err(guard_failed)?;
-        if evidence.id_reflects(&caller.user_id)
-            || evidence.id_reflects(&caller.account_id.to_string())
-            || [&caller.user_type, &caller.username]
-                .into_iter()
-                .any(|v| evidence.text_reflects(v))
-            || evidence.reflected_in(&Value::from(caller.account_id))
-        {
+        if caller_reflected(&fetched, evidence) {
             return Err(guard_refusal(
                 "iam: iam.GetCallerIdentity: unsafe caller identity",
                 None,
             ));
         }
+        *slot = Some(fetched.clone());
+        drop(slot);
+        self.classified(fetched, op)
+    }
+
+    fn classified<O>(
+        &self,
+        caller: super::GetCallerIdentityOutput,
+        op: &str,
+    ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
         if !matches!(
             caller.user_type.as_str(),
             "iam-user" | "user-sa" | "service-sa"
@@ -364,4 +380,40 @@ pub(super) fn error_reason(error: &Error) -> String {
         let _ = write!(reason, " (status {status})");
     }
     reason
+}
+
+fn caller_reflected(caller: &super::GetCallerIdentityOutput, evidence: &Evidence) -> bool {
+    evidence.id_reflects(&caller.user_id)
+        || evidence.id_reflects(&caller.account_id.to_string())
+        || [&caller.user_type, &caller.username]
+            .into_iter()
+            .any(|v| evidence.text_reflects(v))
+        || evidence.reflected_in(&Value::from(caller.account_id))
+}
+
+fn unsafe_cached<O>(op: &str) -> Failure<O> {
+    guard_refusal(&format!("iam: {op}: unsafe cached guard response"), None)
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+pub(super) fn check_cached_caller<O>(
+    caller: &super::GetCallerIdentityOutput,
+    evidence: &Evidence,
+) -> Result<(), Failure<O>> {
+    if caller_reflected(caller, evidence) {
+        return Err(unsafe_cached("iam.GetCallerIdentity"));
+    }
+    Ok(())
+}
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+pub(super) fn check_cached_actions<O>(
+    names: &[String],
+    evidence: &Evidence,
+) -> Result<(), Failure<O>> {
+    if serde_json::to_value(names).is_ok_and(|value| !evidence.reflected_in(&value)) {
+        Ok(())
+    } else {
+        Err(unsafe_cached("iam.ListActions"))
+    }
 }

@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::value::RawValue;
 
 use super::wire::{self, Wire};
-use super::writes::{confirmed_identity, guard_failed, guard_refusal};
+use super::writes::{check_cached_actions, confirmed_identity, guard_failed, guard_refusal};
 use super::{
     Action, Api, Client, LIST_CAP, OBJECT_CAP, Operation, Policy, PolicySummary, WriteError,
     read_operation,
@@ -115,6 +115,11 @@ impl Client {
         ctx: &RequestContext,
         evidence: &mut Evidence,
     ) -> Result<Vec<String>, Failure<O>> {
+        let mut slot = self.guard.write_actions.lock().await;
+        if !slot.is_empty() {
+            check_cached_actions(&slot, evidence)?;
+            return Ok(slot.clone());
+        }
         let actions: Vec<Action> = self
             .fetch(
                 ctx,
@@ -139,6 +144,8 @@ impl Client {
                     None,
                 )
             })?;
+        check_cached_actions(&names, evidence)?;
+        slot.clone_from(&names);
         Ok(names)
     }
 

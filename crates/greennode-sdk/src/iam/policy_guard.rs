@@ -9,7 +9,7 @@ use super::groups::GroupAttachments;
 use super::wire::{self, Screen, Wire};
 use super::writes::{WriteError, confirmed_identity, guard_failed, guard_refusal};
 use super::{
-    Action, Api, Client, GetCallerIdentityOutput, GroupSummary, LIST_CAP, OBJECT_CAP, Policy,
+    Api, Client, GetCallerIdentityOutput, GroupSummary, LIST_CAP, OBJECT_CAP, Policy,
     PolicySummary, Statement, read_operation,
 };
 use crate::wire::product::{evidence::Evidence, options::PathIds};
@@ -76,37 +76,11 @@ impl<'a> Guard<'a> {
     }
 
     pub(super) async fn load_actions<O>(&mut self) -> Result<(), Failure<O>> {
-        let catalog: Vec<Action> = self
+        self.actions = self
             .client
-            .fetch(
-                self.ctx,
-                Api::Policies,
-                &read_operation(ACTIONS, "policies-api/v1/actions", LIST_CAP, false),
-                &[],
-                &[("product", "iam")],
-                self.evidence,
-            )
-            .await
-            .map_err(guard_failed)?;
-        self.check_response(ACTIONS, &catalog)?;
-        for action in catalog {
-            let name = action.action.to_ascii_lowercase();
-            let action_name = name.strip_prefix("iam:").unwrap_or(&name);
-            if action_name.is_empty() || !action_name.bytes().all(|b| b.is_ascii_alphanumeric()) {
-                self.actions.clear();
-                break;
-            }
-            if !matches!(action.label.as_str(), "List" | "Read" | "Tagging") {
-                self.actions.push(format!("iam:{action_name}"));
-            }
-        }
-        if self.actions.is_empty() {
-            return Err(guard_refusal(
-                "iam: guard: refused: the account's IAM action list names no write action",
-                None,
-            ));
-        }
-        self.check_response(ACTIONS, &self.actions)
+            .guard_write_actions(self.ctx, self.evidence)
+            .await?;
+        Ok(())
     }
 
     pub(super) async fn policy<O>(&mut self, id: &str) -> Result<Policy, Failure<O>> {
