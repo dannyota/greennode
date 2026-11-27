@@ -6,6 +6,7 @@
 )]
 
 mod alarms;
+mod channel_writes;
 mod channels;
 mod check_alarm;
 mod checks;
@@ -13,6 +14,7 @@ mod dashboards;
 mod history;
 mod inventory;
 mod log_projects;
+mod mutation;
 mod quota;
 mod response_times;
 mod wire;
@@ -27,12 +29,14 @@ use crate::model::wire::{Field, WireField};
 use crate::wire::product::evidence::Evidence;
 
 pub use alarms::*;
+pub use channel_writes::*;
 pub use channels::*;
 pub use check_alarm::*;
 pub use checks::*;
 pub use dashboards::*;
 pub use history::*;
 pub use log_projects::*;
+pub use mutation::WriteError;
 pub use quota::*;
 pub use response_times::*;
 

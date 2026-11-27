@@ -2,6 +2,42 @@
 
 # CLI: Monitor
 
+## create-channel
+
+Kind: Write.
+
+Pass Slack and Webhook addresses and all Headers through --cli-input-json
+file://channel.json. Email, Slack, SMS, and Telegram can validate an OTP
+supplied with its reference. Webhook refuses OTP fields. Channel credentials are
+masked before rendering or querying.
+
+| Flag                                    | Type                      | Required |
+| --------------------------------------- | ------------------------- | -------- |
+| `--name`                                | `string`                  | yes      |
+| `--type`                                | `string`                  | yes      |
+| `--address`                             | `string`                  | yes      |
+| `--otp-ref`                             | `string`                  |          |
+| `--otp`                                 | `string`                  |          |
+| `Headers` (via `--cli-input-json` only) | `[]monitor.ChannelHeader` |          |
+
+```sh
+greennode monitor create-channel --name <name> --type Webhook --cli-input-json file://channel.json
+```
+
+## delete-channel
+
+Kind: Write, destructive.
+
+Requires --yes. GreenNode removes the deleted channel from checks that used it.
+
+| Flag           | Type     | Required |
+| -------------- | -------- | -------- |
+| `--channel-id` | `string` | yes      |
+
+```sh
+greennode monitor delete-channel --channel-id <channel-id> --yes
+```
+
 ## get-alarm
 
 Kind: Read.
@@ -458,4 +494,43 @@ MaxDaysLeft, and NoWait are ignored. Read-only permits this quote.
 
 ```sh
 greennode monitor quote-renew-synthetic-quota --expected-end-time <expected-end-time>
+```
+
+## send-channel-otp
+
+Kind: Write.
+
+Use the returned Ref and the OTP received at the address to create or update a
+channel before it expires. Pass Slack addresses and all Headers through
+--cli-input-json file://channel.json. Webhook does not use an OTP.
+
+| Flag                                    | Type                      | Required |
+| --------------------------------------- | ------------------------- | -------- |
+| `--type`                                | `string`                  | yes      |
+| `--address`                             | `string`                  | yes      |
+| `Headers` (via `--cli-input-json` only) | `[]monitor.ChannelHeader` |          |
+
+```sh
+greennode monitor send-channel-otp --type Email --address <address>
+```
+
+## update-channel
+
+Kind: Write.
+
+Pass Address and Headers through --cli-input-json file://channel.json. Omitted
+fields keep their current values. An empty Headers list clears the headers. An
+update that carries a validated OTP sends once.
+
+| Flag                                    | Type                       | Required |
+| --------------------------------------- | -------------------------- | -------- |
+| `--channel-id`                          | `string`                   | yes      |
+| `--name`                                | `*string`                  |          |
+| `--address`                             | `*string`                  |          |
+| `--otp-ref`                             | `string`                   |          |
+| `--otp`                                 | `string`                   |          |
+| `Headers` (via `--cli-input-json` only) | `*[]monitor.ChannelHeader` |          |
+
+```sh
+greennode monitor update-channel --channel-id <channel-id> --cli-input-json file://channel.json
 ```

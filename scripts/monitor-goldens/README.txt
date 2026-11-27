@@ -25,3 +25,6 @@ generate six notification quote and check alarm goldens.
 Run `go test ./internal/cli -run '^TestMonitorRemainingGoldens$' -count=1`
 with the same settings for the 51 history, alarm, channel, check, location,
 log-project, and quota read goldens.
+
+Run `go test ./internal/cli -run '^TestMonitorChannelWriteGoldens$' -count=1`
+with TZ=UTC and the same settings for the 12 channel and OTP write goldens.

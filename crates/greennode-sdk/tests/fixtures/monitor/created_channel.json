@@ -1,0 +1,1 @@
+{"id": "channel-new", "name": "Alerts", "address": "https://example.test/secret-path", "header": "[{\"key\":\"X-Hook\",\"value\":\"toy-hook\"}]", "createdDate": "2000-01-01"}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -264,6 +265,55 @@ func TestMonitorRemainingGoldens(t *testing.T) {
 					t.Fatalf("Monitor read failed (exit %d, requests %d)", code, server.requestCount())
 				}
 				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), []byte(stdout), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestMonitorChannelWriteGoldens(t *testing.T) {
+	for _, tc := range []struct {
+		operation, route, fixture string
+		flags                     []string
+	}{
+		{"create-channel", "/notification-gateway/api/v1/notification", "created_channel", []string{"--name", "Alerts", "--type", "Webhook"}},
+		{"update-channel", "/notification-gateway/api/v1/notification", "", []string{"--channel-id", "channel-1", "--name", "Changed"}},
+		{"delete-channel", "/notification-gateway/api/v1/notification/channel-1", "", []string{"--channel-id", "channel-1", "--yes"}},
+		{"send-channel-otp", "/notification-gateway/api/v1/notification/otps", "sent_channel_otp", []string{"--type", "Email", "--address", "example@example.test"}},
+	} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.operation+"/"+format, func(t *testing.T) {
+				load := func(name string) string {
+					body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), name+".json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					return string(body)
+				}
+				body := ""
+				if tc.fixture != "" {
+					body = load(tc.fixture)
+				}
+				routes := map[string]func(http.ResponseWriter, *http.Request){tc.route: jsonHandler(200, body)}
+				if tc.operation == "update-channel" {
+					routes["/notification-gateway/api/v1/notification/list/typeSearch"] = jsonHandler(200, load("remaining_channels"))
+				}
+				server := newSvcFixture(routes)
+				args := append([]string{"--region", "hcm-3", "--output", format, "monitor", tc.operation}, tc.flags...)
+				if tc.operation == "create-channel" {
+					path := filepath.Join(t.TempDir(), "channel.json")
+					if err := os.WriteFile(path, []byte(`{"Address":"https://example.test/secret-path","Headers":[{"Key":"X-Hook","Value":"toy-hook"}]}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+					args = append(args, "--cli-input-json", "file://"+path)
+				}
+				root, stdout, stderr := newSvcRoot(t, server)
+				root.SetArgs(args)
+				if err := root.ExecuteContext(context.Background()); err != nil || stderr.Len() != 0 || server.requestCount() != len(routes) {
+					t.Fatalf("Monitor channel write failed (requests %d)", server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
 					t.Fatal(err)
 				}
 			})

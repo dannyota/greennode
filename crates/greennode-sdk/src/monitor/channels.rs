@@ -20,6 +20,76 @@ const TYPE_LIST: Shape<'static> = Shape::Object(&[ShapeField {
     name: "lstData",
     shape: Shape::Array(&Shape::Any),
 }]);
+const NOTIFICATION_TYPE: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "id",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "name",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "description",
+        shape: Shape::Any,
+    },
+]);
+const GUARD_CHANNEL: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "id",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "name",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "address",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "header",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "typeNotification",
+        shape: NOTIFICATION_TYPE,
+    },
+    ShapeField {
+        name: "metricMappingId",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "createdDate",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "updatedDate",
+        shape: Shape::Any,
+    },
+]);
+const GUARD_PAGE: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "lstData",
+        shape: Shape::Array(&GUARD_CHANNEL),
+    },
+    ShapeField {
+        name: "page",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "pageSize",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "totalPage",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "totalItem",
+        shape: Shape::Any,
+    },
+]);
 const REDACTED: &str = "<redacted>";
 
 get_input!(
@@ -101,7 +171,9 @@ pub struct Channel {
     /// Provider update timestamp text.
     pub updated_date: String,
     #[serde(skip)]
-    masked_address: String,
+    pub(super) masked_address: String,
+    #[serde(skip)]
+    pub(super) raw_header: String,
 }
 
 impl fmt::Debug for Channel {
@@ -161,6 +233,7 @@ impl<'de> Deserialize<'de> for Channel {
             created_date: wire.created,
             updated_date: wire.updated,
             masked_address: String::new(),
+            raw_header: wire.header,
         })
     }
 }
@@ -175,6 +248,7 @@ impl Channel {
                 std::mem::take(&mut self.masked_address)
             };
         }
+        self.raw_header.clear();
         for header in &mut self.headers {
             header.value = REDACTED.into();
         }
@@ -247,7 +321,7 @@ impl Client {
     ) -> Result<ListChannelsOutput, Failure<ListChannelsOutput>> {
         let mut evidence = Evidence::new();
         let mut page = self
-            .channel_page(ctx, &input, &mut evidence)
+            .channel_page(ctx, &input, &mut evidence, false)
             .await
             .map_err(failure)?;
         if !page.items.redact(&evidence) {
@@ -277,6 +351,23 @@ impl Client {
         if evidence.id_reflects(&input.channel_id) {
             return Err(requires_failure(OP, "ChannelID"));
         }
+        let mut channel = self
+            .find_channel(ctx, &input.channel_id, &mut evidence, false)
+            .await
+            .map_err(failure)?;
+        if !channel.redact(&evidence) {
+            return Err(failure(LIST.invalid(&evidence)));
+        }
+        Ok(GetChannelOutput { channel })
+    }
+
+    pub(super) async fn find_channel(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+        guard: bool,
+    ) -> Result<Channel, Error> {
         let mut seen = 0_i64;
         for page in 1..=1000 {
             let list = self
@@ -286,39 +377,33 @@ impl Client {
                         page,
                         ..Default::default()
                     },
-                    &mut evidence,
+                    evidence,
+                    guard,
                 )
-                .await
-                .map_err(failure)?;
-            if evidence.id_reflects(&input.channel_id) {
-                return Err(failure(LIST.invalid(&evidence)));
+                .await?;
+            if evidence.id_reflects(id) {
+                return Err(LIST.invalid(evidence));
             }
             let count = i64::try_from(list.items.len()).unwrap_or(i64::MAX);
-            for mut channel in list.items {
-                if channel.id == input.channel_id {
-                    if !channel.redact(&evidence) {
-                        return Err(failure(LIST.invalid(&evidence)));
-                    }
-                    return Ok(GetChannelOutput { channel });
-                }
+            if let Some(channel) = list.items.into_iter().find(|channel| channel.id == id) {
+                return Ok(channel);
             }
             seen = seen.saturating_add(count);
             if count == 0 || seen >= list.total_item {
                 break;
             }
         }
-        let message = format!("vngcloud: not found: channel {}", input.channel_id);
+        let message = format!("vngcloud: not found: channel {id}");
         let message =
             crate::wire::product::response::sanitize_error_text(&message, evidence.credentials());
-        Err(failure(
-            Error::new(ErrorClass::NotFound).with_outer_detail(message.as_str().to_owned()),
-        ))
+        Err(Error::new(ErrorClass::NotFound).with_outer_detail(message.as_str().to_owned()))
     }
     async fn channel_page(
         &self,
         ctx: &RequestContext,
         input: &ListChannelsInput,
         evidence: &mut Evidence,
+        guard: bool,
     ) -> Result<ListChannelsOutput, Error> {
         let (page, size) = page_values(input.page, input.size, 1, 10000);
         let query = [
@@ -329,7 +414,11 @@ impl Client {
             ("size", size.as_str()),
         ];
         let raw = self.read(ctx, &LIST, &[], &query, evidence).await?;
-        let wire: Option<Page<Channel>> = output(&raw, &PAGE, &LIST, evidence)?;
+        let wire: Option<Page<Channel>> = if guard {
+            super::wire::decode(&raw, &GUARD_PAGE, &LIST, evidence)?
+        } else {
+            output(&raw, &PAGE, &LIST, evidence)?
+        };
         wire.unwrap_or_default().into_page(false, &LIST, evidence)
     }
 }

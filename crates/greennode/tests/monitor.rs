@@ -4,6 +4,9 @@ mod quota;
 #[path = "monitor/notification.rs"]
 mod notification;
 
+#[path = "monitor/channel_writes.rs"]
+mod channel_writes;
+
 #[path = "monitor/next_reads.rs"]
 mod next_reads;
 

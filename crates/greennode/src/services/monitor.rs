@@ -1,3 +1,4 @@
+mod channel_writes;
 mod quota;
 
 use std::io::Write;
@@ -316,6 +317,21 @@ pub(super) const SERVICE: Service = Service {
     name: "monitor",
     error_rules: &[
         Rule {
+            identity: "monitor-otp-rejected",
+            matches: |error| {
+                error.detail::<greennode_sdk::monitor::WriteError>()
+                    == Some(&greennode_sdk::monitor::WriteError::OtpRejected)
+            },
+            name: Some(RuleName {
+                rank: 9,
+                code: "OTPRejected",
+                operation: RuleOperation::Omit,
+                include_api_status: false,
+            }),
+            exit: Some(RuleExit::Failure),
+            message: Some("monitor: otp rejected"),
+        },
+        Rule {
             identity: "monitor-invalid-quota-kind",
             matches: |error| error.detail::<ErrorDetail>() == Some(&ErrorDetail::InvalidQuotaKind),
             name: None,
@@ -366,6 +382,10 @@ pub(super) const SERVICE: Service = Service {
         },
     ],
     operations: &[
+        channel_writes::CREATE,
+        channel_writes::UPDATE,
+        channel_writes::DELETE,
+        channel_writes::SEND,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,
