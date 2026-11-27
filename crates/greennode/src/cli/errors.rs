@@ -145,6 +145,11 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         .next()
         .or_else(|| {
             error
+                .detail::<greennode_sdk::tagging::SystemTagText>()
+                .map(|text| text.message())
+        })
+        .or_else(|| {
+            error
                 .detail::<greennode_sdk::RecoveryAdvice>()
                 .map(|advice| advice.message())
         })

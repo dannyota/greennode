@@ -48,6 +48,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
 |`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0: lexer, parser, `compile`, evaluation and all built-in functions; its license and compliance suite|
+|`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Port of Go's `html.UnescapeString` and `strconv.Quote` (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|

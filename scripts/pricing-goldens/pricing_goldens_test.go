@@ -20,6 +20,7 @@ func TestPricingPortGoldens(t *testing.T) {
 		args       []string
 	}{
 		{"get-quote", "pricing/GetQuoteServerResizeCredit.json", 200, 0, []string{"get-quote", "--resource-type", "server", "--action", "resize"}},
+		{"get-quote-refused", "", 400, 1, []string{"get-quote", "--resource-type", "server"}},
 		{"estimate", "network/discovery_quote_public_vm.json", 200, 0, []string{"estimate", "--cli-input-json", `{"PublicIPs":[{"Key":"quoted","Kind":"public-vip","Type":"public-vm","Quantity":3}]}`}},
 		{"estimate-unknown", "network/discovery_quote_public_vm.json", 200, 0, []string{"estimate", "--cli-input-json", `{"PublicIPs":[{"Key":"quoted","Kind":"public-vip","Type":"public-vm","Quantity":3},{"Key":"unknown","Kind":"floating-ip","Quantity":2}]}`}},
 		{"estimate-partial", "", 403, 1, []string{"estimate", "--allow-partial", "--cli-input-json", `{"PublicIPs":[{"Key":"unknown","Kind":"floating-ip","Quantity":2},{"Key":"failed","Kind":"public-vip","Type":"public-vm","Quantity":3}]}`}},
@@ -33,7 +34,11 @@ func TestPricingPortGoldens(t *testing.T) {
 						return
 					}
 					w.WriteHeader(c.code)
-					_, _ = w.Write([]byte(`{}`))
+					body := `{}`
+					if c.name == "get-quote-refused" {
+						body = `{"code":"QuoteRefused","message":"quantity is not allowed"}`
+					}
+					_, _ = w.Write([]byte(body))
 				}})
 				root, stdout, stderr := newSvcRoot(t, fixture)
 				args := []string{"--region", "hcm-3", "--project-id", "proj-1", "--read-only", "--output", format, "pricing"}

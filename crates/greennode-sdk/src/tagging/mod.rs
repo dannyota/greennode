@@ -26,6 +26,16 @@ pub enum ErrorDetail {
     NotSettled,
 }
 
+/// Full refusal text for a system tag key, without the generic length cap.
+pub struct SystemTagText(pub(crate) String);
+
+impl SystemTagText {
+    /// Returns the refusal text.
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
 /// One resource tag, including whether it is managed by the platform.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]

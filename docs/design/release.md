@@ -15,6 +15,9 @@ later ones through GitHub Actions. Uploads are permanent ([Cargo publishing]).
 
 ## Versions
 
+`greennode-sdk` declares `license = "Apache-2.0 AND BSD-3-Clause"` and ships
+`licenses/go-LICENSE` for the tables derived from Go's standard library.
+
 The root `Cargo.toml` owns `[workspace.package].version`. Both members use
 `version.workspace = true`. The tool has no SDK dependency until it first uses
 SDK code. From that commit, `crates/greennode/Cargo.toml` declares
@@ -60,21 +63,21 @@ was incomplete. The [CLI design](cli.md) owns the format.
 | `aarch64-unknown-linux-gnu` | `greennode-linux-arm64.tar.gz`  |
 | `x86_64-pc-windows-msvc`    | `greennode-windows-amd64.zip`   |
 
-Each archive holds the executable, `LICENSE`, and
-`licenses/go-jmespath-LICENSE`; the release job checks both license files
-against the tag and the executable against its build artifact. Upload the
-archives, their `greennode-PLATFORM.sha256` files, and the
-`crate-checksums.json` an unprivileged Ubuntu 24.04 job builds from the staged
-packages, each with `retention-days: 90`. Stage all nine assets on a draft.
-Immediately before publishing it to lock them and the tag ([GitHub immutable
-releases]), check that the live tag names the verified commit and the preceding
-published tag is unchanged. This workflow is the only Release writer; nobody
-creates or edits a Release by hand. Only the Release job has `contents: write`.
-It runs no script from the tag: it writes the notes with inline `gh api` calls
-to the [generate notes] and compare endpoints, listing non-merge commit
-subjects. No release job has OIDC or registry write credentials. The receipt is
-written on a fresh runner that never built the tag, from the staged archives the
-packaging job uploads.
+Each archive holds the executable, `LICENSE`, `licenses/go-jmespath-LICENSE`,
+and `licenses/go-LICENSE` (the Go notice for the HTML entity and `strconv`
+tables); the release job checks all three license files against the tag and the
+executable against its build artifact. Upload the archives, their
+`greennode-PLATFORM.sha256` files, and the `crate-checksums.json` an
+unprivileged Ubuntu 24.04 job builds from the staged packages, each with
+`retention-days: 90`. Stage all nine assets on a draft. Immediately before
+publishing it to lock them and the tag ([GitHub immutable releases]), check that
+the live tag names the verified commit and the preceding published tag is
+unchanged. This workflow is the only Release writer; nobody creates or edits a
+Release by hand. Only the Release job has `contents: write`. It runs no script
+from the tag: it writes the notes with inline `gh api` calls to the [generate
+notes] and compare endpoints, listing non-merge commit subjects. No release job
+has OIDC or registry write credentials. The receipt is written on a fresh runner
+that never built the tag, from the staged archives the packaging job uploads.
 
 ### Release evidence
 

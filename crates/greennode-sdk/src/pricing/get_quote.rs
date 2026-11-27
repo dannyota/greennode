@@ -88,7 +88,7 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote(ctx, input, evidence, false, false).await
+        self.quote(ctx, input, evidence, false).await
     }
 
     pub(crate) async fn compute_quote_with_evidence(
@@ -98,7 +98,7 @@ impl Client {
         evidence: &mut Evidence,
         require_totals: bool,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote(ctx, input, evidence, require_totals, true).await
+        self.quote(ctx, input, evidence, require_totals).await
     }
 
     async fn quote(
@@ -107,7 +107,6 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
         require_totals: bool,
-        retain_code: bool,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         if input.resource_type.is_empty() {
@@ -127,7 +126,7 @@ impl Client {
             &input.action
         };
         let body = input::regional(&input.resource_type, action, input.resource_info.as_ref());
-        let raw = request::exchange_with_code(
+        let raw = request::exchange(
             &self.session,
             ctx,
             evidence,
@@ -140,7 +139,6 @@ impl Client {
                 body: Some(&body),
             },
             None,
-            retain_code,
         )
         .await
         .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))));

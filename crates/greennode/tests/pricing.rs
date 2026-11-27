@@ -106,6 +106,13 @@ fn pricing_reads_match_baseline_in_every_format() {
             0,
         ),
         (
+            "get-quote-refused",
+            &["get-quote", "--resource-type", "server"][..],
+            "400 Bad Request",
+            r#"{"code":"QuoteRefused","message":"quantity is not allowed"}"#,
+            1,
+        ),
+        (
             "estimate",
             &["estimate", "--cli-input-json", ESTIMATE][..],
             "200 OK",

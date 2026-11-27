@@ -253,52 +253,6 @@ fn parse_tag(rest: &str) -> Option<(Tag<'_>, &str)> {
     ))
 }
 
-fn decode_text(mut text: &str, output: &mut String) {
-    while let Some((before, after)) = text.split_once('&') {
-        output.push_str(before);
-        let end = after
-            .bytes()
-            .take(32)
-            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'#')
-            .count();
-        let name = &after[..end];
-        let semicolon = after.as_bytes().get(end) == Some(&b';');
-        if let Some(decoded) = entity(name, semicolon) {
-            output.push(decoded);
-            text = &after[end + usize::from(semicolon)..];
-        } else {
-            output.push('&');
-            text = after;
-        }
-    }
-    output.push_str(text);
-}
-
-fn entity(name: &str, semicolon: bool) -> Option<char> {
-    if let Some(value) = name.strip_prefix('#') {
-        let number = if let Some(hex) = value.strip_prefix(['x', 'X']) {
-            u32::from_str_radix(hex, 16)
-        } else {
-            value.parse()
-        };
-        return number
-            .ok()
-            .map(|number| char::from_u32(number).unwrap_or(char::REPLACEMENT_CHARACTER));
-    }
-    match (name, semicolon) {
-        ("quot", _) => Some('"'),
-        ("apos", true) => Some('\''),
-        ("amp", _) => Some('&'),
-        ("lt", _) => Some('<'),
-        ("gt", _) => Some('>'),
-        ("nbsp", _) | ("Tab" | "NewLine" | "ensp" | "emsp" | "thinsp", true) => Some(' '),
-        ("period", true) => Some('.'),
-        ("sol", true) => Some('/'),
-        ("colon", true) => Some(':'),
-        _ => None,
-    }
-}
-
 fn level(name: &str) -> Option<u8> {
     match name.as_bytes() {
         [b'h' | b'H', digit @ b'1'..=b'6'] => Some(*digit - b'0'),
@@ -307,9 +261,7 @@ fn level(name: &str) -> Option<u8> {
 }
 
 fn heading_matches(text: &str) -> bool {
-    let mut decoded = String::new();
-    decode_text(text, &mut decoded);
-    decoded
+    crate::go_text::unescape_html(text)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -368,8 +320,7 @@ fn ranges(html: &str) -> Result<Vec<String>, String> {
     if !section_closed {
         return Err("no heading found after the matched section".into());
     }
-    let mut decoded = String::new();
-    decode_text(&section, &mut decoded);
+    let decoded = crate::go_text::unescape_html(&section);
     let mut result = BTreeSet::new();
     for token in
         decoded.split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '/')))

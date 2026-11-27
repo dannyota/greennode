@@ -67,6 +67,29 @@ async fn public_page_without_a_key_has_canonical_ranges() {
 }
 
 #[tokio::test]
+async fn public_page_decodes_html_entities_like_go() {
+    let server = Server::start(vec![response(
+        include_str!("fixtures/cdn/entities.html"),
+        "text/html; charset=utf-8",
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let ranges = client(&server, None)
+        .list_ip_ranges(&ctx, ListIpRangesInput)
+        .await
+        .unwrap();
+    assert_eq!(
+        ranges.items,
+        [
+            "1.2.3.0/24",
+            "5.6.7.0/24",
+            "8.8.8.0/24",
+            "9.9.9.0/24",
+            "10.0.0.0/8"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn missing_key_refuses_api_reads_before_sending() {
     let server = Server::start(vec![]);
     let (ctx, _) = RequestContext::new();
