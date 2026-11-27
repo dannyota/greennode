@@ -249,6 +249,7 @@ async fn read_projects_with_evidence(
 }
 
 const LIST_PROJECTS: &str = "project.ListProjects";
+const PROJECTS_OK: &[StatusCode] = &[StatusCode::OK];
 
 fn invalid_response(status: StatusCode) -> Box<Error> {
     crate::wire::product::response::project_discovery_error(LIST_PROJECTS, status)
@@ -285,7 +286,7 @@ fn projects_operation() -> Operation {
         method: Method::GET,
         class: Classification::Read,
         retry: Retry::Repeatable,
-        success: &[StatusCode::OK],
+        success: PROJECTS_OK,
         cap: 8 << 20,
         allow_recovery: true,
         allow_empty: false,
@@ -360,7 +361,7 @@ fn guard_estimate_project_response(
     _: &SentCredentials,
     _: &SentCredentials,
 ) -> Option<Box<Error>> {
-    (!status.is_success()
+    (!PROJECTS_OK.contains(&status)
         && !body.iter().all(u8::is_ascii_whitespace)
         && serde_json::from_str::<&serde_json::value::RawValue>(&crate::model::wire::go_json(body))
             .is_err())

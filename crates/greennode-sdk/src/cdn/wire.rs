@@ -357,6 +357,17 @@ impl Client {
             };
             return Err(sent_failure(error));
         }
+        let screen = if call.write {
+            let screen = evidence.transport_only().go_peer_body_screen(&reply.body);
+            screen.clean().ok_or_else(|| {
+                sent_failure(crate::wire::product::operation::unsafe_guard_response(
+                    call.id,
+                ))
+            })?;
+            screen
+        } else {
+            reply.reflection
+        };
         let names = if guard {
             crate::wire::strict_json::FieldNames::Canonical
         } else {
@@ -372,17 +383,6 @@ impl Client {
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         let envelope: Envelope = serde_json::from_slice(&reply.body)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
-        let screen = if call.write {
-            let screen = evidence.transport_only().go_peer_body_screen(&reply.body);
-            screen.clean().ok_or_else(|| {
-                sent_failure(crate::wire::product::operation::unsafe_guard_response(
-                    call.id,
-                ))
-            })?;
-            screen
-        } else {
-            reply.reflection
-        };
         if !envelope.success {
             let checked = GuardEnvelope::checked(&envelope, screen)
                 .ok_or_else(|| sent_failure(call.unexpected(status)))?;

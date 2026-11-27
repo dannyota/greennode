@@ -9,8 +9,40 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
-    check_decoded(
-        body,
+    serde_json::from_slice::<&RawValue>(body).map_or(Screen::Indeterminate, |value| {
+        decoded_value_screen(matcher, value)
+    })
+}
+
+pub(super) fn discovery_stream_screen(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
+    let leading = body.trim_ascii_start();
+    let leading = leading
+        .strip_prefix(b"\xef\xbb\xbf")
+        .unwrap_or(leading)
+        .trim_ascii_start();
+    let mut require_json = matches!(leading.first(), Some(b'{' | b'[' | b'"'));
+    let text = crate::model::wire::go_json(body);
+    let values = serde_json::Deserializer::from_str(&text).into_iter::<&RawValue>();
+    for value in values {
+        let Ok(value) = value else {
+            return if require_json {
+                Screen::Indeterminate
+            } else {
+                Screen::Clean
+            };
+        };
+        let screen = decoded_value_screen(matcher, value);
+        if !screen.is_clean() {
+            return screen;
+        }
+        require_json = true;
+    }
+    Screen::Clean
+}
+
+fn decoded_value_screen(matcher: &BodyMatcher<'_>, value: &RawValue) -> Screen {
+    check_value(
+        value,
         false,
         super::super::identifier::declared_wire,
         &|text, identifier, _| matcher.scan(text.as_bytes(), identifier),
@@ -92,16 +124,24 @@ fn check_decoded<F: Fn(&str, bool, bool) -> Screen>(
     identifier_key: fn(&str) -> bool,
     matches: &F,
 ) -> Screen {
-    let Ok(raw) = serde_json::from_slice::<&RawValue>(body) else {
-        return Screen::Indeterminate;
-    };
+    serde_json::from_slice::<&RawValue>(body).map_or(Screen::Indeterminate, |value| {
+        check_value(value, root_identifier, identifier_key, matches)
+    })
+}
+
+fn check_value<F: Fn(&str, bool, bool) -> Screen>(
+    value: &RawValue,
+    root_identifier: bool,
+    identifier_key: fn(&str) -> bool,
+    matches: &F,
+) -> Screen {
     Walker {
         matches,
         identifier_key,
         identifier: root_identifier,
         depth: 0,
     }
-    .check(raw)
+    .check(value)
     .unwrap_or(Screen::Indeterminate)
 }
 

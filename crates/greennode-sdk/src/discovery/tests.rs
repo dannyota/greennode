@@ -134,6 +134,8 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
             br#""unterminated"#,
             b"\xef\xbb\xbf {\"projectId\":\"ordinary-id\"",
             br#"{"projectId":"pre6A6B6Cpost"}"#,
+            br#"1 {"projectId":"pre6A6B6Cpost"}"#,
+            b"true{bad",
         ] {
             let server = Server::start(vec![
                 response(status, body),
@@ -161,6 +163,28 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
 }
 
 #[tokio::test]
+async fn discovery_recovers_from_clean_error_bodies() {
+    for (status, body) in [
+        ("401 Unauthorized", b"token expired".as_slice()),
+        ("503 Service Unavailable", b"<html>Try again</html>"),
+        (
+            "503 Service Unavailable",
+            br#"1 {"projectId":"ordinary-id"}"#,
+        ),
+    ] {
+        let server = Server::start(vec![
+            response(status, body),
+            response("200 OK", br#"{"projects":[{"projectId":"one"}]}"#),
+        ]);
+        let project = call(&Discovery::default(), &server, &RequestContext::new().0)
+            .await
+            .unwrap();
+        assert_eq!(project.id, "one");
+        assert_eq!(server.requests(), 2);
+    }
+}
+
+#[tokio::test]
 async fn discovery_a_nonaccepted_201_uses_the_ordinary_status_diagnostic() {
     let server = Server::start(vec![response("201 Created", b"unaccepted response")]);
     let error = call(&Discovery::default(), &server, &RequestContext::new().0)
@@ -169,6 +193,39 @@ async fn discovery_a_nonaccepted_201_uses_the_ordinary_status_diagnostic() {
     let api = error.api_error().unwrap();
     assert_eq!(api.status(), Some(201));
     assert_eq!(api.message(), "Created");
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
+    let server = Server::start(vec![response("201 Created", b"unaccepted response")]);
+    let clients = sender::Clients {
+        pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+        one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap(),
+    };
+    let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let error = read_projects_with_evidence(
+        Runtime {
+            configured_credentials: None,
+            client: &clients,
+            ctx: &ctx,
+            clock: &SystemClock,
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            sleeper: &Sleeper,
+            jitter: &mut || 0,
+        },
+        &base,
+        &Source,
+        "han-1",
+        &mut Evidence::new(),
+        Some(&Pacing::new(Duration::ZERO)),
+    )
+    .await
+    .unwrap_err();
+    let api = error.api_error().unwrap();
+    assert_eq!(api.status(), Some(201));
+    assert_eq!(api.code(), "InvalidResponse");
     assert_eq!(server.requests(), 1);
 }
 
