@@ -1,6 +1,5 @@
 use serde::Serialize;
 
-use crate::model::server::Zone;
 use crate::model::wire::model;
 use crate::{List, PagedList};
 
@@ -400,4 +399,32 @@ pub struct GetSecurityGroupOutput {
     /// The security group.
     #[serde(rename = "SecurityGroup")]
     pub security_group: SecurityGroup,
+}
+
+model! {
+    @ true;
+    /// The network zone embedded in a VPC or subnet.
+    pub struct Zone {
+        /// Resource identifier.
+        uuid: String => "uuid", "UUID";
+        /// Display name.
+        name: String => "name", "Name";
+        /// Zone type.
+        zone_type: String => "zoneType", "ZoneType";
+        /// Is default.
+        is_default: bool => "isDefault", "IsDefault";
+        /// Resource description.
+        description: String => "description", "Description";
+        /// Is enabled.
+        is_enabled: bool => "isEnabled", "IsEnabled";
+        /// Open stack zone.
+        openstack_zone: String => "openstackZone", "OpenStackZone";
+        /// Ip ranges.
+        #[serde(serialize_with = "crate::model::wire::serialize_slice")]
+        ip_ranges: Option<Vec<String>> => "ipRanges", "IPRanges";
+        /// Server count.
+        server_count: i64 => "serverCount", "ServerCount";
+        /// Volume count.
+        volume_count: i64 => "volumeCount", "VolumeCount";
+    }
 }

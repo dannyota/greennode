@@ -5,7 +5,6 @@ mod nat;
 mod vpc;
 mod wire;
 
-pub use crate::model::server::Zone;
 pub use bandwidth::{BandwidthPackage, ListBandwidthPackagesInput, ListBandwidthPackagesOutput};
 pub use nat::{
     GetNatInstanceInput, GetNatInstanceOutput, ListNatInboundRulesInput, ListNatInboundRulesOutput,

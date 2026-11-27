@@ -4,6 +4,8 @@ mod subnets;
 mod wire;
 
 #[cfg(test)]
+mod deadlines;
+#[cfg(test)]
 mod tests;
 
 pub use models::*;

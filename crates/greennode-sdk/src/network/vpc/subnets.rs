@@ -19,6 +19,7 @@ const BY_VPC: Read = Read::new(
 );
 
 model! {
+    @ true;
     struct SubnetWire {
         uuid: String => "uuid", "UUID";
         status: String => "status", "Status";
@@ -34,6 +35,7 @@ model! {
 }
 
 model! {
+    @ true;
     struct SubnetZone {
         uuid: String => "uuid", "UUID";
     }
@@ -51,7 +53,7 @@ impl From<SubnetWire> for Subnet {
             interface_acl_policy_name: row.interface_acl_policy_name,
             route_table_id: row.route_table_uuid,
             zone_id: row.zone.uuid,
-            zone: crate::model::server::Zone {
+            zone: super::models::Zone {
                 ip_ranges: Some(Vec::new()),
                 ..Default::default()
             },

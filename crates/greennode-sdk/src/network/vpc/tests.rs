@@ -3,7 +3,7 @@ use crate::network::Client;
 use crate::testing::{Product, Response, Server, with_product_loopback};
 use crate::{Config, ConfigOptions, ErrorClass, RequestContext, Secret};
 
-fn reply(status: &str, body: &str) -> Response {
+pub(super) fn reply(status: &str, body: &str) -> Response {
     Response::Http {
         status: status.into(),
         headers: vec![("Content-Length".into(), body.len().to_string())],
@@ -11,7 +11,7 @@ fn reply(status: &str, body: &str) -> Response {
     }
 }
 
-fn client(server: &Server) -> Client {
+pub(super) fn client(server: &Server) -> Client {
     client_with_token(server, "toy-credential")
 }
 
@@ -211,7 +211,6 @@ async fn inventory_separates_syntax_from_shape_and_screens_query_inputs() {
 }
 
 #[tokio::test]
-
 async fn encoded_hex_credential_in_rendered_integer_is_rejected() {
     let server = Server::start(vec![reply("200 OK", r#"{"id":"vpc-1","mtu":-1500}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -224,7 +223,6 @@ async fn encoded_hex_credential_in_rendered_integer_is_rejected() {
 }
 
 #[tokio::test]
-
 async fn lone_page_case_variant_is_ignored() {
     let server = Server::start(vec![reply("200 OK", r#"{"listData":[],"Page":1}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -237,7 +235,6 @@ async fn lone_page_case_variant_is_ignored() {
 }
 
 #[tokio::test]
-
 async fn lone_case_variant_is_ignored() {
     let server = Server::start(vec![reply("200 OK", r#"{"ID":"vpc-1"}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -611,42 +608,47 @@ fn parse_acl_refuses_an_underscore_subnet_id() {
     );
 }
 
-async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(10), future)
-        .await
-        .expect("the 30-second deadline did not end the read")
-}
-
 #[tokio::test]
-async fn single_protected_read_has_its_own_deadline() {
-    super::wire::READ_DEADLINE.with(|cell| cell.set(Some(std::time::Duration::from_millis(200))));
-    let (started, _hold) = tokio::sync::oneshot::channel();
-    let server = Server::start(vec![Response::StallBeforeHead(started)]);
+async fn long_token_containing_hex_of_zero_does_not_break_zero_numbers() {
+    let server = Server::start(vec![reply(
+        "200 OK",
+        r#"{"id":"vpc-1","mtu":0,"serverCount":0,"zone":{"serverCount":0}}"#,
+    )]);
     let (ctx, _) = RequestContext::new();
-    let error =
-        within(client(&server).get_security_group(&ctx, GetSecurityGroupInput::new("sg-1")))
-            .await
-            .unwrap_err();
-    assert_eq!(error.error().class(), ErrorClass::DeadlineExceeded);
+    let output = client_with_token(&server, "token-30-value")
+        .get_vpc(&ctx, GetVpcInput::new("vpc-1"))
+        .await
+        .unwrap();
+    assert_eq!(output.vpc.mtu, 0);
 }
 
 #[tokio::test]
-async fn rule_walk_has_one_deadline_across_its_reads() {
-    super::wire::WALK_DEADLINE.with(|cell| cell.set(Some(std::time::Duration::from_millis(200))));
-    let (started, _hold) = tokio::sync::oneshot::channel();
+async fn subnet_and_vpc_zone_ignore_lone_case_variants() {
     let server = Server::start(vec![
+        reply("200 OK", r#"{"UUID":"x","zone":{"UUID":"z"}}"#),
+        reply("200 OK", r#"{"id":"vpc-1","zone":{"UUID":"z"}}"#),
         reply(
             "200 OK",
-            r#"{"listData":[{"id":"sg-1"}],"page":1,"pageSize":1,"totalPage":1,"totalItem":1}"#,
+            r#"{"uuid":"sub-1","zone":{"uuid":"zone-1","Uuid":"a","UUID":"b"}}"#,
         ),
-        Response::StallBeforeHead(started),
     ]);
     let (ctx, _) = RequestContext::new();
-    let error = within(
-        client(&server)
-            .list_all_security_group_rules(&ctx, ListAllSecurityGroupRulesInput::default()),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error.error().class(), ErrorClass::DeadlineExceeded);
+    let client = client(&server);
+    let subnet = client
+        .get_subnet(&ctx, GetSubnetInput::new("vpc-1", "sub-1"))
+        .await
+        .unwrap();
+    assert!(subnet.subnet.uuid.is_empty());
+    assert!(subnet.subnet.zone_id.is_empty());
+    let vpc = client
+        .get_vpc(&ctx, GetVpcInput::new("vpc-1"))
+        .await
+        .unwrap();
+    assert!(vpc.vpc.zone.uuid.is_empty());
+    assert!(
+        client
+            .get_subnet(&ctx, GetSubnetInput::new("vpc-1", "sub-1"))
+            .await
+            .is_err()
+    );
 }

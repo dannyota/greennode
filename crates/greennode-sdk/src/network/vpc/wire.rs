@@ -204,14 +204,11 @@ impl<'a> Reads<'a> {
             return true;
         }
         let hex = data_encoding::HEXLOWER.encode(text.as_bytes());
-        self.evidence.credentials().values().iter().any(|secret| {
-            let value = secret.expose_secret().to_ascii_lowercase();
-            if value.len() < 8 {
-                value == hex
-            } else {
-                value.contains(&hex)
-            }
-        })
+        self.evidence
+            .credentials()
+            .values()
+            .iter()
+            .any(|secret| secret.expose_secret().eq_ignore_ascii_case(&hex))
     }
 
     pub(super) fn protected_output<T: serde::Serialize>(
@@ -498,7 +495,7 @@ impl<'a> Reads<'a> {
         let mut metadata = [page.page, page.page_size, page.total_page, page.total_item];
         if metadata.iter().any(|value| {
             self.evidence.credentials().has_numeric_product_credential()
-                || self.evidence.text_reflects(&value.to_string())
+                || self.number_reflects(&value.to_string())
         }) || !metadata
             .iter_mut()
             .all(|value| value.redact(&self.evidence))
