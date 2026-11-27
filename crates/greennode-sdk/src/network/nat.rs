@@ -55,6 +55,8 @@ pub struct GetNatInstanceOutput {
     pub nat: NatDetail,
 }
 
+crate::wire::product::output::public_fields!(GetNatInstanceOutput { nat });
+
 /// Public NAT configuration and status.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NatDetail {
@@ -89,6 +91,19 @@ pub struct NatDetail {
     #[serde(rename = "VPCName")]
     pub vpc_name: String,
 }
+
+crate::wire::product::output::public_fields!(NatDetail {
+    id,
+    name,
+    status,
+    gateway_ip,
+    public_ip,
+    created_at,
+    package_id,
+    package_name,
+    vpc_id,
+    vpc_name
+});
 
 /// Identifies the Public NAT whose inbound rules to read.
 #[derive(Clone, Debug)]
@@ -143,6 +158,18 @@ pub struct NatInboundRule {
     #[serde(rename = "System")]
     pub system: bool,
 }
+
+crate::wire::product::output::public_fields!(NatInboundRule {
+    id,
+    protocol,
+    ether_type,
+    direction,
+    port_range_min,
+    port_range_max,
+    description,
+    created_at,
+    system
+});
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {

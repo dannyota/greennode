@@ -15,6 +15,21 @@ pub enum Field<T> {
     Redacted,
 }
 
+impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
+    for Field<T>
+{
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        match self {
+            Self::Value(value) => value.public_reflects(scan, identifier),
+            Self::Redacted => false,
+        }
+    }
+}
+
 impl<T: Default> Default for Field<T> {
     fn default() -> Self {
         Self::Value(T::default())
@@ -50,6 +65,16 @@ impl<T> Field<T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Timestamp(#[serde(with = "rfc3339")] pub OffsetDateTime);
+
+impl crate::wire::product::output::PublicOutput for Timestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
 
 impl Default for Timestamp {
     fn default() -> Self {
@@ -99,6 +124,8 @@ pub struct VpcMapRegion {
     #[serde(deserialize_with = "null_default")]
     pub region: String,
 }
+
+crate::wire::product::output::public_fields!(VpcMapRegion { vpc_id, region });
 
 /// A hosted DNS zone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -158,6 +185,21 @@ pub struct HostedZone {
     pub updated_at: Field<Timestamp>,
 }
 
+crate::wire::product::output::public_fields!(HostedZone {
+    id,
+    domain_name,
+    status,
+    description,
+    zone_type,
+    count_records,
+    associated_vpc_ids,
+    assoc_vpc_map_region,
+    portal_user_id,
+    created_at,
+    deleted_at,
+    updated_at
+});
+
 /// One value in a DNS record's routing policy.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "PascalCase"))]
@@ -170,6 +212,12 @@ pub struct RecordValue {
     /// Optional routing weight.
     pub weight: Option<Field<i64>>,
 }
+
+crate::wire::product::output::public_fields!(RecordValue {
+    value,
+    location,
+    weight
+});
 
 /// A record in a hosted DNS zone.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -223,6 +271,21 @@ pub struct Record {
     #[serde(deserialize_with = "null_default")]
     pub updated_at: Field<Timestamp>,
 }
+
+crate::wire::product::output::public_fields!(Record {
+    id,
+    sub_domain,
+    hosted_zone_id,
+    status,
+    record_type,
+    routing_policy,
+    value,
+    ttl,
+    enable_sticky_session,
+    created_at,
+    deleted_at,
+    updated_at
+});
 
 pub(super) trait Resource: Default {
     const SHAPE: Shape<'static>;

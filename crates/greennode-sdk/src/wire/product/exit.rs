@@ -108,7 +108,7 @@ macro_rules! finish {
 
 pub(crate) use finish;
 
-pub(crate) async fn verify<T: Serialize>(
+pub(crate) async fn verify<T: Serialize + super::output::PublicOutput>(
     future: impl Future<Output = Result<T, Failure<T>>>,
 ) -> Result<T, Box<Failure<T>>> {
     scope(async {
@@ -118,7 +118,10 @@ pub(crate) async fn verify<T: Serialize>(
             return result.map_err(Box::new);
         }
         let evidence = Evidence::from_credentials(&state.public);
-        let reflected = |output: &T| evidence.serialized_output_reflects(output);
+        let reflected = |output: &T| {
+            output.public_reflects(&super::output::FieldScan::new(&evidence), false)
+                || evidence.serialized_output_reflects(output)
+        };
         let result = match result {
             Ok(output) if !reflected(&output) => return Ok(output),
             Ok(_) => Failure::new(
@@ -308,6 +311,49 @@ mod tests {
             assert!(!credentials.text_reflects(detail.stage));
             assert!(!credentials.text_reflects(&detail.item_key));
         }
+    }
+
+    #[tokio::test]
+    async fn nested_public_error_formatters_are_screened() {
+        let credentials = SentCredentials::for_test(
+            ["ApiError {", "LoginError {", "ServiceAccountLoginError {"]
+                .into_iter()
+                .map(crate::Secret::new)
+                .collect(),
+        );
+        let failure = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            use crate::error::SafeText;
+            let error = Error::from_api(crate::ApiError::new(
+                "test",
+                Some(503),
+                SafeText::new("", &[]),
+                SafeText::new("", &[]),
+                false,
+            ))
+            .with_login(crate::LoginError::new("signin page", Some(401), false))
+            .with_service_login(crate::ServiceAccountLoginError::new(
+                "token exchange",
+                Some(403),
+            ));
+            Err::<(), _>(Failure::new(error, None, WriteDispatch::NotAWrite))
+        })
+        .unwrap_err();
+        let error = failure.error();
+        let api = error.api_error().unwrap();
+        let login = error.login_error().unwrap();
+        let service = error.service_account_login_error().unwrap();
+        for formatted in [
+            format!("{api:?}"),
+            format!("{login:?}"),
+            format!("{service:?}"),
+            format!("{api:#?}"),
+            format!("{login:#?}"),
+            format!("{service:#?}"),
+        ] {
+            assert!(!credentials.text_reflects(&formatted));
+        }
+        assert_eq!(api.status(), Some(503));
     }
 
     #[tokio::test]

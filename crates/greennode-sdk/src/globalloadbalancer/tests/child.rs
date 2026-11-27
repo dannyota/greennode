@@ -1,3 +1,5 @@
+mod retained_guards;
+
 use super::*;
 use crate::testing::{Product, with_product_loopback, with_write_loopback};
 use serde_json::{Value, json};
@@ -39,15 +41,29 @@ fn servers(
     project: bool,
     token: &str,
 ) -> (Client, Server, Server) {
+    servers_with_auth(
+        glb,
+        regional,
+        project,
+        ConfigOptions::default().with_static_token(Secret::new(token)),
+    )
+}
+
+fn servers_with_auth(
+    glb: Vec<Response>,
+    regional: Vec<Response>,
+    project: bool,
+    options: ConfigOptions,
+) -> (Client, Server, Server) {
     let glb = Server::start(glb);
     let regional = Server::start(regional);
-    let mut options = ConfigOptions::default()
-        .with_region("han-1".into())
-        .with_static_token(Secret::new(token))
-        .with_endpoint_overrides(EndpointOverrides {
-            global_load_balancer: Some(format!("{}/glb-controller/", glb.origin)),
-            ..Default::default()
-        });
+    let mut options =
+        options
+            .with_region("han-1".into())
+            .with_endpoint_overrides(EndpointOverrides {
+                global_load_balancer: Some(format!("{}/glb-controller/", glb.origin)),
+                ..Default::default()
+            });
     if project {
         options = options.with_project_id("project-1".into());
     }

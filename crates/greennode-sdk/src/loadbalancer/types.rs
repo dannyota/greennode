@@ -154,6 +154,8 @@ pub struct GetLoadBalancerOutput {
     pub load_balancer: LoadBalancer,
 }
 
+crate::wire::product::output::public_fields!(GetLoadBalancerOutput { load_balancer });
+
 /// The result of reading a listener.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetListenerOutput {
@@ -161,6 +163,8 @@ pub struct GetListenerOutput {
     #[serde(rename = "Listener")]
     pub listener: Listener,
 }
+
+crate::wire::product::output::public_fields!(GetListenerOutput { listener });
 
 /// The result of reading a pool.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -170,6 +174,8 @@ pub struct GetPoolOutput {
     pub pool: Pool,
 }
 
+crate::wire::product::output::public_fields!(GetPoolOutput { pool });
+
 /// The result of reading a health monitor.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetPoolHealthMonitorOutput {
@@ -177,6 +183,8 @@ pub struct GetPoolHealthMonitorOutput {
     #[serde(rename = "HealthMonitor")]
     pub health_monitor: HealthMonitor,
 }
+
+crate::wire::product::output::public_fields!(GetPoolHealthMonitorOutput { health_monitor });
 
 /// The result of reading a policy.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -186,6 +194,8 @@ pub struct GetPolicyOutput {
     pub policy: Policy,
 }
 
+crate::wire::product::output::public_fields!(GetPolicyOutput { policy });
+
 /// The result of reading a certificate.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetCertificateOutput {
@@ -193,3 +203,5 @@ pub struct GetCertificateOutput {
     #[serde(rename = "Certificate")]
     pub certificate: Certificate,
 }
+
+crate::wire::product::output::public_fields!(GetCertificateOutput { certificate });

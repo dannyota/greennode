@@ -183,7 +183,7 @@ impl Client {
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
         loop {
             check(&wait, clock)?;
-            let result = self.server_detail::<()>(&wait, id, evidence).await;
+            let result = self.server_guard::<()>(&wait, id, evidence).await;
             check(&wait, clock)?;
             match result {
                 Err(error)
@@ -200,6 +200,7 @@ impl Client {
                 }
                 Err(error) => return Err(Box::new(error.into_parts().0)),
                 Ok(server) => {
+                    let server = server.into_checked(evidence)?;
                     let invalid = |evidence| {
                         Box::new(api(
                             "compute.GetServer",

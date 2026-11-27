@@ -60,6 +60,8 @@ pub struct CreateServiceAccountOutput {
     evidence: Evidence,
 }
 
+crate::wire::product::output::public_fields!(CreateServiceAccountOutput { service_account; cleanup_id, client_secret, evidence });
+
 impl CreateServiceAccountOutput {
     /// Borrows the issued secret for private delivery after successful creation.
     pub fn client_secret(&self) -> Option<&Secret> {
@@ -152,6 +154,8 @@ pub struct UpdateServiceAccountOutput {
     pub service_account: ServiceAccount,
 }
 
+crate::wire::product::output::public_fields!(UpdateServiceAccountOutput { service_account });
+
 /// Identifies the service account to delete.
 #[derive(Clone, Debug)]
 pub struct DeleteServiceAccountInput {
@@ -174,6 +178,8 @@ impl DeleteServiceAccountInput {
 #[derive(Clone, Debug, Serialize)]
 pub struct DeleteServiceAccountOutput {}
 
+crate::wire::product::output::public_fields!(DeleteServiceAccountOutput {});
+
 id_input!(
     /// Identifies the account whose secret will be rotated.
     ResetServiceAccountSecretInput,
@@ -189,6 +195,8 @@ pub struct ResetServiceAccountSecretOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(ResetServiceAccountSecretOutput { ; client_secret, evidence });
 
 impl ResetServiceAccountSecretOutput {
     /// Borrows the issued secret for private delivery.

@@ -84,6 +84,8 @@ pub struct GetHostedZoneOutput {
     pub hosted_zone: HostedZone,
 }
 
+crate::wire::product::output::public_fields!(GetHostedZoneOutput { hosted_zone });
+
 /// Selects the records in one hosted zone with an optional name filter.
 #[derive(Clone, Debug)]
 pub struct ListRecordsInput {
@@ -132,6 +134,8 @@ pub struct GetRecordOutput {
     #[serde(rename = "Record")]
     pub record: Record,
 }
+
+crate::wire::product::output::public_fields!(GetRecordOutput { record });
 
 #[expect(
     clippy::result_large_err,

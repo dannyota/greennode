@@ -1,8 +1,10 @@
 pub(crate) mod evidence;
 pub(crate) mod exit;
+pub(crate) mod guard;
 pub(crate) mod identifier;
 pub(crate) mod operation;
 pub(crate) mod options;
+pub(crate) mod output;
 pub(crate) mod redirect;
 pub(crate) mod response;
 pub(crate) mod retry;

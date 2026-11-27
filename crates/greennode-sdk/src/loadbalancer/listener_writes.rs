@@ -77,6 +77,8 @@ pub struct CreateListenerOutput {
     projection: Option<ListenerProjection>,
 }
 
+crate::wire::product::output::public_fields!(CreateListenerOutput { listener; projection });
+
 impl Serialize for CreateListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut result = serializer.serialize_struct("CreateListenerOutput", 1)?;
@@ -137,6 +139,8 @@ pub struct UpdateListenerOutput {
     pub listener: Listener,
     projection: Option<ListenerProjection>,
 }
+
+crate::wire::product::output::public_fields!(UpdateListenerOutput { listener; projection });
 
 impl Serialize for UpdateListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

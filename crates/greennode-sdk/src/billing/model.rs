@@ -76,6 +76,31 @@ pub struct Budget {
     pub alarm_threshold_count: i64,
 }
 
+crate::wire::product::output::public_fields!(Budget {
+    uuid,
+    id,
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    currency,
+    status,
+    period_key,
+    period_start,
+    period_end,
+    start_date,
+    created_at,
+    updated_at,
+    actual_cost,
+    forecasted_cost,
+    actual_percentage,
+    forecasted_percentage,
+    threshold_percentage,
+    alarm,
+    threshold_count,
+    alarm_threshold_count
+});
+
 impl Budget {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("uuid"),

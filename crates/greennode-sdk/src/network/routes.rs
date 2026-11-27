@@ -31,6 +31,8 @@ pub struct GetRouteTableOutput {
     pub route_table: RouteTable,
 }
 
+crate::wire::product::output::public_fields!(GetRouteTableOutput { route_table });
+
 paged_input!(
     /// Selects a page of route tables.
     ListRouteTablesInput

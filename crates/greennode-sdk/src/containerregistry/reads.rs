@@ -50,6 +50,8 @@ pub struct GetRepositoryOutput {
     pub repository: Repository,
 }
 
+crate::wire::product::output::public_fields!(GetRepositoryOutput { repository });
+
 /// A registry user and its repository permissions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
@@ -105,6 +107,19 @@ pub struct User {
     )]
     pub repositories: Vec<RepositoryPermission>,
 }
+
+crate::wire::product::output::public_fields!(User {
+    id,
+    name,
+    backend_name,
+    description,
+    disabled,
+    expired_at,
+    created_at,
+    number_of_repositories,
+    user_id,
+    repositories
+});
 /// Permissions for a particular repository.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
@@ -135,6 +150,13 @@ pub struct RepositoryPermission {
     )]
     pub policies: Vec<Permission>,
 }
+
+crate::wire::product::output::public_fields!(RepositoryPermission {
+    repository_id,
+    repository_name,
+    backend_repository_name,
+    policies
+});
 fn user_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let raw = Option::<Box<serde_json::value::RawValue>>::deserialize(deserializer)?;
     let Some(raw) = raw else {

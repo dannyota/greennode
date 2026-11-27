@@ -89,6 +89,8 @@ pub struct GetBudgetOutput {
     pub budget: Budget,
 }
 
+crate::wire::product::output::public_fields!(GetBudgetOutput { budget });
+
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"

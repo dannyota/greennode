@@ -154,6 +154,8 @@ pub struct UpdateWebAcceleratorOutput {
     pub web_accelerator: WebAccelerator,
 }
 
+crate::wire::product::output::public_fields!(UpdateWebAcceleratorOutput { web_accelerator });
+
 impl Client {
     /// Merges changes into an active Web Accelerator, sends once, and reads the resulting detail.
     /// If the accepted update cannot settle, its failure includes the last safe detail.

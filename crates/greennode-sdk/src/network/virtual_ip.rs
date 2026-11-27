@@ -40,6 +40,8 @@ pub struct GetVirtualIpAddressOutput {
     pub virtual_ip_address: VirtualIpAddress,
 }
 
+crate::wire::product::output::public_fields!(GetVirtualIpAddressOutput { virtual_ip_address });
+
 paged_input!(
     /// Selects a page of virtual IP addresses.
     ListVirtualIpAddressesInput

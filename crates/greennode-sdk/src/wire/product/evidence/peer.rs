@@ -21,7 +21,7 @@ pub(super) fn request_reflects(matcher: &BodyMatcher<'_>, body: &[u8], identifie
         identifier,
         request_identifier_key,
         &|text, identifier, _| matcher.reflects(text.as_bytes(), identifier),
-    ) == Some(true)
+    ) != Some(false)
 }
 
 pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option<bool> {

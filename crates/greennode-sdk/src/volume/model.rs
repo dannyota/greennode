@@ -20,6 +20,12 @@ macro_rules! row {
             $($(#[$field_doc])* #[serde(rename = $key)] pub $field: $ty,)*
         }
 
+        impl crate::wire::product::output::PublicOutput for $name {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $key) ||)* false
+            }
+        }
+
         impl Serialize for $name {
             fn serialize<S: Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
                 $(if crate::wire::product::identifier::declared($wire, $key) {

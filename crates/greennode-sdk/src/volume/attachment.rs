@@ -64,6 +64,8 @@ pub struct AttachVolumeOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(AttachVolumeOutput { volume, changed });
+
 /// The detachment state and whether the request changed it.
 pub type DetachVolumeOutput = AttachVolumeOutput;
 
@@ -85,6 +87,8 @@ pub struct DeleteVolumeInput {
 /// The deletion acknowledgement has no result fields.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct DeleteVolumeOutput {}
+
+crate::wire::product::output::public_fields!(DeleteVolumeOutput {});
 
 impl Redact for DeleteVolumeOutput {
     fn redact(&mut self, _: &Evidence) {}

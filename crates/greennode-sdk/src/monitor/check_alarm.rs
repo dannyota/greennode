@@ -48,6 +48,8 @@ pub struct GetCheckAlarmOutput {
     pub alarm: CheckAlarm,
 }
 
+crate::wire::product::output::public_fields!(GetCheckAlarmOutput { alarm });
+
 /// Current state of the check's alarm definition.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -63,6 +65,13 @@ pub struct CheckAlarm {
     /// Location states in provider order.
     pub locations: Vec<CheckLocationAlarm>,
 }
+
+crate::wire::product::output::public_fields!(CheckAlarm {
+    id,
+    status,
+    status_updated_at,
+    locations
+});
 
 /// State of one probe location's alarm.
 #[derive(Clone, Debug, Serialize)]
@@ -88,6 +97,16 @@ pub struct CheckLocationAlarm {
     #[serde(serialize_with = "serialize_time")]
     pub created_at: OffsetDateTime,
 }
+
+crate::wire::product::output::public_fields!(CheckLocationAlarm {
+    alarm_id,
+    location_id,
+    location_name,
+    state,
+    state_updated_at,
+    updated_at,
+    created_at
+});
 
 #[derive(Deserialize)]
 struct Snapshot {

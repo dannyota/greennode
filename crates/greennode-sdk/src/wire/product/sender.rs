@@ -566,15 +566,9 @@ async fn run_inner(
                 }
                 evidence.go_peer_body_reflects(&reply.body)
             });
-            if let Some(id) = op.guard
-                && body_reflection == Some(true)
-            {
-                evidence.status = None;
-                return Err(Error::Provider(Box::new(
-                    super::operation::unsafe_guard_response(id),
-                )));
-            }
-            if let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
+            let refused = op.guard.filter(|_| body_reflection == Some(true));
+            if refused.is_none()
+                && let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
                 && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
             {
                 return Err(Error::Provider(error));
@@ -590,7 +584,7 @@ async fn run_inner(
                     auth,
                     bearer.as_ref(),
                     op,
-                    result.is_err(),
+                    result.is_err() || refused.is_some(),
                     recovered,
                     clock,
                 );
@@ -610,6 +604,12 @@ async fn run_inner(
                     attempt = 0;
                     continue 'attempt;
                 }
+            }
+            if let Some(id) = refused {
+                evidence.status = None;
+                return Err(Error::Provider(Box::new(
+                    super::operation::unsafe_guard_response(id),
+                )));
             }
             let outcome = match &result {
                 Ok(reply) => {

@@ -65,6 +65,8 @@ pub struct CreateClusterOutput {
     pub status: String,
 }
 
+crate::wire::product::output::public_fields!(CreateClusterOutput { id, status });
+
 fn valid_name(value: &str, max: usize) -> bool {
     (5..=max).contains(&value.len())
         && value

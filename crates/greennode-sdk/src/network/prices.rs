@@ -38,6 +38,8 @@ pub struct ListNetworkPricesOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(ListNetworkPricesOutput { items, metadata });
+
 /// The quoted or unknown charge for one network product.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NetworkPrice {
@@ -60,6 +62,15 @@ pub struct NetworkPrice {
     #[serde(rename = "Price")]
     pub price: DiscoveryPrice,
 }
+
+crate::wire::product::output::public_fields!(NetworkPrice {
+    kind,
+    name,
+    r#type,
+    scope,
+    unit,
+    price
+});
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {

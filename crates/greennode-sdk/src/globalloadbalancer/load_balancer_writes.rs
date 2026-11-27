@@ -53,6 +53,8 @@ pub struct CreateLoadBalancerOutput {
     redact_user_id: bool,
 }
 
+crate::wire::product::output::public_fields!(CreateLoadBalancerOutput { load_balancer; redact_user_id });
+
 impl Serialize for CreateLoadBalancerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("CreateLoadBalancerOutput", 1)?;
@@ -111,6 +113,8 @@ pub struct DeleteLoadBalancerOutput {
     pub deleted: bool,
     redact_deleted: bool,
 }
+
+crate::wire::product::output::public_fields!(DeleteLoadBalancerOutput { load_balancer_id, deleted; redact_deleted });
 
 impl Serialize for DeleteLoadBalancerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -465,5 +469,26 @@ fn delete_output(id: &str, deleted: bool, evidence: &Evidence) -> DeleteLoadBala
         load_balancer_id,
         deleted,
         redact_deleted: evidence.output_reflects(&json!(deleted)),
+    }
+}
+
+#[cfg(test)]
+mod typed_output_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn exit_withholds_the_typed_deleted_flag_hidden_by_serde() {
+        let failure = crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            evidence.add_secret(&crate::Secret::new("true"));
+            let result = delete_output("glb-1", true, &evidence);
+            Err::<DeleteLoadBalancerOutput, _>(Failure::new(
+                Error::new(crate::ErrorClass::NotSettled),
+                Some(result),
+                crate::WriteDispatch::MayHaveBeenSent,
+            ))
+        })
+        .unwrap_err();
+        assert!(failure.partial().is_none());
     }
 }

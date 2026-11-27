@@ -59,6 +59,8 @@ pub struct ListCheckResponseTimesOutput {
     pub end: OffsetDateTime,
 }
 
+crate::wire::product::output::public_fields!(ListCheckResponseTimesOutput { items, start, end });
+
 /// The response-time buckets for one probe location.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -70,6 +72,11 @@ pub struct CheckResponseTimeSeries {
     pub points: Vec<CheckResponseTimePoint>,
 }
 
+crate::wire::product::output::public_fields!(CheckResponseTimeSeries {
+    location_id,
+    points
+});
+
 /// Average HTTP response time for one bucket.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -80,6 +87,11 @@ pub struct CheckResponseTimePoint {
     /// Average in milliseconds.
     pub value_millis: ResponseField<f64>,
 }
+
+crate::wire::product::output::public_fields!(CheckResponseTimePoint {
+    timestamp,
+    value_millis
+});
 
 #[derive(Deserialize)]
 struct Snapshot {

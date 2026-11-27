@@ -58,9 +58,7 @@ impl Client {
             let mut items = Vec::new();
             for id in ids {
                 FLAVORS.path("FlavorZoneID", &id).map_err(failure)?;
-                let rows = self
-                    .read_guard(ctx, GuardRead(&FLAVORS), &[&id], &[], &mut evidence)
-                    .await?;
+                let rows = self.read(ctx, &FLAVORS, &[&id], &[], &mut evidence).await?;
                 let flavors: Vec<Flavor> = rows.field("flavors", &FLAVORS, &evidence)?;
                 for mut flavor in flavors
                     .into_iter()

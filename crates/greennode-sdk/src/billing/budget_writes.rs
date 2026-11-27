@@ -54,6 +54,8 @@ pub struct CreateBudgetOutput {
     pub budget: Budget,
 }
 
+crate::wire::product::output::public_fields!(CreateBudgetOutput { budget });
+
 /// Changes selected fields on an existing account-wide budget.
 #[derive(Clone, Debug)]
 pub struct UpdateBudgetInput {
@@ -89,6 +91,8 @@ impl UpdateBudgetInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UpdateBudgetOutput {}
 
+crate::wire::product::output::public_fields!(UpdateBudgetOutput {});
+
 /// Selects a budget and its API-managed thresholds for deletion.
 #[derive(Clone, Debug)]
 pub struct DeleteBudgetInput {
@@ -108,6 +112,8 @@ impl DeleteBudgetInput {
 /// A confirmed deletion with no returned budget fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeleteBudgetOutput {}
+
+crate::wire::product::output::public_fields!(DeleteBudgetOutput {});
 
 #[expect(
     clippy::result_large_err,

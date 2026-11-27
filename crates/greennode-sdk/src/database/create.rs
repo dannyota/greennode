@@ -92,6 +92,8 @@ pub struct CreateDatabaseInstanceOutput {
     pub instance: Instance,
 }
 
+crate::wire::product::output::public_fields!(CreateDatabaseInstanceOutput { instance });
+
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"

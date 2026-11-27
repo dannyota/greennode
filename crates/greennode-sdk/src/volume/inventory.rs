@@ -53,6 +53,8 @@ pub struct GetVolumeOutput {
     pub volume: Volume,
 }
 
+crate::wire::product::output::public_fields!(GetVolumeOutput { volume });
+
 /// Identifies a volume whose backing volume should be read.
 #[derive(Clone, Debug, Default)]
 pub struct GetUnderlyingVolumeInput {

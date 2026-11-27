@@ -64,6 +64,8 @@ pub struct CreateUserOutput {
     evidence: Evidence,
 }
 
+crate::wire::product::output::public_fields!(CreateUserOutput { user, created_id, candidate_id; password_marker, password, evidence });
+
 impl CreateUserOutput {
     /// Borrows the locally generated password, if present.
     pub fn generated_password(&self) -> Option<&Secret> {
@@ -103,6 +105,8 @@ id_input!(
 #[derive(Clone, Debug, Serialize)]
 pub struct DeleteUserOutput {}
 
+crate::wire::product::output::public_fields!(DeleteUserOutput {});
+
 /// Resets a user's password using a supplied or generated password.
 #[derive(Clone)]
 pub struct ResetUserPasswordInput {
@@ -135,6 +139,8 @@ pub struct ResetUserPasswordOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(ResetUserPasswordOutput { ; password_marker, password, evidence });
 
 impl ResetUserPasswordOutput {
     /// Borrows the locally generated password, if present.

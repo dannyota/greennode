@@ -84,6 +84,17 @@ pub struct NetworkQuoteOutput {
     pub currency: String,
 }
 
+crate::wire::product::output::public_fields!(NetworkQuoteOutput {
+    optimum_price,
+    original_price,
+    discount_price,
+    discount_percent,
+    properties,
+    monthly_price,
+    total_price,
+    currency
+});
+
 /// Result of quoting Public NAT placement.
 pub type QuoteCreateNatInstanceOutput = NetworkQuoteOutput;
 

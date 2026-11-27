@@ -66,6 +66,8 @@ pub struct GetEndpointOutput {
     pub endpoint: EndpointDetail,
 }
 
+crate::wire::product::output::public_fields!(GetEndpointOutput { endpoint });
+
 /// Selects one page of regional endpoints.
 #[derive(Clone, Debug, Default)]
 pub struct ListEndpointsInput {

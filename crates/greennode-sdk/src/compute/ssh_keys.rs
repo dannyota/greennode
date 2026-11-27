@@ -65,6 +65,8 @@ pub struct CreateSshKeyOutput {
     evidence: Evidence,
 }
 
+crate::wire::product::output::public_fields!(CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
+
 impl std::fmt::Debug for CreateSshKeyOutput {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -128,6 +130,8 @@ pub struct ImportSshKeyOutput {
     pub ssh_key: SshKey,
 }
 
+crate::wire::product::output::public_fields!(ImportSshKeyOutput { ssh_key });
+
 /// Identifies an SSH key to delete.
 #[derive(Clone, Debug, Default)]
 pub struct DeleteSshKeyInput {
@@ -138,6 +142,8 @@ pub struct DeleteSshKeyInput {
 /// An acknowledgement of SSH key deletion.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct DeleteSshKeyOutput {}
+
+crate::wire::product::output::public_fields!(DeleteSshKeyOutput {});
 
 #[expect(
     clippy::result_large_err,

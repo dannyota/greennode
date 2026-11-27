@@ -38,6 +38,16 @@ pub struct GetQuotaStatusInput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QuotaTimestamp(pub OffsetDateTime);
 
+impl crate::wire::product::output::PublicOutput for QuotaTimestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
+
 impl QuotaTimestamp {
     /// Returns the same instant with a UTC offset, if representable.
     pub fn to_utc(self) -> Option<Self> {

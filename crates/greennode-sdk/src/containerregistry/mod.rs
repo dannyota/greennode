@@ -100,6 +100,19 @@ pub struct Repository {
     pub created_at: String,
 }
 
+crate::wire::product::output::public_fields!(Repository {
+    id,
+    name,
+    backend_name,
+    access_level,
+    registry_url,
+    quota_limit_gb,
+    quota_used,
+    image_count,
+    attached_users,
+    created_at
+});
+
 /// A registry permission and its policy identifier.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
@@ -118,6 +131,8 @@ pub struct Permission {
     )]
     pub action: String,
 }
+
+crate::wire::product::output::public_fields!(Permission { id, action });
 
 fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
     d: D,

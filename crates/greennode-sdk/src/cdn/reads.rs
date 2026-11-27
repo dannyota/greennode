@@ -65,6 +65,8 @@ pub struct GetWebAcceleratorOutput {
     pub web_accelerator: WebAccelerator,
 }
 
+crate::wire::product::output::public_fields!(GetWebAcceleratorOutput { web_accelerator });
+
 /// Input for listing certificates.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ListCertificatesInput;
@@ -95,6 +97,8 @@ pub struct GetCertificateOutput {
     #[serde(rename = "Certificate")]
     pub certificate: Certificate,
 }
+
+crate::wire::product::output::public_fields!(GetCertificateOutput { certificate });
 
 /// Input for listing API key metadata.
 #[derive(Clone, Copy, Debug, Default)]

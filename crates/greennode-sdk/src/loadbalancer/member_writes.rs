@@ -109,6 +109,8 @@ macro_rules! member_output {
             redact_changed: bool,
         }
 
+        crate::wire::product::output::public_fields!($output { pool, changed; projection, redact_changed });
+
         impl Serialize for $output {
             fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 let mut output = serializer.serialize_struct(stringify!($output), 2)?;

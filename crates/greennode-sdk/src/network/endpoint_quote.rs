@@ -67,6 +67,11 @@ pub struct QuoteCreateEndpointOutput {
     pub currency: String,
 }
 
+crate::wire::product::output::public_fields!(QuoteCreateEndpointOutput {
+    monthly_price,
+    currency
+});
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     /// Quotes an eligible Gateway endpoint without placing an order.

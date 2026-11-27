@@ -196,6 +196,13 @@ pub struct EstimateOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(EstimateOutput {
+    items,
+    total,
+    coverage,
+    metadata
+});
+
 /// One requested component group.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct EstimateItem {
@@ -228,6 +235,18 @@ pub struct EstimateItem {
     pub breakdown: Vec<EstimateCharge>,
 }
 
+crate::wire::product::output::public_fields!(EstimateItem {
+    key,
+    kind,
+    server_key,
+    region,
+    zone_id,
+    quantity,
+    price,
+    monthly_amount,
+    breakdown
+});
+
 /// One informational charge per unit.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct EstimateCharge {
@@ -238,6 +257,11 @@ pub struct EstimateCharge {
     #[serde(rename = "MonthlyPrice")]
     pub monthly_price: Option<f64>,
 }
+
+crate::wire::product::output::public_fields!(EstimateCharge {
+    name,
+    monthly_price
+});
 
 /// Independent monthly VND quote totals and completeness.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -268,6 +292,17 @@ pub struct EstimateTotal {
     pub cost_complete: bool,
 }
 
+crate::wire::product::output::public_fields!(EstimateTotal {
+    known_monthly_subtotal,
+    requested_monthly_total,
+    currency,
+    tax,
+    basis,
+    scope,
+    requested_complete,
+    cost_complete
+});
+
 /// Coverage for a requested component or the entire setup.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct EstimateCoverage {
@@ -284,6 +319,13 @@ pub struct EstimateCoverage {
     #[serde(rename = "Reason")]
     pub reason: String,
 }
+
+crate::wire::product::output::public_fields!(EstimateCoverage {
+    topic,
+    scope,
+    status,
+    reason
+});
 
 impl EstimateInput {
     /// Checks setup fields independent of the configured region or catalogs.

@@ -110,10 +110,24 @@ impl Client {
         id: &str,
         evidence: &mut Evidence,
     ) -> Result<Server, Failure<O>> {
-        self.server_detail_checked(ctx, id, evidence, false).await
+        self.server_detail_with_policy(ctx, id, evidence, false)
+            .await
     }
 
-    pub(super) async fn server_detail_checked<O>(
+    pub(super) async fn server_guard<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<crate::wire::product::guard::Guarded<Server>, Failure<O>> {
+        let value = self
+            .server_detail_with_policy(ctx, id, evidence, true)
+            .await?;
+        crate::wire::product::guard::Guarded::latest(value, evidence)
+            .map_err(|error| failure(*error))
+    }
+
+    async fn server_detail_with_policy<O>(
         &self,
         ctx: &RequestContext,
         id: &str,

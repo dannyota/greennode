@@ -90,6 +90,8 @@ pub struct GetLoadBalancerOutput {
     pub load_balancer: LoadBalancer,
 }
 
+crate::wire::product::output::public_fields!(GetLoadBalancerOutput { load_balancer });
+
 /// Selects all pools in a global load balancer.
 #[derive(Clone, Debug)]
 pub struct ListPoolsInput {
@@ -155,6 +157,8 @@ pub struct GetListenerOutput {
     pub listener: Listener,
 }
 
+crate::wire::product::output::public_fields!(GetListenerOutput { listener });
+
 /// Selects all member groups of a global pool.
 #[derive(Clone, Debug)]
 pub struct ListPoolMembersInput {
@@ -210,6 +214,8 @@ pub struct GetPoolMemberOutput {
     #[serde(rename = "PoolMember")]
     pub pool_member: PoolMember,
 }
+
+crate::wire::product::output::public_fields!(GetPoolMemberOutput { pool_member });
 
 /// Selects a load balancer's usage history and optional filters.
 #[derive(Clone, Debug)]

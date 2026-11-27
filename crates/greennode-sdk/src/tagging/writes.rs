@@ -209,7 +209,10 @@ impl Client {
                 let (e, _, _) = f.into_parts();
                 fail(e)
             })?;
-        let current = snapshot.0;
+        let current = snapshot
+            .into_checked(&evidence)
+            .map_err(|error| fail(*error))?
+            .0;
         if current.iter().any(|tag| tag.system_tag && tag.key == key) {
             return Err(fail(system_tag_error(&evidence, op_id, Some(id), key)));
         }
@@ -324,6 +327,17 @@ impl Client {
             );
             evidence.with_partial(
                 failure,
+                safe_partial(&evidence, output(&current)),
+                WriteDispatch::MayHaveBeenSent,
+            )
+        })?;
+        let snapshot = snapshot.into_checked(&evidence).map_err(|error| {
+            evidence.with_partial(
+                Failure::<Value>::new(
+                    (*error).with_cause(Error::new(ErrorClass::NotSettled)),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ),
                 safe_partial(&evidence, output(&current)),
                 WriteDispatch::MayHaveBeenSent,
             )

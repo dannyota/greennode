@@ -47,6 +47,20 @@ pub struct Cluster {
     pub enable_private_cluster: bool,
 }
 
+crate::wire::product::output::public_fields!(Cluster {
+    id,
+    name,
+    description,
+    status,
+    release_channel,
+    version,
+    az_strategy,
+    created_at,
+    updated_at,
+    num_nodes,
+    enable_private_cluster
+});
+
 /// Kubernetes version and its availability.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -62,6 +76,13 @@ pub struct ClusterVersion {
     pub deprecated_at: String,
 }
 
+crate::wire::product::output::public_fields!(ClusterVersion {
+    version,
+    enable,
+    stage,
+    deprecated_at
+});
+
 /// Kubernetes limits and cluster usage for the account in one region.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -75,6 +96,13 @@ pub struct Quota {
     /// Maximum nodes per node group.
     pub max_nodes_per_node_group: i64,
 }
+
+crate::wire::product::output::public_fields!(Quota {
+    max_clusters,
+    num_clusters,
+    max_node_groups_per_cluster,
+    max_nodes_per_node_group
+});
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -132,6 +132,75 @@ async fn rename_requires_matching_acknowledgement_and_sends_new_name() {
 }
 
 #[tokio::test]
+async fn resize_rechecks_the_current_flavor_with_the_write_bearer() {
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct Rotating(AtomicUsize);
+    impl crate::CredentialsProvider for Rotating {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            let bearer = if self.0.fetch_add(1, Ordering::Relaxed) < 2 {
+                CANARY
+            } else {
+                "jkl"
+            };
+            Box::pin(ready(Ok(crate::Token::new(Secret::new(bearer), None))))
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+    let server = TestServer::start(vec![
+        response(
+            r#"{"data":{"uuid":"server-1","status":"ACTIVE","flavor":{"flavorId":"pre6A6B6Cpost"}}}"#,
+        ),
+        response(r#"{"optimumPrice":-20}"#),
+        http("409 Conflict", "{}"),
+    ]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_credentials_provider(Arc::new(Rotating(AtomicUsize::new(0))))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let failure = Client::new(&config)
+        .resize_server(
+            &RequestContext::new().0,
+            ResizeServerInput {
+                server_id: "server-1".into(),
+                flavor_id: "flavor-2".into(),
+                no_wait: true,
+                max_price: 0.0,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
 async fn resize_oversized_conflict_is_rejected() {
     let server = TestServer::start(vec![
         response(

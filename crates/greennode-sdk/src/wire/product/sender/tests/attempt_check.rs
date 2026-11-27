@@ -141,3 +141,70 @@ async fn bearer_refreshed_after_a_401_is_compared_without_the_401_status() {
     assert_eq!(failure.dispatch, crate::WriteDispatch::MayHaveBeenSent);
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn guard_reflection_on_401_rejects_and_evicts_without_resending() {
+    struct Aged {
+        age: i64,
+        rejection: Mutex<Option<bool>>,
+        acquisitions: AtomicUsize,
+    }
+    impl BearerSource for Aged {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<BearerToken, crate::Error>> + Send + 'a>> {
+            self.acquisitions.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::ready(Ok(BearerToken {
+                token: Token::new(Secret::new("toy-session-token"), None),
+                obtained_at: Some(unauthorized::ObtainedAt::Disk(
+                    OffsetDateTime::UNIX_EPOCH - time::Duration::seconds(self.age),
+                )),
+                signin_credentials: None,
+            })))
+        }
+        fn rejected<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+            evict: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            *self.rejection.lock().unwrap() = Some(evict);
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+    for (age, evict) in [(29, false), (30, true)] {
+        let body = br#"{"reason":"toy-session-token"}"#;
+        let server = Server::start(vec![Response::Http {
+            status: "401 Unauthorized".into(),
+            headers: vec![("Content-Length".into(), body.len().to_string())],
+            body: body.to_vec(),
+        }]);
+        let source = Aged {
+            age,
+            rejection: Mutex::new(None),
+            acquisitions: AtomicUsize::new(0),
+        };
+        let (ctx, clock, deadline) = ctx();
+        let result = run!(
+            &client(&server),
+            &ctx,
+            &clock,
+            deadline,
+            &Operation {
+                guard: Some("test.guard"),
+                ..operation(Method::GET, redirect::Retry::Repeatable)
+            },
+            Auth::Bearer(&source),
+            &request(&server.origin),
+            &Immediate::default(),
+            &mut || 0
+        )
+        .await;
+        let failure = result.err().unwrap();
+        assert_eq!(*source.rejection.lock().unwrap(), Some(evict));
+        assert_eq!(source.acquisitions.load(Ordering::SeqCst), 1);
+        assert!(failure.status.is_none());
+        assert_eq!(server.requests(), 1);
+    }
+}

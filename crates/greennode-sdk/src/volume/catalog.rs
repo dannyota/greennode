@@ -75,6 +75,8 @@ pub struct GetVolumeTypeOutput {
     pub volume_type: VolumeType,
 }
 
+crate::wire::product::output::public_fields!(GetVolumeTypeOutput { volume_type });
+
 /// Selects the network zone for a default volume type read.
 #[derive(Clone, Debug, Default)]
 pub struct GetDefaultVolumeTypeInput {

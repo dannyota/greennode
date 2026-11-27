@@ -369,6 +369,8 @@ pub struct GetVpcOutput {
     pub vpc: Vpc,
 }
 
+crate::wire::product::output::public_fields!(GetVpcOutput { vpc });
+
 /// Subnet detail.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetSubnetOutput {
@@ -376,6 +378,8 @@ pub struct GetSubnetOutput {
     #[serde(rename = "Subnet")]
     pub subnet: Subnet,
 }
+
+crate::wire::product::output::public_fields!(GetSubnetOutput { subnet });
 
 /// DHCP options detail.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -385,6 +389,8 @@ pub struct GetDhcpOptionsOutput {
     pub dhcp_options: DhcpOptions,
 }
 
+crate::wire::product::output::public_fields!(GetDhcpOptionsOutput { dhcp_options });
+
 /// Network ACL detail.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetNetworkAclOutput {
@@ -393,6 +399,8 @@ pub struct GetNetworkAclOutput {
     pub acl: NetworkAcl,
 }
 
+crate::wire::product::output::public_fields!(GetNetworkAclOutput { acl });
+
 /// Security group detail.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetSecurityGroupOutput {
@@ -400,6 +408,8 @@ pub struct GetSecurityGroupOutput {
     #[serde(rename = "SecurityGroup")]
     pub security_group: SecurityGroup,
 }
+
+crate::wire::product::output::public_fields!(GetSecurityGroupOutput { security_group });
 
 model! {
     @ true;

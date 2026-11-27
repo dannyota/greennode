@@ -20,6 +20,8 @@ pub struct Backend {
     pub name: String,
 }
 
+crate::wire::product::output::public_fields!(Backend { id, name });
+
 /// A Backup Center policy and its verified schedule settings.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -71,6 +73,19 @@ pub struct Policy {
     pub updated_at: String,
 }
 
+crate::wire::product::output::public_fields!(Policy {
+    id,
+    backend_id,
+    project_id,
+    product,
+    name,
+    is_default,
+    backup_instance_count,
+    config,
+    created_at,
+    updated_at
+});
+
 /// Schedule start time and cadence flags. Only daily settings are projected.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -103,6 +118,18 @@ pub struct PolicyConfig {
     pub daily_config: Option<DailyConfig>,
 }
 
+crate::wire::product::output::public_fields!(PolicyConfig {
+    hour,
+    minute,
+    time_zone,
+    hourly_enabled,
+    daily_enabled,
+    weekly_enabled,
+    monthly_enabled,
+    is_protected_server,
+    daily_config
+});
+
 /// Daily backup settings with absent values preserved.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -116,6 +143,12 @@ pub struct DailyConfig {
     #[serde(default, deserialize_with = "optional_whole")]
     pub incremental_quantity: Option<i64>,
 }
+
+crate::wire::product::output::public_fields!(DailyConfig {
+    retention,
+    backup_type,
+    incremental_quantity
+});
 
 impl Policy {
     pub(super) fn reflects(&self, credentials: &SentCredentials) -> bool {

@@ -64,6 +64,30 @@ fn client_with_rotating_bearer(server: &Server, bearer: &'static str, after: usi
 }
 
 #[tokio::test]
+async fn readiness_status_is_rechecked_with_the_write_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":[]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let failure = client_with_rotating_bearer(&server, "ACTIVE", 1)
+        .update_hosted_zone(
+            &RequestContext::new().0,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn replacement_rechecks_copied_association_ids_against_the_write_bearer() {
     let server = Server::start(vec![
         response(

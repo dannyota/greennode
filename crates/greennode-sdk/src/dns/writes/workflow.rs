@@ -204,7 +204,10 @@ impl<'a> Workflow<'a> {
             })
     }
 
-    pub(super) async fn ready<T>(&mut self, zone_id: &str) -> Result<HostedZone, Failure<T>> {
+    pub(super) async fn ready<T>(
+        &mut self,
+        zone_id: &str,
+    ) -> Result<crate::wire::product::guard::Guarded<HostedZone>, Failure<T>> {
         self.poll(
             |flow| {
                 flow.diagnostic(
@@ -219,7 +222,12 @@ impl<'a> Workflow<'a> {
             },
             async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, zone_id).await?;
-                Ok(matches!(zone.status.as_str(), ACTIVE | ERROR).then_some(zone))
+                let zone = crate::wire::product::guard::Guarded::latest(zone, &flow.evidence)?;
+                Ok(matches!(
+                    zone.recheck(&flow.evidence)?.status.as_str(),
+                    ACTIVE | ERROR
+                )
+                .then_some(zone))
             },
         )
         .await

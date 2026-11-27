@@ -10,7 +10,7 @@ use crate::wire::product::{
     operation::{GuardOperation, Operation, RouteAuth, execute_raw},
     options::Options,
     redirect::{Classification, Retry},
-    response::{classify, sanitize_error_text},
+    response::{classify, decision_text, sanitize_error_text},
     retry,
 };
 use crate::wire::strict_json::{Shape, ShapeField, validate_shape};
@@ -113,6 +113,10 @@ impl Call {
         let parsed = envelope.code.as_deref().and_then(parse_code);
         let effective = parsed
             .as_deref()
+            .filter(|code| {
+                decision_text(code, evidence.credentials())
+                    .is_some_and(|safe| safe.as_str() == *code)
+            })
             .and_then(|code| code.parse::<u16>().ok())
             .unwrap_or_default();
         let code = if envelope.code.is_some() && parsed.is_none() {
@@ -123,15 +127,17 @@ impl Call {
                 .unwrap_or_else(|| "EnvelopeError".to_owned())
         };
         let message = envelope.message.as_deref().unwrap_or_default();
-        let (code, class, detail) = if message.contains("is not allow to update or delete") {
+        let decision = decision_text(message, evidence.credentials());
+        let decision = decision.as_ref().map_or("", |text| text.as_str());
+        let (code, class, detail) = if decision.contains("is not allow to update or delete") {
             (
                 code.as_str(),
                 ErrorClass::Api,
                 Some(ErrorDetail::ResourceBusy),
             )
-        } else if message.starts_with("Not found cdn") {
+        } else if decision.starts_with("Not found cdn") {
             ("NotFound", ErrorClass::NotFound, None)
-        } else if effective == 202 && message.starts_with("Last CDN flush cache time") {
+        } else if effective == 202 && decision.starts_with("Last CDN flush cache time") {
             (
                 code.as_str(),
                 ErrorClass::Api,

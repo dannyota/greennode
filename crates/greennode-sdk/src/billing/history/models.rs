@@ -48,6 +48,20 @@ pub struct Transaction {
     pub created_at: String,
 }
 
+crate::wire::product::output::public_fields!(Transaction {
+    id,
+    r#type,
+    type_code,
+    direction,
+    amount,
+    balance,
+    source_reference,
+    description,
+    user_service_reference,
+    invoice_id,
+    created_at
+});
+
 /// A payment entry as reported by billing.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase", try_from = "PaymentWire")]
@@ -71,6 +85,17 @@ pub struct Payment {
     /// Description when supplied.
     pub description: Option<String>,
 }
+
+crate::wire::product::output::public_fields!(Payment {
+    id,
+    type_code,
+    amount,
+    transaction_id,
+    gateway,
+    status,
+    created_at,
+    description
+});
 
 pub(super) trait HistoryRow: DeserializeOwned {
     const SCHEMA: Shape<'static>;

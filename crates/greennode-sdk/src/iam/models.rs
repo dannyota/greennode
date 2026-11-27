@@ -71,6 +71,12 @@ macro_rules! record {
             }
         }
 
+        impl $(<$item: crate::wire::product::output::PublicOutput>)? crate::wire::product::output::PublicOutput for $name $(<$item>)? {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $go) ||)+ false
+            }
+        }
+
         impl $(<$item: Serialize>)? Serialize for $name $(<$item>)? {
             fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 let mut output = serializer.serialize_struct(stringify!($name), [$($go),+].len())?;

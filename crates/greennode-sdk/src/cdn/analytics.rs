@@ -103,6 +103,12 @@ pub struct CacheSample {
     pub uncached: Field<f64>,
 }
 
+crate::wire::product::output::public_fields!(CacheSample {
+    time,
+    cached,
+    uncached
+});
+
 /// One sample in a traffic report.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -112,6 +118,8 @@ pub struct Sample {
     /// The measured amount.
     pub value: Field<f64>,
 }
+
+crate::wire::product::output::public_fields!(Sample { time, value });
 
 /// Traffic samples for a CDN domain and traffic group.
 #[derive(Clone, Debug, Serialize)]
@@ -129,6 +137,14 @@ pub struct DomainTraffic {
     /// The samples in ascending timestamp order.
     pub points: Vec<Sample>,
 }
+
+crate::wire::product::output::public_fields!(DomainTraffic {
+    domain_name,
+    cdn_domain,
+    traffic_type,
+    group_type,
+    points
+});
 
 /// The traffic report grouped by CDN domain and traffic type.
 pub type GetTrafficReportOutput = List<DomainTraffic>;
@@ -168,6 +184,8 @@ pub struct GetTrafficOutput {
     pub points: Vec<CacheSample>,
 }
 
+crate::wire::product::output::public_fields!(GetTrafficOutput { points });
+
 impl Client {
     /// Reads the CDN traffic series.
     pub async fn get_traffic(
@@ -192,6 +210,8 @@ pub struct GetRequestRateOutput {
     /// Samples in ascending timestamp order.
     pub points: Vec<CacheSample>,
 }
+
+crate::wire::product::output::public_fields!(GetRequestRateOutput { points });
 
 impl Client {
     /// Reads the CDN request rate series.
@@ -221,6 +241,8 @@ pub struct GetCacheStatusOutput {
     pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
 
+crate::wire::product::output::public_fields!(GetCacheStatusOutput { counts });
+
 impl Client {
     /// Reads request counts by cache status.
     pub async fn get_cache_status(
@@ -248,6 +270,8 @@ pub struct GetHttpCodesOutput {
     /// Counts keyed by the server’s category.
     pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
+
+crate::wire::product::output::public_fields!(GetHttpCodesOutput { counts });
 
 impl Client {
     /// Reads request counts by HTTP code.

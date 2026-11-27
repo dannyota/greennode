@@ -79,6 +79,8 @@ pub struct ImportCertificateOutput {
     pub certificate: Certificate,
 }
 
+crate::wire::product::output::public_fields!(ImportCertificateOutput { certificate });
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Body<'a> {

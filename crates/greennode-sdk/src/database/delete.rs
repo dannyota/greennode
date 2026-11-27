@@ -47,6 +47,8 @@ pub struct DeleteDatabaseInstanceOutput {
     pub deleted: bool,
 }
 
+crate::wire::product::output::public_fields!(DeleteDatabaseInstanceOutput { id, deleted });
+
 /// Delete preflight found an ineligible instance and sent no mutation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeleteRefused;

@@ -50,6 +50,14 @@ pub struct EngineVersion {
     pub license_name: String,
 }
 
+crate::wire::product::output::public_fields!(EngineVersion {
+    name,
+    r#type,
+    version_name,
+    version,
+    license_name
+});
+
 impl EngineVersion {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("name"),
@@ -90,6 +98,13 @@ pub struct Zone {
     )]
     pub zone_type: String,
 }
+
+crate::wire::product::output::public_fields!(Zone {
+    uuid,
+    name,
+    status,
+    zone_type
+});
 
 impl Zone {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -218,6 +233,27 @@ pub struct Flavor {
     pub zone_uuid: String,
 }
 
+crate::wire::product::output::public_fields!(Flavor {
+    id,
+    name,
+    flavor_id,
+    vcpus,
+    ram,
+    package_sku,
+    locate_zone_id,
+    monthly_cost,
+    price_key,
+    volume_size,
+    volume_type,
+    backup_size,
+    description,
+    family_type,
+    platform_type,
+    bandwidth,
+    bandwidth_unit,
+    zone_uuid
+});
+
 impl Flavor {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("id"),
@@ -292,6 +328,16 @@ pub struct StorageType {
     pub volume_type_sku: String,
 }
 
+crate::wire::product::output::public_fields!(StorageType {
+    id,
+    r#type,
+    min_volume_size,
+    max_volume_size,
+    zone_id,
+    volume_type_zone_id,
+    volume_type_sku
+});
+
 impl StorageType {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("id"),
@@ -343,6 +389,14 @@ pub struct Subnet {
     pub zone_id: String,
 }
 
+crate::wire::product::output::public_fields!(Subnet {
+    uuid,
+    network_uuid,
+    name,
+    status,
+    zone_id
+});
+
 impl Subnet {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("uuid"),
@@ -387,6 +441,14 @@ pub struct Network {
     #[serde(rename(deserialize = "subnets", serialize = "Subnets"))]
     pub subnets: Vec<Subnet>,
 }
+
+crate::wire::product::output::public_fields!(Network {
+    uuid,
+    display_name,
+    status,
+    zone_id,
+    subnets
+});
 
 impl Network {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -509,6 +571,27 @@ pub struct Instance {
     pub deleted: Option<bool>,
 }
 
+crate::wire::product::output::public_fields!(Instance {
+    id,
+    name,
+    status,
+    datastore_type,
+    datastore_version,
+    zone_id,
+    project_id,
+    subnet_id,
+    volume_type,
+    volume_size,
+    quota_package_id,
+    public_access,
+    backup_auto,
+    owner,
+    role,
+    replica_source_id,
+    replicas,
+    deleted
+});
+
 impl Instance {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("id"),
@@ -567,6 +650,14 @@ pub struct Page {
     )]
     pub max_size: i32,
 }
+
+crate::wire::product::output::public_fields!(Page {
+    total_pages,
+    total_elements,
+    size,
+    number,
+    max_size
+});
 
 impl Page {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[

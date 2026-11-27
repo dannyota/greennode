@@ -49,6 +49,21 @@ pub enum ResponseField<T> {
     Redacted,
 }
 
+impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
+    for ResponseField<T>
+{
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        match self {
+            Self::Value(value) => value.public_reflects(scan, identifier),
+            Self::Redacted => false,
+        }
+    }
+}
+
 impl<T: Default> Default for ResponseField<T> {
     fn default() -> Self {
         Self::Value(T::default())

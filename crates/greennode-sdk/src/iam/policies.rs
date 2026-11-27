@@ -48,6 +48,8 @@ pub struct GetPolicyOutput {
     pub policy: Policy,
 }
 
+crate::wire::product::output::public_fields!(GetPolicyOutput { policy });
+
 id_input!(
     /// Inputs for reading the principals attached to one policy.
     ListPolicyAttachmentsInput,
@@ -69,6 +71,12 @@ pub struct ListPolicyAttachmentsOutput {
     pub service_account_ids: Vec<String>,
 }
 
+crate::wire::product::output::public_fields!(ListPolicyAttachmentsOutput {
+    groups,
+    user_ids,
+    service_account_ids
+});
+
 id_input!(
     /// Inputs for reading one IAM group.
     GetGroupInput,
@@ -83,6 +91,8 @@ pub struct GetGroupOutput {
     #[serde(rename = "Group")]
     pub group: Group,
 }
+
+crate::wire::product::output::public_fields!(GetGroupOutput { group });
 
 id_input!(
     /// Inputs for reading the groups that contain one user.

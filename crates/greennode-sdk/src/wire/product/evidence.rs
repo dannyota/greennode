@@ -175,7 +175,7 @@ pub(super) fn body_reflects(
     if let Some(slot) = password_slot {
         return check_password_body(body, credentials, slot).unwrap_or(true);
     }
-    if body.is_empty() || credentials.values().is_empty() {
+    if body.is_empty() {
         return false;
     }
     let matcher = response::BodyMatcher::new(credentials, body.len());
@@ -251,6 +251,8 @@ pub(crate) type CachedCheck =
 pub(crate) struct Evidence {
     credentials: SentCredentials,
     cached: Vec<CachedCheck>,
+    guards: Vec<super::guard::Proof>,
+    guard_bytes: usize,
 }
 
 impl Evidence {
@@ -261,7 +263,7 @@ impl Evidence {
     pub(crate) fn from_credentials(credentials: &SentCredentials) -> Self {
         Self {
             credentials: credentials.clone(),
-            cached: Vec::new(),
+            ..Self::default()
         }
     }
 
@@ -292,7 +294,7 @@ impl Evidence {
     pub(crate) fn transport_only(&self) -> Self {
         Self {
             credentials: self.credentials.transport_only(),
-            cached: Vec::new(),
+            ..Self::default()
         }
     }
 
@@ -301,8 +303,36 @@ impl Evidence {
             credentials: self
                 .credentials
                 .filtered(|_, source| source != Source::OperationPassword),
-            cached: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    pub(super) fn keep_guard(&mut self, id: &'static str, body: &[u8]) -> bool {
+        let Some(total) = self.guard_bytes.checked_add(body.len()) else {
+            return false;
+        };
+        if total > 64 << 20 || self.guards.len() == 512 {
+            return false;
+        }
+        self.guard_bytes = total;
+        self.guards.push(super::guard::Proof {
+            id,
+            body: bytes::Bytes::copy_from_slice(body),
+        });
+        true
+    }
+
+    pub(super) fn last_guard(&self) -> Option<super::guard::Proof> {
+        self.guards.last().cloned()
+    }
+
+    pub(super) fn recheck_guards(
+        &self,
+        credentials: &SentCredentials,
+    ) -> Option<Box<crate::Error>> {
+        let transport = credentials.transport_only();
+        let matcher = response::BodyMatcher::with_work(&transport, 192 << 20);
+        self.guards.iter().find_map(|proof| proof.check(&matcher))
     }
 
     pub(crate) fn keep_cached_check(&mut self, check: CachedCheck) {
@@ -465,18 +495,29 @@ impl Evidence {
     }
 
     fn screen_peer_body(&self, body: &[u8], go_compatible: bool) -> Option<bool> {
-        let matcher = response::BodyMatcher::new(&self.credentials, body.len());
+        Self::screen_peer_with(
+            &response::BodyMatcher::new(&self.credentials, body.len()),
+            body,
+            go_compatible,
+        )
+    }
+
+    pub(super) fn screen_peer_with(
+        matcher: &response::BodyMatcher<'_>,
+        body: &[u8],
+        go_compatible: bool,
+    ) -> Option<bool> {
         if matcher.reflects(body, false) {
             return Some(true);
         }
-        peer::decoded_reflects(&matcher, body).or_else(|| {
+        peer::decoded_reflects(matcher, body).or_else(|| {
             if !go_compatible {
                 return None;
             }
             let std::borrow::Cow::Owned(normalized) = crate::model::wire::go_json(body) else {
                 return None;
             };
-            peer::decoded_reflects(&matcher, normalized.as_bytes())
+            peer::decoded_reflects(matcher, normalized.as_bytes())
         })
     }
 
@@ -553,6 +594,13 @@ mod tests {
         assert!(!exact.reflects(b"long-line"));
         let oversized = SentCredentials::for_test(vec![crate::Secret::new("x".repeat(64 << 10))]);
         assert!(oversized.reflects(b"ordinary"));
+    }
+
+    #[test]
+    fn outgoing_json_with_exhausted_depth_is_refused() {
+        let evidence = evidence(&["jkl"]);
+        let body = format!(r#"{{"value":{}0{}}}"#, "[".repeat(140), "]".repeat(140));
+        assert!(body_reflects(body.as_bytes(), evidence.credentials(), None));
     }
 
     #[test]

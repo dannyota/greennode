@@ -47,6 +47,14 @@ pub struct BandwidthPackage {
     pub bandwidth: i64,
 }
 
+crate::wire::product::output::public_fields!(BandwidthPackage {
+    id,
+    name,
+    kind,
+    description,
+    bandwidth
+});
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     /// Lists the selected project's bandwidth offers in Hanoi or HCM.

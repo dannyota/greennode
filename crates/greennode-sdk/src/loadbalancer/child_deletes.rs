@@ -85,6 +85,8 @@ pub struct DeletePoolInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePoolOutput {}
 
+crate::wire::product::output::public_fields!(DeletePoolOutput {});
+
 /// Identifies a listener to delete and controls confirmation.
 #[derive(Clone, Debug, Default)]
 pub struct DeleteListenerInput {
@@ -99,6 +101,8 @@ pub struct DeleteListenerInput {
 /// A listener delete has no output fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteListenerOutput {}
+
+crate::wire::product::output::public_fields!(DeleteListenerOutput {});
 
 /// Identifies a policy to delete and controls confirmation.
 #[derive(Clone, Debug, Default)]
@@ -116,6 +120,8 @@ pub struct DeletePolicyInput {
 /// A policy delete has no output fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
+
+crate::wire::product::output::public_fields!(DeletePolicyOutput {});
 
 struct Child<'a> {
     operation: &'static str,

@@ -28,6 +28,8 @@ pub struct GetUserOutput {
     pub user: UserDetail,
 }
 
+crate::wire::product::output::public_fields!(GetUserOutput { user });
+
 page_input!(
     /// Inputs for listing IAM users.
     ListUsersInput,
@@ -53,6 +55,8 @@ pub struct GetServiceAccountOutput {
     #[serde(rename = "ServiceAccount")]
     pub service_account: ServiceAccount,
 }
+
+crate::wire::product::output::public_fields!(GetServiceAccountOutput { service_account });
 
 page_input!(
     /// Inputs for listing IAM service accounts.

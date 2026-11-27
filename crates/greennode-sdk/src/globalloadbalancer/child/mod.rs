@@ -166,7 +166,8 @@ impl Child<'_> {
         if reply.reflection != Some(false) {
             return Err(self.invalid(DecodeError::ReflectedCredential));
         }
-        Ok(result)
+        let guarded = crate::wire::product::guard::Guarded::latest(result, &self.0.evidence)?;
+        guarded.into_checked(&self.0.evidence)
     }
 
     fn invalid(&self, detail: DecodeError) -> Box<Error> {

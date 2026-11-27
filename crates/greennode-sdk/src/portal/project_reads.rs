@@ -50,6 +50,20 @@ pub struct Zone {
     #[serde(rename(serialize = "IPRanges"))]
     pub ip_ranges: Option<Vec<String>>,
 }
+
+crate::wire::product::output::public_fields!(Zone {
+    id,
+    uuid,
+    name,
+    zone_type,
+    is_default,
+    description,
+    is_enabled,
+    volume_count,
+    server_count,
+    open_stack_zone,
+    ip_ranges
+});
 /// A project quota with API-defined fields.
 pub type Quota = UserInfo;
 /// A project tag quota with API-defined fields.
@@ -65,6 +79,8 @@ pub struct GetQuotaOutput {
     #[serde(rename = "Quota")]
     pub quota: Quota,
 }
+
+crate::wire::product::output::public_fields!(GetQuotaOutput { quota });
 /// The project tag quota.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct GetTagQuotaOutput {
@@ -72,6 +88,8 @@ pub struct GetTagQuotaOutput {
     #[serde(rename = "TagQuota")]
     pub tag_quota: TagQuota,
 }
+
+crate::wire::product::output::public_fields!(GetTagQuotaOutput { tag_quota });
 
 fn null_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())

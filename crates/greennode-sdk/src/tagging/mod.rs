@@ -42,6 +42,13 @@ pub struct Tag {
     pub created_at: String,
 }
 
+crate::wire::product::output::public_fields!(Tag {
+    key,
+    value,
+    system_tag,
+    created_at
+});
+
 /// Identifies the resource whose tags should be read.
 #[derive(Clone, Debug)]
 pub struct ListResourceTagsInput {
@@ -95,6 +102,12 @@ pub struct WriteResourceTagsOutput {
     /// Whether a replacement was needed.
     pub changed: bool,
 }
+
+crate::wire::product::output::public_fields!(WriteResourceTagsOutput {
+    tags,
+    previous,
+    changed
+});
 
 /// Shares the configuration's session for tag operations.
 #[derive(Clone)]

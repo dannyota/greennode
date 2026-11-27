@@ -4,6 +4,10 @@ use std::fmt;
 #[path = "error/detail.rs"]
 mod detail;
 use detail::Detail;
+#[path = "error/parts.rs"]
+mod parts;
+pub(crate) use parts::LoginFailureKind;
+pub use parts::{ApiError, LoginError, ServiceAccountLoginError};
 
 /// Stable categories for operation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,193 +131,6 @@ impl SystemTagText {
     }
 }
 
-/// Sanitized details of a failed service request.
-pub struct ApiError {
-    operation: &'static str,
-    status: Option<u16>,
-    code: String,
-    message: String,
-    retryable: bool,
-    public_route: bool,
-}
-
-impl ApiError {
-    pub(crate) fn new(
-        operation: &'static str,
-        status: Option<u16>,
-        code: SafeText,
-        message: SafeText,
-        retryable: bool,
-    ) -> Self {
-        let value = code.as_str();
-        let code =
-            if value.is_empty() || value == "null" || value == status.unwrap_or(0).to_string() {
-                match status {
-                    Some(400) => "BadRequest",
-                    Some(401) => "Unauthorized",
-                    Some(403) => "Forbidden",
-                    Some(404) => "NotFound",
-                    Some(409) => "Conflict",
-                    Some(429) => "Throttled",
-                    Some(500..) => "ServerError",
-                    Some(400..) => "ClientError",
-                    _ => "",
-                }
-            } else {
-                value
-            };
-        Self {
-            operation,
-            status,
-            code: code.to_owned(),
-            message: message.0,
-            retryable,
-            public_route: false,
-        }
-    }
-    pub(crate) fn without_fallback(
-        operation: &'static str,
-        status: Option<u16>,
-        code: SafeText,
-        message: SafeText,
-        retryable: bool,
-    ) -> Self {
-        Self {
-            operation,
-            status,
-            code: code.0,
-            message: message.0,
-            retryable,
-            public_route: false,
-        }
-    }
-    /// Returns the operation identifier.
-    pub fn operation(&self) -> &'static str {
-        self.operation
-    }
-    /// Returns the HTTP status when a response was received.
-    pub fn status(&self) -> Option<u16> {
-        self.status
-    }
-    /// Returns the sanitized service code or a status-derived fallback, possibly empty.
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-    /// Returns the sanitized service message, possibly empty.
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-    /// Reports whether the service failure is marked retryable.
-    pub fn retryable(&self) -> bool {
-        self.retryable
-    }
-}
-
-impl fmt::Debug for ApiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ApiError")
-            .field("operation", &self.operation)
-            .field("status", &self.status)
-            .field("retryable", &self.retryable)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) enum LoginFailureKind {
-    Other,
-    SigninRejected,
-    TotpRejected,
-    TokenCache,
-}
-
-/// Safe details of an IAM user login failure.
-#[derive(Clone)]
-pub struct LoginError {
-    kind: LoginFailureKind,
-    reason: &'static str,
-    status: Option<u16>,
-    captcha_suspected: bool,
-}
-impl LoginError {
-    pub(crate) fn new(reason: &'static str, status: Option<u16>, captcha_suspected: bool) -> Self {
-        Self {
-            kind: LoginFailureKind::Other,
-            reason,
-            status,
-            captcha_suspected,
-        }
-    }
-
-    pub(crate) fn with_kind(mut self, kind: LoginFailureKind) -> Self {
-        self.kind = kind;
-        self
-    }
-
-    pub(crate) fn kind(&self) -> LoginFailureKind {
-        self.kind
-    }
-
-    pub(crate) fn screen(&mut self, reflects: impl Fn(&str) -> bool) {
-        if reflects(self.reason) {
-            self.reason = "";
-        }
-        if self
-            .status
-            .is_some_and(|status| reflects(&status.to_string()))
-        {
-            self.status = None;
-        }
-    }
-
-    /// Returns fixed text identifying the failed step.
-    pub fn reason(&self) -> &'static str {
-        self.reason
-    }
-    /// Returns the HTTP status when a response was received.
-    pub fn status(&self) -> Option<u16> {
-        self.status
-    }
-    /// Reports a redisplayed sign-in form, which may indicate a CAPTCHA or wrong credentials.
-    pub fn captcha_suspected(&self) -> bool {
-        self.captcha_suspected
-    }
-}
-impl fmt::Debug for LoginError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LoginError")
-            .field("status", &self.status)
-            .field("captcha_suspected", &self.captcha_suspected)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Safe details of a service-account token exchange failure.
-pub struct ServiceAccountLoginError {
-    reason: &'static str,
-    status: Option<u16>,
-}
-impl ServiceAccountLoginError {
-    pub(crate) fn new(reason: &'static str, status: Option<u16>) -> Self {
-        Self { reason, status }
-    }
-    /// Returns fixed text identifying the failed step.
-    pub fn reason(&self) -> &'static str {
-        self.reason
-    }
-    /// Returns the HTTP status when a response was received.
-    pub fn status(&self) -> Option<u16> {
-        self.status
-    }
-}
-impl fmt::Debug for ServiceAccountLoginError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ServiceAccountLoginError")
-            .field("status", &self.status)
-            .finish_non_exhaustive()
-    }
-}
-
 const DIAGNOSTIC_FALLBACK: &str = "request failed";
 
 /// A categorized failure with optional typed details and a cause chain.
@@ -427,6 +244,15 @@ impl Error {
         while let Some(current) = node {
             if let Some(detail) = &mut current.detail {
                 detail.screen_public(reflects);
+            }
+            if let Some(api) = &mut current.api {
+                api.screen_formatter(reflects);
+            }
+            if let Some(login) = &mut current.login {
+                login.screen_formatter(reflects);
+            }
+            if let Some(login) = &mut current.service_login {
+                login.screen_formatter(reflects);
             }
             current.debug_reflected |= detail::debug_reflects(current, reflects);
             node = current.cause.as_deref_mut();

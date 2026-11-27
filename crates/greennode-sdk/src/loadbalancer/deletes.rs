@@ -46,6 +46,8 @@ pub struct DeleteLoadBalancerInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteLoadBalancerOutput {}
 
+crate::wire::product::output::public_fields!(DeleteLoadBalancerOutput {});
+
 /// Identifies the certificate to delete.
 #[derive(Clone, Debug, Default)]
 pub struct DeleteCertificateInput {
@@ -56,6 +58,8 @@ pub struct DeleteCertificateInput {
 /// A certificate delete has no output fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteCertificateOutput {}
+
+crate::wire::product::output::public_fields!(DeleteCertificateOutput {});
 
 /// Regional load balancer failure identities used in service operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -62,6 +62,7 @@ impl Client {
             )
             .await
             .map_err(|failure| Box::new(super::safe_error(op.id, failure.error())))?;
+        let state = state.into_checked(evidence)?;
         if state.id != id || !valid_status(&state.status) {
             return Err(Box::new(super::malformed(op.id)));
         }

@@ -55,6 +55,8 @@ pub struct CreatePolicyOutput {
     pub policy: Policy,
 }
 
+crate::wire::product::output::public_fields!(CreatePolicyOutput { policy });
+
 /// Replaces a customer IAM policy, preserving each omitted field.
 #[derive(Clone, Debug)]
 pub struct UpdatePolicyInput {
@@ -88,6 +90,8 @@ pub struct UpdatePolicyOutput {
     pub policy: Policy,
 }
 
+crate::wire::product::output::public_fields!(UpdatePolicyOutput { policy });
+
 super::id_input!(
     /// Identifies an unattached customer policy to delete.
     DeletePolicyInput,
@@ -98,6 +102,8 @@ super::id_input!(
 /// A completed policy deletion.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
+
+crate::wire::product::output::public_fields!(DeletePolicyOutput {});
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {

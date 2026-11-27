@@ -15,6 +15,21 @@ pub enum Field<T> {
     Redacted,
 }
 
+impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
+    for Field<T>
+{
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        match self {
+            Self::Value(value) => value.public_reflects(scan, identifier),
+            Self::Redacted => false,
+        }
+    }
+}
+
 impl<T: Default> Default for Field<T> {
     fn default() -> Self {
         Self::Value(T::default())
@@ -49,6 +64,16 @@ impl<T: Serialize> Field<T> {
 /// A timestamp with its offset and nanosecond precision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timestamp(pub OffsetDateTime);
+
+impl crate::wire::product::output::PublicOutput for Timestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
 
 impl Default for Timestamp {
     fn default() -> Self {
@@ -222,6 +247,20 @@ pub struct Certificate {
     pub ca_root: String,
 }
 
+crate::wire::product::output::public_fields!(Certificate {
+    id,
+    common_name,
+    c_name,
+    issuer,
+    valid_from,
+    expires_on,
+    status,
+    cdn_using,
+    created_time,
+    certificate,
+    ca_root
+});
+
 impl Certificate {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         redact_id(&mut self.id, evidence);
@@ -278,6 +317,15 @@ pub struct ApiKey {
     pub current: bool,
 }
 
+crate::wire::product::output::public_fields!(ApiKey {
+    id,
+    expires_at,
+    create_time,
+    update_time,
+    allow_origin_header,
+    current
+});
+
 impl ApiKey {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         self.id.redact(evidence);
@@ -328,6 +376,15 @@ pub struct WebAcceleratorSummary {
     pub status_name: String,
 }
 
+crate::wire::product::output::public_fields!(WebAcceleratorSummary {
+    cdn_id,
+    domain_name,
+    cdn_domain,
+    c_names,
+    status,
+    status_name
+});
+
 impl WebAcceleratorSummary {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         if let Field::Value(status) = self.status {
@@ -375,6 +432,13 @@ pub struct Upstream {
     pub status: Field<i64>,
 }
 
+crate::wire::product::output::public_fields!(Upstream {
+    id,
+    priority,
+    ip_address,
+    status
+});
+
 impl Upstream {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         redact_id(&mut self.id, evidence);
@@ -414,6 +478,13 @@ pub struct RuleAction {
     )]
     pub order: Field<i64>,
 }
+
+crate::wire::product::output::public_fields!(RuleAction {
+    id,
+    name,
+    value,
+    order
+});
 
 impl RuleAction {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
@@ -538,6 +609,27 @@ pub struct WebAccelerator {
     )]
     pub advanced_rule: Option<Box<RawValue>>,
 }
+
+crate::wire::product::output::public_fields!(WebAccelerator {
+    cdn_id,
+    kind,
+    domain_name,
+    cdn_domain,
+    c_names,
+    status,
+    status_name,
+    certificate_id,
+    lb_type,
+    origin_host_header,
+    fail_over_error_codes,
+    use_ssl,
+    use_small_file,
+    enable_gzip,
+    upstreams,
+    default_rule_actions,
+    page_rules,
+    advanced_rule
+});
 
 impl WebAccelerator {
     pub(super) fn redact(&mut self, evidence: &Evidence) {

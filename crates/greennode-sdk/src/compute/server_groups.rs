@@ -81,6 +81,8 @@ pub struct CreateServerGroupOutput {
     pub server_group: ServerGroup,
 }
 
+crate::wire::product::output::public_fields!(CreateServerGroupOutput { server_group });
+
 /// The group read after an update.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -89,9 +91,13 @@ pub struct UpdateServerGroupOutput {
     pub server_group: ServerGroup,
 }
 
+crate::wire::product::output::public_fields!(UpdateServerGroupOutput { server_group });
+
 /// An acknowledgement of server-group deletion.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct DeleteServerGroupOutput {}
+
+crate::wire::product::output::public_fields!(DeleteServerGroupOutput {});
 
 #[expect(
     clippy::result_large_err,

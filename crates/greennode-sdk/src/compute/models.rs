@@ -178,6 +178,15 @@ pub struct ServerGroupPolicy {
     pub descriptions: BTreeMap<String, String>,
 }
 
+crate::wire::product::output::public_fields!(ServerGroupPolicy {
+    name,
+    uuid,
+    status,
+    description,
+    description_vi,
+    descriptions
+});
+
 /// Server inventory page selection.
 #[derive(Clone, Debug, Default)]
 pub struct ListServersInput {
@@ -334,6 +343,8 @@ pub struct GetServerOutput {
     pub server: Server,
 }
 
+crate::wire::product::output::public_fields!(GetServerOutput { server });
+
 /// Result of the get server console log operation.
 #[derive(Clone, Debug, Serialize)]
 pub struct GetServerConsoleLogOutput {
@@ -341,6 +352,8 @@ pub struct GetServerConsoleLogOutput {
     #[serde(rename = "Log")]
     pub log: Secret,
 }
+
+crate::wire::product::output::public_fields!(GetServerConsoleLogOutput { log });
 
 /// Result of the list ssh keys operation.
 pub type ListSshKeysOutput = PagedList<SshKey>;
@@ -353,6 +366,8 @@ pub struct GetSshKeyOutput {
     pub ssh_key: SshKey,
 }
 
+crate::wire::product::output::public_fields!(GetSshKeyOutput { ssh_key });
+
 /// Result of the list server groups operation.
 pub type ListServerGroupsOutput = PagedList<ServerGroup>;
 
@@ -363,6 +378,8 @@ pub struct GetServerGroupOutput {
     #[serde(rename = "ServerGroup")]
     pub server_group: ServerGroup,
 }
+
+crate::wire::product::output::public_fields!(GetServerGroupOutput { server_group });
 
 /// Result of the list server security groups operation.
 pub type ListServerSecurityGroupsOutput = List<ServerSecurityGroup>;

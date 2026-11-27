@@ -52,8 +52,8 @@ impl GuardOperation {
         query: &[(&str, &str)],
         source: &dyn sender::BearerSource,
         evidence: &mut Evidence,
-    ) -> Result<(StatusCode, T), crate::Failure<T>> {
-        execute_with_evidence(
+    ) -> Result<(StatusCode, super::guard::Guarded<T>), crate::Failure<T>> {
+        let (status, value) = execute_with_evidence(
             runtime,
             base,
             self,
@@ -64,7 +64,10 @@ impl GuardOperation {
             bytes::Bytes::new(),
             evidence,
         )
-        .await
+        .await?;
+        let value = super::guard::Guarded::latest(value, evidence)
+            .map_err(|error| crate::Failure::new(*error, None, crate::WriteDispatch::NotAWrite))?;
+        Ok((status, value))
     }
 }
 
@@ -381,11 +384,21 @@ async fn send_route<T>(
         credentials,
         body,
     };
+    let attempt_check = |credentials: &sender::SentCredentials| {
+        let unsafe_guard = matches!(operation.class, redirect::Classification::Write)
+            .then(|| evidence.recheck_guards(credentials))
+            .flatten();
+        unsafe_guard.or_else(|| {
+            options
+                .attempt_check
+                .and_then(|check| (check.0)(credentials))
+        })
+    };
     let policy = sender::Operation {
         guard: (operation.reflection == Reflection::Guard).then_some(operation.id),
         pacing: options.pacing,
         response_guard: options.response_guard.map(|guard| (operation.id, guard)),
-        attempt_check: options.attempt_check,
+        attempt_check: Some(super::options::AttemptCheck(&attempt_check)),
         method: operation.method.clone(),
         class: operation.class,
         retry: operation.retry,
@@ -494,6 +507,16 @@ async fn send_route<T>(
         }
     };
     evidence.absorb(&response.credentials);
+    if operation.reflection == Reflection::Guard
+        && operation.success.contains(&response.status)
+        && !evidence.keep_guard(operation.id, &response.body)
+    {
+        return Err(crate::Failure::new(
+            unsafe_guard_response(operation.id),
+            None,
+            dispatch,
+        ));
+    }
     Ok(response)
 }
 

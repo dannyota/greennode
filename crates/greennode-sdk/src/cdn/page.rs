@@ -28,6 +28,8 @@ pub struct ListIpRangesOutput {
     pub source: String,
 }
 
+crate::wire::product::output::public_fields!(ListIpRangesOutput { items, source });
+
 impl Client {
     /// Reads the public CDN IP ranges without using account credentials.
     pub async fn list_ip_ranges(

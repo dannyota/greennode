@@ -64,6 +64,15 @@ pub struct Dashboard {
     pub updated_at: String,
 }
 
+crate::wire::product::output::public_fields!(Dashboard {
+    id,
+    name,
+    system,
+    favorite,
+    created_at,
+    updated_at
+});
+
 /// Filter and pagination for dashboard listing.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ListDashboardsInput {
@@ -101,6 +110,8 @@ pub struct GetDashboardOutput {
     #[serde(rename = "Dashboard")]
     pub dashboard: Dashboard,
 }
+
+crate::wire::product::output::public_fields!(GetDashboardOutput { dashboard });
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

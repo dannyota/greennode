@@ -55,6 +55,8 @@ pub struct Page<T> {
     pub total_item: Field<i64>,
 }
 
+crate::wire::product::output::public_fields!(Page<T> { items, page, page_size, total_page, total_item });
+
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
 pub(super) struct PageResponse<T: DeserializeOwned + Resource> {

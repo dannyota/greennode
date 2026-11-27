@@ -81,6 +81,16 @@ pub struct GetCostOverviewOutput {
     pub group_by: String,
 }
 
+crate::wire::product::output::public_fields!(GetCostOverviewOutput {
+    summary,
+    series,
+    grouped_series,
+    interval,
+    start_date,
+    end_date,
+    group_by
+});
+
 /// Date range, filters, ordering, and pagination for resource costs.
 #[derive(Clone, Debug)]
 pub struct ListCostResourcesInput {
@@ -133,6 +143,8 @@ pub struct ListCostResourcesOutput {
     pub summary: CostResourceSummary,
 }
 
+crate::wire::product::output::public_fields!(ListCostResourcesOutput { resources, summary });
+
 impl Serialize for ListCostResourcesOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("ListCostResourcesOutput", 6)?;
@@ -157,6 +169,8 @@ pub struct GetBalancesOutput {
     #[serde(rename = "Balances")]
     pub balances: Balances,
 }
+
+crate::wire::product::output::public_fields!(GetBalancesOutput { balances });
 
 #[expect(
     clippy::result_large_err,
@@ -391,6 +405,8 @@ pub struct CostBreakdown {
     pub percent: f64,
 }
 
+crate::wire::product::output::public_fields!(CostBreakdown { key, cost, percent });
+
 impl<'de> Deserialize<'de> for CostBreakdown {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Default, Deserialize)]
@@ -444,6 +460,15 @@ pub struct CostSummary {
     pub breakdown: Vec<CostBreakdown>,
 }
 
+crate::wire::product::output::public_fields!(CostSummary {
+    current_cost,
+    last_period_cost,
+    change_percent,
+    forecast_cost,
+    active_count,
+    breakdown
+});
+
 /// A legacy date and cost point.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -453,6 +478,8 @@ pub struct CostSeries {
     /// Cost in VND for that date.
     pub cost: f64,
 }
+
+crate::wire::product::output::public_fields!(CostSeries { date, cost });
 
 /// A group in the cost overview.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -467,6 +494,8 @@ pub struct CostSeriesGroup {
     pub points: Vec<CostSeriesPoint>,
 }
 
+crate::wire::product::output::public_fields!(CostSeriesGroup { key, color, points });
+
 /// One bucket in a grouped cost series.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -478,6 +507,8 @@ pub struct CostSeriesPoint {
     #[serde(rename(deserialize = "y"))]
     pub cost: f64,
 }
+
+crate::wire::product::output::public_fields!(CostSeriesPoint { date, cost });
 
 /// Cost of a resource over the requested range.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -514,6 +545,16 @@ pub struct CostResource {
     pub start_date: String,
 }
 
+crate::wire::product::output::public_fields!(CostResource {
+    resource_id,
+    resource_name,
+    resource_type,
+    product,
+    cost,
+    daily_average,
+    start_date
+});
+
 /// Aggregate costs across matching resources.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -525,6 +566,12 @@ pub struct CostResourceSummary {
     /// Average cost in VND per matching resource.
     pub avg_per_resource: f64,
 }
+
+crate::wire::product::output::public_fields!(CostResourceSummary {
+    total_all,
+    active_count,
+    avg_per_resource
+});
 
 /// Cash and pay-on-credit balances. A missing balance kind is reported as `None`.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
@@ -546,6 +593,14 @@ pub struct Balances {
     #[serde(rename(serialize = "POCHolding"), deserialize_with = "decode_money")]
     pub poc_holding: Option<f64>,
 }
+
+crate::wire::product::output::public_fields!(Balances {
+    cash,
+    poc,
+    cash_available,
+    cash_holding,
+    poc_holding
+});
 
 fn serialize_series<S: Serializer, T: Serialize>(
     series: &Option<Vec<T>>,

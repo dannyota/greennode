@@ -290,35 +290,30 @@ async fn a_preflight_not_found_is_not_a_delete_confirmation() {
 }
 
 #[tokio::test]
-async fn output_redacts_typed_numbers_and_booleans() {
+async fn output_withholds_reflecting_typed_numbers_and_booleans() {
     let (ctx, _) = RequestContext::new();
     let create = Server::start(vec![
         response("202 Accepted", ACCEPTED),
         response("200 OK", DETAIL),
     ]);
-    let output = write_client(&create, "0")
+    let failure = write_client(&create, "0")
         .create_load_balancer(&ctx, CreateLoadBalancerInput::new("demo", "pkg-1"))
         .await
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(output).unwrap()["LoadBalancer"]["UserID"],
-        "<redacted>"
-    );
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
 
     let delete = Server::start(vec![
         response("200 OK", DETAIL),
         response("202 Accepted", ""),
         response("404 Not Found", "{}"),
     ]);
-    let output = write_client(&delete, "true")
+    let failure = write_client(&delete, "true")
         .delete_load_balancer(&ctx, DeleteLoadBalancerInput::new(GLB))
         .await
-        .unwrap();
-    assert!(output.deleted);
-    assert_eq!(
-        serde_json::to_value(output).unwrap()["Deleted"],
-        "<redacted>"
-    );
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
 }
 
 #[tokio::test]

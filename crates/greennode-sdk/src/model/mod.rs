@@ -30,6 +30,15 @@ pub struct Project {
     pub user_id: i64,
 }
 
+crate::wire::product::output::public_fields!(Project {
+    id,
+    name,
+    region,
+    status,
+    is_default,
+    user_id
+});
+
 impl<'de> Deserialize<'de> for Project {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct ProjectVisitor;
@@ -149,6 +158,8 @@ pub struct List<T> {
     pub items: Vec<T>,
 }
 
+crate::wire::product::output::public_fields!(List<T> { items });
+
 /// Items and pagination metadata, serialized with service-format keys.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PagedList<T> {
@@ -168,3 +179,5 @@ pub struct PagedList<T> {
     #[serde(rename = "TotalItem")]
     pub total_item: i64,
 }
+
+crate::wire::product::output::public_fields!(PagedList<T> { items, page, page_size, total_page, total_item });

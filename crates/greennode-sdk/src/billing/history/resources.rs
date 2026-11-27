@@ -52,6 +52,16 @@ pub struct ListResourcesOutput {
     pub extra: ResourceThresholds,
 }
 
+crate::wire::product::output::public_fields!(ListResourcesOutput {
+    items,
+    total_auto_renews,
+    total_good_resources,
+    total_warning_resources,
+    total_alerted_resources,
+    total_expired_resources,
+    extra
+});
+
 /// A prepaid resource's identity, renewal state, and billing details.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(
@@ -106,6 +116,25 @@ pub struct Resource {
     pub billing_elements: Vec<ResourceBillingElement>,
 }
 
+crate::wire::product::output::public_fields!(Resource {
+    artifact_id,
+    artifact_name,
+    artifact_type,
+    product,
+    renew_type,
+    billing_type,
+    start_billing_time,
+    end_billing_time,
+    date_left,
+    renew_period,
+    channel,
+    is_renewing,
+    cost,
+    status,
+    status_ui,
+    billing_elements
+});
+
 /// One billing element of a prepaid resource.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(
@@ -124,6 +153,12 @@ pub struct ResourceBillingElement {
     pub meta_key: Option<Box<RawValue>>,
 }
 
+crate::wire::product::output::public_fields!(ResourceBillingElement {
+    sku,
+    quantity,
+    meta_key
+});
+
 /// Warning and alarm thresholds supplied with prepaid resources.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(
@@ -138,6 +173,11 @@ pub struct ResourceThresholds {
     #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
     pub alarm_thresholds: Option<Box<RawValue>>,
 }
+
+crate::wire::product::output::public_fields!(ResourceThresholds {
+    warning_thresholds,
+    alarm_thresholds
+});
 
 #[expect(
     clippy::result_large_err,

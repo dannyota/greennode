@@ -51,6 +51,8 @@ pub struct CreateGroupOutput {
     pub group: Group,
 }
 
+crate::wire::product::output::public_fields!(CreateGroupOutput { group });
+
 /// Updates a group's name or description.
 #[derive(Clone, Debug)]
 pub struct UpdateGroupInput {
@@ -81,6 +83,8 @@ pub struct UpdateGroupOutput {
     pub group: Group,
 }
 
+crate::wire::product::output::public_fields!(UpdateGroupOutput { group });
+
 super::id_input!(
     /// Identifies an empty IAM group to delete.
     DeleteGroupInput,
@@ -91,6 +95,8 @@ super::id_input!(
 /// A completed group deletion.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeleteGroupOutput {}
+
+crate::wire::product::output::public_fields!(DeleteGroupOutput {});
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {

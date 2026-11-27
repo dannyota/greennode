@@ -70,6 +70,8 @@ pub struct CreateUserOutput {
     evidence: Evidence,
 }
 
+crate::wire::product::output::public_fields!(CreateUserOutput { user; secret_key, evidence });
+
 impl CreateUserOutput {
     /// Borrows the one-time secret for storage in a private destination.
     pub fn secret_key(&self) -> &Secret {
@@ -112,6 +114,8 @@ impl DeleteUserInput {
 /// An acknowledged user deletion with no resource fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DeleteUserOutput {}
+
+crate::wire::product::output::public_fields!(DeleteUserOutput {});
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]

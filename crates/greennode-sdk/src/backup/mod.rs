@@ -51,6 +51,14 @@ pub struct ListBackendsOutput {
     pub total_item: i64,
 }
 
+crate::wire::product::output::public_fields!(ListBackendsOutput {
+    items,
+    page,
+    page_size,
+    total_page,
+    total_item
+});
+
 /// Page selection for the policy list.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ListPoliciesInput {
@@ -86,6 +94,8 @@ pub struct GetPolicyOutput {
     #[serde(rename = "Policy")]
     pub policy: Policy,
 }
+
+crate::wire::product::output::public_fields!(GetPolicyOutput { policy });
 
 #[expect(
     clippy::result_large_err,

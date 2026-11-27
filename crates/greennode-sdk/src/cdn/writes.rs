@@ -70,6 +70,11 @@ macro_rules! toggle_types {
             /// Whether a toggle was sent and confirmed by a read.
             pub changed: bool,
         }
+
+        crate::wire::product::output::public_fields!($output {
+            web_accelerator,
+            changed
+        });
     };
 }
 
@@ -96,6 +101,8 @@ impl DeleteWebAcceleratorInput {
 #[derive(Clone, Debug, Serialize)]
 pub struct DeleteWebAcceleratorOutput {}
 
+crate::wire::product::output::public_fields!(DeleteWebAcceleratorOutput {});
+
 /// Input for purging exact cached paths.
 #[derive(Clone, Debug)]
 pub struct PurgePathsInput {
@@ -118,6 +125,8 @@ impl PurgePathsInput {
 /// An accepted purge of the requested paths.
 #[derive(Clone, Debug, Serialize)]
 pub struct PurgePathsOutput {}
+
+crate::wire::product::output::public_fields!(PurgePathsOutput {});
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WriteKind {

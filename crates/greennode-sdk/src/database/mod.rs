@@ -72,6 +72,8 @@ pub struct ListDatabaseStorageTypesOutput {
     #[serde(rename = "Items")]
     pub items: Vec<StorageType>,
 }
+
+crate::wire::product::output::public_fields!(ListDatabaseStorageTypesOutput { project_id, items });
 /// Selects networks for a zone.
 #[derive(Clone, Debug, Default)]
 pub struct ListDatabaseNetworksInput {
@@ -102,6 +104,12 @@ pub struct ListDatabaseInstancesOutput {
     pub page: Page,
 }
 
+crate::wire::product::output::public_fields!(ListDatabaseInstancesOutput {
+    project_id,
+    items,
+    page
+});
+
 /// Selects one relational instance by ID.
 #[derive(Clone, Debug, Default)]
 pub struct GetDatabaseInstanceInput {
@@ -116,6 +124,8 @@ pub struct GetDatabaseInstanceOutput {
     #[serde(rename = "Instance")]
     pub instance: Instance,
 }
+
+crate::wire::product::output::public_fields!(GetDatabaseInstanceOutput { instance });
 
 #[expect(
     clippy::result_large_err,

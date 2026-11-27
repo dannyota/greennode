@@ -45,6 +45,8 @@ pub struct CreateRepositoryOutput {
     projection: Value,
 }
 
+crate::wire::product::output::public_fields!(CreateRepositoryOutput { repository; projection });
+
 fn serialize_repository<S: serde::Serializer>(
     value: &Value,
     serializer: S,
@@ -138,6 +140,8 @@ impl DeleteRepositoryInput {
 /// An accepted repository deletion with no resource fields.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteRepositoryOutput {}
+
+crate::wire::product::output::public_fields!(DeleteRepositoryOutput {});
 
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
@@ -325,4 +329,22 @@ fn settlement_failure<T>(
         )
         .into_parts();
     Failure::new(error, allowed.map(|_| output), dispatch)
+}
+
+#[cfg(test)]
+mod typed_output_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn exit_refuses_typed_image_count_hidden_by_the_projection() {
+        use crate::Secret;
+        let result = crate::wire::product::exit::finish!(async {
+            let mut result = CreateRepositoryOutput::new(Repository::default(), &Evidence::new());
+            result.repository.image_count = 937;
+            let mut evidence = Evidence::new();
+            evidence.add_secret(&Secret::new("937"));
+            Ok(result)
+        });
+        assert!(result.is_err());
+    }
 }

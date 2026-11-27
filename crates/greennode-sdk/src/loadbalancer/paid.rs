@@ -50,6 +50,11 @@ pub struct CreateLoadBalancerOutput {
     pub quoted_price: f64,
 }
 
+crate::wire::product::output::public_fields!(CreateLoadBalancerOutput {
+    load_balancer,
+    quoted_price
+});
+
 /// Result of resizing a regional load balancer.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -61,6 +66,12 @@ pub struct ResizeLoadBalancerOutput {
     /// Whether a resize was submitted.
     pub changed: bool,
 }
+
+crate::wire::product::output::public_fields!(ResizeLoadBalancerOutput {
+    load_balancer,
+    quoted_price,
+    changed
+});
 
 /// A regional write could not proceed while the resource was busy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

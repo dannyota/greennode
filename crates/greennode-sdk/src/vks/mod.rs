@@ -69,6 +69,8 @@ pub struct GetQuotaOutput {
     pub quota: Quota,
 }
 
+crate::wire::product::output::public_fields!(GetQuotaOutput { quota });
+
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"

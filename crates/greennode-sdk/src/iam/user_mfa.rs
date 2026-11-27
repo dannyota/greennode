@@ -55,6 +55,12 @@ pub struct UserMfaWriteOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(UserMfaWriteOutput {
+    method,
+    enabled,
+    changed
+});
+
 /// The MFA state after an enable operation.
 pub type EnableUserMfaOutput = UserMfaWriteOutput;
 /// The MFA state after a disable operation.

@@ -45,6 +45,8 @@ pub struct ListFlavorPricesOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(ListFlavorPricesOutput { items, metadata });
+
 /// One catalog flavor and the price of its reference instance.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FlavorPrice {
@@ -92,6 +94,23 @@ pub struct FlavorPrice {
     pub price: DiscoveryPrice,
 }
 
+crate::wire::product::output::public_fields!(FlavorPrice {
+    flavor,
+    zone_id,
+    zone_name,
+    family,
+    family_name,
+    platform,
+    visibility,
+    ram_unit,
+    zone_enabled,
+    ram_gib,
+    price_per_gib,
+    price_per_ram_unit,
+    reference,
+    price
+});
+
 /// The image and root disk chosen for an instance quote.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FlavorPriceReference {
@@ -111,3 +130,11 @@ pub struct FlavorPriceReference {
     #[serde(rename = "RootDiskSizeGB")]
     pub root_disk_size_gb: i64,
 }
+
+crate::wire::product::output::public_fields!(FlavorPriceReference {
+    image_id,
+    image_type,
+    image_version,
+    root_disk_type_id,
+    root_disk_size_gb
+});

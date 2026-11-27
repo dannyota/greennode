@@ -66,6 +66,8 @@ macro_rules! output {
             $($(#[$field_meta])* #[serde(rename = $name)] pub $field: $ty,)*
         }
 
+        crate::wire::product::output::public_fields!($model { $($field),* });
+
         impl super::Screen for $model {
             fn screen(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
                 $(super::Screen::screen(&mut self.$field, evidence) &&)* true

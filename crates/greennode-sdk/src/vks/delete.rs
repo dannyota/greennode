@@ -41,6 +41,8 @@ pub struct DeleteClusterOutput {
     pub deleted: bool,
 }
 
+crate::wire::product::output::public_fields!(DeleteClusterOutput { deleted });
+
 #[derive(Default, Deserialize)]
 struct Acknowledgement {}
 

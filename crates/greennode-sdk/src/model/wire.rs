@@ -354,6 +354,12 @@ macro_rules! model {
             )?
         }
 
+        impl crate::wire::product::output::PublicOutput for $model {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $go) ||)* $(scan.field(&self.$derived, identifier, stringify!($derived), $derived_go) ||)? false
+            }
+        }
+
         impl serde::Serialize for $model {
             fn serialize<S: serde::Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
                 $(if $crate::wire::product::identifier::declared($wire, $go) {

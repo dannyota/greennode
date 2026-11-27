@@ -74,6 +74,8 @@ pub struct CreatePoolOutput {
     projection: Option<PoolProjection>,
 }
 
+crate::wire::product::output::public_fields!(CreatePoolOutput { pool; projection });
+
 impl Serialize for CreatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("CreatePoolOutput", 1)?;
@@ -144,6 +146,8 @@ pub struct UpdatePoolOutput {
     pub pool: Pool,
     projection: Option<PoolProjection>,
 }
+
+crate::wire::product::output::public_fields!(UpdatePoolOutput { pool; projection });
 
 impl Serialize for UpdatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

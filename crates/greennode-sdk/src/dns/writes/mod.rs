@@ -92,6 +92,10 @@ impl Client {
             )?;
             let mut flow = Workflow::start(self, ctx, UPDATE_ZONE).await?;
             let current = flow.ready(id).await?;
+            let current = current
+                .recheck(&flow.evidence)
+                .map_err(|error| not_sent(*error))?
+                .clone();
             if (input.description.is_none()
                 && flow
                     .evidence

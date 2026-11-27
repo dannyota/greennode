@@ -141,6 +141,8 @@ pub struct CreatePoolOutput {
     pub pool_member: PoolMember,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(CreatePoolOutput { pool, pool_member; screen });
 impl CreatePoolOutput {
     pub(super) fn new(pool: Pool, pool_member: PoolMember, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -172,6 +174,8 @@ pub struct CreateListenerOutput {
     pub listener: Listener,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(CreateListenerOutput { listener; screen });
 impl CreateListenerOutput {
     pub(super) fn new(listener: Listener, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -205,6 +209,8 @@ pub struct DeletePoolOutput {
     pub deleted: bool,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(DeletePoolOutput { load_balancer_id, pool_id, deleted; screen });
 impl DeletePoolOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -246,6 +252,8 @@ pub struct DeleteListenerOutput {
     pub deleted: bool,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(DeleteListenerOutput { load_balancer_id, listener_id, deleted; screen });
 impl DeleteListenerOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {

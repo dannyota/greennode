@@ -41,12 +41,16 @@ pub struct GetUserInfoOutput {
     pub user_info: UserInfo,
 }
 
+crate::wire::product::output::public_fields!(GetUserInfoOutput { user_info });
+
 /// Portal user details, including account data and API-defined fields.
 #[derive(Clone, Default, PartialEq)]
 pub struct UserInfo {
     /// Account fields keyed by their API names.
     pub fields: BTreeMap<String, Value>,
 }
+
+crate::wire::product::output::public_fields!(UserInfo { fields });
 
 impl Serialize for UserInfo {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

@@ -49,6 +49,8 @@ pub struct CreateBudgetThresholdOutput {
     pub threshold: Threshold,
 }
 
+crate::wire::product::output::public_fields!(CreateBudgetThresholdOutput { threshold });
+
 /// Changes selected fields on an existing budget threshold.
 #[derive(Clone, Debug)]
 pub struct UpdateBudgetThresholdInput {
@@ -84,6 +86,8 @@ impl UpdateBudgetThresholdInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct UpdateBudgetThresholdOutput {}
 
+crate::wire::product::output::public_fields!(UpdateBudgetThresholdOutput {});
+
 /// Selects a threshold to delete.
 #[derive(Clone, Debug)]
 pub struct DeleteBudgetThresholdInput {
@@ -106,6 +110,8 @@ impl DeleteBudgetThresholdInput {
 /// A confirmed deletion with no returned fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeleteBudgetThresholdOutput {}
+
+crate::wire::product::output::public_fields!(DeleteBudgetThresholdOutput {});
 
 #[expect(
     clippy::result_large_err,

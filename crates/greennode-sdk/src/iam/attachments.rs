@@ -40,6 +40,8 @@ macro_rules! attachment {
         #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
         pub struct $output {}
 
+        crate::wire::product::output::public_fields!($output {});
+
         #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
         impl Client {
             $(#[$doc])*

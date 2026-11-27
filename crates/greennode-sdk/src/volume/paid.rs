@@ -41,6 +41,11 @@ pub struct CreateVolumeOutput {
     pub monthly_price: f64,
 }
 
+crate::wire::product::output::public_fields!(CreateVolumeOutput {
+    volume,
+    monthly_price
+});
+
 impl Redact for CreateVolumeOutput {
     fn redact(&mut self, evidence: &Evidence) {
         self.volume.redact(evidence);
@@ -56,6 +61,11 @@ pub struct ResizeVolumeOutput {
     /// Quoted price adjustment in VND.
     pub quoted_adjustment: f64,
 }
+
+crate::wire::product::output::public_fields!(ResizeVolumeOutput {
+    volume,
+    quoted_adjustment
+});
 
 impl Redact for ResizeVolumeOutput {
     fn redact(&mut self, evidence: &Evidence) {

@@ -119,6 +119,8 @@ pub struct StartServerOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(StartServerOutput { server, changed });
+
 /// Result of stopping a server.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -129,6 +131,8 @@ pub struct StopServerOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(StopServerOutput { server, changed });
+
 /// Result of rebooting a server.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -137,6 +141,8 @@ pub struct RebootServerOutput {
     pub server: Server,
 }
 
+crate::wire::product::output::public_fields!(RebootServerOutput { server });
+
 /// Server returned by a successful rename.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -144,6 +150,8 @@ pub struct RenameServerOutput {
     /// The renamed server.
     pub server: Server,
 }
+
+crate::wire::product::output::public_fields!(RenameServerOutput { server });
 
 /// Result of changing the server's flavor.
 #[derive(Clone, Debug, Serialize)]
@@ -154,6 +162,11 @@ pub struct ResizeServerOutput {
     /// Signed quote in VND. Negative values indicate a credit.
     pub quoted_adjustment: f64,
 }
+
+crate::wire::product::output::public_fields!(ResizeServerOutput {
+    server,
+    quoted_adjustment
+});
 
 #[expect(
     clippy::result_large_err,
@@ -317,7 +330,7 @@ impl Client {
                     &mut evidence,
                 )
                 .await?;
-            if evidence.text_reflects(&server.flavor.flavor_id) {
+            if evidence.id_reflects(&server.flavor.flavor_id) {
                 return Err(not_sent(invalid_preflight(&evidence)));
             }
             if server.flavor.flavor_id == input.flavor_id {
@@ -392,13 +405,12 @@ impl Client {
         self.guard_write(ctx, &json!([id, body]), evidence)
             .map_err(|error| not_sent(*error))?;
         let server = self
-            .server_detail_checked::<()>(ctx, id, evidence, true)
+            .server_guard::<()>(ctx, id, evidence)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
-        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
-            return Err(not_sent(invalid_preflight(evidence)));
-        }
-        Ok(server)
+        server
+            .into_checked(evidence)
+            .map_err(|error| not_sent(*error))
     }
 
     async fn toggle<O>(

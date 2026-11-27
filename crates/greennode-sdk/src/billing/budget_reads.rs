@@ -19,6 +19,8 @@ pub struct GetCurrentPeriodCostOutput {
     pub period_cost: PeriodCost,
 }
 
+crate::wire::product::output::public_fields!(GetCurrentPeriodCostOutput { period_cost });
+
 /// Dates and spend for the current billing period.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
@@ -37,6 +39,14 @@ pub struct PeriodCost {
     /// Forecasted spend in the account's billing currency.
     pub forecasted_cost: f64,
 }
+
+crate::wire::product::output::public_fields!(PeriodCost {
+    period_key,
+    period_start,
+    period_end,
+    actual_cost,
+    forecasted_cost
+});
 
 /// Selects the budget whose thresholds to read.
 #[derive(Clone, Debug)]
@@ -93,6 +103,18 @@ pub struct Threshold {
     pub last_alert_at: String,
 }
 
+crate::wire::product::output::public_fields!(Threshold {
+    uuid,
+    threshold_type,
+    threshold_percentage,
+    comparison_operator,
+    enabled,
+    max_alerts_per_period,
+    reminder_interval_hours,
+    notification_state,
+    last_alert_at
+});
+
 /// Selects a budget and optionally filters its alerts by period.
 #[derive(Clone, Debug)]
 pub struct ListBudgetAlertsInput {
@@ -137,6 +159,17 @@ pub struct Alert {
     /// Original recipients string when the API did not encode a valid list.
     pub recipients_raw: String,
 }
+
+crate::wire::product::output::public_fields!(Alert {
+    triggered_at,
+    threshold_type,
+    threshold_percentage,
+    triggered_value,
+    actual_percentage,
+    delivery_status,
+    recipients,
+    recipients_raw
+});
 
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

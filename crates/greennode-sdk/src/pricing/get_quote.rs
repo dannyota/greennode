@@ -49,6 +49,14 @@ pub struct GetQuoteOutput {
     pub properties: Vec<PriceProperty>,
 }
 
+crate::wire::product::output::public_fields!(GetQuoteOutput {
+    optimum_price,
+    original_price,
+    discount_price,
+    discount_percent,
+    properties
+});
+
 /// One line of a regional quote.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -66,6 +74,15 @@ pub struct PriceProperty {
     /// Discount percentage.
     pub discount_percent: f64,
 }
+
+crate::wire::product::output::public_fields!(PriceProperty {
+    name,
+    description,
+    optimum_price,
+    monthly_price,
+    current_price,
+    discount_percent
+});
 
 #[expect(
     clippy::result_large_err,

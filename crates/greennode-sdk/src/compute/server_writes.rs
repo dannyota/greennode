@@ -48,6 +48,11 @@ pub struct CreateServerOutput {
     pub monthly_price: f64,
 }
 
+crate::wire::product::output::public_fields!(CreateServerOutput {
+    server,
+    monthly_price
+});
+
 /// Options for deleting a server.
 #[derive(Clone, Debug, Default)]
 pub struct DeleteServerInput {
@@ -69,6 +74,11 @@ pub struct DeleteServerOutput {
     #[serde(rename = "KeptVolumeIDs")]
     pub kept_volume_ids: Vec<String>,
 }
+
+crate::wire::product::output::public_fields!(DeleteServerOutput {
+    deleted_volume_ids,
+    kept_volume_ids
+});
 
 #[expect(
     clippy::result_large_err,
@@ -189,9 +199,11 @@ impl Client {
             self.guard_write(ctx, &json!([id, body]), &mut evidence)
                 .map_err(|error| not_sent(*error))?;
             let mut server = self
-                .server_detail_checked::<()>(ctx, id, &mut evidence, true)
+                .server_guard::<()>(ctx, id, &mut evidence)
                 .await
-                .map_err(|error| not_sent(error.into_parts().0))?;
+                .map_err(|error| not_sent(error.into_parts().0))?
+                .into_checked(&evidence)
+                .map_err(|error| not_sent(*error))?;
             if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value))
             {
                 return Err(not_sent(delete_inventory_error(&evidence)));

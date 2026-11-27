@@ -33,6 +33,18 @@ pub struct DiscoveryPrice {
     pub discount_percent: Option<f64>,
 }
 
+crate::wire::product::output::public_fields!(DiscoveryPrice {
+    status,
+    basis,
+    currency,
+    tax,
+    source,
+    monthly_price,
+    original_price,
+    discount_price,
+    discount_percent
+});
+
 /// Coverage and completion metadata for one discovery invocation.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DiscoveryMetadata {
@@ -60,6 +72,16 @@ pub struct DiscoveryMetadata {
     pub excluded_groups: Option<i64>,
 }
 
+crate::wire::product::output::public_fields!(DiscoveryMetadata {
+    region,
+    complete,
+    requests,
+    quoted_at,
+    failures,
+    notes,
+    excluded_groups
+});
+
 /// Safe scope and classification of a discovery failure.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct DiscoveryFailure {
@@ -76,6 +98,13 @@ pub struct DiscoveryFailure {
     #[serde(rename = "Status")]
     pub status: i64,
 }
+
+crate::wire::product::output::public_fields!(DiscoveryFailure {
+    operation,
+    item_key,
+    code,
+    status
+});
 
 /// Published or observed pricing context.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -96,6 +125,14 @@ pub struct PricingNote {
     #[serde(rename = "Evidence")]
     pub evidence: String,
 }
+
+crate::wire::product::output::public_fields!(PricingNote {
+    topic,
+    scope,
+    text,
+    source_url,
+    evidence
+});
 
 fn quoted_at<S: Serializer>(value: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error> {
     let text = value

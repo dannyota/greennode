@@ -79,6 +79,8 @@ pub struct CreatePolicyOutput {
     projection: Option<PolicyProjection>,
 }
 
+crate::wire::product::output::public_fields!(CreatePolicyOutput { policy; projection });
+
 impl Serialize for CreatePolicyOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut result = serializer.serialize_struct("CreatePolicyOutput", 1)?;
@@ -133,6 +135,8 @@ pub struct UpdatePolicyOutput {
     pub policy: Policy,
     projection: Option<PolicyProjection>,
 }
+
+crate::wire::product::output::public_fields!(UpdatePolicyOutput { policy; projection });
 
 impl Serialize for UpdatePolicyOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

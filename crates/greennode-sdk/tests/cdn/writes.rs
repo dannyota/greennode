@@ -143,6 +143,29 @@ async fn update_partial_redacts_the_cdn_key_and_user_identifier() {
 }
 
 #[tokio::test]
+async fn cdn_classifies_only_bounded_sanitized_message_text() {
+    let long = format!("{} is not allow to update or delete", "x".repeat(520));
+    for message in [
+        long.as_str(),
+        "internal@example.test is not allow to update or delete",
+    ] {
+        let body = json!({"success":false,"code":400,"message":message});
+        let server = Server::start(vec![reply(&body.to_string())]);
+        let failure = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/img/a.webp".into()]),
+            )
+            .await
+            .unwrap_err();
+        assert_ne!(
+            failure.error().detail::<ErrorDetail>(),
+            Some(&ErrorDetail::ResourceBusy)
+        );
+    }
+}
+
+#[tokio::test]
 async fn reflective_cdn_envelope_cannot_choose_special_error_identity() {
     for (code, message, detail) in [
         (

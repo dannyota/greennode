@@ -48,6 +48,8 @@ pub struct ListVolumePricesOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(ListVolumePricesOutput { items, metadata });
+
 /// One volume offering and the price quoted for the requested size.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -73,6 +75,17 @@ pub struct VolumePrice {
     /// Monthly quote and status.
     pub price: DiscoveryPrice,
 }
+
+crate::wire::product::output::public_fields!(VolumePrice {
+    volume_type,
+    zone_id,
+    zone_name,
+    encryption_type_id,
+    zone_enabled,
+    size_gb,
+    price_per_gb,
+    price
+});
 
 impl VolumePrice {
     fn type_id(&self) -> &str {
