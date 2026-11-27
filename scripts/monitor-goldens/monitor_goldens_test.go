@@ -463,3 +463,105 @@ func TestMonitorLogProjectWriteGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestMonitorQuotaLifecycleWriteGoldens(t *testing.T) {
+	load := func(file string) string {
+		body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), file+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	for _, op := range []string{"create-notification-quota", "delete-notification-quota", "set-notification-quota-auto-renew", "delete-synthetic-quota", "set-synthetic-quota-auto-renew"} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(op+"/"+format, func(t *testing.T) {
+				args := []string{"--region", "hcm-3", "--output", format, "monitor", op}
+				routes := map[string]func(http.ResponseWriter, *http.Request){}
+				const email = "/billing-api/v1/email/quota"
+				const synth = "/billing-api/v1/synthetic/quota"
+				var sent atomic.Bool
+				count := 0
+				switch op {
+				case "create-notification-quota":
+					args = append(args, "--kind", "Email", "--no-wait")
+					count = 5
+					routes[email] = func(w http.ResponseWriter, r *http.Request) {
+						if r.Method == "POST" {
+							jsonHandler(200, `{"orderId":"order-1","paymentUrl":null}`)(w, r)
+						} else {
+							jsonHandler(404, load("notification_quote_absent"))(w, r)
+						}
+					}
+					routes["/billing-api/v1/email/packages"] = jsonHandler(200, load("notification_quote_packages"))
+					routes["/billing-api/v2/email/prices/created-price"] = jsonHandler(200, `{"optimumPrice":0}`)
+				case "delete-notification-quota":
+					args = append(args, "--kind", "Email", "--yes", "--expected-quota-id", "quota-email")
+					count = 4
+					routes[email] = func(w http.ResponseWriter, r *http.Request) {
+						if r.Method == "DELETE" {
+							sent.Store(true)
+							w.WriteHeader(204)
+						} else if sent.Load() {
+							jsonHandler(404, load("notification_quote_absent"))(w, r)
+						} else {
+							jsonHandler(200, load("notification_quota_email"))(w, r)
+						}
+					}
+				case "set-notification-quota-auto-renew":
+					args = append(args, "--kind", "Email", "--enabled=false")
+					count = 4
+					routes[email] = func(w http.ResponseWriter, r *http.Request) {
+						body := load("notification_quota_email")
+						if sent.Load() {
+							body = strings.ReplaceAll(body, `"autoRenewPeriod": 1`, `"autoRenewPeriod": 0`)
+						} else {
+							body = strings.ReplaceAll(body, `"autoRenew": 0`, `"autoRenew": 1`)
+						}
+						jsonHandler(200, body)(w, r)
+					}
+					routes[email+"/quota-email/update-auto-renew"] = func(w http.ResponseWriter, _ *http.Request) { sent.Store(true); w.WriteHeader(200) }
+				case "delete-synthetic-quota":
+					args = append(args, "--expected-quota-id", "quota-1", "--yes")
+					count = 6
+					routes[synth] = func(w http.ResponseWriter, r *http.Request) {
+						if r.Method == "DELETE" {
+							sent.Store(true)
+							w.WriteHeader(204)
+						} else if sent.Load() {
+							jsonHandler(404, load("synthetic_quote_absent"))(w, r)
+						} else {
+							jsonHandler(200, load("synthetic_quote_renewal"))(w, r)
+						}
+					}
+					routes["/billing-api/v2/synthetic/quota-1/quota-detail"] = jsonHandler(200, load("quota_quota_detail"))
+				case "set-synthetic-quota-auto-renew":
+					args = append(args, "--enabled=true")
+					count = 8
+					routes[synth] = func(w http.ResponseWriter, r *http.Request) {
+						body := load("synthetic_quote_renewal")
+						if sent.Load() {
+							body = strings.ReplaceAll(body, `"autoRenew": 0`, `"autoRenew": 1`)
+						}
+						jsonHandler(200, body)(w, r)
+					}
+					routes["/billing-api/v2/synthetic/prices/created-price"] = jsonHandler(200, `{"optimumPrice":0}`)
+					routes["/billing-api/v2/synthetic/quota-1/quota-detail"] = jsonHandler(200, load("quota_quota_detail"))
+					routes[synth+"/quota-1/update-auto-renew"] = func(w http.ResponseWriter, _ *http.Request) { sent.Store(true); w.WriteHeader(200) }
+				}
+				server := newSvcFixture(routes)
+				_, stdout, stderr := newSvcRoot(t, server)
+				if code := Main(context.Background(), args, strings.NewReader(""), stdout, stderr); code != 0 || server.requestCount() != count {
+					t.Fatalf("quota lifecycle write failed (exit %d, requests %d)", code, server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), op+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.Len() > 0 {
+					if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), op+".stderr.golden"), stderr.Bytes(), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}

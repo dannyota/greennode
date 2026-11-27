@@ -229,7 +229,7 @@ pub(super) fn parse(
     stderr: &mut dyn Write,
     registry: &crate::services::Registry,
 ) -> Result<clap::ArgMatches, ExitCode> {
-    match command_with_registry(registry).try_get_matches_from(args) {
+    match command_with_registry(registry).try_get_matches_from(args.iter().cloned()) {
         Ok(matches) => Ok(matches),
         Err(error) if !error.use_stderr() => {
             let _ = write!(stdout, "{}", error.render());
@@ -242,10 +242,37 @@ pub(super) fn parse(
                 clap::error::ErrorKind::InvalidValue => "invalid flag value",
                 _ => "invalid command usage",
             };
-            Err(ExitCode::from(super::dispatch::local(
-                stderr,
-                super::dispatch::LocalError::usage(message),
-            )))
+            let error = super::dispatch::LocalError::usage(message);
+            if let Ok(diagnostic) = command_with_registry(registry)
+                .ignore_errors(true)
+                .try_get_matches_from(args)
+                && let Some((_, handler, matches)) = registry.select(&diagnostic)
+                && let Some(preflight) = handler.parse_preflight
+            {
+                let format = matches
+                    .try_get_one::<String>("output")
+                    .ok()
+                    .flatten()
+                    .map(String::as_str);
+                if let Some(output) = (preflight.project)(&error) {
+                    super::dispatch::write_preflight(stdout, stderr, &output, format);
+                }
+                if let Some(writer) = preflight.error_writer {
+                    writer(
+                        stderr,
+                        &super::errors::Envelope {
+                            code: error.code,
+                            message: &error.message,
+                            operation: None,
+                            status: None,
+                        },
+                        None,
+                    );
+                    return Err(ExitCode::from(error.exit));
+                }
+                return Err(ExitCode::from(super::dispatch::local(stderr, error)));
+            }
+            Err(ExitCode::from(super::dispatch::local(stderr, error)))
         }
     }
 }

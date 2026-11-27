@@ -1,0 +1,20 @@
+{
+  "Quota": {
+    "ID": "quota-1",
+    "Name": "Synthetic",
+    "Type": "SYNTHETIC_TEST",
+    "Status": "ACTIVE",
+    "PackageID": "unit_1",
+    "StartTime": "2000-01-01 00:00:00 UTC",
+    "EndTime": "2099-02-01 00:00:00 UTC",
+    "CreatedAt": "2000-01-01 00:00:00 UTC",
+    "UpdatedAt": "0001-01-01 00:00:00 UTC",
+    "AutoRenew": false,
+    "POC": false,
+    "System": false,
+    "AutoRenewPeriod": 1
+  },
+  "Stage": "settled",
+  "Purged": false,
+  "Effect": "Deleting this quota permanently deletes every synthetic check."
+}

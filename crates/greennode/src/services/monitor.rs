@@ -35,6 +35,8 @@ struct Input {
     max_price: f64,
     no_wait: bool,
     purge: bool,
+    expected_quota_id: String,
+    enabled: Option<bool>,
     location_id: String,
     alarm_id: String,
     channel_id: String,
@@ -278,6 +280,7 @@ macro_rules! read {
 }
 
 mod log_project_writes;
+mod quota_writes;
 mod remaining;
 
 fn dashboard_view() -> OutputView {
@@ -432,6 +435,11 @@ pub(super) const SERVICE: Service = Service {
         log_alarm_writes::DELETE,
         log_project_writes::CREATE,
         log_project_writes::DELETE,
+        quota_writes::CREATE,
+        quota_writes::DELETE,
+        quota_writes::RENEW_NOTIFY,
+        quota_writes::RENEW_SYNTH,
+        quota_writes::DELETE_SYNTH,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,

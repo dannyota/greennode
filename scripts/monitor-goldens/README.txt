@@ -37,3 +37,7 @@ with the same settings for the nine log alarm write goldens.
 
 Run `go test ./internal/cli -run '^TestMonitorLogProjectWriteGoldens$' -count=1`
 with the same settings for the six log project write goldens.
+
+Run `go test ./internal/cli -run '^TestMonitorQuotaLifecycleWriteGoldens$' -count=1`
+with the same settings for the 15 lifecycle write goldens and auto-renew
+warning golden.

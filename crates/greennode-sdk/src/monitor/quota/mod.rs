@@ -4,6 +4,7 @@ mod quotes;
 mod status;
 mod usage;
 mod wire;
+mod writes;
 
 pub(super) use wire::integer;
 
@@ -12,6 +13,13 @@ pub use notification::*;
 pub use quotes::*;
 pub use status::*;
 pub use usage::*;
+pub(super) use writes::QuotaLedger;
+pub use writes::{
+    CreateNotificationQuotaOutput, DeleteNotificationQuotaInput, DeleteNotificationQuotaOutput,
+    DeleteQuotaOutput, DeleteSyntheticQuotaInput, DeleteSyntheticQuotaOutput,
+    SetNotificationQuotaAutoRenewInput, SetNotificationQuotaAutoRenewOutput,
+    SetQuotaAutoRenewOutput, SetSyntheticQuotaAutoRenewInput, SetSyntheticQuotaAutoRenewOutput,
+};
 
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -22,6 +30,12 @@ use crate::wire::product::evidence::Evidence;
 
 trait Screen {
     fn screen(&mut self, evidence: &Evidence) -> bool;
+}
+
+impl Screen for bool {
+    fn screen(&mut self, evidence: &Evidence) -> bool {
+        !evidence.text_reflects(if *self { "true" } else { "false" })
+    }
 }
 
 impl Screen for String {

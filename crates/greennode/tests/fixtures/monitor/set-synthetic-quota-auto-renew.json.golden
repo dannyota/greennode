@@ -1,0 +1,19 @@
+{
+  "Quota": {
+    "ID": "quota-1",
+    "Name": "Synthetic",
+    "Type": "SYNTHETIC_TEST",
+    "Status": "ACTIVE",
+    "PackageID": "unit_1",
+    "StartTime": "2000-01-01T00:00:00Z",
+    "EndTime": "2099-02-01T07:00:00+07:00",
+    "CreatedAt": "2000-01-01T00:00:00Z",
+    "UpdatedAt": "0001-01-01T00:00:00Z",
+    "AutoRenew": false,
+    "POC": false,
+    "System": false,
+    "AutoRenewPeriod": 1
+  },
+  "Stage": "settled",
+  "Changed": true
+}

@@ -53,6 +53,8 @@ pub use response_times::*;
 pub struct Client {
     session: Arc<Session>,
     check_gates: Arc<check_writes::CheckGates>,
+    quota_ledger: Arc<quota::QuotaLedger>,
+    quota_read_only: Option<String>,
 }
 
 impl Client {
@@ -61,6 +63,8 @@ impl Client {
         Self {
             session: Arc::clone(config.session()),
             check_gates: Arc::default(),
+            quota_ledger: Arc::default(),
+            quota_read_only: config.profile_setting("read_only").map(str::to_owned),
         }
     }
 }

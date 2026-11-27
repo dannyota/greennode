@@ -6,7 +6,7 @@ use crate::cli::op::{Kind, SelectedOperation};
 use crate::cli::{Invocation, Stdin, errors, password, render};
 use clap::ArgMatches;
 use greennode_sdk::{Clock, Config, ConfigOptions, ConfigSource, Error, RequestContext};
-use std::ffi::OsStr;
+use std::{ffi::OsStr, io::Write};
 
 type ManagementOperation<T> =
     for<'a> fn(&'a RequestContext, &'a Config, &'a T) -> FutureResult<'a, ExecutionResult>;
@@ -19,6 +19,7 @@ struct ManagementAdapter<'a, T> {
     view: OutputView,
     error_rules: &'static [errors::Rule],
     file_input: Option<FileInput<'a, T>>,
+    write_policy: WritePolicy<T>,
 }
 
 struct FileInput<'a, T> {
@@ -40,6 +41,22 @@ pub(crate) type InputPreparation<T> = for<'a> fn(
 enum FileBinding<T> {
     Password(fn(&mut T, greennode_sdk::Secret)),
     Custom(InputPreparation<T>),
+}
+
+pub(crate) type ErrorWriter = fn(&mut dyn Write, &errors::Envelope<'_>, Option<&Error>);
+pub(crate) struct WritePolicy<T> {
+    pub(crate) warning: Option<fn(&T) -> Option<&'static str>>,
+    pub(crate) preflight: Option<fn(&LocalError) -> Option<render::Projected>>,
+    pub(crate) error_writer: Option<ErrorWriter>,
+}
+impl<T> Default for WritePolicy<T> {
+    fn default() -> Self {
+        Self {
+            warning: None,
+            preflight: None,
+            error_writer: None,
+        }
+    }
 }
 
 struct ManagementInput<'a, T: 'static> {
@@ -247,6 +264,41 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         Ok(())
     }
 
+    fn before_send_warning(&self, input: &ManagementInput<'_, T>) -> Option<&'static str> {
+        let warn = self.write_policy.warning?;
+        input.value.as_ref().and_then(|input| warn(&input.value))
+    }
+    fn preflight_output(
+        &self,
+        _: &ManagementInput<'_, T>,
+        error: &LocalError,
+    ) -> Option<render::Projected> {
+        self.write_policy
+            .preflight
+            .and_then(|project| project(error))
+    }
+    fn settings_refusal_output(
+        &self,
+        _: &ManagementInput<'_, T>,
+        error: &LocalError,
+    ) -> Option<render::Projected> {
+        self.write_policy
+            .preflight
+            .and_then(|project| project(error))
+    }
+    fn report_error(
+        &self,
+        stderr: &mut dyn Write,
+        envelope: &errors::Envelope<'_>,
+        error: Option<&Error>,
+    ) {
+        if let Some(writer) = self.write_policy.error_writer {
+            writer(stderr, envelope, error);
+        } else {
+            errors::write_error(stderr, envelope);
+        }
+    }
+
     fn output_view(&self) -> OutputView {
         self.view
     }
@@ -362,6 +414,7 @@ pub(crate) async fn management_custom<T: Send + 'static>(
             check_json,
             bind: None,
             confirmation: None,
+            write_policy: WritePolicy::default(),
         },
     )
     .await
@@ -386,6 +439,7 @@ pub(crate) async fn management_with_password<T: Send + 'static>(
             check_json: None,
             bind: Some(FileBinding::Password(bind)),
             confirmation: None,
+            write_policy: WritePolicy::default(),
         },
     )
     .await
@@ -410,6 +464,7 @@ pub(crate) async fn management_with_input_preparation<T: Send + 'static>(
             check_json: None,
             bind: Some(FileBinding::Custom(prepare)),
             confirmation: None,
+            write_policy: WritePolicy::default(),
         },
     )
     .await
@@ -434,6 +489,33 @@ pub(crate) async fn management_with_confirmation<T: Send + 'static>(
             check_json: None,
             bind: None,
             confirmation: Some(confirmation),
+            write_policy: WritePolicy::default(),
+        },
+    )
+    .await
+}
+
+pub(crate) async fn management_with_write_policy<T: Send + 'static>(
+    invocation: &mut Invocation<'_>,
+    selected: SelectedOperation,
+    matches: &ArgMatches,
+    descriptor: &'static InputDescriptor<T>,
+    execute: ManagementOperation<T>,
+    presentation: (OutputView, Option<input::JsonChecks>, WritePolicy<T>),
+) -> u8 {
+    let (view, check_json, write_policy) = presentation;
+    run_management(
+        invocation,
+        selected,
+        matches,
+        descriptor,
+        execute,
+        Hooks {
+            view,
+            check_json,
+            bind: None,
+            confirmation: None,
+            write_policy,
         },
     )
     .await
@@ -444,6 +526,7 @@ struct Hooks<T> {
     check_json: Option<input::JsonChecks>,
     bind: Option<FileBinding<T>>,
     confirmation: Option<&'static str>,
+    write_policy: WritePolicy<T>,
 }
 
 async fn run_management<T: Send + 'static>(
@@ -471,6 +554,7 @@ async fn run_management<T: Send + 'static>(
         source: invocation.source,
         view: hooks.view,
         error_rules: selected.error_rules,
+        write_policy: hooks.write_policy,
         file_input: hooks.bind.map(|bind| FileInput {
             stdin: invocation.stdin,
             terminal: invocation.stdin_terminal,

@@ -451,12 +451,14 @@ pub(super) async fn read_synthetic_detail(
     Ok(detail)
 }
 
+#[derive(Clone)]
 pub(super) struct QuotaIds {
     pub(super) id: String,
     pub(super) package_id: String,
     pub(super) status: String,
 }
 
+#[derive(Clone)]
 pub(super) struct DecodedQuota {
     pub(super) id_fields: QuotaIds,
     name: String,
@@ -472,6 +474,10 @@ pub(super) struct DecodedQuota {
 }
 
 impl DecodedQuota {
+    pub(super) fn to_model(&self) -> Quota {
+        self.clone().into_model()
+    }
+
     fn normalize_utc(&mut self) -> Option<()> {
         for timestamp in [
             &mut self.start_time,

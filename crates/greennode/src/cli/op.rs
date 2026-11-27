@@ -27,9 +27,16 @@ pub(crate) type Execute = for<'a> fn(
 ) -> super::dispatch::FutureResult<'a, u8>;
 
 #[derive(Clone, Copy, Debug)]
+pub(crate) struct ParsePreflight {
+    pub(crate) project: fn(&super::dispatch::LocalError) -> Option<super::render::Projected>,
+    pub(crate) error_writer: Option<super::dispatch::ErrorWriter>,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Handler {
     pub(crate) execute: Execute,
     pub(crate) allow_json: bool,
+    pub(crate) parse_preflight: Option<ParsePreflight>,
 }
 
 impl Handler {
@@ -37,7 +44,12 @@ impl Handler {
         Self {
             execute,
             allow_json: input.allow_json,
+            parse_preflight: None,
         }
+    }
+    pub(crate) const fn with_parse_preflight(mut self, preflight: ParsePreflight) -> Self {
+        self.parse_preflight = Some(preflight);
+        self
     }
 }
 

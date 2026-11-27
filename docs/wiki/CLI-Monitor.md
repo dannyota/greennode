@@ -116,6 +116,27 @@ projects by name before ordering again.
 greennode monitor create-log-project --name <name>
 ```
 
+## create-notification-quota
+
+Kind: Write.
+
+Orders one month of Email or SMS quota. A positive --max-price is consent to the
+higher of the package and quote prices. Billing may debit the balance. --no-wait
+leaves the attempt open for reconciliation. Serialize writes across processes
+per account and kind. Retain a durable pending marker and reconcile with
+read-only quota reads and console billing after uncertainty.
+
+| Flag           | Type      | Required |
+| -------------- | --------- | -------- |
+| `--kind`       | `string`  | yes      |
+| `--package-id` | `string`  |          |
+| `--max-price`  | `float64` |          |
+| `--no-wait`    | `bool`    |          |
+
+```sh
+greennode monitor create-notification-quota --kind Email
+```
+
 ## delete-channel
 
 Kind: Write, destructive.
@@ -175,6 +196,43 @@ status or billing status. --no-wait skips both reads.
 
 ```sh
 greennode monitor delete-log-project --log-project-id <log-project-id> --yes
+```
+
+## delete-notification-quota
+
+Kind: Write, destructive.
+
+Requires --yes and an active notification quota with auto-renew and POC off. The
+optional ExpectedQuotaID guards the read snapshot. The provider request is per
+kind. Purge is unsupported. Serialize writes across processes per account and
+kind, and reconcile after uncertainty.
+
+| Flag                                  | Type     | Required |
+| ------------------------------------- | -------- | -------- |
+| `--kind`                              | `string` | yes      |
+| `--expected-quota-id`                 | `string` |          |
+| `Purge` (via `--cli-input-json` only) | `bool`   |          |
+
+```sh
+greennode monitor delete-notification-quota --kind Email --yes
+```
+
+## delete-synthetic-quota
+
+Kind: Write, destructive.
+
+Deleting this quota permanently deletes every synthetic check. Requires --yes
+and --expected-quota-id. Purge and --query are unsupported. Only an exact source
+404 confirms deletion. Serialize per account and kind, retain a durable pending
+marker, and reconcile with reads after uncertainty.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--purge`             | `bool`   |          |
+| `--expected-quota-id` | `string` | yes      |
+
+```sh
+greennode monitor delete-synthetic-quota --expected-quota-id <quota-id> --yes
 ```
 
 ## get-alarm
@@ -681,6 +739,43 @@ channel before it expires. Pass Slack addresses and all Headers through
 
 ```sh
 greennode monitor send-channel-otp --type Email --address <address>
+```
+
+## set-notification-quota-auto-renew
+
+Kind: Write.
+
+Requires explicit --enabled=false. Enabling is refused before requests. Optional
+ExpectedQuotaID binds the intended snapshot. A later read confirms the setting.
+Serialize writes per account and kind.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--kind`              | `string`  | yes      |
+| `--enabled`           | `*bool`   | yes      |
+| `--max-price`         | `float64` |          |
+| `--expected-quota-id` | `string`  |          |
+
+```sh
+greennode monitor set-notification-quota-auto-renew --kind Email --enabled=false
+```
+
+## set-synthetic-quota-auto-renew
+
+Kind: Write.
+
+Requires explicit --enabled=true. Disabling is unsupported. The SDK quotes the
+free quota, checks the frozen terms, sends once, and confirms by reading. The
+free quota server refusal remains visible.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--enabled`           | `*bool`   | yes      |
+| `--max-price`         | `float64` |          |
+| `--expected-quota-id` | `string`  |          |
+
+```sh
+greennode monitor set-synthetic-quota-auto-renew --enabled=true
 ```
 
 ## update-channel

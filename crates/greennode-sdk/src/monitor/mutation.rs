@@ -92,6 +92,10 @@ pub(super) struct Reply {
 }
 
 impl Reply {
+    pub(super) fn is_empty(&self) -> bool {
+        self.body.is_empty()
+    }
+
     pub(super) fn decode<T: DeserializeOwned>(
         &self,
         mutation: &Mutation,

@@ -11,8 +11,9 @@ use greennode_sdk::{Clock, Error, Failure, RequestContext};
 
 use super::{errors, query, render};
 pub(crate) use management::{
-    management, management_custom, management_with_confirmation, management_with_input_preparation,
-    management_with_password, management_with_view,
+    ErrorWriter, WritePolicy, management, management_custom, management_with_confirmation,
+    management_with_input_preparation, management_with_password, management_with_view,
+    management_with_write_policy,
 };
 pub(crate) use output::RawText;
 pub use output::{ExecutionFailure, ExecutionResult, OutputView, RenderFailure};
@@ -85,6 +86,24 @@ pub trait Adapter<I: ParsedInput> {
     fn preflight_output(&self, _input: &I, _error: &LocalError) -> Option<render::Projected> {
         None
     }
+    fn before_send_warning(&self, _input: &I) -> Option<&'static str> {
+        None
+    }
+    fn settings_refusal_output(
+        &self,
+        _input: &I,
+        _error: &LocalError,
+    ) -> Option<render::Projected> {
+        None
+    }
+    fn report_error(
+        &self,
+        stderr: &mut dyn Write,
+        envelope: &errors::Envelope<'_>,
+        _error: Option<&Error>,
+    ) {
+        errors::write_error(stderr, envelope);
+    }
     fn output_view(&self) -> OutputView {
         OutputView::default()
     }
@@ -143,13 +162,66 @@ fn refuse<I: ParsedInput, A: Adapter<I>>(
     stderr: &mut dyn Write,
 ) -> u8 {
     if let Some(output) = adapter.preflight_output(input, &error) {
-        let format = input
-            .output()
-            .and_then(Format::parse)
-            .unwrap_or(Format::Json);
-        let _ = render_output(stdout, stderr, &output, format, None, OutputView::default());
+        write_preflight(stdout, stderr, &output, input.output());
     }
-    local(stderr, error)
+    report_local::<I, A>(adapter, stderr, error)
+}
+
+pub(crate) fn write_preflight(
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    output: &render::Projected,
+    format: Option<&str>,
+) {
+    let format = format.and_then(Format::parse).unwrap_or(Format::Json);
+    let _ = render_output(stdout, stderr, output, format, None, OutputView::default());
+}
+
+fn report_local<I: ParsedInput, A: Adapter<I>>(
+    adapter: &A,
+    stderr: &mut dyn Write,
+    error: LocalError,
+) -> u8 {
+    adapter.report_error(
+        stderr,
+        &errors::Envelope {
+            code: error.code,
+            message: &error.message,
+            status: None,
+            operation: None,
+        },
+        None,
+    );
+    error.exit
+}
+
+fn settings_error<I: ParsedInput, A: Adapter<I>>(
+    input: &I,
+    adapter: &A,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    error: &Error,
+) -> u8 {
+    let classified = errors::classify(error, adapter.rules());
+    let code = match classified.envelope.code {
+        "NoCredentials" => "NoCredentials",
+        "TokenCacheFailed" => "TokenCacheFailed",
+        "InvalidConfig" => "InvalidConfig",
+        "InvalidUsage" => "InvalidUsage",
+        "ServiceAccountLoginFailed" => "ServiceAccountLoginFailed",
+        "LoginFailed" => "LoginFailed",
+        _ => "RequestFailed",
+    };
+    let local = LocalError {
+        code,
+        message: classified.envelope.message.to_owned().into(),
+        exit: classified.exit,
+    };
+    if let Some(output) = adapter.settings_refusal_output(input, &local) {
+        write_preflight(stdout, stderr, &output, input.output());
+    }
+    adapter.report_error(stderr, &classified.envelope, Some(error));
+    classified.exit
 }
 
 pub async fn run<I: ParsedInput, A: Adapter<I>>(
@@ -182,9 +254,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
 ) -> u8 {
     if let Some(end) = ctx.check(clock) {
         let error = Error::from(end);
-        let classified = errors::classify(&error, adapter.rules());
-        errors::write_error(stderr, &classified.envelope);
-        return classified.exit;
+        return settings_error(input, adapter, stdout, stderr, &error);
     }
     if !errors::validate_rules(adapter.rules()) {
         return local(
@@ -259,9 +329,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     let settings = match adapter.settings(ctx).await {
         Ok(settings) => settings,
         Err(error) => {
-            let classified = errors::classify(&error, adapter.rules());
-            errors::write_error(stderr, &classified.envelope);
-            return classified.exit;
+            return settings_error(input, adapter, stdout, stderr, &error);
         }
     };
     let format = match explicit_format.or_else(|| {
@@ -299,6 +367,9 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             );
         }
     };
+    if let Some(warning) = adapter.before_send_warning(input) {
+        let _ = writeln!(stderr, "{warning}");
+    }
     log_write(stderr, "write started");
     let result = adapter.execute(ctx, &settings, input).await;
     log_write(stderr, "write finished");
@@ -376,7 +447,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             }
         },
         Ok(None) => 0,
-        Err(ExecutionFailure::Local(error)) => local(stderr, error),
+        Err(ExecutionFailure::Local(error)) => report_local::<I, A>(adapter, stderr, error),
         Err(ExecutionFailure::Sdk(failure)) => {
             if let Some(partial) = &failure.partial {
                 let _ = render_output(
@@ -402,7 +473,7 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             } else if let Some(advice) = adapter.advice(&failure.error) {
                 classified.envelope.message = advice;
             }
-            errors::write_error(stderr, &classified.envelope);
+            adapter.report_error(stderr, &classified.envelope, Some(&failure.error));
             classified.exit
         }
     }
