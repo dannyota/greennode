@@ -567,12 +567,13 @@ mod tests {
 
     #[test]
     fn peer_body_charges_all_decoded_fields_to_one_budget() {
-        let credential = "z".repeat(4096);
-        let evidence = evidence(&[&credential]);
-        let body = format!(r#"[{}"ok"]"#, r#""ok","#.repeat(5000));
-        assert!(!evidence.peer_bytes_reflect(body.as_bytes()));
-        assert_eq!(evidence.peer_body_reflects(body.as_bytes()), Some(true));
-        assert_eq!(evidence.peer_body_reflects(br#"["ok","ok"]"#), Some(false));
+        let evidence = Evidence::from_credentials(&response::budget_test_credentials());
+        let field = format!("!{}", "a".repeat(255));
+        let single = serde_json::to_vec(&[field.as_str()]).unwrap();
+        let page = serde_json::to_vec(&vec![field; 1024]).unwrap();
+        assert_eq!(evidence.peer_body_reflects(&single), Some(false));
+        assert!(!evidence.peer_bytes_reflect(&page));
+        assert_eq!(evidence.peer_body_reflects(&page), Some(true));
     }
 
     #[test]

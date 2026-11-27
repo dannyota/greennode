@@ -1,3 +1,4 @@
+mod automaton;
 mod encoded;
 mod full_error;
 mod marker;
@@ -380,8 +381,18 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
 }
 
 #[cfg(test)]
+pub(super) fn budget_test_credentials() -> SentCredentials {
+    SentCredentials::for_test(
+        (b'0'..=b'9')
+            .chain(b'b'..=b'z')
+            .map(|byte| crate::Secret::new(format!("a{}-test-operand", char::from(byte))))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
 mod tests {
-    use super::matching::{MatchState, matches_forms, matching_work_limit};
+    use super::matching::matching_work_limit;
     use super::*;
 
     fn error(
@@ -984,11 +995,12 @@ mod tests {
         assert_eq!(matching_work_limit(usize::MAX, false), 192 << 20);
         assert_eq!(matching_work_limit(usize::MAX, true), 8 << 20);
         let credentials = SentCredentials::for_test(
-            (0..20)
-                .map(|index| crate::Secret::new(format!("sample-{index}")))
+            (b'!'..=b'~')
+                .filter(|byte| !byte.is_ascii_uppercase() && *byte != b'a')
+                .map(|byte| crate::Secret::new(format!("a{}-test-operand", char::from(byte))))
                 .collect(),
         );
-        let text = "ordinary%2520".repeat(1 << 18);
+        let text = format!("!{}", "a".repeat(256 << 10));
         assert!(reflects_credential(&text, &credentials));
     }
 
@@ -996,24 +1008,11 @@ mod tests {
     fn long_prefix_search_is_charged_within_budget() {
         let mut input = vec![b'a'; 1 << 20];
         input[0] = b'!';
-        let mut needle = vec![b'a'; 8192];
-        needle[8191] = b'b';
-        let mut state = MatchState {
-            work: 8 << 20,
-            forms: Vec::new(),
-            visited: Vec::new(),
-            encoded_needles: &[],
-            hex_needles: &[],
-            error_text: true,
-            strict_base64: false,
-        };
-        assert!(!matches_forms(
-            &input,
-            &[Zeroizing::new(needle)],
-            [0; 4],
-            &mut state
-        ));
-        assert_eq!(state.work, (8 << 20) - 6 * (1 << 20) - 8192);
+        let credentials =
+            SentCredentials::for_test(vec![crate::Secret::new(format!("{}b", "a".repeat(8191)))]);
+        let matcher = BodyMatcher::with_work(&credentials, 8 << 20);
+        assert!(!matcher.reflects(&input, false));
+        assert!(matcher.remaining() > 0);
     }
 
     #[test]

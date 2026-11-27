@@ -41,14 +41,16 @@ async fn prior_bearer_remains_available_for_response_reflection() {
     .unwrap();
     assert_eq!(reply.status, 200);
     assert!(reply.credentials.reflects(&reply.body));
-    assert!(
-        reply
-            .credentials
-            .values()
-            .iter()
-            .any(|secret| secret.expose_secret() == "toy-next")
-    );
-    assert_eq!(reply.credentials.values().len(), 2);
+    let values = reply.credentials.values();
+    assert_eq!(values.len(), 4);
+    for expected in [
+        "toy-first",
+        "Bearer toy-first",
+        "toy-next",
+        "Bearer toy-next",
+    ] {
+        assert!(values.iter().any(|value| value.expose_secret() == expected));
+    }
 }
 
 #[tokio::test]
@@ -80,7 +82,11 @@ async fn typed_key_header_is_attached_and_recorded() {
     .await
     .unwrap();
     assert!(reply.credentials.reflects(&reply.body));
-    assert_eq!(reply.credentials.values().len(), 1);
+    let values = reply.credentials.values();
+    assert_eq!(values.len(), 2);
+    for expected in ["toy-key", "Bearer toy-key"] {
+        assert!(values.iter().any(|value| value.expose_secret() == expected));
+    }
     let heads = server.heads();
     assert_eq!(heads.len(), 2);
     assert!(heads.iter().all(|head| {

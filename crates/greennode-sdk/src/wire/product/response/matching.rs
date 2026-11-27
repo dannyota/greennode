@@ -1,8 +1,4 @@
-use super::{
-    SentCredentials,
-    encoded::{self, EncodedNeedle},
-    marker,
-};
+use super::{SentCredentials, marker, patterns::Patterns};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy)]
@@ -62,24 +58,10 @@ impl<'a> BodyMatcher<'a> {
         let Some(patterns) = self.credentials.patterns() else {
             return true;
         };
-        let text = Zeroizing::new(text.to_ascii_lowercase());
-        for needle in &patterns.literal {
-            let Some(work) = self
-                .remaining
-                .get()
-                .checked_sub(text.len().saturating_add(needle.len()))
-            else {
-                return true;
-            };
-            self.remaining.set(work);
-            let Ok(needle) = std::str::from_utf8(needle) else {
-                return true;
-            };
-            if text.contains(needle) {
-                return true;
-            }
-        }
-        false
+        let mut work = self.remaining.get();
+        let reflects = patterns.literal(text.as_bytes(), false, false, &mut work);
+        self.remaining.set(work);
+        reflects
     }
 
     pub(in crate::wire::product) fn reflects(&self, bytes: &[u8], identifier: bool) -> bool {
@@ -112,12 +94,11 @@ fn match_with_budget(
         work: *work,
         forms: Vec::new(),
         visited: Vec::new(),
-        encoded_needles: &patterns.base64,
-        hex_needles: &patterns.hex,
+        patterns,
         error_text,
         strict_base64: matches!(context, MatchContext::Identifier),
     };
-    let reflects = matches_forms(text, &patterns.literal, [0; 4], &mut state);
+    let reflects = matches_forms(text, [0; 4], &mut state);
     *work = state.work;
     reflects
 }
@@ -131,14 +112,13 @@ pub(super) fn matching_work_limit(length: usize, error_text: bool) -> usize {
     }
 }
 
-pub(super) struct MatchState<'a> {
-    pub(super) work: usize,
-    pub(super) forms: Vec<(Zeroizing<Vec<u8>>, bool)>,
-    pub(super) visited: Vec<(usize, [u8; 4])>,
-    pub(super) encoded_needles: &'a [EncodedNeedle],
-    pub(super) hex_needles: &'a [Zeroizing<String>],
-    pub(super) error_text: bool,
-    pub(super) strict_base64: bool,
+struct MatchState<'a> {
+    work: usize,
+    forms: Vec<(Zeroizing<Vec<u8>>, bool)>,
+    visited: Vec<(usize, [u8; 4])>,
+    patterns: &'a Patterns,
+    error_text: bool,
+    strict_base64: bool,
 }
 
 impl MatchState<'_> {
@@ -151,12 +131,7 @@ impl MatchState<'_> {
     }
 }
 
-pub(super) fn matches_forms(
-    input: &[u8],
-    needles: &[Zeroizing<Vec<u8>>],
-    counts: [u8; 4],
-    state: &mut MatchState<'_>,
-) -> bool {
+fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> bool {
     let decoded_base64 = counts[3] != 0;
     let mut found = None;
     for index in 0..state.forms.len() {
@@ -174,50 +149,17 @@ pub(super) fn matches_forms(
         if !state.charge(input.len()) {
             return true;
         }
-        for index in 0..state.encoded_needles.len() {
-            if !state.charge(
-                input
-                    .len()
-                    .saturating_add(state.encoded_needles[index].len()),
-            ) {
-                return true;
-            }
-            if state.encoded_needles[index].matches(input, state.strict_base64) {
-                return true;
-            }
-        }
-        let lower = Zeroizing::new(input.to_ascii_lowercase());
-        for index in 0..state.hex_needles.len() {
-            if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
-                || encoded::contains_hex(&lower, &state.hex_needles[index], state.strict_base64)
-            {
-                return true;
-            }
-        }
-        if state.error_text && marker::has_credential_marker_bytes(input) {
+        if state.error_text
+            && (marker::has_credential_marker_bytes(input)
+                || (!state.patterns.is_empty() && std::str::from_utf8(input).is_err()))
+        {
             return true;
         }
-        if !needles.is_empty() {
-            if state.error_text && std::str::from_utf8(&lower).is_err() {
-                return true;
-            }
-            for needle in needles {
-                if decoded_base64 && !search_decoded(needle, state.strict_base64) {
-                    continue;
-                }
-                if !state.charge(lower.len().saturating_add(needle.len())) {
-                    return true;
-                }
-                let Ok(needle) = std::str::from_utf8(needle) else {
-                    return true;
-                };
-                if lower
-                    .utf8_chunks()
-                    .any(|chunk| chunk.valid().contains(needle))
-                {
-                    return true;
-                }
-            }
+        if state
+            .patterns
+            .forms(input, decoded_base64, state.strict_base64, &mut state.work)
+        {
+            return true;
         }
         state
             .forms
@@ -242,12 +184,9 @@ pub(super) fn matches_forms(
             ),
             1 => json_unescape(input),
             2 => Zeroizing::new(percent_decode(input)),
-            _ if needles
-                .iter()
-                .map(|needle| needle.len().saturating_mul(8).saturating_add(5) / 6)
-                .filter(|length| state.strict_base64 || *length >= 7)
-                .min()
-                .is_some_and(|minimum| input.len() >= minimum) =>
+            _ if state
+                .patterns
+                .can_decode_base64(input.len(), state.strict_base64) =>
             {
                 decode_base64(input).unwrap_or_else(|| Zeroizing::new(input.to_vec()))
             }
@@ -256,23 +195,11 @@ pub(super) fn matches_forms(
         if next.as_slice() != input {
             if counts[step] == 2 {
                 if step == 3 {
-                    let lower = Zeroizing::new(next.to_ascii_lowercase());
-                    for needle in needles {
-                        if !search_decoded(needle, state.strict_base64) {
-                            continue;
-                        }
-                        if !state.charge(lower.len().saturating_add(needle.len())) {
-                            return true;
-                        }
-                        let Ok(needle) = std::str::from_utf8(needle) else {
-                            return true;
-                        };
-                        if lower
-                            .utf8_chunks()
-                            .any(|chunk| chunk.valid().contains(needle))
-                        {
-                            return true;
-                        }
+                    if state
+                        .patterns
+                        .literal(&next, true, state.strict_base64, &mut state.work)
+                    {
+                        return true;
                     }
                     continue;
                 }
@@ -284,7 +211,7 @@ pub(super) fn matches_forms(
             if step == 3 {
                 state.error_text = false;
             }
-            let matched = matches_forms(&next, needles, next_counts, state);
+            let matched = matches_forms(&next, next_counts, state);
             state.error_text = error_text;
             if matched {
                 return true;
@@ -292,10 +219,6 @@ pub(super) fn matches_forms(
         }
     }
     false
-}
-
-fn search_decoded(needle: &[u8], identifier: bool) -> bool {
-    identifier || needle.len().saturating_mul(8).div_ceil(6) >= 8
 }
 
 fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
@@ -391,4 +314,40 @@ fn percent_decode(data: &[u8]) -> Vec<u8> {
         }
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ten_long_credentials_allow_clean_256_kib_output() {
+        let credentials = SentCredentials::for_test(
+            (0..10)
+                .map(|index| {
+                    crate::Secret::new(format!(
+                        "synthetic-credential-{index}-{}",
+                        "secret".repeat(12)
+                    ))
+                })
+                .collect(),
+        );
+        let output = "ordinary output!".repeat(1 << 14);
+        assert_eq!(output.len(), 256 << 10);
+        assert!(
+            !BodyMatcher::for_output(&credentials, output.len()).reflects(output.as_bytes(), false)
+        );
+        let evidence = crate::wire::product::evidence::Evidence::from_credentials(&credentials);
+        assert!(!evidence.serialized_output_reflects(&serde_json::json!({"output": output})));
+    }
+
+    #[test]
+    fn bounded_output_scan_refuses_an_adversarial_prefix_run() {
+        let credentials =
+            SentCredentials::for_test(vec![crate::Secret::new(format!("{}b", "a".repeat(512)))]);
+        let mut output = vec![b'a'; 1 << 16];
+        output[0] = b'!';
+        let matcher = BodyMatcher::with_work(&credentials, output.len());
+        assert!(matcher.reflects(&output, false));
+    }
 }

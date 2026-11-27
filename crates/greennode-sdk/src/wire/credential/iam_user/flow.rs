@@ -394,6 +394,10 @@ mod tests {
                             "Set-Cookie".into(),
                             "session=toy-cookie; Path=/; Secure".into(),
                         ),
+                        (
+                            "Set-Cookie".into(),
+                            "nested=\"toy quoted\"; Path=/ap/auth/iam; Secure".into(),
+                        ),
                     ],
                     body: page.to_vec(),
                 },
@@ -440,7 +444,14 @@ mod tests {
             let authorization = format!("Basic {payload}");
             let expected: [&[&str]; 5] = [
                 &[client_id, "toy-root@example.test", &challenge],
-                &["toy-cookie", "login-csrf", "toy-user", "toy-password"],
+                &[
+                    "toy-cookie",
+                    "toy quoted",
+                    "nested=\"toy quoted\"; session=toy-cookie",
+                    "login-csrf",
+                    "toy-user",
+                    "toy-password",
+                ],
                 &["totp-ticket"],
                 &["totp-csrf", "345678"],
                 &[

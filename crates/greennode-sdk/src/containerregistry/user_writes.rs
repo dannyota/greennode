@@ -2,7 +2,9 @@ use super::reads::{Users, complete_absence, valid_id};
 use super::*;
 use crate::Secret;
 use crate::error::SafeText;
-use crate::wire::product::response::reflects_credential_forms;
+use crate::wire::product::{
+    options::AttemptCheck, response::reflects_credential_forms, sender::SentCredentials,
+};
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -153,7 +155,7 @@ impl Client {
                 )
                 .await
                 .map_err(before_write)?;
-            let body = create_body(&input, &permissions.0, &evidence)?;
+            let (body, ids) = create_body(&input, &permissions.0, &evidence)?;
             let found = self.find_user_name(ctx, &input.name, &mut evidence).await.map_err(|failure| {
                 let (error, _, _) = failure.into_parts();
                 let Some(api) = error.api_error() else {
@@ -167,10 +169,19 @@ impl Client {
                     "containerregistry.CreateUser: requested name already exists; check list-users --name",
                 ));
             }
-            let issued: IssuedSecret = self.request(
+            let check_ids = |credentials: &SentCredentials| {
+                ids.iter()
+                    .any(|id| credentials.id_reflects(id))
+                    .then(|| Box::new(Error::new(ErrorClass::InvalidInput)))
+            };
+            let options = Options {
+                attempt_check: Some(AttemptCheck(&check_ids)),
+                ..Options::DEFAULT
+            };
+            let issued: IssuedSecret = self.request_with_options(
                 ctx, &Operation { allow_empty: true, sensitive: true, reflection: crate::wire::product::operation::Reflection::PrivateDelivery, ..write_operation(
                     CREATE, Method::POST, "v1/user", &[StatusCode::OK],
-                ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
+                ) }, &[], &[], (Bytes::from(body.to_string()), options), &mut evidence,
             ).await.map_err(|failure| create_failure(failure, concat!(
                 "containerregistry.CreateUser: create may have already reached the server; ",
                 "check list-users --name and reconcile ownership before any cleanup",
@@ -420,16 +431,17 @@ fn validate_create(input: &CreateUserInput) -> Result<(), Failure<CreateUserOutp
     clippy::result_large_err,
     reason = "Validation returns the operation's Failure"
 )]
-fn create_body(
-    input: &CreateUserInput,
-    permissions: &[Permission],
+fn create_body<'a>(
+    input: &'a CreateUserInput,
+    permissions: &'a [Permission],
     evidence: &Evidence,
-) -> Result<Value, Failure<CreateUserOutput>> {
+) -> Result<(Value, Vec<&'a str>), Failure<CreateUserOutput>> {
     let policies: BTreeMap<_, _> = permissions
         .iter()
         .map(|policy| (&policy.action, &policy.id))
         .collect();
     let mut requests = Vec::new();
+    let mut identifiers = Vec::new();
     for (i, permission) in input.permissions.iter().enumerate() {
         let ids: Option<Vec<_>> = permission
             .actions
@@ -451,6 +463,8 @@ fn create_body(
                 invalid_input(message.as_str())
             }
         })?;
+        identifiers.push(permission.repository_id.as_str());
+        identifiers.extend(ids.iter().map(|id| id.as_str()));
         requests.push(json!({"repoId": permission.repository_id, "policyIdList": ids}));
     }
     let mut body = json!({"name": input.name, "permissionRequestList": requests});
@@ -460,5 +474,5 @@ fn create_body(
     if let Some(days) = input.duration_days {
         body["duration"] = json!(days);
     }
-    Ok(body)
+    Ok((body, identifiers))
 }

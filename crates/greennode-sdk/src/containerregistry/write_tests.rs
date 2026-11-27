@@ -188,6 +188,7 @@ async fn create_user_validates_later_pages_before_post() {
 struct SequenceProvider {
     calls: std::sync::atomic::AtomicUsize,
     fail_at: Option<usize>,
+    write_bearer: Option<&'static str>,
 }
 
 impl crate::CredentialsProvider for SequenceProvider {
@@ -203,10 +204,11 @@ impl crate::CredentialsProvider for SequenceProvider {
             if self.fail_at == Some(count) {
                 return Err(Error::provider_failed());
             }
-            Ok(crate::Token::new(
-                Secret::new(format!("synthetic-bearer-{count}")),
-                None,
-            ))
+            let token = match (count, self.write_bearer) {
+                (2, Some(token)) => Secret::new(token),
+                _ => Secret::new(format!("synthetic-bearer-{count}")),
+            };
+            Ok(crate::Token::new(token, None))
         })
     }
 
@@ -249,6 +251,42 @@ async fn user_preflight_rejects_reflection_of_bearer_from_permission_read() {
             .windows(b"synthetic-bearer-1".len())
             .any(|value| value == b"synthetic-bearer-1")
     );
+}
+
+#[tokio::test]
+async fn create_user_rechecks_policy_and_repository_ids_against_write_bearer() {
+    for (policy, repository) in [("pre6A6B6Cpost", "repo-1"), ("policy-1", "pre6A6B6Cpost")] {
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                &format!(r#"[{{"uuid":"{policy}","action":"pull"}}]"#),
+            ),
+            response("200 OK", r#"{"data":[],"totalPage":0,"totalItem":0}"#),
+            response("200 OK", "{}"),
+        ]);
+        let provider = Arc::new(SequenceProvider {
+            write_bearer: Some("jkl"),
+            ..SequenceProvider::default()
+        });
+        let client = client_with(
+            &server,
+            ConfigOptions::default().with_credentials_provider(provider.clone()),
+        );
+        let failure = client
+            .create_user(
+                &RequestContext::new().0,
+                CreateUserInput::new(
+                    "app-ci",
+                    vec![UserPermission::new(repository, vec!["pull".into()])],
+                ),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(server.requests(), 2);
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert!(failure.error().has_identity(ErrorClass::InvalidInput));
+    }
 }
 
 #[tokio::test]

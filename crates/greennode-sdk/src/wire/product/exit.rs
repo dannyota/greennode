@@ -181,13 +181,18 @@ mod tests {
 
     #[tokio::test]
     async fn output_screening_refuses_when_its_work_budget_is_exhausted() {
-        let result = finish!(async {
-            let mut credentials = SentCredentials::default();
-            credentials.record(&crate::Secret::new("z".repeat(4096)));
+        let credentials = super::super::response::budget_test_credentials();
+        let field = format!("!{}", "a".repeat(255));
+        let clean = finish!(async {
             record(&credentials, &credentials, WriteDispatch::NotAWrite);
-            Ok(vec!["ok"; 5000])
+            Ok(vec![field.clone()])
         });
-        assert!(result.is_err());
+        assert!(clean.is_ok());
+        let exhausted = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Ok(vec![field; 1024])
+        });
+        assert!(exhausted.is_err());
     }
 
     #[tokio::test]

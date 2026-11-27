@@ -524,6 +524,15 @@ async fn run_inner(
                 .body(http_body_util::Full::new(request.body.clone()))
                 .map_err(|_| Error::InvalidRequest)?;
             *outgoing.headers_mut() = headers;
+            for value in outgoing
+                .headers()
+                .values()
+                .filter(|value| value.is_sensitive())
+            {
+                sent.record(&Secret::new(
+                    std::str::from_utf8(value.as_bytes()).map_err(|_| Error::InvalidRequest)?,
+                ));
+            }
             let mut observed = send::Evidence::default();
             #[cfg(test)]
             if matches!(op.class, redirect::Classification::Write) {

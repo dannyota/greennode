@@ -156,13 +156,15 @@ impl CookieJar {
                 .unwrap_or(value);
             self.sent.record(&Secret::new(unquoted));
         }
-        Some(Secret::new(
+        let header = Secret::new(
             matches
                 .iter()
                 .map(|cookie| format!("{}={}", cookie.name, cookie.value.expose_secret()))
                 .collect::<Vec<_>>()
                 .join("; "),
-        ))
+        );
+        self.sent.record(&header);
+        Some(header)
     }
 }
 

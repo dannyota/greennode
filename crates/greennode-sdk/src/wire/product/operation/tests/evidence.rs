@@ -553,6 +553,13 @@ async fn key_routes_send_only_the_cdn_key_and_record_reflection() {
         .unwrap();
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     assert!(evidence.output_reflects(&json!("toy-cdn-key")));
+    assert!(
+        evidence
+            .credentials()
+            .values()
+            .iter()
+            .any(|secret| secret.expose_secret() == "Bearer toy-cdn-key")
+    );
     let heads = server.heads();
     let req = String::from_utf8_lossy(&heads[0]);
     assert!(
@@ -637,6 +644,7 @@ async fn product_sender_records_bearer_before_a_dropped_exchange() {
             _ = call_evidence(&server, &op, &options, "one", "toy-inflight-token", &mut evidence) => panic!("exchange should still be pending"),
         }
         assert!(crate::RequestContext::response_bytes_reflect(b"toy-inflight-token"));
+        assert!(crate::wire::product::exit::recorded_exactly("Bearer toy-inflight-token"));
     }).await;
     assert_eq!(server.requests(), 1);
 }

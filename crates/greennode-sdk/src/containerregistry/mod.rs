@@ -341,6 +341,26 @@ impl Client {
         body: bytes::Bytes,
         evidence: &mut Evidence,
     ) -> Result<T, Failure<O>> {
+        self.request_with_options(
+            ctx,
+            operation,
+            path,
+            query,
+            (body, Options::DEFAULT),
+            evidence,
+        )
+        .await
+    }
+
+    async fn request_with_options<T: Output, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+        (body, options): (bytes::Bytes, Options<'_>),
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
         let dispatch = if matches!(operation.class, Classification::Write) {
             WriteDispatch::NotSent
         } else {
@@ -360,7 +380,7 @@ impl Client {
             runtime,
             base,
             operation,
-            &Options::DEFAULT,
+            &options,
             path,
             query,
             session.bearer_source(),
