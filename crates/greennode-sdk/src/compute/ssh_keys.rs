@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, value::RawValue};
 
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, operation, options::PathIds, redirect::Retry};
+use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
 use crate::wire::strict_json;
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
@@ -43,11 +43,13 @@ const DELETE: Mutation = Mutation {
 };
 
 /// Names the SSH key GreenNode will generate.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateSshKeyInput {
     /// Name of the new key.
     pub name: String,
 }
+
+crate::error::debug_record!(CreateSshKeyInput { name });
 
 /// A generated SSH key and the one-time material for private delivery.
 #[derive(Serialize)]
@@ -65,13 +67,11 @@ pub struct CreateSshKeyOutput {
     evidence: Evidence,
 }
 
-impl std::fmt::Debug for CreateSshKeyOutput {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CreateSshKeyOutput")
-            .finish_non_exhaustive()
-    }
-}
+crate::wire::product::output::public_fields!(custom_debug CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
+
+crate::error::debug_record!(CreateSshKeyOutput => |self, f| {
+    f.debug_struct("CreateSshKeyOutput").finish_non_exhaustive()
+});
 
 impl CreateSshKeyOutput {
     /// Borrows the one-time private key for storage in a private destination.
@@ -112,7 +112,7 @@ impl CreateSshKeyOutput {
 }
 
 /// Names a public SSH key to import.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ImportSshKeyInput {
     /// Name of the imported key.
     pub name: String,
@@ -120,24 +120,32 @@ pub struct ImportSshKeyInput {
     pub public_key: String,
 }
 
+crate::error::debug_record!(ImportSshKeyInput { name, public_key });
+
 /// The public SSH key record returned by an import.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ImportSshKeyOutput {
     /// Imported public key record.
     #[serde(rename = "SSHKey")]
     pub ssh_key: SshKey,
 }
 
+crate::wire::product::output::public_fields!(ImportSshKeyOutput { ssh_key });
+
 /// Identifies an SSH key to delete.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteSshKeyInput {
     /// Identifier of the key to delete.
     pub ssh_key_id: String,
 }
 
+crate::error::debug_record!(DeleteSshKeyInput { ssh_key_id });
+
 /// An acknowledgement of SSH key deletion.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct DeleteSshKeyOutput {}
+
+crate::wire::product::output::public_fields!(DeleteSshKeyOutput {});
 
 #[expect(
     clippy::result_large_err,
@@ -150,58 +158,62 @@ impl Client {
         ctx: &RequestContext,
         input: CreateSshKeyInput,
     ) -> Result<CreateSshKeyOutput, Failure<CreateSshKeyOutput>> {
-        required(CREATE.id, &[("Name", !input.name.is_empty())])
-            .map_err(|error| not_sent(*error))?;
-        let mut evidence = Evidence::new();
-        let body = json!({"name": input.name});
-        self.guard_write(ctx, &body, &mut evidence)
-            .map_err(|error| not_sent(*error))?;
-        let reply = self
-            .send_mutation(
-                ctx,
-                &CREATE,
-                &[],
-                Some(&body),
-                ReplyPolicy::PrivateKey,
-                &mut evidence,
-            )
-            .await
-            .map_err(|error| ambiguous(error, &CREATE, &input.name, &evidence))?;
-        let (mut ssh_key, private_key) = decode_key(&reply, &CREATE, &evidence)
-            .map_err(|error| ambiguous(sent(*error), &CREATE, &input.name, &evidence))?;
-        if evidence.text_reflects(private_key.expose_secret()) {
-            return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
-        }
-        evidence.add_redaction(&private_key);
-        if !ssh_key.id.is_empty() && !PathIds::Strict.allows(&ssh_key.id) {
-            return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
-        }
-        if !valid_key_output(&mut ssh_key, &evidence) || private_key.expose_secret().is_empty() {
-            let message = if PathIds::Strict.allows(&ssh_key.id)
-                && !evidence.id_reflects(&ssh_key.id)
-                && private_key.expose_secret().is_empty()
-            {
-                format!(
-                    "create response for ssh key {} had no private key; its private key is lost, delete that key directly",
-                    ssh_key.id
+        crate::wire::product::exit::finish!(async {
+            required(CREATE.id, &[("Name", !input.name.is_empty())])
+                .map_err(|error| not_sent(*error))?;
+            let mut evidence = Evidence::for_write();
+            let body = json!({"name": input.name});
+            self.guard_write(ctx, &body, &mut evidence)
+                .map_err(|error| not_sent(*error))?;
+            let reply = self
+                .send_mutation(
+                    ctx,
+                    &CREATE,
+                    &[],
+                    Some(&body),
+                    ReplyPolicy::PrivateKey,
+                    &mut evidence,
                 )
-            } else {
-                "create response had no id or no private key; a key may exist, check with list-ssh-keys".into()
-            };
-            return Err(sent(api(CREATE.id, Some(201), "", &message, &evidence)));
-        }
-        if evidence.text_reflects("PrivateKey")
-            || evidence.text_reflects("[redacted]")
-            || serde_json::to_value(&ssh_key).map_or(true, |value| evidence.reflected_in(&value))
-        {
-            return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
-        }
-        Ok(CreateSshKeyOutput {
-            cleanup_id: ssh_key.id.clone(),
-            issuer: self.clone(),
-            ssh_key,
-            private_key,
-            evidence,
+                .await
+                .map_err(|error| ambiguous(error, &CREATE, &input.name, &evidence))?;
+            let (mut ssh_key, private_key) = decode_key(&reply, &CREATE, &evidence)
+                .map_err(|error| ambiguous(sent(*error), &CREATE, &input.name, &evidence))?;
+            if evidence.text_reflects(private_key.expose_secret()) {
+                return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
+            }
+            evidence.add_redaction(&private_key);
+            if !ssh_key.id.is_empty() && !PathIds::Strict.allows(&ssh_key.id) {
+                return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
+            }
+            if !valid_key_output(&mut ssh_key, &evidence) || private_key.expose_secret().is_empty()
+            {
+                let message = if PathIds::Strict.allows(&ssh_key.id)
+                    && !evidence.id_reflects(&ssh_key.id)
+                    && private_key.expose_secret().is_empty()
+                {
+                    format!(
+                        "create response for ssh key {} had no private key; its private key is lost, delete that key directly",
+                        ssh_key.id
+                    )
+                } else {
+                    "create response had no id or no private key; a key may exist, check with list-ssh-keys".into()
+                };
+                return Err(sent(api(CREATE.id, Some(201), "", &message, &evidence)));
+            }
+            if evidence.text_reflects("PrivateKey")
+                || evidence.text_reflects("[redacted]")
+                || serde_json::to_value(&ssh_key)
+                    .map_or(true, |value| evidence.output_reflects(&value))
+            {
+                return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
+            }
+            Ok(CreateSshKeyOutput {
+                cleanup_id: ssh_key.id.clone(),
+                issuer: self.clone(),
+                ssh_key,
+                private_key,
+                evidence,
+            })
         })
     }
 
@@ -211,56 +223,58 @@ impl Client {
         ctx: &RequestContext,
         input: ImportSshKeyInput,
     ) -> Result<ImportSshKeyOutput, Failure<ImportSshKeyOutput>> {
-        required(
-            IMPORT.id,
-            &[
-                ("Name", !input.name.is_empty()),
-                ("PublicKey", !input.public_key.is_empty()),
-            ],
-        )
-        .map_err(|error| not_sent(*error))?;
-        let public_key = input.public_key.trim();
-        if public_key.contains(['\n', '\r']) {
-            return Err(not_sent(invalid_input(
-                "compute.ImportSSHKey requires PublicKey to be one line",
-            )));
-        }
-        if public_key.contains("PRIVATE KEY") {
-            return Err(not_sent(invalid_input(
-                "compute.ImportSSHKey: PublicKey looks like a private key, not a public one",
-            )));
-        }
-        let mut evidence = Evidence::new();
-        let body = json!({"name": input.name, "pubKey": public_key});
-        self.guard_write(ctx, &body, &mut evidence)
-            .map_err(|error| not_sent(*error))?;
-        let reply = self
-            .send_mutation(
-                ctx,
-                &IMPORT,
-                &[],
-                Some(&body),
-                ReplyPolicy::SshPublic,
-                &mut evidence,
-            )
-            .await
-            .map_err(|error| ambiguous(error, &IMPORT, &input.name, &evidence))?;
-        let (mut ssh_key, unexpected_private_key) = decode_key(&reply, &IMPORT, &evidence)
-            .map_err(|error| ambiguous(sent(*error), &IMPORT, &input.name, &evidence))?;
-        evidence.add_redaction(&unexpected_private_key);
-        if ssh_key.id.is_empty() {
-            return Err(sent(api(
+        crate::wire::product::exit::finish!(async {
+            required(
                 IMPORT.id,
-                Some(201),
-                "",
-                "import response had no id",
-                &evidence,
-            )));
-        }
-        if !valid_key_output(&mut ssh_key, &evidence) {
-            return Err(sent(invalid_mutation_response(&IMPORT, &evidence)));
-        }
-        Ok(ImportSshKeyOutput { ssh_key })
+                &[
+                    ("Name", !input.name.is_empty()),
+                    ("PublicKey", !input.public_key.is_empty()),
+                ],
+            )
+            .map_err(|error| not_sent(*error))?;
+            let public_key = input.public_key.trim();
+            if public_key.contains(['\n', '\r']) {
+                return Err(not_sent(invalid_input(
+                    "compute.ImportSSHKey requires PublicKey to be one line",
+                )));
+            }
+            if public_key.contains("PRIVATE KEY") {
+                return Err(not_sent(invalid_input(
+                    "compute.ImportSSHKey: PublicKey looks like a private key, not a public one",
+                )));
+            }
+            let mut evidence = Evidence::for_write();
+            let body = json!({"name": input.name, "pubKey": public_key});
+            self.guard_write(ctx, &body, &mut evidence)
+                .map_err(|error| not_sent(*error))?;
+            let reply = self
+                .send_mutation(
+                    ctx,
+                    &IMPORT,
+                    &[],
+                    Some(&body),
+                    ReplyPolicy::SshPublic,
+                    &mut evidence,
+                )
+                .await
+                .map_err(|error| ambiguous(error, &IMPORT, &input.name, &evidence))?;
+            let (mut ssh_key, unexpected_private_key) = decode_key(&reply, &IMPORT, &evidence)
+                .map_err(|error| ambiguous(sent(*error), &IMPORT, &input.name, &evidence))?;
+            evidence.add_redaction(&unexpected_private_key);
+            if ssh_key.id.is_empty() {
+                return Err(sent(api(
+                    IMPORT.id,
+                    Some(201),
+                    "",
+                    "import response had no id",
+                    &evidence,
+                )));
+            }
+            if !valid_key_output(&mut ssh_key, &evidence) {
+                return Err(sent(invalid_mutation_response(&IMPORT, &evidence)));
+            }
+            Ok(ImportSshKeyOutput { ssh_key })
+        })
     }
 
     /// Deletes an SSH key and recognizes the provider's already-gone response.
@@ -269,8 +283,10 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteSshKeyInput,
     ) -> Result<DeleteSshKeyOutput, Failure<DeleteSshKeyOutput>> {
-        self.delete_key(ctx, &input.ssh_key_id, &mut Evidence::new())
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.delete_key(ctx, &input.ssh_key_id, &mut Evidence::for_write())
+                .await
+        })
     }
 
     async fn delete_key(
@@ -374,7 +390,7 @@ fn decode_key(
     ];
     let invalid = || Box::new(invalid_mutation_response(mutation, evidence));
     let text = zeroize::Zeroizing::new(go_json(body).into_owned());
-    let raw: &RawValue = serde_json::from_str(&text).map_err(|_| {
+    serde_json::from_str::<&RawValue>(&text).map_err(|_| {
         Box::new(api(
             mutation.id,
             None,
@@ -398,14 +414,8 @@ fn decode_key(
     {
         return Err(invalid());
     }
-    if mutation.id == CREATE.id {
-        let reflects = |text: &str| evidence.text_reflects(text);
-        if operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
-            .unwrap_or(true)
-            || matches_raw_tokens(raw, &reflects, &reflects).unwrap_or(true)
-        {
-            return Err(invalid());
-        }
+    if mutation.id == CREATE.id && !evidence.go_peer_body_screen(body).is_clean() {
+        return Err(invalid());
     }
     let envelope: Envelope<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;
     let Some(data) = envelope.data else {

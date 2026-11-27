@@ -15,11 +15,13 @@ const OP: &str = "cdn.ListIPRanges";
 const CAP: usize = 4 << 20;
 
 /// Input for reading the public CDN IP ranges.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListIpRangesInput;
 
+crate::error::debug_record!(ListIpRangesInput unit);
+
 /// The canonical IP prefixes and their source.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListIpRangesOutput {
     /// Canonical IP ranges sorted by IP address and prefix length.
@@ -28,6 +30,8 @@ pub struct ListIpRangesOutput {
     pub source: String,
 }
 
+crate::wire::product::output::public_fields!(ListIpRangesOutput { items, source });
+
 impl Client {
     /// Reads the public CDN IP ranges without using account credentials.
     pub async fn list_ip_ranges(
@@ -35,68 +39,70 @@ impl Client {
         ctx: &RequestContext,
         _: ListIpRangesInput,
     ) -> Result<ListIpRangesOutput, Failure<ListIpRangesOutput>> {
-        let mut source = self
-            .session
-            .endpoints()
-            .cdn_docs
-            .as_deref()
-            .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?
-            .to_owned();
-        let operation = operation(OP, "", Method::GET, CAP, true);
-        let mut evidence = Evidence::new();
-        let reply = raw(
-            self,
-            ctx,
-            &operation,
-            &[],
-            Bytes::new(),
-            &mut evidence,
-            true,
-        )
-        .await
-        .map_err(|failure| {
-            if failure.error().is_body_too_large()
-                && failure.error().detail::<StatusCode>() == Some(&StatusCode::OK)
-            {
-                return page_format(&format!("body over {CAP} bytes"), &evidence);
+        crate::wire::product::exit::finish!(async {
+            let mut source = self
+                .session
+                .endpoints()
+                .cdn_docs
+                .as_deref()
+                .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?
+                .to_owned();
+            let operation = operation(OP, "", Method::GET, CAP, true);
+            let mut evidence = Evidence::new();
+            let reply = raw(
+                self,
+                ctx,
+                &operation,
+                &[],
+                Bytes::new(),
+                &mut evidence,
+                true,
+            )
+            .await
+            .map_err(|failure| {
+                if failure.error().is_body_too_large()
+                    && failure.error().http_status() == Some(StatusCode::OK)
+                {
+                    return page_format(&format!("body over {CAP} bytes"), &evidence);
+                }
+                let status = failure.error().http_status().or_else(|| {
+                    failure
+                        .error()
+                        .api_error()
+                        .and_then(crate::ApiError::status)
+                        .and_then(|status| StatusCode::from_u16(status).ok())
+                });
+                if let Some(status) = status
+                    && status != StatusCode::OK
+                {
+                    return status_error(status);
+                }
+                convert(failure)
+            })?;
+            if reply.status != StatusCode::OK {
+                return Err(status_error(reply.status));
             }
-            let status = failure.error().detail::<StatusCode>().copied().or_else(|| {
-                failure
-                    .error()
-                    .api_error()
-                    .and_then(crate::ApiError::status)
-                    .and_then(|status| StatusCode::from_u16(status).ok())
-            });
-            if let Some(status) = status
-                && status != StatusCode::OK
-            {
-                return status_error(status);
+            let content_type = reply
+                .headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if !is_html(content_type) {
+                let reason = if evidence.text_reflects(content_type) {
+                    String::new()
+                } else {
+                    format!("content-type {content_type:?} is not text/html")
+                };
+                return Err(page_format(&reason, &evidence));
             }
-            convert(failure)
-        })?;
-        if reply.status != StatusCode::OK {
-            return Err(status_error(reply.status));
-        }
-        let content_type = reply
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if !is_html(content_type) {
-            let reason = if evidence.text_reflects(content_type) {
-                String::new()
-            } else {
-                format!("content-type {content_type:?} is not text/html")
-            };
-            return Err(page_format(&reason, &evidence));
-        }
-        let mut items = ranges(&String::from_utf8_lossy(&reply.body))
-            .map_err(|reason| page_format(&reason, &evidence))?;
-        for range in &mut items {
-            redact_text(range, &evidence);
-        }
-        redact_text(&mut source, &evidence);
-        Ok(ListIpRangesOutput { items, source })
+            let mut items = ranges(&String::from_utf8_lossy(&reply.body))
+                .map_err(|reason| page_format(&reason, &evidence))?;
+            for range in &mut items {
+                redact_text(range, &evidence);
+            }
+            redact_text(&mut source, &evidence);
+            Ok(ListIpRangesOutput { items, source })
+        })
     }
 }
 

@@ -492,7 +492,7 @@ async fn encoded_credential_never_becomes_a_policy_confirmation_id() {
 }
 
 #[tokio::test]
-async fn policy_confirmation_redacts_values_in_the_sdk_output() {
+async fn policy_confirmation_refuses_reflected_values() {
     let (ctx, _) = RequestContext::new();
     let body = br#"{"id":"pol-1","name":"before toy%2Fbearer after","statements":[{"effect":"allow","resources":["*"],"actions":["iam:ListActions"],"condition":{"equals":{"x":"toy%2Fbearer","toy/bearer":true}}}]}"#;
     let server = Server::start(vec![
@@ -501,21 +501,18 @@ async fn policy_confirmation_redacts_values_in_the_sdk_output() {
         response("201 Created", br#"{"id":"pol-1"}"#),
         response("200 OK", body),
     ]);
-    let output = client(&server, BEARER)
+    let failure = client(&server, BEARER)
         .create_policy(&ctx, input())
         .await
-        .unwrap();
-    let projection = serde_json::to_value(output).unwrap();
-    assert_eq!(projection["Policy"]["Name"], "<redacted>");
-    assert_eq!(
-        projection["Policy"]["Statements"][0]["Condition"],
-        json!({"equals":{"x":"<redacted>"}})
-    );
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.partial().unwrap().policy.id, "pol-1");
     assert_eq!(server.requests(), 4);
 }
 
 #[tokio::test]
-async fn policy_confirmation_redacts_rendered_numbers() {
+async fn policy_confirmation_refuses_reflected_number_spelling() {
     let (ctx, _) = RequestContext::new();
     let body = br#"{"id":"pol-1","createdAt":1000000,"statements":[{"effect":"allow","condition":{"equals":{"x":1e6}}}]}"#;
     let server = Server::start(vec![
@@ -524,16 +521,14 @@ async fn policy_confirmation_redacts_rendered_numbers() {
         response("201 Created", br#"{"id":"pol-1"}"#),
         response("200 OK", body),
     ]);
-    let output = client(&server, "1000000")
+    let failure = client(&server, "1000000")
         .create_policy(&ctx, input())
         .await
-        .unwrap();
-    let projection = serde_json::to_value(output).unwrap();
-    assert_eq!(projection["Policy"]["CreatedAt"], "<redacted>");
-    assert_eq!(
-        projection["Policy"]["Statements"][0]["Condition"],
-        json!({"equals":{"x":"<redacted>"}})
-    );
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.partial().unwrap().policy.id, "pol-1");
+    assert_eq!(server.requests(), 4);
 }
 
 #[tokio::test]

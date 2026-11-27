@@ -4,22 +4,30 @@ use crate::wire::strict_json::{Shape, field_matches};
 use serde::{Deserialize, Deserializer, de};
 
 /// Selects all project zones.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListZonesInput {}
+
+crate::error::debug_record!(ListZonesInput {});
 /// Selects all project quota entries.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListQuotaUsedInput {}
+
+crate::error::debug_record!(ListQuotaUsedInput {});
 /// Selects a project quota by name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetQuotaInput {
     /// Quota name, matched without ASCII case distinctions.
     pub name: String,
 }
+
+crate::error::debug_record!(GetQuotaInput { name });
 /// Selects the project tag quota.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetTagQuotaInput {}
+
+crate::error::debug_record!(GetTagQuotaInput {});
 /// Zone properties returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Zone {
     /// Zone identifier.
@@ -50,6 +58,20 @@ pub struct Zone {
     #[serde(rename(serialize = "IPRanges"))]
     pub ip_ranges: Option<Vec<String>>,
 }
+
+crate::wire::product::output::public_fields!(Zone {
+    id,
+    uuid,
+    name,
+    zone_type,
+    is_default,
+    description,
+    is_enabled,
+    volume_count,
+    server_count,
+    open_stack_zone,
+    ip_ranges
+});
 /// A project quota with API-defined fields.
 pub type Quota = UserInfo;
 /// A project tag quota with API-defined fields.
@@ -59,19 +81,23 @@ pub type ListZonesOutput = crate::List<Zone>;
 /// Quota entries for the configured project.
 pub type ListQuotaUsedOutput = crate::List<Quota>;
 /// One matching quota entry.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetQuotaOutput {
     /// The matching quota.
     #[serde(rename = "Quota")]
     pub quota: Quota,
 }
+
+crate::wire::product::output::public_fields!(GetQuotaOutput { quota });
 /// The project tag quota.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetTagQuotaOutput {
     /// The tag quota.
     #[serde(rename = "TagQuota")]
     pub tag_quota: TagQuota,
 }
+
+crate::wire::product::output::public_fields!(GetTagQuotaOutput { tag_quota });
 
 fn null_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
@@ -148,9 +174,31 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Collection<T> {
             .map_err(de::Error::custom)
     }
 }
-impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
+trait RetainedRow: Serialize {
+    fn reflects(&self, evidence: &crate::wire::product::evidence::Evidence) -> bool;
+}
+
+impl RetainedRow for Zone {
+    fn reflects(&self, evidence: &crate::wire::product::evidence::Evidence) -> bool {
+        evidence.serialized_output_reflects(self)
+    }
+}
+
+impl RetainedRow for QuotaRow {
+    fn reflects(&self, evidence: &crate::wire::product::evidence::Evidence) -> bool {
+        evidence.serialized_output_reflects(&self.0.fields)
+    }
+}
+
+impl<T: for<'de> Deserialize<'de> + RetainedRow> Output for Collection<T> {
     const SCHEMA: Shape<'static> = Shape::Any;
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
+    fn reflected_response(
+        operation: &Operation,
+        response: &crate::wire::product::sender::Response,
+    ) -> Box<Error> {
+        Box::new(super::envelope::invalid_response(operation, response))
+    }
 
     fn decode_response(
         operation: &Operation,
@@ -162,18 +210,20 @@ impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
         {
             return operation::decode_response(operation, response);
         }
-        operation::decode_response(operation, response).map_err(|_| {
-            Box::new(Error::from_api(crate::ApiError::without_fallback(
-                operation.id,
-                Some(response.status.as_u16()),
-                crate::error::SafeText::new("InvalidResponse", &[]),
-                crate::error::SafeText::new("invalid portal response; body withheld", &[]),
-                false,
-            )))
-        })
+        let invalid = || Self::reflected_response(operation, response);
+        let output: Self =
+            operation::decode_response(operation, response).map_err(|_| invalid())?;
+        let evidence =
+            crate::wire::product::evidence::Evidence::from_credentials(&response.credentials);
+        if output.0.iter().any(|row| row.reflects(&evidence)) {
+            return Err(invalid());
+        }
+        Ok(output)
     }
 }
 
+#[derive(Serialize)]
+#[serde(transparent)]
 struct QuotaRow(UserInfo);
 
 impl<'de> Deserialize<'de> for QuotaRow {
@@ -232,11 +282,13 @@ impl Client {
         ctx: &RequestContext,
         _: ListZonesInput,
     ) -> Result<ListZonesOutput, Failure<ListZonesOutput>> {
-        let items = self
-            .project_read::<Collection<Zone>, _>(ctx, "portal.ListZones", "v1/{}/zones")
-            .await?
-            .0;
-        Ok(crate::List { items })
+        crate::wire::product::exit::finish!(async {
+            let items = self
+                .project_read::<Collection<Zone>, _>(ctx, "portal.ListZones", "v1/{}/zones")
+                .await?
+                .0;
+            Ok(crate::List { items })
+        })
     }
     /// Reads quota entries for the configured project.
     pub async fn list_quota_used(
@@ -244,16 +296,18 @@ impl Client {
         ctx: &RequestContext,
         _: ListQuotaUsedInput,
     ) -> Result<ListQuotaUsedOutput, Failure<ListQuotaUsedOutput>> {
-        let items = self
-            .project_read::<Collection<QuotaRow>, _>(
-                ctx,
-                "portal.ListQuotaUsed",
-                "v2/{}/quotas/quotaUsed",
-            )
-            .await?
-            .0;
-        Ok(crate::List {
-            items: items.into_iter().map(|row| row.0).collect(),
+        crate::wire::product::exit::finish!(async {
+            let items = self
+                .project_read::<Collection<QuotaRow>, _>(
+                    ctx,
+                    "portal.ListQuotaUsed",
+                    "v2/{}/quotas/quotaUsed",
+                )
+                .await?
+                .0;
+            Ok(crate::List {
+                items: items.into_iter().map(|row| row.0).collect(),
+            })
         })
     }
     /// Finds the first quota entry matching the supplied name.
@@ -262,43 +316,45 @@ impl Client {
         ctx: &RequestContext,
         input: GetQuotaInput,
     ) -> Result<GetQuotaOutput, Failure<GetQuotaOutput>> {
-        if input.name.is_empty() {
-            return Err(Failure::new(
-                Error::new(ErrorClass::InvalidInput),
-                None,
-                WriteDispatch::NotAWrite,
-            ));
-        }
-        let list = self
-            .list_quota_used(ctx, ListQuotaUsedInput {})
-            .await
-            .map_err(|e| Failure::new(e.into_parts().0, None, WriteDispatch::NotAWrite))?;
-        let quota = list.items.into_iter().find(|quota| {
-            [
-                "name",
-                "quotaName",
-                "resourceName",
-                "resource",
-                "key",
-                "type",
-            ]
-            .iter()
-            .any(|key| {
-                quota
-                    .fields
-                    .get(*key)
-                    .is_some_and(|value| match value.as_str() {
-                        Some(text) => text.eq_ignore_ascii_case(&input.name),
-                        None => value.to_string().eq_ignore_ascii_case(&input.name),
-                    })
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty() {
+                return Err(Failure::new(
+                    Error::new(ErrorClass::InvalidInput),
+                    None,
+                    WriteDispatch::NotAWrite,
+                ));
+            }
+            let list = self
+                .list_quota_used(ctx, ListQuotaUsedInput {})
+                .await
+                .map_err(|e| Failure::new(e.into_parts().0, None, WriteDispatch::NotAWrite))?;
+            let quota = list.items.into_iter().find(|quota| {
+                [
+                    "name",
+                    "quotaName",
+                    "resourceName",
+                    "resource",
+                    "key",
+                    "type",
+                ]
+                .iter()
+                .any(|key| {
+                    quota
+                        .fields
+                        .get(*key)
+                        .is_some_and(|value| match value.as_str() {
+                            Some(text) => text.eq_ignore_ascii_case(&input.name),
+                            None => value.to_string().eq_ignore_ascii_case(&input.name),
+                        })
+                })
+            });
+            quota.map(|quota| GetQuotaOutput { quota }).ok_or_else(|| {
+                Failure::new(
+                    Error::new(ErrorClass::NotFound).with_detail(crate::Diagnostic::QuotaNotFound),
+                    None,
+                    WriteDispatch::NotAWrite,
+                )
             })
-        });
-        quota.map(|quota| GetQuotaOutput { quota }).ok_or_else(|| {
-            Failure::new(
-                Error::new(ErrorClass::NotFound).with_detail(crate::Diagnostic::QuotaNotFound),
-                None,
-                WriteDispatch::NotAWrite,
-            )
         })
     }
     /// Reads the project tag quota.
@@ -307,11 +363,13 @@ impl Client {
         ctx: &RequestContext,
         _: GetTagQuotaInput,
     ) -> Result<GetTagQuotaOutput, Failure<GetTagQuotaOutput>> {
-        let envelope = self
-            .project_read::<Envelope, _>(ctx, "portal.GetTagQuota", "v2/{}/tag/quota")
-            .await?;
-        Ok(GetTagQuotaOutput {
-            tag_quota: envelope.0,
+        crate::wire::product::exit::finish!(async {
+            let envelope = self
+                .project_read::<Envelope, _>(ctx, "portal.GetTagQuota", "v2/{}/tag/quota")
+                .await?;
+            Ok(GetTagQuotaOutput {
+                tag_quota: envelope.0,
+            })
         })
     }
     async fn project_read<T: Output, O>(

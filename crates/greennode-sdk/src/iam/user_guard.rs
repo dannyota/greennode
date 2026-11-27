@@ -53,7 +53,7 @@ impl Client {
     ) -> Result<UserDetail, Failure<O>> {
         let operation = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation(op, USER, OBJECT_CAP, false)
         };
         let user: Option<UserDetail> = self
@@ -94,11 +94,12 @@ impl Client {
         let caller = self.require_classified_caller(ctx, op, evidence).await?;
         if caller.user_type == "iam-user" {
             if !PathIds::Strict.allows(&caller.user_id) || evidence.id_reflects(&caller.user_id) {
-                return Err(guard_refusal(
+                return Err(super::writes::proved_refusal(
+                    evidence,
+                    super::writes::ProofRefusal::Privileged,
                     &format!(
                         "iam: refused: target is protected: {op}: caller identity is unusable"
                     ),
-                    Some(WriteError::PrivilegedChange),
                 ));
             }
             if caller.user_id.eq_ignore_ascii_case(id) {
@@ -132,17 +133,18 @@ impl Client {
             .paged_policy_ids(ctx, op, USER_POLICIES, ("UserID", id), evidence)
             .await?;
         let mut seen = HashMap::new();
-        let protected = || {
-            guard_refusal(
+        let protected = |evidence: &Evidence| {
+            super::writes::proved_refusal(
+                evidence,
+                super::writes::ProofRefusal::Privileged,
                 &format!("{op}: iam: refused: target is protected"),
-                Some(WriteError::PrivilegedChange),
             )
         };
         if self
             .policy_ids_are_privileged(ctx, direct, &actions, &mut seen, evidence)
             .await?
         {
-            return Err(protected());
+            return Err(protected(evidence));
         }
         let groups: Option<Vec<UserGroup>> = self
             .fetch(
@@ -175,7 +177,7 @@ impl Client {
                 .policy_ids_are_privileged(ctx, policies, &actions, &mut seen, evidence)
                 .await?
             {
-                return Err(protected());
+                return Err(protected(evidence));
             }
         }
         if evidence.id_reflects(id) || evidence.id_reflects(&target.id) {

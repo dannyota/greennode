@@ -610,3 +610,14 @@ async fn history_refuses_numeric_tokens_when_request_fails() {
     assert!(partial.is_none());
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn billing_history_exit_refuses_a_reflected_redaction_marker() {
+    let body = page_body(1, 1, &payment_row(1, "redacted"));
+    let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+    let result = client(&server, "redacted")
+        .list_payments(&RequestContext::new().0, payments())
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}

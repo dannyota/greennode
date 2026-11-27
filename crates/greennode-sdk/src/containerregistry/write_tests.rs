@@ -188,6 +188,7 @@ async fn create_user_validates_later_pages_before_post() {
 struct SequenceProvider {
     calls: std::sync::atomic::AtomicUsize,
     fail_at: Option<usize>,
+    write_bearer: Option<&'static str>,
 }
 
 impl crate::CredentialsProvider for SequenceProvider {
@@ -203,10 +204,11 @@ impl crate::CredentialsProvider for SequenceProvider {
             if self.fail_at == Some(count) {
                 return Err(Error::provider_failed());
             }
-            Ok(crate::Token::new(
-                Secret::new(format!("synthetic-bearer-{count}")),
-                None,
-            ))
+            let token = match (count, self.write_bearer) {
+                (2, Some(token)) => Secret::new(token),
+                _ => Secret::new(format!("synthetic-bearer-{count}")),
+            };
+            Ok(crate::Token::new(token, None))
         })
     }
 
@@ -216,6 +218,40 @@ impl crate::CredentialsProvider for SequenceProvider {
         _: &'a Secret,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn repository_delete_rechecks_the_zero_image_read_with_the_write_bearer() {
+    for (note, reflects) in [("ordinary-note", false), ("synthetic-bearer-1", true)] {
+        let body = serde_json::json!({"uuid":"repo-1","imageCount":0,"note":note}).to_string();
+        let server = Server::start(vec![
+            response("200 OK", &body),
+            response("202 Accepted", ""),
+        ]);
+        let client = client_with(
+            &server,
+            ConfigOptions::default()
+                .with_credentials_provider(Arc::new(SequenceProvider::default())),
+        );
+        let result = client
+            .delete_repository(
+                &RequestContext::new().0,
+                DeleteRepositoryInput {
+                    no_wait: true,
+                    ..DeleteRepositoryInput::new("repo-1")
+                },
+            )
+            .await;
+        assert_eq!(
+            result.map(|_| ()).map_err(|error| error.write_dispatch()),
+            if reflects {
+                Err(WriteDispatch::NotSent)
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(server.requests(), if reflects { 1 } else { 2 });
     }
 }
 
@@ -249,6 +285,51 @@ async fn user_preflight_rejects_reflection_of_bearer_from_permission_read() {
             .windows(b"synthetic-bearer-1".len())
             .any(|value| value == b"synthetic-bearer-1")
     );
+}
+
+#[tokio::test]
+async fn create_user_rechecks_policy_and_repository_ids_against_write_bearer() {
+    let header_id = format!(
+        "pre{}post",
+        data_encoding::BASE64URL_NOPAD.encode(b"Bearer jkl")
+    );
+    for (policy, repository) in [
+        ("pre6A6B6Cpost", "repo-1"),
+        ("policy-1", "pre6A6B6Cpost"),
+        (header_id.as_str(), "repo-1"),
+        ("policy-1", header_id.as_str()),
+    ] {
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                &format!(r#"[{{"uuid":"{policy}","action":"pull"}}]"#),
+            ),
+            response("200 OK", r#"{"data":[],"totalPage":0,"totalItem":0}"#),
+            response("200 OK", "{}"),
+        ]);
+        let provider = Arc::new(SequenceProvider {
+            write_bearer: Some("jkl"),
+            ..SequenceProvider::default()
+        });
+        let client = client_with(
+            &server,
+            ConfigOptions::default().with_credentials_provider(provider.clone()),
+        );
+        let failure = client
+            .create_user(
+                &RequestContext::new().0,
+                CreateUserInput::new(
+                    "app-ci",
+                    vec![UserPermission::new(repository, vec!["pull".into()])],
+                ),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+        assert_eq!(server.requests(), 2);
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert!(failure.error().has_identity(ErrorClass::InvalidInput));
+    }
 }
 
 #[tokio::test]
@@ -308,7 +389,7 @@ async fn sensitive_preflight_distinguishes_invalid_json_and_shape() {
 }
 
 #[tokio::test]
-async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
+async fn unsafe_permission_response_is_refused_before_action_lookup() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"[{"uuid":"policy-1","action":"synthetic-registry-\u0007token"}]"#,
@@ -325,7 +406,7 @@ async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
         .unwrap_err();
     let message = failure.error().api_error().unwrap().message();
     assert!(!message.contains("synthetic-registry-token"));
-    assert!(message.contains("unknown action"));
+    assert!(message.contains("unsafe registry response"));
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
@@ -368,4 +449,26 @@ async fn failed_lookup_keeps_private_delivery_outside_the_error() {
     assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
     assert!(issued_user_secret(&Failure::new(error, partial, dispatch)).is_none());
     assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn reflected_registry_404_does_not_confirm_deletion() {
+    for (body, allowed) in [
+        ("{}", true),
+        (r#"{"note":"synthetic-registry-token"}"#, false),
+    ] {
+        let server = Server::start(vec![
+            response("200 OK", r#"{"uuid":"repo-1","imageCount":0}"#),
+            response("202 Accepted", ""),
+            response("404 Not Found", body),
+        ]);
+        let result = client(&server)
+            .delete_repository(
+                &RequestContext::new().0,
+                DeleteRepositoryInput::new("repo-1"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        assert_eq!(server.requests(), 3);
+    }
 }

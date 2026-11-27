@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::groups::CreatedId;
-use super::policy_guard::{Guard, POLICY, Protection, protection_error};
+use super::policy_guard::{Guard, POLICY, Protection};
 use super::wire::Screen;
 use super::writes::{
     WriteError, error_reason, guard_failed, guard_refusal, settle, unsettled, withheld_operand,
@@ -26,7 +26,7 @@ const CREATE_ADVICE: &str = "iam.CreatePolicy: create may have already reached t
 const UPDATE_ADVICE: &str = "iam.UpdatePolicy: vngcloud: write outcome not confirmed: replacement outcome is uncertain; read the policy before another write";
 
 /// Defines a new customer IAM policy.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreatePolicyInput {
     /// Name of the new policy.
     pub name: String,
@@ -35,6 +35,12 @@ pub struct CreatePolicyInput {
     /// Required policy statements, in evaluation order.
     pub statements: Vec<Statement>,
 }
+
+crate::error::debug_record!(CreatePolicyInput {
+    name,
+    description,
+    statements
+});
 
 impl CreatePolicyInput {
     /// Sets the required name and statements, with an empty description.
@@ -48,15 +54,17 @@ impl CreatePolicyInput {
 }
 
 /// A newly created policy, with only its ID when confirmation failed.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreatePolicyOutput {
     /// The policy returned by IAM.
     #[serde(rename = "Policy")]
     pub policy: Policy,
 }
 
+crate::wire::product::output::public_fields!(CreatePolicyOutput { policy });
+
 /// Replaces a customer IAM policy, preserving each omitted field.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdatePolicyInput {
     /// ID of the policy to replace.
     pub policy_id: String,
@@ -67,6 +75,13 @@ pub struct UpdatePolicyInput {
     /// Replacement statements, or absent to preserve the current statements.
     pub statements: Option<Vec<Statement>>,
 }
+
+crate::error::debug_record!(UpdatePolicyInput {
+    policy_id,
+    name,
+    description,
+    statements
+});
 
 impl UpdatePolicyInput {
     /// Selects a policy and preserves all fields by default.
@@ -81,12 +96,14 @@ impl UpdatePolicyInput {
 }
 
 /// The updated policy, with only its ID when confirmation failed.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct UpdatePolicyOutput {
     /// The policy returned by IAM.
     #[serde(rename = "Policy")]
     pub policy: Policy,
 }
+
+crate::wire::product::output::public_fields!(UpdatePolicyOutput { policy });
 
 super::id_input!(
     /// Identifies an unattached customer policy to delete.
@@ -96,8 +113,10 @@ super::id_input!(
 );
 
 /// A completed policy deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
+
+crate::wire::product::output::public_fields!(DeletePolicyOutput {});
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {
@@ -107,75 +126,80 @@ impl Client {
         ctx: &RequestContext,
         input: CreatePolicyInput,
     ) -> Result<CreatePolicyOutput, Failure<CreatePolicyOutput>> {
-        if input.name.is_empty() {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE} requires Name"
-            ))));
-        }
-        validate_statements(CREATE, &input.statements)?;
-        let body = policy_body(
-            &input.name,
-            &input.description,
-            wire_statements(&input.statements),
-        );
-        let mut evidence = self.write_evidence(ctx, CREATE, &[], &[])?;
-        if evidence.reflected_in(&body) {
-            return Err(withheld_operand());
-        }
-        let mut guard = Guard::new(self, ctx, CREATE, &mut evidence).await?;
-        guard.load_actions().await?;
-        refuse_privileged(
-            CREATE,
-            guard.privileged(&input.statements)?,
-            "the statements grant an IAM write action",
-        )?;
-        let mut operation = write_operation(
-            CREATE,
-            Method::POST,
-            POLICIES,
-            Retry::Once,
-            &[StatusCode::CREATED],
-        );
-        operation.keep_status = true;
-        operation.overflow_overrides_status = true;
-        let CreatedId(id) = self
-            .write(
-                ctx,
-                Api::Policies,
-                &operation,
-                &[],
-                Some(body),
-                &mut evidence,
-            )
-            .await
-            .map_err(|failure| uncertain_create(failure, &evidence))?;
-        if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
-            return Err(Failure::new(
-                Error::from_api(ApiError::without_fallback(
-                    CREATE,
-                    None,
-                    SafeText::new("", &[]),
-                    SafeText::new(
-                        "create response had no id; a policy may exist, check with list-policies --name",
-                        &[],
-                    ),
-                    false,
-                )),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        let outcome = self.confirm_created_policy(ctx, &id, &mut evidence).await;
-        outcome
-            .map(|policy| CreatePolicyOutput { policy })
-            .map_err(|failed| {
-                settle(
-                    failed,
-                    partial_policy(&id, &evidence).map(|policy| CreatePolicyOutput { policy }),
-                    &format!("{CREATE}: policy {id} was created but the read to confirm it failed"),
-                    &evidence,
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty() {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE} requires Name"
+                ))));
+            }
+            validate_statements(CREATE, &input.statements)?;
+            let body = policy_body(
+                &input.name,
+                &input.description,
+                wire_statements(&input.statements),
+            );
+            let mut evidence = self.write_evidence(ctx, CREATE, &[], &[])?;
+            if evidence.output_reflects(&body) {
+                return Err(withheld_operand());
+            }
+            let mut guard = Guard::new(self, ctx, CREATE, &mut evidence).await?;
+            guard.load_actions().await?;
+            refuse_privileged(
+                &guard,
+                CREATE,
+                guard.privileged(&input.statements)?,
+                "the statements grant an IAM write action",
+            )?;
+            let mut operation = write_operation(
+                CREATE,
+                Method::POST,
+                POLICIES,
+                Retry::Once,
+                &[StatusCode::CREATED],
+            );
+            operation.keep_status = true;
+            operation.overflow_overrides_status = true;
+            let CreatedId(id) = self
+                .write(
+                    ctx,
+                    Api::Policies,
+                    &operation,
+                    &[],
+                    Some(body),
+                    &mut evidence,
                 )
-            })
+                .await
+                .map_err(|failure| uncertain_create(failure, &evidence))?;
+            if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
+                return Err(Failure::new(
+                    Error::from_api(ApiError::without_fallback(
+                        CREATE,
+                        None,
+                        SafeText::new("", &[]),
+                        SafeText::new(
+                            "create response had no id; a policy may exist, check with list-policies --name",
+                            &[],
+                        ),
+                        false,
+                    )),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            let outcome = self.confirm_created_policy(ctx, &id, &mut evidence).await;
+            outcome
+                .map(|policy| CreatePolicyOutput { policy })
+                .map_err(|failed| {
+                    settle(
+                        failed,
+                        partial_policy(&id, &evidence).map(|policy| CreatePolicyOutput { policy }),
+                        &format!(
+                            "{CREATE}: policy {id} was created but the read to confirm it failed"
+                        ),
+                        &evidence,
+                    )
+                })
+        })
     }
 
     async fn confirm_created_policy<O>(
@@ -198,82 +222,88 @@ impl Client {
         ctx: &RequestContext,
         input: UpdatePolicyInput,
     ) -> Result<UpdatePolicyOutput, Failure<UpdatePolicyOutput>> {
-        let id = input.policy_id.as_str();
-        if let Some(statements) = &input.statements {
-            validate_statements(UPDATE, statements)?;
-        }
-        let mut evidence = self.write_evidence(
-            ctx,
-            UPDATE,
-            &[("PolicyID", id)],
-            &[
-                input.name.as_deref().unwrap_or_default(),
-                input.description.as_deref().unwrap_or_default(),
-            ],
-        )?;
-        if input
-            .statements
-            .as_ref()
-            .is_some_and(|statements| evidence.reflected_in(&wire_statements(statements)))
-        {
-            return Err(withheld_operand());
-        }
-        let mut guard = Guard::new(self, ctx, UPDATE, &mut evidence).await?;
-        let (current, statements) = guard.replacement_policy(id).await?;
-        check_managed(UPDATE, &current)?;
-        guard.load_actions().await?;
-        let attachments = guard.attachments(id).await?;
-        let protection = guard.attached_protection(attachments).await?;
-        if protection == Protection::Caller {
-            protection_error(UPDATE, protection, "")?;
-        }
-        refuse_privileged(
-            UPDATE,
-            guard.privileged(&current.statements)?,
-            "the policy's current statements grant an IAM write action",
-        )?;
-        if let Some(statements) = &input.statements {
-            refuse_privileged(
+        crate::wire::product::exit::finish!(async {
+            let id = input.policy_id.as_str();
+            if let Some(statements) = &input.statements {
+                validate_statements(UPDATE, statements)?;
+            }
+            let mut evidence = self.write_evidence(
+                ctx,
                 UPDATE,
-                guard.privileged(statements)?,
-                "the proposed statements grant an IAM write action",
+                &[("PolicyID", id)],
+                &[
+                    input.name.as_deref().unwrap_or_default(),
+                    input.description.as_deref().unwrap_or_default(),
+                ],
             )?;
-        }
-        protection_error(
-            UPDATE,
-            protection,
-            "the policy is attached to a protected principal or group",
-        )?;
-        let body = policy_body(
-            input.name.as_deref().unwrap_or(&current.name),
-            input.description.as_deref().unwrap_or(&current.description),
-            input
+            if input
                 .statements
-                .as_deref()
-                .map_or(statements, wire_statements),
-        );
-        let mut op = write_operation(
-            UPDATE,
-            Method::PUT,
-            POLICY,
-            Retry::Once,
-            &[StatusCode::NO_CONTENT],
-        );
-        op.keep_status = true;
-        self.write::<Value, _>(ctx, Api::Policies, &op, &[id], Some(body), &mut evidence)
-            .await
-            .map_err(|failure| uncertain_update(failure, id, &evidence))?;
-        self.confirm_policy(ctx, id, &mut evidence)
-            .await
-            .map(|policy| UpdatePolicyOutput { policy })
-            .map_err(|failed| {
-                settle(
-                    failed,
-                    partial_policy(id, &evidence).map(|policy| UpdatePolicyOutput { policy }),
-                    &format!("{UPDATE}: policy {id} was updated but the read to confirm it failed"),
-                    &evidence,
-                )
-            })
+                .as_ref()
+                .is_some_and(|statements| evidence.output_reflects(&wire_statements(statements)))
+            {
+                return Err(withheld_operand());
+            }
+            let mut guard = Guard::new(self, ctx, UPDATE, &mut evidence).await?;
+            let (current, statements) = guard.replacement_policy(id).await?;
+            check_managed(UPDATE, &current)?;
+            guard.load_actions().await?;
+            let attachments = guard.attachments(id).await?;
+            let protection = guard.attached_protection(attachments).await?;
+            if protection == Protection::Caller {
+                guard.check_protection(UPDATE, protection, "")?;
+            }
+            refuse_privileged(
+                &guard,
+                UPDATE,
+                guard.privileged(&current.statements)?,
+                "the policy's current statements grant an IAM write action",
+            )?;
+            if let Some(statements) = &input.statements {
+                refuse_privileged(
+                    &guard,
+                    UPDATE,
+                    guard.privileged(statements)?,
+                    "the proposed statements grant an IAM write action",
+                )?;
+            }
+            guard.check_protection(
+                UPDATE,
+                protection,
+                "the policy is attached to a protected principal or group",
+            )?;
+            let body = policy_body(
+                input.name.as_deref().unwrap_or(&current.name),
+                input.description.as_deref().unwrap_or(&current.description),
+                input
+                    .statements
+                    .as_deref()
+                    .map_or(statements, wire_statements),
+            );
+            let mut op = write_operation(
+                UPDATE,
+                Method::PUT,
+                POLICY,
+                Retry::Once,
+                &[StatusCode::NO_CONTENT],
+            );
+            op.keep_status = true;
+            self.write::<Value, _>(ctx, Api::Policies, &op, &[id], Some(body), &mut evidence)
+                .await
+                .map_err(|failure| uncertain_update(failure, id, &evidence))?;
+            self.confirm_policy(ctx, id, &mut evidence)
+                .await
+                .map(|policy| UpdatePolicyOutput { policy })
+                .map_err(|failed| {
+                    settle(
+                        failed,
+                        partial_policy(id, &evidence).map(|policy| UpdatePolicyOutput { policy }),
+                        &format!(
+                            "{UPDATE}: policy {id} was updated but the read to confirm it failed"
+                        ),
+                        &evidence,
+                    )
+                })
+        })
     }
 
     /// Deletes a customer policy after proving it has no attachments.
@@ -282,26 +312,34 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePolicyInput,
     ) -> Result<DeletePolicyOutput, Failure<DeletePolicyOutput>> {
-        let id = input.policy_id.as_str();
-        let mut evidence = self.write_evidence(ctx, DELETE, &[("PolicyID", id)], &[])?;
-        let mut guard = Guard::new(self, ctx, DELETE, &mut evidence).await?;
-        check_managed(DELETE, &guard.policy(id).await?)?;
-        if !guard.attachments(id).await?.is_empty() {
-            return Err(guard_refusal(
-                "iam: refused: resource in use: iam.DeletePolicy: the policy is attached",
-                Some(WriteError::ResourceInUse),
-            ));
-        }
-        let op = write_operation(
-            DELETE,
-            Method::DELETE,
-            POLICY,
-            Retry::Repeatable,
-            &[StatusCode::NO_CONTENT],
-        );
-        self.write::<Value, _>(ctx, Api::Policies, &op, &[id], None, &mut evidence)
-            .await?;
-        Ok(DeletePolicyOutput {})
+        crate::wire::product::exit::finish!(async {
+            let id = input.policy_id.as_str();
+            let mut evidence = self.write_evidence(ctx, DELETE, &[("PolicyID", id)], &[])?;
+            let mut guard = Guard::new(self, ctx, DELETE, &mut evidence).await?;
+            check_managed(DELETE, &guard.policy(id).await?)?;
+            let attachments = guard.attachments(id).await?;
+            guard.decide(|decision| {
+                if attachments.is_empty() {
+                    Ok(())
+                } else {
+                    Err(super::writes::decided_refusal(
+                        decision,
+                        super::writes::ProofRefusal::InUse,
+                        "iam: refused: resource in use: iam.DeletePolicy: the policy is attached",
+                    ))
+                }
+            })??;
+            let op = write_operation(
+                DELETE,
+                Method::DELETE,
+                POLICY,
+                Retry::Repeatable,
+                &[StatusCode::NO_CONTENT],
+            );
+            self.write::<Value, _>(ctx, Api::Policies, &op, &[id], None, &mut evidence)
+                .await?;
+            Ok(DeletePolicyOutput {})
+        })
     }
 }
 
@@ -386,9 +424,14 @@ fn check_managed<O>(op: &str, policy: &Policy) -> Result<(), Failure<O>> {
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
-fn refuse_privileged<O>(op: &str, privileged: bool, reason: &str) -> Result<(), Failure<O>> {
+fn refuse_privileged<O>(
+    guard: &Guard<'_>,
+    op: &str,
+    privileged: bool,
+    reason: &str,
+) -> Result<(), Failure<O>> {
     if privileged {
-        protection_error(op, Protection::Privileged, reason)?;
+        guard.check_protection(op, Protection::Privileged, reason)?;
     }
     Ok(())
 }
@@ -399,8 +442,8 @@ fn uncertain_create<O>(failure: Failure<O>, evidence: &Evidence) -> Failure<O> {
         return Failure::new(error, None, dispatch);
     }
     if error
-        .detail::<StatusCode>()
-        .is_some_and(StatusCode::is_client_error)
+        .http_status()
+        .is_some_and(|status| status.is_client_error())
     {
         if !error.is_body_too_large() {
             let message = if error.has_identity(crate::ErrorClass::Cancelled) {
@@ -460,7 +503,7 @@ fn uncertain_update(
 
 fn observed_status(error: &Error) -> Option<u16> {
     error
-        .detail::<StatusCode>()
-        .map(StatusCode::as_u16)
+        .http_status()
+        .map(|status| status.as_u16())
         .or_else(|| error.api_error().and_then(ApiError::status))
 }

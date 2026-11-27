@@ -15,13 +15,15 @@ const DISABLE: &str = "iam.DisableUserMFA";
 macro_rules! mfa_input {
     ($(#[$meta:meta])* $ty:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $ty {
             /// Target IAM user resource ID.
             pub user_id: String,
             /// Factor method. The service supports google.
             pub method: String,
         }
+
+        crate::error::debug_record!($ty { user_id, method });
 
         impl $ty {
             /// Sets the target user and factor method.
@@ -42,7 +44,7 @@ mfa_input!(
 );
 
 /// The observed outcome of an IAM MFA state change.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UserMfaWriteOutput {
     /// The supported factor method.
     #[serde(rename = "Method")]
@@ -54,6 +56,12 @@ pub struct UserMfaWriteOutput {
     #[serde(rename = "Changed")]
     pub changed: bool,
 }
+
+crate::wire::product::output::public_fields!(UserMfaWriteOutput {
+    method,
+    enabled,
+    changed
+});
 
 /// The MFA state after an enable operation.
 pub type EnableUserMfaOutput = UserMfaWriteOutput;
@@ -68,8 +76,10 @@ impl Client {
         ctx: &RequestContext,
         input: EnableUserMfaInput,
     ) -> Result<EnableUserMfaOutput, Failure<EnableUserMfaOutput>> {
-        self.change_user_mfa(ctx, ENABLE, &input.user_id, &input.method, true)
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.change_user_mfa(ctx, ENABLE, &input.user_id, &input.method, true)
+                .await
+        })
     }
 
     /// Disables a Google factor once and confirms the resulting state.
@@ -78,8 +88,10 @@ impl Client {
         ctx: &RequestContext,
         input: DisableUserMfaInput,
     ) -> Result<DisableUserMfaOutput, Failure<DisableUserMfaOutput>> {
-        self.change_user_mfa(ctx, DISABLE, &input.user_id, &input.method, false)
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.change_user_mfa(ctx, DISABLE, &input.user_id, &input.method, false)
+                .await
+        })
     }
 
     async fn change_user_mfa(
@@ -97,7 +109,6 @@ impl Client {
         }
         let mut evidence = self.write_evidence(ctx, op, &[("UserID", id)], &[method])?;
         let target = self.guard_user(ctx, op, id, true, &mut evidence).await?;
-        let (verified, active) = google_state(&target).ok_or_else(|| unavailable(op))?;
         let output = |enabled, changed, evidence: &Evidence| UserMfaWriteOutput {
             method: if evidence.text_reflects(method) {
                 "<redacted>"
@@ -108,11 +119,17 @@ impl Client {
             enabled,
             changed,
         };
-        if enable && !verified || evidence.text_reflects(method) {
-            return Err(unavailable(op));
-        }
-        if active == enable {
-            return Ok(output(Some(active), false, &evidence));
+        let noop = crate::wire::product::guard::decide(&evidence, |decision| {
+            let (verified, active) = google_state(&target).ok_or_else(|| unavailable(op))?;
+            let evidence = decision.evidence();
+            if enable && !verified || evidence.text_reflects(method) {
+                return Err(unavailable(op));
+            }
+            Ok((active == enable).then(|| output(Some(active), false, evidence)))
+        })
+        .map_err(|error| not_sent(*error))??;
+        if let Some(noop) = noop {
+            return Ok(noop);
         }
         let route = if enable {
             "accounts-api/v1/iam-users/{}/activate-google"

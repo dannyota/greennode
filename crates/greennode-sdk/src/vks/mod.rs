@@ -39,7 +39,7 @@ pub struct Client {
 }
 
 /// Selects a single zero-based page of cluster inventory.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListClustersInput {
     /// Zero-based page number, at most 2,147,483,647.
     pub page: i64,
@@ -47,27 +47,35 @@ pub struct ListClustersInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListClustersInput { page, size });
+
 /// A cluster page. The page number is zero-based.
 pub type ListClustersOutput = PagedList<Cluster>;
 
 /// Requests the version catalog with no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListClusterVersionsInput;
+
+crate::error::debug_record!(ListClusterVersionsInput unit);
 
 /// The available cluster versions.
 pub type ListClusterVersionsOutput = List<ClusterVersion>;
 
 /// Requests the account quota with no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct GetQuotaInput;
 
+crate::error::debug_record!(GetQuotaInput unit);
+
 /// The configured region's account quota.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetQuotaOutput {
     /// Account quota and current cluster usage.
     #[serde(rename = "Quota")]
     pub quota: Quota,
 }
+
+crate::wire::product::output::public_fields!(GetQuotaOutput { quota });
 
 #[expect(
     clippy::result_large_err,
@@ -88,42 +96,44 @@ impl Client {
         ctx: &RequestContext,
         input: ListClustersInput,
     ) -> Result<ListClustersOutput, Failure<ListClustersOutput>> {
-        self.base()?;
-        let max = i64::from(i32::MAX);
-        if !(0..=max).contains(&input.page) {
-            return Err(read_failure(local_error(
-                ErrorClass::InvalidInput,
-                "InvalidUsage",
-                "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
-            )));
-        }
-        if !(0..=max).contains(&input.size) {
-            return Err(read_failure(local_error(
-                ErrorClass::InvalidInput,
-                "InvalidUsage",
-                "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
-            )));
-        }
-        let page = input.page.to_string();
-        let size = if input.size == 0 { 10 } else { input.size }.to_string();
-        let response: ClusterPage = self
-            .read(
-                ctx,
-                &read_operation(CLUSTERS, "v1/clusters"),
-                &[("page", &page), ("pageSize", &size)],
-            )
-            .await?;
-        let page_size = i64::from(response.page_size);
-        if response.page < 0 || page_size <= 0 || response.total < 0 {
-            return Err(read_failure(malformed(CLUSTERS)));
-        }
-        Ok(PagedList {
-            items: response.items,
-            page: i64::from(response.page),
-            page_size,
-            total_page: response.total.div_euclid(page_size)
-                + i64::from(response.total.rem_euclid(page_size) != 0),
-            total_item: response.total,
+        crate::wire::product::exit::finish!(async {
+            self.base()?;
+            let max = i64::from(i32::MAX);
+            if !(0..=max).contains(&input.page) {
+                return Err(read_failure(local_error(
+                    ErrorClass::InvalidInput,
+                    "InvalidUsage",
+                    "greennode: invalid input: vks.ListClusters: Page must be between 0 and 2147483647",
+                )));
+            }
+            if !(0..=max).contains(&input.size) {
+                return Err(read_failure(local_error(
+                    ErrorClass::InvalidInput,
+                    "InvalidUsage",
+                    "greennode: invalid input: vks.ListClusters: Size must be between 1 and 2147483647, or 0 for the default",
+                )));
+            }
+            let page = input.page.to_string();
+            let size = if input.size == 0 { 10 } else { input.size }.to_string();
+            let response: ClusterPage = self
+                .read(
+                    ctx,
+                    &read_operation(CLUSTERS, "v1/clusters"),
+                    &[("page", &page), ("pageSize", &size)],
+                )
+                .await?;
+            let page_size = i64::from(response.page_size);
+            if response.page < 0 || page_size <= 0 || response.total < 0 {
+                return Err(read_failure(malformed(CLUSTERS)));
+            }
+            Ok(PagedList {
+                items: response.items,
+                page: i64::from(response.page),
+                page_size,
+                total_page: response.total.div_euclid(page_size)
+                    + i64::from(response.total.rem_euclid(page_size) != 0),
+                total_item: response.total,
+            })
         })
     }
 
@@ -133,10 +143,12 @@ impl Client {
         ctx: &RequestContext,
         _input: ListClusterVersionsInput,
     ) -> Result<ListClusterVersionsOutput, Failure<ListClusterVersionsOutput>> {
-        let Versions(items) = self
-            .read(ctx, &read_operation(VERSIONS, "v1/cluster-versions"), &[])
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let Versions(items) = self
+                .read(ctx, &read_operation(VERSIONS, "v1/cluster-versions"), &[])
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads the configured region's account quota.
@@ -145,11 +157,13 @@ impl Client {
         ctx: &RequestContext,
         _input: GetQuotaInput,
     ) -> Result<GetQuotaOutput, Failure<GetQuotaOutput>> {
-        let quota: QuotaResponse = self
-            .read(ctx, &read_operation(QUOTA, "v1/quota"), &[])
-            .await?;
-        Ok(GetQuotaOutput {
-            quota: quota.into(),
+        crate::wire::product::exit::finish!(async {
+            let quota: QuotaResponse = self
+                .read(ctx, &read_operation(QUOTA, "v1/quota"), &[])
+                .await?;
+            Ok(GetQuotaOutput {
+                quota: quota.into(),
+            })
         })
     }
 
@@ -210,7 +224,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: false,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }
@@ -276,7 +290,7 @@ fn safe_error(operation: &'static str, error: &Error) -> Error {
     let api = error.api_error();
     let status = api.and_then(ApiError::status);
     if status == Some(200)
-        || (error.is_body_too_large() && error.detail::<StatusCode>() == Some(&StatusCode::OK))
+        || (error.is_body_too_large() && error.http_status() == Some(StatusCode::OK))
     {
         return malformed(operation);
     }

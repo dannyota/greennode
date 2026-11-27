@@ -8,12 +8,13 @@ use crate::billing::{
 };
 use crate::wire::{
     product::{
+        evidence::Evidence,
         operation::{self, Operation, Output},
         sender::Response,
     },
     strict_json::{self, Shape, ShapeField},
 };
-use crate::{Error, Failure, RequestContext, output_number};
+use crate::{Error, Failure, RequestContext};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
@@ -26,11 +27,13 @@ pub const RENEW_TYPE_MANUAL: &str = "MANUAL";
 pub const RENEW_TYPE_AUTO_RENEW: &str = "AUTO-RENEW";
 
 /// Reads prepaid resources across products without filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListResourcesInput {}
 
+crate::error::debug_record!(ListResourcesInput {});
+
 /// Prepaid resource renewal state and aggregate counts.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all(deserialize = "camelCase", serialize = "PascalCase"))]
 pub struct ListResourcesOutput {
     /// Resources in API order.
@@ -51,8 +54,18 @@ pub struct ListResourcesOutput {
     pub extra: ResourceThresholds,
 }
 
+crate::wire::product::output::public_fields!(ListResourcesOutput {
+    items,
+    total_auto_renews,
+    total_good_resources,
+    total_warning_resources,
+    total_alerted_resources,
+    total_expired_resources,
+    extra
+});
+
 /// A prepaid resource's identity, renewal state, and billing details.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")
@@ -105,8 +118,27 @@ pub struct Resource {
     pub billing_elements: Vec<ResourceBillingElement>,
 }
 
+crate::wire::product::output::public_fields!(Resource {
+    artifact_id,
+    artifact_name,
+    artifact_type,
+    product,
+    renew_type,
+    billing_type,
+    start_billing_time,
+    end_billing_time,
+    date_left,
+    renew_period,
+    channel,
+    is_renewing,
+    cost,
+    status,
+    status_ui,
+    billing_elements
+});
+
 /// One billing element of a prepaid resource.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")
@@ -123,8 +155,14 @@ pub struct ResourceBillingElement {
     pub meta_key: Option<Box<RawValue>>,
 }
 
+crate::wire::product::output::public_fields!(ResourceBillingElement {
+    sku,
+    quantity,
+    meta_key
+});
+
 /// Warning and alarm thresholds supplied with prepaid resources.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(deserialize = "camelCase", serialize = "PascalCase")
@@ -138,6 +176,11 @@ pub struct ResourceThresholds {
     pub alarm_thresholds: Option<Box<RawValue>>,
 }
 
+crate::wire::product::output::public_fields!(ResourceThresholds {
+    warning_thresholds,
+    alarm_thresholds
+});
+
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"
@@ -149,16 +192,18 @@ impl Client {
         ctx: &RequestContext,
         _input: ListResourcesInput,
     ) -> Result<ListResourcesOutput, Failure<ListResourcesOutput>> {
-        let operation = Operation {
-            cap: 4 << 20,
-            reject_reflected_credentials: true,
-            overflow_overrides_status: true,
-            ..history_operation("billing.ListResources", "gateway/api/v1/resources")
-        };
-        self.history_request::<ResourceEnvelope>(ctx, &operation, &[], RESOURCE_WITHHELD)
-            .await
-            .map(|output| output.data)
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let operation = Operation {
+                cap: 4 << 20,
+                reflection: crate::wire::product::operation::Reflection::Refuse,
+                overflow_overrides_status: true,
+                ..history_operation("billing.ListResources", "gateway/api/v1/resources")
+            };
+            self.history_request::<ResourceEnvelope>(ctx, &operation, &[], RESOURCE_WITHHELD)
+                .await
+                .map(|output| output.data)
+                .map_err(|error| failure(*error))
+        })
     }
 }
 
@@ -212,7 +257,6 @@ const DATA: Shape<'static> = Shape::Object(&[
 ]);
 
 impl Output for ResourceEnvelope {
-    const CHECK_RENDERED_NUMBERS: bool = true;
     const SCHEMA: Shape<'static> = Shape::Object(&[
         field("code"),
         ShapeField {
@@ -246,12 +290,8 @@ impl Output for ResourceEnvelope {
         }
         let output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
-        if output
-            .data
-            .items
-            .iter()
-            .filter_map(|item| item.cost)
-            .any(|cost| output_number::reflects(cost, &response.credentials, true))
+        let evidence = Evidence::from_credentials(&response.credentials);
+        if serde_json::to_value(&output.data).map_or(true, |value| evidence.output_reflects(&value))
         {
             return Err(invalid());
         }

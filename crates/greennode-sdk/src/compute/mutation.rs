@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -124,7 +125,7 @@ impl Client {
             keep_status: true,
             overflow_overrides_status: mutation.overflow_overrides_status,
             sensitive: !matches!(policy, ReplyPolicy::Ordinary),
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -142,11 +143,7 @@ impl Client {
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            Failure::new(
-                error.screen_api(&|text| evidence.text_reflects(text)),
-                None,
-                dispatch,
-            )
+            Failure::new(evidence.screen_error(error), None, dispatch)
         })?;
         let withhold = matches!(policy, ReplyPolicy::PrivateKey)
             || (matches!(policy, ReplyPolicy::SshPublic)
@@ -162,7 +159,7 @@ impl Client {
         )
         .map_err(|error| {
             Failure::new(
-                error.screen_api(&|text| evidence.text_reflects(text)),
+                evidence.screen_error(*error),
                 None,
                 WriteDispatch::MayHaveBeenSent,
             )
@@ -185,13 +182,13 @@ impl Client {
         };
         let wait =
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
-        loop {
+        guarded_poll!(evidence, {
             check(&wait, clock)?;
-            let result = self.server_detail::<()>(&wait, id, evidence).await;
+            let result = self.server_guard::<()>(&wait, id, evidence).await;
             check(&wait, clock)?;
             match result {
                 Err(error)
-                    if error.error().detail::<StatusCode>().is_none()
+                    if error.error().http_status().is_none()
                         && error.error().api_error().is_some_and(|api| {
                             api.operation() == "compute.GetServer" && api.status() == Some(404)
                         }) =>
@@ -204,6 +201,7 @@ impl Client {
                 }
                 Err(error) => return Err(Box::new(error.into_parts().0)),
                 Ok(server) => {
+                    let server = server.into_checked(evidence)?;
                     let invalid = |evidence| {
                         Box::new(api(
                             "compute.GetServer",
@@ -213,7 +211,7 @@ impl Client {
                             evidence,
                         ))
                     };
-                    if evidence.reflected_in(&json!([server.uuid, server.status]))
+                    if evidence.output_reflects(&json!([server.uuid, server.status]))
                         || (matches!(mode, Settlement::Resized(_))
                             && evidence.text_reflects(&server.flavor.flavor_id))
                     {
@@ -232,7 +230,7 @@ impl Client {
             if tick.wait(clock).await == ContextEnd::Cancelled {
                 return Err(Box::new(ContextEnd::Cancelled.into()));
             }
-        }
+        });
     }
 
     pub(super) fn guard_write(
@@ -246,7 +244,7 @@ impl Client {
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
-        if evidence.reflected_in(value) || !evidence.can_retain_partial() {
+        if evidence.output_reflects(value) || !evidence.can_retain_partial() {
             return Err(Box::new(Error::new(ErrorClass::InvalidInput)));
         }
         Ok(())
@@ -316,7 +314,7 @@ pub(super) fn with_screened_advice(error: Error, message: &str, evidence: &Evide
 }
 
 pub(super) fn rejected(error: &Error) -> bool {
-    error.detail::<StatusCode>().is_none()
+    error.http_status().is_none()
         && status(error).is_some_and(|status| (400..500).contains(&status))
 }
 
@@ -324,7 +322,7 @@ pub(super) fn status(error: &Error) -> Option<u16> {
     error
         .api_error()
         .and_then(ApiError::status)
-        .or_else(|| error.detail::<StatusCode>().map(|value| value.as_u16()))
+        .or_else(|| error.http_status().map(|value| value.as_u16()))
 }
 
 pub(super) fn safe_server(mut server: Server, evidence: &Evidence) -> Option<Server> {

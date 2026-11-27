@@ -11,6 +11,7 @@ pub(crate) enum Outcome<'a> {
     Status(u16, Option<&'a str>),
     Body,
 }
+#[derive(Clone)]
 pub(crate) struct Config {
     pub(crate) budget: usize,
     pub(crate) interval: Duration,
@@ -230,6 +231,20 @@ fn parse_http_date(value: &str) -> Option<time::OffsetDateTime> {
     )
     .ok()?;
     Some(time::PrimitiveDateTime::new(date, clock).assume_utc())
+}
+
+pub(super) fn system_time(time: time::OffsetDateTime) -> Option<std::time::SystemTime> {
+    let nanos = time.unix_timestamp_nanos();
+    let absolute = nanos.unsigned_abs();
+    let duration = std::time::Duration::new(
+        u64::try_from(absolute / 1_000_000_000).ok()?,
+        u32::try_from(absolute % 1_000_000_000).ok()?,
+    );
+    if nanos >= 0 {
+        std::time::SystemTime::UNIX_EPOCH.checked_add(duration)
+    } else {
+        std::time::SystemTime::UNIX_EPOCH.checked_sub(duration)
+    }
 }
 
 #[cfg(test)]

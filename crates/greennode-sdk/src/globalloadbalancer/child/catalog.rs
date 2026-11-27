@@ -1,8 +1,10 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use super::alias::{fold, same_alias};
-use super::model::{Package, Region, Server, Subnet, Vpc};
-use super::{Child, DecodeError, Error, PACKAGES, RequestContext, State, ids, refuse, state};
+use super::model::{Package, Parent, Region, Server, Subnet, Vpc};
+use super::{
+    Child, DecodeError, Error, Guarded, PACKAGES, RequestContext, State, ids, refuse, state,
+};
 use crate::wire::product::options::PathIds;
 
 impl Child<'_> {
@@ -27,10 +29,25 @@ impl Child<'_> {
     pub(super) async fn region(
         &mut self,
         ctx: &RequestContext,
-        package: &str,
+        parent: &Guarded<Parent>,
+    ) -> Result<Guarded<String>, Box<Error>> {
+        let checkpoint = self.0.evidence.guard_checkpoint();
+        let regions = self.read_guard(ctx, "v1/regions", &[], false).await?;
+        let packages = self.read_guard(ctx, PACKAGES, &[], false).await?;
+        let region = self.catalog_region(parent, &regions, &packages)?;
+        Ok(Guarded::from_checkpoint(region, &self.0.evidence, checkpoint)?.with_proofs_of(parent))
+    }
+
+    fn catalog_region(
+        &self,
+        parent: &Guarded<Parent>,
+        regions: &Guarded<Vec<Region>>,
+        packages: &Guarded<Vec<Package>>,
     ) -> Result<String, Box<Error>> {
-        let regions: Vec<Region> = self.get(ctx, "v1/regions", &[]).await?;
-        let packages: Vec<Package> = self.get(ctx, PACKAGES, &[]).await?;
+        let evidence = &self.0.evidence;
+        let package = parent.recheck(evidence)?.package.as_str();
+        let regions = regions.recheck(evidence)?;
+        let packages = packages.recheck(evidence)?;
         let configured = &self.0.client.region;
         if regions.iter().any(|row| row.status.is_none()) {
             return Err(self.invalid(DecodeError::InvalidShape));
@@ -64,7 +81,7 @@ impl Child<'_> {
         let mut packages = packages.iter().filter(|row| row.id == package);
         if packages
             .next()
-            .is_none_or(|package| !supports(package, configured, &region.id, &regions))
+            .is_none_or(|package| !supports(package, configured, &region.id, regions))
             || packages.next().is_some()
         {
             return Err(refuse(
@@ -81,7 +98,7 @@ impl Child<'_> {
         server: &str,
         vpc: &str,
         subnet: &str,
-    ) -> Result<String, Box<Error>> {
+    ) -> Result<Guarded<String>, Box<Error>> {
         ids(
             self.0.id,
             &[
@@ -90,20 +107,37 @@ impl Child<'_> {
                 ("BackendSubnetID", subnet),
             ],
         )?;
-        let server_row: Server = self
-            .get_from(ctx, "v2/{}/servers/{}", &[project, server], true)
+        let checkpoint = self.0.evidence.guard_checkpoint();
+        let server_row = self
+            .read_guard(ctx, "v2/{}/servers/{}", &[project, server], true)
             .await?;
-        let vpc_row: Vpc = self
-            .get_from(ctx, "v2/{}/networks/{}", &[project, vpc], true)
+        let vpc_row = self
+            .read_guard(ctx, "v2/{}/networks/{}", &[project, vpc], true)
             .await?;
-        let subnet_row: Subnet = self
-            .get_from(
+        let subnet_row = self
+            .read_guard(
                 ctx,
                 "v2/{}/networks/{}/subnets/{}",
                 &[project, vpc, subnet],
                 true,
             )
             .await?;
+        let address =
+            self.placement_address((server, vpc, subnet), &server_row, &vpc_row, &subnet_row)?;
+        Guarded::from_checkpoint(address, &self.0.evidence, checkpoint)
+    }
+
+    fn placement_address(
+        &self,
+        (server, vpc, subnet): (&str, &str, &str),
+        server_row: &Guarded<Server>,
+        vpc_row: &Guarded<Vpc>,
+        subnet_row: &Guarded<Subnet>,
+    ) -> Result<String, Box<Error>> {
+        let evidence = &self.0.evidence;
+        let server_row = server_row.recheck(evidence)?;
+        let vpc_row = vpc_row.recheck(evidence)?;
+        let subnet_row = subnet_row.recheck(evidence)?;
         if server_row.data.id != server
             || state(&server_row.data.status) != State::Active
             || vpc_row.id != vpc

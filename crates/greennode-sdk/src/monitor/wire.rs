@@ -24,6 +24,7 @@ pub(super) enum Family {
     Quota { no_redirect: bool },
 }
 
+#[derive(Debug)]
 pub(super) struct BodyReadFailure;
 
 pub(super) struct Read {
@@ -59,21 +60,20 @@ impl Read {
         retryable: bool,
         evidence: &Evidence,
     ) -> Error {
-        Error::from_api(ApiError::new(
+        evidence.screen_error(Error::from_api(ApiError::new(
             self.id,
             status,
             SafeText::new(code, &[]),
             SafeText::new(message, &[]),
             retryable,
-        ))
-        .screen_api(&|text| evidence.text_reflects(text))
+        )))
     }
 
     fn failure(&self, error: Error, evidence: &Evidence) -> Error {
         let api = error.api_error();
         let status = error
-            .detail::<StatusCode>()
-            .map(StatusCode::as_u16)
+            .http_status()
+            .map(|status| status.as_u16())
             .or_else(|| api.and_then(ApiError::status));
         if error.is_body_too_large() {
             return self.overflow(status, evidence);
@@ -81,7 +81,7 @@ impl Read {
         if matches!(self.family, Family::Quota { .. }) && status.is_some() && api.is_some() {
             let kept_redirect =
                 self.no_redirect() && status.is_some_and(|status| (300..400).contains(&status));
-            if error.detail::<StatusCode>().is_some() && !kept_redirect {
+            if error.http_status().is_some() && !kept_redirect {
                 return self
                     .request_failed(None, false, evidence)
                     .with_outer_detail(BodyReadFailure);
@@ -89,7 +89,7 @@ impl Read {
             return self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
         }
         if error.class() != ErrorClass::Api || api.is_none() {
-            return error.screen_api(&|text| evidence.text_reflects(text));
+            return evidence.screen_error(error);
         }
         self.request_failed(status, api.is_some_and(ApiError::retryable), evidence)
     }
@@ -184,7 +184,7 @@ impl Client {
             keep_status: true,
             overflow_overrides_status: false,
             sensitive: true,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.no_redirect(),
             retry_config: retry::Config::default(),
         };

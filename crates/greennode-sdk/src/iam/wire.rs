@@ -8,6 +8,7 @@ use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{Operation, Output},
+    output::{FieldScan, PublicOutput},
     response,
     sender::Response,
 };
@@ -23,6 +24,24 @@ pub(super) trait Wire: Default {
     const SHAPE: Shape<'static> = Shape::Any;
 
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error>;
+
+    fn scan_operands(&self, _: &FieldScan<'_>, _: bool) -> bool {
+        false
+    }
+}
+
+pub(super) struct WireOperands<'a, T>(pub(super) &'a T);
+
+impl<T> std::fmt::Debug for WireOperands<'_, T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WireOperands")
+    }
+}
+
+impl<T: Wire> PublicOutput for WireOperands<'_, T> {
+    fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.0.scan_operands(scan, identifier)
+    }
 }
 
 pub(super) fn field<'a>(
@@ -90,6 +109,10 @@ impl Wire for String {
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
         serde_json::from_str::<Option<Self>>(raw.get()).map(Option::unwrap_or_default)
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        identifier && self.public_reflects(scan, true)
+    }
 }
 
 impl Wire for bool {
@@ -105,6 +128,10 @@ impl Wire for i64 {
             json => serde_json::from_str(json),
         }
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        identifier && self.public_reflects(scan, true)
+    }
 }
 
 impl<T: Wire> Wire for Option<T> {
@@ -117,6 +144,11 @@ impl<T: Wire> Wire for Option<T> {
             T::decode(raw).map(Some)
         }
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.as_ref()
+            .is_some_and(|value| value.scan_operands(scan, identifier))
+    }
 }
 
 impl<T: Wire> Wire for Vec<T> {
@@ -128,6 +160,11 @@ impl<T: Wire> Wire for Vec<T> {
             .into_iter()
             .map(T::decode)
             .collect()
+    }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.iter()
+            .any(|value| value.scan_operands(scan, identifier))
     }
 }
 
@@ -265,7 +302,7 @@ impl Screen for String {
 
 impl Screen for i64 {
     fn screen(&mut self, evidence: &Evidence) -> bool {
-        if evidence.reflected_in(&Value::from(*self)) {
+        if evidence.output_reflects(&Value::from(*self)) {
             *self = 0;
             return true;
         }
@@ -275,7 +312,7 @@ impl Screen for i64 {
 
 impl Screen for bool {
     fn screen(&mut self, evidence: &Evidence) -> bool {
-        if evidence.reflected_in(&Value::Bool(*self)) {
+        if evidence.output_reflects(&Value::Bool(*self)) {
             *self = false;
             return true;
         }
@@ -287,7 +324,7 @@ impl<T: Screen> Screen for Option<T> {
     fn screen(&mut self, evidence: &Evidence) -> bool {
         let reflected = match self {
             Some(value) => value.screen(evidence),
-            None => evidence.reflected_in(&Value::Null),
+            None => evidence.output_reflects(&Value::Null),
         };
         if reflected {
             *self = None;
@@ -343,7 +380,10 @@ impl<T: Wire> Output for Body<T> {
             operation.success,
             (true, account || private, operation.retry),
             &response.credentials,
-        )?;
+        )
+        .map_err(|error| {
+            Box::new(error.with_outer_detail(ObservedResponse::from_status(response.status)))
+        })?;
         if operation.no_output || (body.is_empty() && operation.allow_empty) {
             return Ok(Self::default());
         }
@@ -354,9 +394,10 @@ impl<T: Wire> Output for Body<T> {
         strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
-        if operation.reject_reflected_credentials
-            && super::operation::reflects_json_forms(body.as_bytes(), &response.credentials)
-                != Some(false)
+        if operation.reflection == crate::wire::product::operation::Reflection::Refuse
+            && !Evidence::from_credentials(&response.credentials)
+                .go_peer_body_screen(&response.body)
+                .is_clean()
         {
             return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
                 crate::RecoveryAdvice::new(if operation.id == "iam.GetServiceAccount" {
@@ -370,7 +411,7 @@ impl<T: Wire> Output for Body<T> {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub(super) enum ObservedResponse {
     ClientRejection,
     NoContent,
@@ -389,7 +430,7 @@ impl ObservedResponse {
     }
 
     pub(super) fn status(error: &Error) -> Option<http::StatusCode> {
-        error.detail::<http::StatusCode>().copied().or_else(|| {
+        error.http_status().or_else(|| {
             error
                 .api_error()
                 .and_then(|api| api.status())
@@ -479,6 +520,16 @@ pub(super) fn account_error(id: &'static str, error: Error) -> Error {
             api.retryable(),
         ));
     }
+    if error.detail::<ObservedResponse>().is_some() && api.status().is_none() {
+        let safe = Error::from_api(ApiError::without_fallback(
+            api.operation(),
+            None,
+            SafeText::new(api.code(), &[]),
+            SafeText::new("IAM response withheld", &[]),
+            api.retryable(),
+        ));
+        return Error::new(error.class()).with_cause(safe).with_cause(error);
+    }
     if error.is_body_too_large() {
         let message = format!("{id}: read {label}: transport: response body exceeds limit");
         return Error::from_api(ApiError::without_fallback(
@@ -491,6 +542,20 @@ pub(super) fn account_error(id: &'static str, error: Error) -> Error {
         .with_body_too_large();
     }
     error
+}
+
+pub(super) fn guarded_decode_error(operation: &Operation, error: Error) -> Error {
+    if error
+        .detail::<crate::wire::product::operation::MalformedGuard>()
+        .is_some()
+        && error
+            .http_status()
+            .is_some_and(|status| status.is_success())
+    {
+        decode_error(operation, super::DecodeError::MalformedJson).with_cause(error)
+    } else {
+        error
+    }
 }
 
 fn decode_error(operation: &Operation, detail: super::DecodeError) -> Error {

@@ -15,7 +15,7 @@ const fn field(name: &'static str) -> ShapeField<'static> {
 }
 
 /// Database EngineVersion returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EngineVersion {
     /// Name reported by the service.
@@ -50,6 +50,14 @@ pub struct EngineVersion {
     pub license_name: String,
 }
 
+crate::wire::product::output::public_fields!(EngineVersion {
+    name,
+    r#type,
+    version_name,
+    version,
+    license_name
+});
+
 impl EngineVersion {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("name"),
@@ -61,13 +69,14 @@ impl EngineVersion {
 }
 
 /// Database Zone returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Zone {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// Name reported by the service.
@@ -90,6 +99,13 @@ pub struct Zone {
     pub zone_type: String,
 }
 
+crate::wire::product::output::public_fields!(Zone {
+    uuid,
+    name,
+    status,
+    zone_type
+});
+
 impl Zone {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("uuid"),
@@ -100,13 +116,14 @@ impl Zone {
 }
 
 /// Database Flavor returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Flavor {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: i32,
     /// Name reported by the service.
@@ -118,7 +135,8 @@ pub struct Flavor {
     /// FlavorID reported by the service.
     #[serde(
         rename(deserialize = "flavorId", serialize = "FlavorID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub flavor_id: String,
     /// VCPUs reported by the service.
@@ -142,7 +160,8 @@ pub struct Flavor {
     /// LocateZoneID reported by the service.
     #[serde(
         rename(deserialize = "locateZoneId", serialize = "LocateZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub locate_zone_id: String,
     /// MonthlyCost reported by the service.
@@ -208,10 +227,32 @@ pub struct Flavor {
     /// ZoneUUID reported by the service.
     #[serde(
         rename(deserialize = "zoneUUID", serialize = "ZoneUUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_uuid: String,
 }
+
+crate::wire::product::output::public_fields!(Flavor {
+    id,
+    name,
+    flavor_id,
+    vcpus,
+    ram,
+    package_sku,
+    locate_zone_id,
+    monthly_cost,
+    price_key,
+    volume_size,
+    volume_type,
+    backup_size,
+    description,
+    family_type,
+    platform_type,
+    bandwidth,
+    bandwidth_unit,
+    zone_uuid
+});
 
 impl Flavor {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -237,13 +278,14 @@ impl Flavor {
 }
 
 /// Database StorageType returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StorageType {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: i32,
     /// Type reported by the service.
@@ -267,13 +309,15 @@ pub struct StorageType {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// VolumeTypeZoneID reported by the service.
     #[serde(
         rename(deserialize = "volumeTypeZoneId", serialize = "VolumeTypeZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub volume_type_zone_id: String,
     /// VolumeTypeSKU reported by the service.
@@ -283,6 +327,16 @@ pub struct StorageType {
     )]
     pub volume_type_sku: String,
 }
+
+crate::wire::product::output::public_fields!(StorageType {
+    id,
+    r#type,
+    min_volume_size,
+    max_volume_size,
+    zone_id,
+    volume_type_zone_id,
+    volume_type_sku
+});
 
 impl StorageType {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -297,19 +351,21 @@ impl StorageType {
 }
 
 /// Database Subnet returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Subnet {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// NetworkUUID reported by the service.
     #[serde(
         rename(deserialize = "networkUuid", serialize = "NetworkUUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub network_uuid: String,
     /// Name reported by the service.
@@ -327,10 +383,19 @@ pub struct Subnet {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
 }
+
+crate::wire::product::output::public_fields!(Subnet {
+    uuid,
+    network_uuid,
+    name,
+    status,
+    zone_id
+});
 
 impl Subnet {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -343,13 +408,14 @@ impl Subnet {
 }
 
 /// Database Network returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Network {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// DisplayName reported by the service.
@@ -367,13 +433,22 @@ pub struct Network {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// Subnets reported by the service.
     #[serde(rename(deserialize = "subnets", serialize = "Subnets"))]
     pub subnets: Vec<Subnet>,
 }
+
+crate::wire::product::output::public_fields!(Network {
+    uuid,
+    display_name,
+    status,
+    zone_id,
+    subnets
+});
 
 impl Network {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -389,13 +464,14 @@ impl Network {
 }
 
 /// Database Instance returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Instance {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Name reported by the service.
@@ -425,19 +501,22 @@ pub struct Instance {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// ProjectID reported by the service.
     #[serde(
         rename(deserialize = "projectId", serialize = "ProjectID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub project_id: String,
     /// SubnetID reported by the service.
     #[serde(
         rename(deserialize = "subnetId", serialize = "SubnetID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub subnet_id: String,
     /// VolumeType reported by the service.
@@ -455,7 +534,8 @@ pub struct Instance {
     /// QuotaPackageID reported by the service.
     #[serde(
         rename(deserialize = "quotaPackageId", serialize = "QuotaPackageID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub quota_package_id: String,
     /// PublicAccess reported by the service.
@@ -476,7 +556,8 @@ pub struct Instance {
     /// ReplicaSourceID reported by the service.
     #[serde(
         rename(deserialize = "replicaSourceId", serialize = "ReplicaSourceID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub replica_source_id: String,
     /// Replicas reported by the service.
@@ -489,6 +570,27 @@ pub struct Instance {
     #[serde(rename(deserialize = "deleted", serialize = "Deleted"))]
     pub deleted: Option<bool>,
 }
+
+crate::wire::product::output::public_fields!(Instance {
+    id,
+    name,
+    status,
+    datastore_type,
+    datastore_version,
+    zone_id,
+    project_id,
+    subnet_id,
+    volume_type,
+    volume_size,
+    quota_package_id,
+    public_access,
+    backup_auto,
+    owner,
+    role,
+    replica_source_id,
+    replicas,
+    deleted
+});
 
 impl Instance {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
@@ -514,7 +616,7 @@ impl Instance {
 }
 
 /// Database Page returned by the service.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Page {
     /// TotalPages reported by the service.
@@ -548,6 +650,14 @@ pub struct Page {
     )]
     pub max_size: i32,
 }
+
+crate::wire::product::output::public_fields!(Page {
+    total_pages,
+    total_elements,
+    size,
+    number,
+    max_size
+});
 
 impl Page {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[

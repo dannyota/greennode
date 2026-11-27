@@ -22,7 +22,7 @@ const QUERY: &[(&str, &str)] = &[("autoRenewal", "false"), ("poc", "false")];
 const ACCEPTED: &[StatusCode] = &[StatusCode::OK, StatusCode::ACCEPTED];
 
 /// Describes a private cluster and its initial node group.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateClusterInput {
     /// Cluster name.
     pub name: String,
@@ -54,8 +54,25 @@ pub struct CreateClusterInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateClusterInput {
+    name,
+    version,
+    vpc_id,
+    subnet_id,
+    pod_cidr,
+    node_group_name,
+    num_nodes,
+    flavor_id,
+    os,
+    disk_size,
+    disk_type_id,
+    security_group_ids,
+    ssh_key_id,
+    no_wait
+});
+
 /// Reports the accepted cluster identifier and last observed status.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CreateClusterOutput {
     /// Cluster identifier.
     #[serde(rename = "ID")]
@@ -64,6 +81,8 @@ pub struct CreateClusterOutput {
     #[serde(rename = "Status")]
     pub status: String,
 }
+
+crate::wire::product::output::public_fields!(CreateClusterOutput { id, status });
 
 fn valid_name(value: &str, max: usize) -> bool {
     (5..=max).contains(&value.len())
@@ -250,7 +269,18 @@ impl Client {
         ctx: &RequestContext,
         input: CreateClusterInput,
     ) -> Result<CreateClusterOutput, Failure<CreateClusterOutput>> {
-        let base = self.write_base()?;
+        crate::wire::product::exit::finish!(async {
+            self.create_cluster_inner(ctx, input, self.write_base()?)
+                .await
+        })
+    }
+
+    async fn create_cluster_inner(
+        &self,
+        ctx: &RequestContext,
+        input: CreateClusterInput,
+        base: &crate::endpoint::Base,
+    ) -> Result<CreateClusterOutput, Failure<CreateClusterOutput>> {
         if let Some((field, rule)) = input.invalid_field() {
             return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
                 format!("greennode: invalid input: {CREATE}: {field} {rule}"),
@@ -258,7 +288,7 @@ impl Client {
         }
         let body = serde_json::to_vec(&input.body())
             .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -328,13 +358,18 @@ impl Client {
             )) => output,
         };
         if !input.no_wait {
-            if evidence.credentials().reflects(output.id.as_bytes()) {
+            if evidence.id_reflects(&output.id) {
                 return Err(partial_failure(unsettled(None), output, &evidence));
             }
-            let result = wait_cluster(ctx, self.session.clock(), async |wait| {
-                let status = self.cluster_state(wait, &output.id, &mut evidence).await?;
-                observe_status(&mut output, status)
-            })
+            let result = wait_cluster(
+                ctx,
+                self.session.clock(),
+                &mut evidence,
+                async |wait, evidence| {
+                    let status = self.cluster_state(wait, &output.id, evidence).await?;
+                    observe_status(&mut output, status.into_checked(evidence)?)
+                },
+            )
             .await;
             if let Err(error) = result {
                 let error = if error.class() == ErrorClass::Failed {
@@ -352,10 +387,9 @@ impl Client {
 
 impl CreateClusterOutput {
     fn redact(&mut self, evidence: &Evidence) {
-        for field in [&mut self.id, &mut self.status] {
-            if evidence.credentials().reflects(field.as_bytes()) {
-                *field = "<redacted>".to_owned();
-            }
+        crate::wire::product::evidence::redact_identifier(&mut self.id, evidence.credentials());
+        if evidence.text_reflects(&self.status) {
+            self.status = "<redacted>".to_owned();
         }
     }
 }
@@ -437,7 +471,7 @@ fn create_operation() -> Operation {
         keep_status: true,
         overflow_overrides_status: true,
         sensitive: true,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }
@@ -466,6 +500,50 @@ mod tests {
             vec!["security-1".into()],
             "key-1".into(),
         )
+    }
+
+    #[tokio::test]
+    async fn vks_no_wait_exit_redacts_a_short_encoding_in_the_cluster_id() {
+        use crate::wire::test_server::{Response, Server};
+        let body = br#"{"id":"pre6A6B6Cpost","status":"CREATING"}"#.to_vec();
+        let server = Server::start(vec![Response::Http {
+            status: "202 Accepted".into(),
+            headers: vec![("Content-Length".into(), body.len().to_string())],
+            body,
+        }]);
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("jkl")),
+        )
+        .unwrap();
+        config
+            .session()
+            .set_test_product_root(server.root_der.clone());
+        let client = Client::new(&config);
+        let base = crate::endpoint::Base::parse(&server.origin).unwrap();
+        let mut order = input();
+        order.no_wait = true;
+        let ctx = RequestContext::new().0;
+        let result =
+            crate::wire::product::exit::finish!(client.create_cluster_inner(&ctx, order, &base));
+        assert_eq!(server.requests(), 1);
+        let output = result.unwrap();
+        assert!(output.id == "<redacted>");
+        assert_eq!(output.status, "CREATING");
+    }
+
+    #[test]
+    fn vks_redacts_encoded_identifier_without_withholding_safe_status() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let mut output = CreateClusterOutput {
+            id: "pre6A6B6Cpost".into(),
+            status: "CREATING".into(),
+        };
+        output.redact(&evidence);
+        assert!(output.id == "<redacted>");
+        assert_eq!(output.status, "CREATING");
     }
 
     #[test]
@@ -572,7 +650,7 @@ mod tests {
         let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
         let (ctx, cancel) = RequestContext::new();
         let mut output = CreateClusterOutput::default();
-        let failure = wait_cluster(&ctx, &clock, async |_| {
+        let failure = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             clock.advance(Duration::from_secs(30 * 60));
             observe_status(&mut output, "CREATING".into())
         })
@@ -580,7 +658,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.class(), ErrorClass::DeadlineExceeded);
         assert_eq!(output.status, "CREATING");
-        let failure = wait_cluster(&ctx, &clock, async |_| {
+        let failure = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             cancel.cancel();
             Ok(true)
         })
@@ -588,13 +666,13 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.class(), ErrorClass::Cancelled);
         let (ctx, _) = RequestContext::new();
-        wait_cluster(&ctx, &clock, async |_| {
+        wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             observe_status(&mut output, "ACTIVE".into())
         })
         .await
         .unwrap();
         assert_eq!(output.status, "ACTIVE");
-        let error = wait_cluster(&ctx, &clock, async |_| {
+        let error = wait_cluster(&ctx, &clock, &mut Evidence::new(), async |_, _| {
             observe_status(&mut output, "PROVISION_FAILED".into())
         })
         .await

@@ -62,31 +62,39 @@ async fn run_with_rng(
     rng: &mut (dyn FnMut(&mut [u8]) -> Result<(), ()> + Send),
 ) -> Result<TimedToken, LoginError> {
     let pkce = super::pkce(rng).map_err(|_| LoginError::new("signin page", None, false))?;
-    let super::signin::Session {
-        verifier,
-        next,
-        mut jar,
-    } = super::signin::signin(login, pkce).await?;
-    let code = match next {
-        super::signin::Next::Code(code) => code,
-        super::signin::Next::TwoFactor(location) => {
-            super::totp::complete(&login, &mut jar, &location, source).await?
+    let mut jar = super::CookieJar::new(login.origin.clone());
+    let result = async {
+        let (verifier, next) = super::signin::signin_with_evidence(login, pkce, &mut jar).await?;
+        let code = match next {
+            super::signin::Next::Code(code) => code,
+            super::signin::Next::TwoFactor(location) => {
+                super::totp::complete(&login, &mut jar, &location, source).await?
+            }
+        };
+        jar.record_form(&code);
+        jar.record_form(&verifier);
+        super::token::exchange(super::token::Exchange {
+            client: login.client,
+            token_url,
+            dashboard: login.dashboard,
+            code: &code,
+            verifier: &verifier,
+            clock: login.clock,
+            deadline: login.deadline,
+        })
+        .await
+    }
+    .await;
+    match result {
+        Ok(mut token) => {
+            token.credentials.extend(&jar.sent);
+            Ok(token)
         }
-    };
-    jar.sent.record(&code);
-    jar.sent.record(&verifier);
-    let mut token = super::token::exchange(super::token::Exchange {
-        client: login.client,
-        token_url,
-        dashboard: login.dashboard,
-        code: &code,
-        verifier: &verifier,
-        clock: login.clock,
-        deadline: login.deadline,
-    })
-    .await?;
-    token.credentials = jar.sent;
-    Ok(token)
+        Err(mut error) => {
+            error.screen(|text| jar.sent.text_reflects(text));
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -369,6 +377,104 @@ mod tests {
             challenge
                 == data_encoding::BASE64URL_NOPAD.encode(&Sha256::digest(verifier.as_bytes()))
         );
+    }
+
+    #[tokio::test]
+    async fn dropped_iam_sends_keep_attempt_credentials() {
+        use crate::wire::product::exit::recorded_exactly;
+        for step in 0..5 {
+            let (sent, received) = tokio::sync::oneshot::channel();
+            let page = br#"<input name="_csrf" value="login-csrf">"#;
+            let mut replies = vec![
+                Response::Http {
+                    status: "200 OK".into(),
+                    headers: vec![
+                        ("Content-Length".into(), page.len().to_string()),
+                        (
+                            "Set-Cookie".into(),
+                            "session=toy-cookie; Path=/; Secure".into(),
+                        ),
+                        (
+                            "Set-Cookie".into(),
+                            "nested=\"toy quoted\"; Path=/ap/auth/iam; Secure".into(),
+                        ),
+                    ],
+                    body: page.to_vec(),
+                },
+                response(
+                    "302 Found",
+                    Some("/ap/auth/iam/google?session=totp-ticket"),
+                    "",
+                ),
+                response("200 OK", None, r#"<input name="_csrf" value="totp-csrf">"#),
+                response(
+                    "302 Found",
+                    Some("https://dashboard.test/return?code=authorization-code"),
+                    "",
+                ),
+            ];
+            replies.truncate(step);
+            replies.push(Response::StallBeforeHead(sent));
+            let server = Server::start(replies);
+            let client =
+                OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
+            let origin = url::Url::parse(&server.origin).unwrap();
+            let token_url = origin.join("/token").unwrap();
+            let dashboard = url::Url::parse("https://dashboard.test/return").unwrap();
+            let password = Secret::new("toy-password");
+            let login = super::super::signin::Login {
+                client: &client,
+                origin: &origin,
+                dashboard: &dashboard,
+                root_email: "toy-root@example.test",
+                username: "toy-user",
+                password: &password,
+                clock: &SystemClock,
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            };
+            let provider: &super::super::totp::Provider<'_> =
+                &|| Box::pin(async { Ok(Secret::new("345678")) });
+            let mut rng = |bytes: &mut [u8]| {
+                bytes.fill(2);
+                Ok(())
+            };
+            let (verifier, challenge) = super::super::from_bytes(&[2; 32]);
+            let client_id = super::super::CLIENT_ID;
+            let payload = data_encoding::BASE64.encode(format!("{client_id}:").as_bytes());
+            let authorization = format!("Basic {payload}");
+            let expected: [&[&str]; 5] = [
+                &[client_id, "toy-root@example.test", &challenge],
+                &[
+                    "toy-cookie",
+                    "toy quoted",
+                    "nested=\"toy quoted\"; session=toy-cookie",
+                    "login-csrf",
+                    "toy-user",
+                    "toy-password",
+                ],
+                &["totp-ticket"],
+                &["totp-csrf", "345678"],
+                &[
+                    "authorization-code",
+                    verifier.expose_secret(),
+                    &payload,
+                    &authorization,
+                ],
+            ];
+            crate::RequestContext::with_response_screening(async {
+                tokio::select! {
+                    signal = received => signal.unwrap(),
+                    _ = run_with_rng(login, &token_url, Some(super::super::totp::Source::Provider(provider)), &mut rng) => panic!("send should still be pending at step {step}"),
+                }
+                for (index, credential) in expected[..=step].iter().flat_map(|values| values.iter()).enumerate() {
+                    assert!(recorded_exactly(credential), "missing evidence at step {step}, entry {index}");
+                }
+                for credential in expected[step + 1..].iter().flat_map(|values| values.iter()) {
+                    assert!(!recorded_exactly(credential), "recorded evidence before step {step} completed");
+                }
+            }).await;
+            assert_eq!(server.requests(), step + 1);
+        }
     }
 
     #[tokio::test]

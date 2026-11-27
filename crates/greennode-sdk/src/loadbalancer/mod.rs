@@ -79,12 +79,14 @@ macro_rules! child_read {
             ctx: &RequestContext,
             input: $input,
         ) -> Result<$output, Failure<$output>> {
-            let read = Read { id: concat!("loadbalancer.", $go), route: $route };
-            let document = self.read(ctx, &read, &[$(($name, &input.$id)),+], &[])
-                .await
-                .map_err(failure)?;
-            let envelope = document.object(&read).map_err(failure)?;
-            child_read!(@output envelope, read, document, $shape $(($output, $field))?)
+            crate::wire::product::exit::finish!(async {
+                let read = Read { id: concat!("loadbalancer.", $go), route: $route };
+                let document = self.read(ctx, &read, &[$(($name, &input.$id)),+], &[])
+                    .await
+                    .map_err(failure)?;
+                let envelope = document.object(&read).map_err(failure)?;
+                child_read!(@output envelope, read, document, $shape $(($output, $field))?)
+            })
         }
     };
     (@output $envelope:ident, $read:ident, $document:ident, children) => {
@@ -115,23 +117,25 @@ impl Client {
         ctx: &RequestContext,
         input: ListLoadBalancersInput,
     ) -> Result<ListLoadBalancersOutput, Failure<ListLoadBalancersOutput>> {
-        let read = Read {
-            id: "loadbalancer.ListLoadBalancers",
-            route: "v2/{}/loadBalancers",
-        };
-        let query = page_query(&input.name, input.page, input.size);
-        let query = query.each_ref().map(|(key, value)| (*key, value.as_str()));
-        let document = self.read(ctx, &read, &[], &query).await.map_err(failure)?;
-        let page = document
-            .object(&read)
-            .and_then(|data| data.page::<ZonedLoadBalancer>(&read, &document.evidence))
-            .map_err(failure)?;
-        Ok(crate::PagedList {
-            items: page.items.into_iter().map(|row| row.0).collect(),
-            page: page.page,
-            page_size: page.page_size,
-            total_page: page.total_page,
-            total_item: page.total_item,
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.ListLoadBalancers",
+                route: "v2/{}/loadBalancers",
+            };
+            let query = page_query(&input.name, input.page, input.size);
+            let query = query.each_ref().map(|(key, value)| (*key, value.as_str()));
+            let document = self.read(ctx, &read, &[], &query).await.map_err(failure)?;
+            let page = document
+                .object(&read)
+                .and_then(|data| data.page::<ZonedLoadBalancer>(&read, &document.evidence))
+                .map_err(failure)?;
+            Ok(crate::PagedList {
+                items: page.items.into_iter().map(|row| row.0).collect(),
+                page: page.page,
+                page_size: page.page_size,
+                total_page: page.total_page,
+                total_item: page.total_item,
+            })
         })
     }
 
@@ -141,24 +145,26 @@ impl Client {
         ctx: &RequestContext,
         input: GetLoadBalancerInput,
     ) -> Result<GetLoadBalancerOutput, Failure<GetLoadBalancerOutput>> {
-        let read = Read {
-            id: "loadbalancer.GetLoadBalancer",
-            route: "v2/{}/loadBalancers/{}",
-        };
-        let document = self
-            .read(
-                ctx,
-                &read,
-                &[("LoadBalancerID", &input.load_balancer_id)],
-                &[],
-            )
-            .await
-            .map_err(failure)?;
-        let ZonedLoadBalancer(load_balancer) = document
-            .object(&read)
-            .and_then(|data| data.field(&read, &document.evidence, "data"))
-            .map_err(failure)?;
-        Ok(GetLoadBalancerOutput { load_balancer })
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.GetLoadBalancer",
+                route: "v2/{}/loadBalancers/{}",
+            };
+            let document = self
+                .read(
+                    ctx,
+                    &read,
+                    &[("LoadBalancerID", &input.load_balancer_id)],
+                    &[],
+                )
+                .await
+                .map_err(failure)?;
+            let ZonedLoadBalancer(load_balancer) = document
+                .object(&read)
+                .and_then(|data| data.field(&read, &document.evidence, "data"))
+                .map_err(failure)?;
+            Ok(GetLoadBalancerOutput { load_balancer })
+        })
     }
 
     /// Lists regional load balancer packages, optionally filtered by zone.
@@ -167,22 +173,24 @@ impl Client {
         ctx: &RequestContext,
         input: ListPackagesInput,
     ) -> Result<ListPackagesOutput, Failure<ListPackagesOutput>> {
-        let read = Read {
-            id: "loadbalancer.ListPackages",
-            route: "v2/{}/loadBalancers/packages",
-        };
-        let filter = [("zoneId", input.zone_id.as_str())];
-        let query = if input.zone_id.is_empty() {
-            &[][..]
-        } else {
-            &filter
-        };
-        let document = self.read(ctx, &read, &[], query).await.map_err(failure)?;
-        let items = document
-            .object(&read)
-            .and_then(|data| data.field(&read, &document.evidence, "listData"))
-            .map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.ListPackages",
+                route: "v2/{}/loadBalancers/packages",
+            };
+            let filter = [("zoneId", input.zone_id.as_str())];
+            let query = if input.zone_id.is_empty() {
+                &[][..]
+            } else {
+                &filter
+            };
+            let document = self.read(ctx, &read, &[], query).await.map_err(failure)?;
+            let items = document
+                .object(&read)
+                .and_then(|data| data.field(&read, &document.evidence, "listData"))
+                .map_err(failure)?;
+            Ok(List { items })
+        })
     }
 
     /// Reads one page of certificate metadata.
@@ -191,17 +199,19 @@ impl Client {
         ctx: &RequestContext,
         input: ListCertificatesInput,
     ) -> Result<ListCertificatesOutput, Failure<ListCertificatesOutput>> {
-        let read = Read {
-            id: "loadbalancer.ListCertificates",
-            route: "v2/{}/cas",
-        };
-        let query = page_query(&input.name, input.page, input.size);
-        let query = query.each_ref().map(|(key, value)| (*key, value.as_str()));
-        let document = self.read(ctx, &read, &[], &query).await.map_err(failure)?;
-        document
-            .object(&read)
-            .and_then(|data| data.page(&read, &document.evidence))
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.ListCertificates",
+                route: "v2/{}/cas",
+            };
+            let query = page_query(&input.name, input.page, input.size);
+            let query = query.each_ref().map(|(key, value)| (*key, value.as_str()));
+            let document = self.read(ctx, &read, &[], &query).await.map_err(failure)?;
+            document
+                .object(&read)
+                .and_then(|data| data.page(&read, &document.evidence))
+                .map_err(failure)
+        })
     }
 
     /// Reads the metadata of one certificate.
@@ -210,16 +220,18 @@ impl Client {
         ctx: &RequestContext,
         input: GetCertificateInput,
     ) -> Result<GetCertificateOutput, Failure<GetCertificateOutput>> {
-        let read = Read {
-            id: "loadbalancer.GetCertificate",
-            route: "v2/{}/cas/{}",
-        };
-        let document = self
-            .read(ctx, &read, &[("CertificateID", &input.certificate_id)], &[])
-            .await
-            .map_err(failure)?;
-        let certificate = document.direct(&read).map_err(failure)?;
-        Ok(GetCertificateOutput { certificate })
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.GetCertificate",
+                route: "v2/{}/cas/{}",
+            };
+            let document = self
+                .read(ctx, &read, &[("CertificateID", &input.certificate_id)], &[])
+                .await
+                .map_err(failure)?;
+            let certificate = document.direct(&read).map_err(failure)?;
+            Ok(GetCertificateOutput { certificate })
+        })
     }
 
     child_read!(
@@ -275,20 +287,22 @@ impl Client {
         ctx: &RequestContext,
         input: ListTagsInput,
     ) -> Result<ListTagsOutput, Failure<ListTagsOutput>> {
-        let read = Read {
-            id: "loadbalancer.ListTags",
-            route: "v2/{}/tag/resource/{}",
-        };
-        let document = self
-            .read(
-                ctx,
-                &read,
-                &[("LoadBalancerID", &input.load_balancer_id)],
-                &[],
-            )
-            .await
-            .map_err(failure)?;
-        let items = document.direct(&read).map_err(failure)?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let read = Read {
+                id: "loadbalancer.ListTags",
+                route: "v2/{}/tag/resource/{}",
+            };
+            let document = self
+                .read(
+                    ctx,
+                    &read,
+                    &[("LoadBalancerID", &input.load_balancer_id)],
+                    &[],
+                )
+                .await
+                .map_err(failure)?;
+            let items = document.direct(&read).map_err(failure)?;
+            Ok(List { items })
+        })
     }
 }

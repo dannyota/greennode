@@ -61,10 +61,12 @@ macro_rules! output {
         $($(#[$field_meta:meta])* $field:ident: $ty:ty => $name:literal,)*
     }) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, serde::Serialize)]
+        #[derive(Clone, serde::Serialize)]
         pub struct $model {
             $($(#[$field_meta])* #[serde(rename = $name)] pub $field: $ty,)*
         }
+
+        crate::wire::product::output::public_fields!($model { $($field),* });
 
         impl super::Screen for $model {
             fn screen(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {

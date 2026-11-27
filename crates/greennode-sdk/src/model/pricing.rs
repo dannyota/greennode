@@ -2,7 +2,7 @@ use serde::{Serialize, Serializer};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
 /// Quote amount and basis, with unknown amounts left absent.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct DiscoveryPrice {
     /// Pricing status.
     #[serde(rename = "Status")]
@@ -33,8 +33,20 @@ pub struct DiscoveryPrice {
     pub discount_percent: Option<f64>,
 }
 
+crate::wire::product::output::public_fields!(DiscoveryPrice {
+    status,
+    basis,
+    currency,
+    tax,
+    source,
+    monthly_price,
+    original_price,
+    discount_price,
+    discount_percent
+});
+
 /// Coverage and completion metadata for one discovery invocation.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct DiscoveryMetadata {
     /// Configured region.
     #[serde(rename = "Region")]
@@ -60,8 +72,18 @@ pub struct DiscoveryMetadata {
     pub excluded_groups: Option<i64>,
 }
 
+crate::wire::product::output::public_fields!(DiscoveryMetadata {
+    region,
+    complete,
+    requests,
+    quoted_at,
+    failures,
+    notes,
+    excluded_groups
+});
+
 /// Safe scope and classification of a discovery failure.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct DiscoveryFailure {
     /// Operation associated with the failure.
     #[serde(rename = "Operation")]
@@ -77,8 +99,15 @@ pub struct DiscoveryFailure {
     pub status: i64,
 }
 
+crate::wire::product::output::public_fields!(DiscoveryFailure {
+    operation,
+    item_key,
+    code,
+    status
+});
+
 /// Published or observed pricing context.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct PricingNote {
     /// Note topic.
     #[serde(rename = "Topic")]
@@ -96,6 +125,14 @@ pub struct PricingNote {
     #[serde(rename = "Evidence")]
     pub evidence: String,
 }
+
+crate::wire::product::output::public_fields!(PricingNote {
+    topic,
+    scope,
+    text,
+    source_url,
+    evidence
+});
 
 fn quoted_at<S: Serializer>(value: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error> {
     let text = value

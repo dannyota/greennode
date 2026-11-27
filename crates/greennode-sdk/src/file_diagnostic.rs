@@ -1,5 +1,5 @@
 /// Identifies which configuration file produced a diagnostic.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum FileSlot {
     /// The settings file.
     Config,
@@ -7,14 +7,25 @@ pub enum FileSlot {
     Credentials,
 }
 
+crate::error::debug_record!(FileSlot; Config, Credentials);
+
 /// Value-free details of a configuration file failure.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct FileDiagnostic {
     slot: FileSlot,
     source: &'static str,
     reason: &'static str,
     line: Option<u32>,
 }
+
+crate::error::debug_record!(FileDiagnostic => |self, f| {
+    f.debug_struct("FileDiagnostic")
+        .field("slot", &self.slot)
+        .field("source", &self.source)
+        .field("reason", &self.reason)
+        .field("line", &self.line)
+        .finish()
+});
 
 impl FileDiagnostic {
     /// Returns the affected file slot.

@@ -173,25 +173,30 @@ async fn delete_does_not_confirm_truncated_not_found_response() {
 }
 
 #[tokio::test]
-async fn oversized_not_found_confirms_server_deletion() {
+async fn oversized_not_found_retains_status_without_confirming_server_deletion() {
     let server = TestServer::start(vec![
         response(r#"{"data":{"uuid":"server-1"}}"#),
         response("[]"),
         http("202 Accepted", ""),
         http("404 Not Found", &"x".repeat((8 << 20) + 1)),
     ]);
-    let (ctx, _) = RequestContext::new();
-    assert!(
-        client(&server)
-            .delete_server(
-                &ctx,
-                DeleteServerInput {
-                    server_id: "server-1".into(),
-                    ..Default::default()
-                }
-            )
-            .await
-            .is_ok()
+    let failure = client(&server)
+        .delete_server(
+            &RequestContext::new().0,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
     );
 }
 
@@ -221,6 +226,47 @@ async fn deletes_server_and_reports_attached_nonboot_volumes() {
     let bodies = server.bodies();
     let request: serde_json::Value = serde_json::from_slice(&bodies[2]).unwrap();
     assert_eq!(request, serde_json::json!({"deleteAllVolume":false}));
+}
+
+#[tokio::test]
+async fn delete_server_guards_each_kept_volume_confirmation() {
+    for (note, allowed) in [("ordinary-note", true), (CANARY, false)] {
+        let detail =
+            serde_json::json!({"data":{"uuid":"vol-data","status":"AVAILABLE","note":note}})
+                .to_string();
+        let server = TestServer::start(vec![
+            response(r#"{"data":{"uuid":"server-1","bootVolumeId":"vol-boot"}}"#),
+            response(r#"[{"uuid":"vol-boot"},{"uuid":"vol-data"}]"#),
+            http("202 Accepted", ""),
+            http("404 Not Found", "{}"),
+            response(&detail),
+        ]);
+        let result = client(&server)
+            .delete_server(
+                &RequestContext::new().0,
+                DeleteServerInput {
+                    server_id: "server-1".into(),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        match result {
+            Ok(result) => assert_eq!(result.kept_volume_ids, ["vol-data"]),
+            Err(failure) => {
+                assert_eq!(
+                    failure.write_dispatch(),
+                    crate::WriteDispatch::MayHaveBeenSent
+                );
+                assert!(
+                    failure
+                        .partial()
+                        .is_none_or(|result| result.kept_volume_ids.is_empty())
+                );
+            }
+        }
+        assert_eq!(server.heads().len(), 5);
+    }
 }
 
 #[tokio::test]
@@ -549,7 +595,7 @@ async fn create_server_never_polls_an_ambiguous_acknowledgement() {
 }
 
 #[tokio::test]
-async fn create_server_retains_a_screened_partial_after_settlement_failure() {
+async fn create_server_retains_the_accepted_partial_when_the_settlement_read_reflects() {
     let server = TestServer::start(vec![
         inventory(),
         response(r#"{"optimumPrice":20}"#),
@@ -561,13 +607,14 @@ async fn create_server_retains_a_screened_partial_after_settlement_failure() {
         .create_server(&ctx, server_order())
         .await
         .unwrap_err();
-    assert_eq!(failure.error().class(), ErrorClass::Failed);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
     assert_eq!(
         failure.write_dispatch(),
         crate::WriteDispatch::MayHaveBeenSent
     );
     let output = failure.partial().unwrap();
-    assert_eq!(output.server.name, "<redacted>");
+    assert_eq!(output.server.name, server_order().name);
+    assert!(output.server.status.is_empty());
     assert_eq!(output.server.uuid, "server-1");
     assert_eq!(output.monthly_price, 20.0);
     assert!(server.heads()[1].starts_with(b"POST /portal/v1/price "));
@@ -617,4 +664,110 @@ async fn compute_quote_keeps_clean_peer_message_and_withholds_a_reflected_one() 
         .unwrap_err();
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.message(), "Bad Request");
+}
+
+#[cfg(test)]
+mod kept_volume_proofs {
+    use super::*;
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct Provider(AtomicUsize);
+
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            let bearer = if self.0.fetch_add(1, Ordering::Relaxed) < 5 {
+                CANARY
+            } else {
+                "last-volume-bearer"
+            };
+            Box::pin(ready(Ok(crate::Token::new(Secret::new(bearer), None))))
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+
+    fn preflight() -> Vec<Response> {
+        vec![
+            response(r#"{"data":{"uuid":"server-1","bootVolumeId":"vol-boot"}}"#),
+            response(r#"[{"uuid":"vol-boot"},{"uuid":"vol-a"},{"uuid":"vol-b"}]"#),
+            http("202 Accepted", ""),
+            http("404 Not Found", "{}"),
+        ]
+    }
+
+    fn delete() -> DeleteServerInput {
+        DeleteServerInput {
+            server_id: "server-1".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_server_rechecks_earlier_404_before_reporting_kept_volumes() {
+        for (note, allowed) in [("ordinary-note", true), ("last-volume-bearer", false)] {
+            let mut replies = preflight();
+            replies.extend([
+                http(
+                    "404 Not Found",
+                    &serde_json::json!({"note":note}).to_string(),
+                ),
+                response(r#"{"data":{"uuid":"vol-b","status":"AVAILABLE"}}"#),
+            ]);
+            let server = TestServer::start(replies);
+            let config = Config::new(
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_project_id("project-1".into())
+                    .with_credentials_provider(Arc::new(Provider(0.into())))
+                    .with_endpoint_overrides(EndpointOverrides {
+                        vserver: Some(server.origin.clone()),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
+            config
+                .session()
+                .set_test_product_root(server.root_der.clone());
+            let result = Client::new(&config)
+                .delete_server(&RequestContext::new().0, delete())
+                .await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Err(failure) = result {
+                assert_eq!(
+                    failure.write_dispatch(),
+                    crate::WriteDispatch::MayHaveBeenSent
+                );
+            }
+            assert_eq!(server.heads().len(), 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_server_keeps_volume_after_ordinary_read_failure_and_continues() {
+        let mut replies = preflight();
+        replies.extend([http("403 Forbidden", "{}"), http("404 Not Found", "{}")]);
+        let server = TestServer::start(replies);
+        let result = client(&server)
+            .delete_server(&RequestContext::new().0, delete())
+            .await
+            .unwrap();
+        assert_eq!(result.kept_volume_ids, ["vol-a"]);
+        assert_eq!(server.heads().len(), 6);
+    }
 }

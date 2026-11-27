@@ -11,7 +11,7 @@ use crate::endpoint::Base;
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::Options,
     redirect::{Classification, Retry},
     response,
@@ -31,9 +31,9 @@ pub(super) struct Write<'a> {
     pub(super) evidence: Evidence,
 }
 
-#[derive(Clone, Copy)]
 pub(super) enum Settlement {
     Unknown(&'static str),
+    Unreadable(&'static str, Box<Error>),
     Failed,
 }
 
@@ -67,7 +67,7 @@ impl Client {
         Ok(Write {
             client: self,
             id,
-            evidence: Evidence::new(),
+            evidence: Evidence::for_write(),
         })
     }
 }
@@ -95,7 +95,17 @@ impl Write<'_> {
         .await
     }
 
-    pub(super) async fn request_on(
+    pub(super) async fn guard_on(
+        &mut self,
+        ctx: &RequestContext,
+        op: &GuardOperation,
+        base: Option<&Base>,
+        path: &[&str],
+    ) -> Result<Response, Failure<()>> {
+        self.request_on(ctx, op, base, path, None).await
+    }
+
+    async fn request_on(
         &mut self,
         ctx: &RequestContext,
         op: &Operation,
@@ -140,12 +150,18 @@ impl Write<'_> {
         reason: Settlement,
         partial: Option<O>,
     ) -> Failure<O> {
-        let (class, reason) = match reason {
+        let (class, reason, cause) = match reason {
             Settlement::Unknown(reason) => (
                 ErrorClass::NotSettled,
                 format!("vngcloud: write outcome not confirmed: {reason}"),
+                None,
             ),
-            Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed".into()),
+            Settlement::Unreadable(reason, error) => (
+                ErrorClass::NotSettled,
+                format!("vngcloud: write outcome not confirmed: {reason}"),
+                Some(error),
+            ),
+            Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed".into(), None),
         };
         let message = format!(
             "{}: inspect inventory and billing before another mutation: {reason}",
@@ -153,15 +169,16 @@ impl Write<'_> {
         );
         let partial =
             partial.filter(|output| self.evidence.can_retain_partial() && self.safe_output(output));
-        Failure::new(
-            local(class, "", &message),
-            partial,
-            WriteDispatch::MayHaveBeenSent,
-        )
+        let error = local(class, "", &message);
+        let error = match cause {
+            Some(cause) => error.with_cause(*cause),
+            None => error,
+        };
+        Failure::new(error, partial, WriteDispatch::MayHaveBeenSent)
     }
 
     pub(super) fn safe_output(&self, output: &impl Serialize) -> bool {
-        serde_json::to_value(output).is_ok_and(|value| !self.evidence.reflected_in(&value))
+        !self.evidence.serialized_output_reflects(output)
     }
 
     pub(super) fn wait_context(&self, ctx: &RequestContext, duration: Duration) -> RequestContext {
@@ -217,7 +234,7 @@ impl Write<'_> {
 
 fn reflected(evidence: &Evidence, path: &[&str], body: Option<&Value>) -> bool {
     path.iter().any(|id| evidence.text_reflects(id))
-        || body.is_some_and(|body| evidence.reflected_in(body))
+        || body.is_some_and(|body| evidence.output_reflects(body))
 }
 
 struct GuardedSource<'a> {
@@ -296,11 +313,15 @@ pub(super) fn write_operation(
         allow_recovery: false,
         keep_status: true,
         overflow_overrides_status: false,
-        ..guard_operation(id, template)
+        ..write_read_settings(id, template)
     }
 }
 
-pub(super) fn guard_operation(id: &'static str, template: &'static str) -> Operation {
+pub(super) fn guard_operation(id: &'static str, template: &'static str) -> GuardOperation {
+    GuardOperation::new(write_read_settings(id, template))
+}
+
+fn write_read_settings(id: &'static str, template: &'static str) -> Operation {
     Operation {
         allow_empty: false,
         overflow_overrides_status: true,
@@ -394,8 +415,9 @@ fn provider_message<'a>(
     let unsafe_text = |text: &str| {
         text.len() > 512 || UNSAFE.as_ref().is_none_or(|pattern| pattern.is_match(text))
     };
-    let unsafe_wire = operation::reflects_json(&reply.body, &reply.credentials, true)
-        .unwrap_or(false)
+    let unsafe_wire = !Evidence::from_credentials(&reply.credentials)
+        .peer_body_screen(&reply.body)
+        .is_clean()
         || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
             |fields| {
                 fields.iter().any(|(key, value)| {

@@ -65,6 +65,31 @@ async fn uncertain_create_keeps_password_private_and_refuses_reflected_identity(
     assert_eq!(server.requests(), 1);
 }
 
+#[tokio::test]
+async fn dropped_iam_write_records_the_submitted_password() {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![crate::wire::test_server::Response::StallBeforeHead(
+        sent,
+    )]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, _) = RequestContext::new();
+    let password = Secret::new("toy-private-password");
+    let mut input = CreateUserInput::new("worker");
+    input.password = Some(password.clone());
+    RequestContext::with_response_screening(async {
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = client.create_user(&ctx, input) => panic!("write should still be pending"),
+        }
+        assert!(crate::wire::product::exit::recorded_exactly(
+            password.expose_secret()
+        ));
+        assert!(crate::wire::product::exit::private_safe(&password));
+    })
+    .await;
+    assert_eq!(server.requests(), 1);
+}
+
 #[test]
 fn debug_redacts_password_and_reflected_operands() {
     let password = Secret::new("toy-private-password");
@@ -192,7 +217,7 @@ fn private_http_error_retains_cancellation_after_observed_rejection_headers() {
             SafeText::new("", &[]),
             false,
         )))
-        .with_outer_detail(StatusCode::NOT_FOUND);
+        .with_http_status(StatusCode::NOT_FOUND);
     let error = private_status_error(&op, error, &Evidence::new());
     assert_eq!(error.api_error().and_then(|api| api.status()), Some(404));
     assert!(error.has_identity(ErrorClass::Cancelled));
@@ -276,4 +301,71 @@ async fn create_refuses_confirmation_redirect_reflecting_hex_encoded_password() 
         Some(&WriteError::CreateUnconfirmed)
     );
     assert_eq!(server.requests(), 2);
+}
+
+struct ConfirmationPasswordProvider(std::sync::Arc<Server>);
+
+impl crate::CredentialsProvider for ConfirmationPasswordProvider {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let body = self.0.bodies();
+            let token = match body.first() {
+                None => Secret::new("toy-initial-token"),
+                Some(request) => {
+                    let fields: serde_json::Value = serde_json::from_slice(request).unwrap();
+                    Secret::new(fields["password"].as_str().unwrap())
+                }
+            };
+            Ok(crate::Token::new(token, None))
+        })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::Error>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn confirmed_create_withholds_password_reused_as_the_confirmation_bearer() {
+    let server = std::sync::Arc::new(Server::start(vec![
+        response("201 Created", br#"{"id":"user-1"}"#),
+        response(
+            "200 OK",
+            br#"{"id":"user-1","username":"worker","from":"iam"}"#,
+        ),
+    ]));
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("han-1".into())
+            .with_project_id("unscoped".into())
+            .with_credentials_provider(std::sync::Arc::new(ConfirmationPasswordProvider(
+                server.clone(),
+            )))
+            .with_endpoint_overrides(EndpointOverrides {
+                dashboard: Some(format!("{}/dashboard/", server.origin)),
+                iam: Some(format!("{}/iam/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let output = Client::new(&config)
+        .create_user(&RequestContext::new().0, CreateUserInput::new("worker"))
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 2);
+    assert_eq!(output.created_id, "user-1");
+    assert!(output.generated_password().is_none());
 }

@@ -1,4 +1,4 @@
-use super::evidence::{Evidence, may_reflect_rendered_number};
+use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
 use super::{redirect, retry, sender};
 use crate::wire::send;
@@ -6,7 +6,15 @@ use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 
-#[allow(dead_code)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum Reflection {
+    Refuse,
+    Guard,
+    Redact,
+    PrivateDelivery,
+}
+
+#[derive(Clone)]
 pub(crate) struct Operation {
     pub(crate) id: &'static str,
     pub(crate) template: &'static str,
@@ -21,12 +29,31 @@ pub(crate) struct Operation {
     pub(crate) keep_status: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
-    pub(crate) reject_reflected_credentials: bool,
+    pub(crate) reflection: Reflection,
     pub(crate) no_redirect: bool,
     pub(crate) retry_config: retry::Config,
 }
 
-#[allow(dead_code, clippy::result_large_err)]
+pub(crate) use super::guard::GuardOperation;
+
+#[derive(Debug)]
+pub(crate) struct RefusedGuard;
+
+#[derive(Debug)]
+pub(crate) struct MalformedGuard;
+
+pub(crate) fn unsafe_guard_response(id: &'static str) -> crate::Error {
+    crate::Error::from_api(crate::ApiError::without_fallback(
+        id,
+        None,
+        crate::error::SafeText::new("InvalidResponse", &[]),
+        crate::error::SafeText::new("response failed validation; body withheld", &[]),
+        false,
+    ))
+    .with_detail(RefusedGuard)
+}
+
+#[allow(clippy::result_large_err)]
 pub(crate) async fn execute<T: Output>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
@@ -50,7 +77,7 @@ pub(crate) async fn execute<T: Output>(
     .await
 }
 
-#[allow(dead_code, clippy::result_large_err, clippy::too_many_arguments)]
+#[allow(clippy::result_large_err, clippy::too_many_arguments)]
 pub(crate) async fn execute_with_evidence<T: Output>(
     runtime: sender::Runtime<'_>,
     base: &crate::endpoint::Base,
@@ -78,7 +105,15 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         evidence,
         T::credential_error,
     )
-    .await?;
+    .await
+    .map_err(|failure| {
+        let (error, partial, dispatch) = failure.into_parts();
+        crate::Failure::new(
+            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+            partial,
+            dispatch,
+        )
+    })?;
     let status = response.status;
     let dispatch = if matches!(operation.class, redirect::Classification::Write) {
         crate::WriteDispatch::MayHaveBeenSent
@@ -86,10 +121,40 @@ pub(crate) async fn execute_with_evidence<T: Output>(
         crate::WriteDispatch::NotAWrite
     };
     if let Some(error) = T::credential_error(operation, &response.credentials) {
-        return Err(crate::Failure::new(*error, None, dispatch));
+        return Err(crate::Failure::new(
+            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+            None,
+            dispatch,
+        ));
+    }
+    if operation.reflection == Reflection::Refuse
+        && operation.success.contains(&status)
+        && response.reflection.clean().is_none()
+    {
+        let error = T::reflected_response(operation, &response);
+        return Err(crate::Failure::new(
+            evidence.screen_error(*error),
+            None,
+            dispatch,
+        ));
+    }
+    if GuardOperation::applies(operation, evidence)
+        && operation.success.contains(&status)
+        && !matches!(T::SCHEMA, Shape::Any)
+    {
+        let body = crate::model::wire::go_json(&response.body);
+        if crate::wire::strict_json::FieldNames::Canonical
+            .has_case_variant(body.as_bytes(), &T::SCHEMA)
+        {
+            return Err(crate::Failure::new(
+                evidence.screen_error(unsafe_guard_response(operation.id)),
+                None,
+                dispatch,
+            ));
+        }
     }
     let output = T::decode_response(operation, &response)
-        .map_err(|error| crate::Failure::new(*error, None, dispatch))?;
+        .map_err(|error| crate::Failure::new(evidence.screen_error(*error), None, dispatch))?;
     Ok((status, output))
 }
 
@@ -112,7 +177,7 @@ pub(crate) async fn execute_raw(
     body: bytes::Bytes,
     evidence: &mut Evidence,
 ) -> Result<sender::Response, crate::Failure<()>> {
-    send_route(
+    let response = send_route(
         runtime,
         base,
         operation,
@@ -124,7 +189,23 @@ pub(crate) async fn execute_raw(
         evidence,
         |_, _| None,
     )
-    .await
+    .await?;
+    if operation.reflection == Reflection::Refuse
+        && operation.success.contains(&response.status)
+        && response.reflection.clean().is_none()
+    {
+        let dispatch = if matches!(operation.class, redirect::Classification::Write) {
+            crate::WriteDispatch::MayHaveBeenSent
+        } else {
+            crate::WriteDispatch::NotAWrite
+        };
+        return Err(crate::Failure::new(
+            evidence.screen_error(invalid_response(operation, response.status)),
+            None,
+            dispatch,
+        ));
+    }
+    Ok(response)
 }
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -140,6 +221,15 @@ async fn send_route<T>(
     evidence: &mut Evidence,
     credential_error: impl Fn(&Operation, &sender::SentCredentials) -> Option<Box<crate::Error>> + Send,
 ) -> Result<sender::Response, crate::Failure<T>> {
+    let guard;
+    let operation = if GuardOperation::applies(operation, evidence)
+        && operation.reflection != Reflection::Guard
+    {
+        guard = GuardOperation::new(operation.clone());
+        &*guard
+    } else {
+        operation
+    };
     if let Some(credentials) = runtime.configured_credentials {
         evidence.absorb(credentials);
     }
@@ -157,6 +247,14 @@ async fn send_route<T>(
     } else {
         crate::WriteDispatch::NotAWrite
     };
+    if dispatch == crate::WriteDispatch::NotSent && evidence.has_unproved_read() {
+        return Err(crate::Failure::new(
+            crate::Error::new(crate::ErrorClass::InvalidInput)
+                .with_cause(unsafe_guard_response(operation.id)),
+            None,
+            dispatch,
+        ));
+    }
     let invalid = || {
         crate::Failure::new(
             crate::Error::new(crate::ErrorClass::InvalidInput),
@@ -221,7 +319,7 @@ async fn send_route<T>(
                 serde_json::from_slice(&body).map_err(|_| invalid())?;
             if fields
                 .values()
-                .any(|value| evidence.reflected_in(value) || key_evidence.reflected_in(value))
+                .any(|value| evidence.output_reflects(value) || key_evidence.output_reflects(value))
             {
                 return Err(invalid());
             }
@@ -278,10 +376,27 @@ async fn send_route<T>(
         credentials,
         body,
     };
+    let attempt_check = |credentials: &sender::SentCredentials| {
+        let unsafe_guard = matches!(operation.class, redirect::Classification::Write)
+            .then(|| evidence.recheck_guards(credentials))
+            .flatten();
+        unsafe_guard.or_else(|| {
+            options
+                .attempt_check
+                .and_then(|check| (check.0)(credentials))
+        })
+    };
     let policy = sender::Operation {
+        guard: (operation.reflection == Reflection::Guard).then_some(operation.id),
         pacing: options.pacing,
+        project_discovery: options
+            .project_discovery
+            .then_some(super::response::ProjectDiscovery {
+                id: operation.id,
+                accepted: operation.success,
+            }),
         response_guard: options.response_guard.map(|guard| (operation.id, guard)),
-        attempt_check: options.attempt_check,
+        attempt_check: Some(super::options::AttemptCheck(&attempt_check)),
         method: operation.method.clone(),
         class: operation.class,
         retry: operation.retry,
@@ -294,7 +409,7 @@ async fn send_route<T>(
             interval: operation.retry_config.interval,
         },
     };
-    let response = match sender::run(
+    let response = sender::run(
         runtime,
         &policy,
         auth,
@@ -306,8 +421,13 @@ async fn send_route<T>(
             identifier_query_keys: options.identifier_query_keys,
         },
     )
-    .await
+    .await;
+    if matches!(operation.class, redirect::Classification::Read)
+        && operation.reflection != Reflection::Guard
     {
+        evidence.note_unproved_read();
+    }
+    let response = match response {
         Ok(response) => response,
         Err(failure) => {
             evidence.absorb(&failure.credentials);
@@ -321,6 +441,7 @@ async fn send_route<T>(
             if let Some(status) = status
                 && (refused_redirect
                     || (overflow
+                        && operation.reflection != Reflection::Guard
                         && !operation.overflow_overrides_status
                         && (status.is_client_error() || status.is_server_error())))
             {
@@ -340,7 +461,7 @@ async fn send_route<T>(
                 .map(|error| *error)
                 .unwrap_or_else(|| api_error(operation.id, Some(status), crate::ErrorClass::Api));
                 let error = if refused_redirect {
-                    error.with_outer_detail(status)
+                    error.with_http_status(status)
                 } else {
                     error
                 };
@@ -358,7 +479,7 @@ async fn send_route<T>(
                     .with_cause(crate::Error::from_api(api))
                     .with_body_too_large();
                 let error = match status {
-                    Some(status) => error.with_outer_detail(status),
+                    Some(status) => error.with_http_status(status),
                     None => error,
                 };
                 return Err(crate::Failure::new(error, None, failure.dispatch));
@@ -378,19 +499,42 @@ async fn send_route<T>(
                 _ if retryable => retryable_error(operation.id),
                 _ => api_error(
                     operation.id,
-                    if operation.keep_status { status } else { None },
+                    if operation.keep_status
+                        && !(operation.reflection == Reflection::Guard
+                            && status == Some(StatusCode::NOT_FOUND))
+                    {
+                        status
+                    } else {
+                        None
+                    },
                     class,
                 ),
             };
             let error = match status {
-                Some(status) => error.with_outer_detail(status),
+                Some(status) => error.with_http_status(status),
                 None => error,
             };
             return Err(crate::Failure::new(error, None, failure.dispatch));
         }
     };
     evidence.absorb(&response.credentials);
+    if operation.reflection == Reflection::Guard
+        && !response
+            .reflection
+            .clean()
+            .is_some_and(|clean| evidence.keep_guard(operation.id, &response.body, clean))
+    {
+        return Err(crate::Failure::new(
+            unsafe_guard_response(operation.id),
+            None,
+            dispatch,
+        ));
+    }
     Ok(response)
+}
+
+fn invalid_response(operation: &Operation, status: StatusCode) -> crate::Error {
+    api_error(operation.id, None, crate::ErrorClass::Api).with_http_status(status)
 }
 
 pub(crate) fn decode_response<T: Output>(
@@ -398,9 +542,8 @@ pub(crate) fn decode_response<T: Output>(
     response: &sender::Response,
 ) -> Result<T, Box<crate::Error>> {
     let status = response.status;
-    let invalid = || {
-        Box::new(api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status))
-    };
+    let invalid = || Box::new(invalid_response(operation, status));
+    let clean = response.reflection.clean();
     let body = super::response::classify(
         operation.id,
         status,
@@ -409,10 +552,7 @@ pub(crate) fn decode_response<T: Output>(
         (true, operation.sensitive, operation.retry),
         &response.credentials,
     )?;
-    if operation.reject_reflected_credentials
-        && (reflects_json(&body, &response.credentials, T::CHECK_RENDERED_NUMBERS).unwrap_or(true)
-            || serde_json::from_slice::<&serde_json::value::RawValue>(&body).is_err())
-    {
+    if operation.reflection == Reflection::Refuse && clean.is_none() {
         return Err(invalid());
     }
     if operation.no_output {
@@ -425,90 +565,10 @@ pub(crate) fn unsafe_json_response(
     body: &[u8],
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
-    validate: bool,
 ) -> bool {
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return false;
-    }
-    [known, sent].into_iter().any(|credentials| {
-        let match_ = reflects_json(body, credentials, true);
-        if validate {
-            match_ != Some(false)
-        } else {
-            match_ == Some(true)
-        }
-    }) || (validate && serde_json::from_slice::<&serde_json::value::RawValue>(body).is_err())
-}
-
-pub(crate) fn reflects_json(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-    check_rendered_numbers: bool,
-) -> Option<bool> {
-    scan_json_reflections(body, credentials, check_rendered_numbers, |value| {
-        credentials.reflects(value.as_bytes())
-    })
-}
-
-pub(crate) fn reflects_json_forms(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-) -> Option<bool> {
-    scan_json_reflections(body, credentials, true, |value| {
-        super::response::reflects_credential(value, credentials)
-    })
-}
-
-fn scan_json_reflections(
-    body: &[u8],
-    credentials: &sender::SentCredentials,
-    check_rendered_numbers: bool,
-    reflects_string: impl Fn(&str) -> bool,
-) -> Option<bool> {
-    if credentials.reflects(body) {
-        return Some(true);
-    }
-    let numeric_match_possible = check_rendered_numbers && may_reflect_rendered_number(credentials);
-    let mut index = 0;
-    while index < body.len() {
-        if body[index] != b'"' {
-            if numeric_match_possible && matches!(body[index], b'-' | b'0'..=b'9') {
-                let start = index;
-                while index < body.len()
-                    && matches!(body[index], b'-' | b'+' | b'0'..=b'9' | b'.' | b'e' | b'E')
-                {
-                    index += 1;
-                }
-                if std::str::from_utf8(&body[start..index])
-                    .ok()
-                    .and_then(|number| number.parse::<f64>().ok())
-                    .is_some_and(|number| {
-                        number.is_finite()
-                            && crate::output_number::reflects(number, credentials, false)
-                    })
-                {
-                    return Some(true);
-                }
-                continue;
-            }
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < body.len() && body[index] != b'"' {
-            if body[index] == b'\\' {
-                index += 1;
-            }
-            index += 1;
-        }
-        let value = serde_json::from_slice::<String>(body.get(start..=index)?).ok()?;
-        if reflects_string(&value) {
-            return Some(true);
-        }
-        index += 1;
-    }
-    Some(false)
+    let mut evidence = Evidence::from_credentials(known);
+    evidence.absorb(sent);
+    evidence.peer_body_screen(body).clean().is_none()
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -572,17 +632,19 @@ fn api_error(
     }
 }
 
-#[allow(dead_code)]
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
     const RESPONSE_GUARD: Option<sender::ResponseGuard> = None;
-    const CHECK_RENDERED_NUMBERS: bool = false;
 
     fn credential_error(
         _operation: &Operation,
         _credentials: &sender::SentCredentials,
     ) -> Option<Box<crate::Error>> {
         None
+    }
+
+    fn reflected_response(operation: &Operation, response: &sender::Response) -> Box<crate::Error> {
+        Box::new(invalid_response(operation, response.status))
     }
 
     fn decode_response(
@@ -593,7 +655,6 @@ pub(crate) trait Output: DeserializeOwned + Default {
     }
 }
 
-#[allow(dead_code)]
 fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()> {
     if allow_empty && body.is_empty() {
         return Ok(T::default());
@@ -663,7 +724,7 @@ mod tests {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: Reflection::Refuse,
             no_redirect: false,
             retry_config: retry::Config::default(),
         }
@@ -744,6 +805,44 @@ mod tests {
     mod evidence;
 
     #[tokio::test]
+    async fn a_write_cannot_reuse_evidence_from_an_unproved_read() {
+        for guarded in [true, false] {
+            let server = Server::start(vec![response("200 OK", b"{}"), response("200 OK", b"{}")]);
+            let mut ledger = if guarded {
+                Evidence::for_write()
+            } else {
+                Evidence::new()
+            };
+            let options = Options::default();
+            let read = declaration();
+            let write = Operation {
+                class: redirect::Classification::Write,
+                method: Method::POST,
+                ..declaration()
+            };
+            assert!(
+                evidence::call_evidence(&server, &read, &options, "one", "toy-first", &mut ledger)
+                    .await
+                    .is_ok()
+            );
+            let result =
+                evidence::call_evidence(&server, &write, &options, "one", "toy-next", &mut ledger)
+                    .await;
+            assert_eq!(
+                result
+                    .map(|_| ())
+                    .map_err(|failure| failure.write_dispatch()),
+                if guarded {
+                    Ok(())
+                } else {
+                    Err(crate::WriteDispatch::NotSent)
+                }
+            );
+            assert_eq!(server.requests(), if guarded { 2 } else { 1 });
+        }
+    }
+
+    #[tokio::test]
     async fn bearer_matching_static_json_headers_sends() {
         let server = Server::start(vec![response("200 OK", br#"{"id":"one"}"#)]);
         assert!(
@@ -793,20 +892,66 @@ mod tests {
         let server = Server::start(vec![response("200 OK", br#"{"id":"one"}"#)]);
         let (status, output) = call(&server, &declaration(), &["one"]).await.unwrap();
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(output, Example { id: "one".into() });
+        assert_eq!(
+            output,
+            Example {
+                id: "one".into(),
+                ..Example::default()
+            }
+        );
         assert_eq!(server.requests(), 1);
     }
 
     #[derive(Debug, Default, serde::Deserialize, PartialEq)]
     struct Example {
         id: String,
+        status: Option<String>,
     }
 
     impl Output for Example {
-        const SCHEMA: Shape<'static> = Shape::Object(&[crate::wire::strict_json::ShapeField {
-            name: "id",
-            shape: Shape::Any,
-        }]);
+        const SCHEMA: Shape<'static> = Shape::Object(&[
+            crate::wire::strict_json::ShapeField {
+                name: "id",
+                shape: Shape::Any,
+            },
+            crate::wire::strict_json::ShapeField {
+                name: "status",
+                shape: Shape::Any,
+            },
+        ]);
+    }
+
+    #[tokio::test]
+    async fn typed_guard_schemas_reject_case_variants_that_output_reads_ignore() {
+        let cases = [
+            (br#"{"id":"one","STATUS":"READY"}"#.as_slice(), false, true),
+            (br#"{"id":"one","STATUS":"READY"}"#, true, false),
+            (br#"{"id":"one"}"#, true, true),
+        ];
+        for (body, guarded, allowed) in cases {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let guard;
+            let ordinary = declaration();
+            let op = if guarded {
+                guard = GuardOperation::new(declaration());
+                &*guard
+            } else {
+                &ordinary
+            };
+            let result = call(&server, op, &["one"]).await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Ok((_, value)) = &result {
+                assert_eq!(value.id, "one");
+                assert!(value.status.is_none());
+            }
+            if let Err(failure) = result {
+                assert_eq!(
+                    failure.error().api_error().map(crate::ApiError::code),
+                    Some("InvalidResponse")
+                );
+            }
+            assert_eq!(server.requests(), 1);
+        }
     }
 
     #[tokio::test]
@@ -855,21 +1000,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_output_discards_bounded_success_body() {
-        let server = Server::start(vec![response("200 OK", b"not json")]);
+    async fn no_output_discards_only_a_clean_success_body() {
         let mut op = declaration();
         op.no_output = true;
-        assert_eq!(
-            call(&server, &op, &["one"]).await.unwrap().1,
-            Example::default()
-        );
+        for (body, accepted) in [
+            (br#"{"ignored":true}"#.as_slice(), true),
+            (b"", true),
+            (b"not json", false),
+        ] {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let result = call(&server, &op, &["one"]).await;
+            assert_eq!(result.is_ok(), accepted);
+            if let Ok((_, output)) = result {
+                assert_eq!(output, Example::default());
+            }
+        }
     }
 
     #[tokio::test]
     async fn malformed_success_keeps_observed_status() {
         let server = Server::start(vec![response("200 OK", b"{")]);
         let error = call(&server, &declaration(), &["one"]).await.unwrap_err();
-        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
+        assert_eq!(error.error().http_status(), Some(StatusCode::OK));
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
     }
 
@@ -938,10 +1090,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(
-            error.error().detail::<StatusCode>(),
-            Some(&StatusCode::UNAUTHORIZED)
-        );
+        assert_eq!(error.error().http_status(), Some(StatusCode::UNAUTHORIZED));
         assert_eq!(error.error().class(), crate::ErrorClass::Auth);
     }
 
@@ -953,7 +1102,7 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(error.error().detail::<StatusCode>(), Some(&StatusCode::OK));
+        assert_eq!(error.error().http_status(), Some(StatusCode::OK));
     }
 
     #[tokio::test]
@@ -965,10 +1114,7 @@ mod tests {
         let error = call(&server, &op, &["one"]).await.unwrap_err();
         assert!(error.error().is_body_too_large());
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
-        assert_eq!(
-            error.error().detail::<StatusCode>(),
-            Some(&StatusCode::NOT_FOUND)
-        );
+        assert_eq!(error.error().http_status(), Some(StatusCode::NOT_FOUND));
         assert!(!error.error().has_class(crate::ErrorClass::NotFound));
     }
 
@@ -988,18 +1134,17 @@ mod tests {
         for body in [br#"{"id":"toy-token"}"#.as_slice(), escaped.as_bytes()] {
             let server = Server::start(vec![response("200 OK", body)]);
             let mut op = declaration();
-            op.reject_reflected_credentials = true;
+            op.reflection = crate::wire::product::operation::Reflection::Refuse;
             let Err(failure) = call(&server, &op, &["one"]).await else {
                 panic!("reflected response accepted");
             };
             assert_eq!(failure.error().class(), crate::ErrorClass::Api);
-            assert_eq!(
-                failure.error().detail::<StatusCode>(),
-                Some(&StatusCode::OK)
-            );
+            assert_eq!(failure.error().http_status(), Some(StatusCode::OK));
         }
         let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
-        assert!(call(&server, &declaration(), &["one"]).await.is_ok());
+        let mut op = declaration();
+        op.reflection = Reflection::Redact;
+        assert!(call(&server, &op, &["one"]).await.is_ok());
     }
 
     #[tokio::test]
@@ -1012,7 +1157,7 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err());
         let server = Server::start(vec![response("200 OK", body.as_bytes())]);
         let mut op = declaration();
-        op.reject_reflected_credentials = true;
+        op.reflection = crate::wire::product::operation::Reflection::Refuse;
         op.no_output = true;
         assert!(call(&server, &op, &["one"]).await.is_err());
         let server = Server::start(vec![response(
@@ -1199,7 +1344,10 @@ mod tests {
     fn decodes_typed_response() {
         assert_eq!(
             decode::<Example>(br#"{"id":"one"}"#, false, 64),
-            Ok(Example { id: "one".into() })
+            Ok(Example {
+                id: "one".into(),
+                ..Example::default()
+            })
         );
     }
 }

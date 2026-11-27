@@ -6,6 +6,7 @@ use super::{
     Client, Instance, ListDatabaseFlavorsInput, ListDatabaseNetworksInput,
     ListDatabaseStorageTypesInput,
 };
+use crate::wire::product::guard::Guarded;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -27,7 +28,7 @@ const INTERRUPTED: Settlement = Settlement::NotSettled(
 );
 
 /// Selects a private, single-node MySQL 8.0 instance with automatic backup off.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateDatabaseInstanceInput {
     /// Instance name, starting with an ASCII letter or digit.
     pub name: String,
@@ -50,6 +51,19 @@ pub struct CreateDatabaseInstanceInput {
     /// Master password sent only with the create request.
     pub password: Secret,
 }
+
+crate::error::debug_record!(CreateDatabaseInstanceInput {
+    name,
+    zone_id,
+    flavor_id,
+    storage_type_id,
+    storage_size,
+    vpc_id,
+    subnet_id,
+    database_name,
+    username,
+    password
+});
 
 impl CreateDatabaseInstanceInput {
     /// Sets the instance, catalog selections, and initial database credentials.
@@ -85,12 +99,14 @@ impl CreateDatabaseInstanceInput {
 }
 
 /// Instance details after confirmation, or an instance with only its ID set on failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateDatabaseInstanceOutput {
     /// Confirmed instance or ID-only partial.
     #[serde(rename = "Instance")]
     pub instance: Instance,
 }
+
+crate::wire::product::output::public_fields!(CreateDatabaseInstanceOutput { instance });
 
 #[expect(
     clippy::result_large_err,
@@ -103,73 +119,82 @@ impl Client {
         ctx: &RequestContext,
         input: CreateDatabaseInstanceInput,
     ) -> Result<CreateDatabaseInstanceOutput, Failure<CreateDatabaseInstanceOutput>> {
-        validate(&input).map_err(|error| not_sent(*error))?;
-        self.write_provenance()?;
-        let mut evidence = Evidence::new();
-        evidence.add_operation_password(&input.password);
-        let engine = self.plan_create(ctx, &input, &mut evidence).await?;
-        let package = input.flavor_id.to_string();
-        let body = create_body(&input, &engine, &package)
-            .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
-        let operation = write_operation(
-            CREATE,
-            "vdb-relational/v1/payment/database-instances",
-            &[StatusCode::OK],
-            false,
-        );
-        let options = Options {
-            headers: &[("user-type", "IAM_USER")],
-            password_slot: Some(crate::wire::product::options::PasswordSlot::DatabaseUser(
-                &input.password,
-            )),
-            ..Options::DEFAULT
-        };
-        let reply = match self
-            .send_write::<CreateReply>(ctx, &operation, &options, &[], body, &mut evidence)
-            .await
-        {
-            Ok(reply) => reply,
-            Err(failure)
-                if failure.write_dispatch() == WriteDispatch::NotSent
-                    && failure.error().has_class(ErrorClass::InvalidInput) =>
+        crate::wire::product::exit::finish!(async {
+            validate(&input).map_err(|error| not_sent(*error))?;
+            self.write_provenance()?;
+            let mut evidence = Evidence::for_write();
+            evidence.add_operation_password(&input.password);
+            let engine = Guarded::read_preflight(
+                &mut evidence,
+                async |evidence| self.plan_create(ctx, &input, evidence).await,
+                |error| not_sent(*error),
+            )
+            .await?
+            .into_checked(&evidence)
+            .map_err(|error| not_sent(*error))?;
+            let package = input.flavor_id.to_string();
+            let body = create_body(&input, &engine, &package)
+                .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
+            let operation = write_operation(
+                CREATE,
+                "vdb-relational/v1/payment/database-instances",
+                &[StatusCode::OK],
+                false,
+            );
+            let options = Options {
+                headers: &[("user-type", "IAM_USER")],
+                password_slot: Some(crate::wire::product::options::PasswordSlot::DatabaseUser(
+                    &input.password,
+                )),
+                ..Options::DEFAULT
+            };
+            let reply = match self
+                .send_write::<CreateReply>(ctx, &operation, &options, &[], body, &mut evidence)
+                .await
             {
-                return Err(not_sent(failure.into_parts().0));
+                Ok(reply) => reply,
+                Err(failure)
+                    if failure.write_dispatch() == WriteDispatch::NotSent
+                        && failure.error().has_class(ErrorClass::InvalidInput) =>
+                {
+                    return Err(not_sent(failure.into_parts().0));
+                }
+                Err(failure) => {
+                    return Err(rejection(failure, CREATE).unwrap_or_else(|| {
+                        create_unsettled(
+                            "vngcloud: write outcome not confirmed: create request unconfirmed",
+                            &evidence,
+                        )
+                    }));
+                }
+            };
+            let Some(id) = reply.instance_id(&evidence) else {
+                return Err(create_unsettled(
+                    "vngcloud: write outcome not confirmed: create response lacks a valid instance ID",
+                    &evidence,
+                ));
+            };
+            match self.poll_instance(ctx, id, &mut evidence, INTERRUPTED, |instance| {
+                match instance {
+                    None => Poll::Pending,
+                    Some(instance) => match instance.status.to_ascii_uppercase().as_str() {
+                        "ACTIVE" if instance.datastore_type.eq_ignore_ascii_case(&engine)
+                            && instance.datastore_version == VERSION
+                            && instance.quota_package_id == package
+                            && instance.backup_auto == Some(false)
+                            && instance.public_access == Some(false) => Poll::Ready(Ok(instance)),
+                        "ACTIVE" => Poll::Ready(Err(Settlement::NotSettled("vngcloud: write outcome not confirmed: create detail does not match the request"))),
+                        "BUILD" | "BUILDING" => Poll::Pending,
+                        "ERROR" | "FAILED" => Poll::Ready(Err(Settlement::Failed)),
+                        _ => Poll::Ready(Err(Settlement::NotSettled("vngcloud: write outcome not confirmed: create status unrecognized"))),
+                    },
+                }
+            }).await {
+                Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.output_reflects(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
+                Ok(_) => Err(unsettled(CREATE, INTERRUPTED, Some(id.to_owned()), &evidence, id_only)),
+                Err(settlement) => Err(unsettled(CREATE, settlement, Some(id.to_owned()), &evidence, id_only)),
             }
-            Err(failure) => {
-                return Err(rejection(failure, CREATE).unwrap_or_else(|| {
-                    create_unsettled(
-                        "vngcloud: write outcome not confirmed: create request unconfirmed",
-                        &evidence,
-                    )
-                }));
-            }
-        };
-        let Some(id) = reply.instance_id(&evidence) else {
-            return Err(create_unsettled(
-                "vngcloud: write outcome not confirmed: create response lacks a valid instance ID",
-                &evidence,
-            ));
-        };
-        match self.poll_instance(ctx, id, &mut evidence, INTERRUPTED, |instance| {
-            match instance {
-                None => Poll::Pending,
-                Some(instance) => match instance.status.to_ascii_uppercase().as_str() {
-                    "ACTIVE" if instance.datastore_type.eq_ignore_ascii_case(&engine)
-                        && instance.datastore_version == VERSION
-                        && instance.quota_package_id == package
-                        && instance.backup_auto == Some(false)
-                        && instance.public_access == Some(false) => Poll::Ready(Ok(instance)),
-                    "ACTIVE" => Poll::Ready(Err(Settlement::NotSettled("vngcloud: write outcome not confirmed: create detail does not match the request"))),
-                    "BUILD" | "BUILDING" => Poll::Pending,
-                    "ERROR" | "FAILED" => Poll::Ready(Err(Settlement::Failed)),
-                    _ => Poll::Ready(Err(Settlement::NotSettled("vngcloud: write outcome not confirmed: create status unrecognized"))),
-                },
-            }
-        }).await {
-            Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.reflected_in(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
-            Ok(_) => Err(unsettled(CREATE, INTERRUPTED, Some(id.to_owned()), &evidence, id_only)),
-            Err(settlement) => Err(unsettled(CREATE, settlement, Some(id.to_owned()), &evidence, id_only)),
-        }
+        })
     }
 
     async fn plan_create(
@@ -507,7 +532,6 @@ impl Output for CreateReply {
             Shape::Array(&Shape::Object(&[field("resourceId", Shape::Any)])),
         ),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         operation::decode_response(operation, response).map_err(|error| {
@@ -520,6 +544,7 @@ impl Output for CreateReply {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct RejectedFields(pub(super) Vec<&'static str>);
 
 fn field_errors(body: &[u8]) -> RejectedFields {

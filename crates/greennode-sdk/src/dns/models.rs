@@ -7,12 +7,29 @@ use crate::wire::strict_json::{Shape, ShapeField};
 const REDACTED: &str = "<redacted>";
 
 /// A typed DNS field whose rendered value can be redacted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field<T> {
     /// The original value did not contain a credential sent for the request.
     Value(T),
     /// The original value was removed and projects to `<redacted>`.
     Redacted,
+}
+
+crate::error::debug_record!(Field<T>; Value, Redacted);
+
+impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
+    for Field<T>
+{
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        match self {
+            Self::Value(value) => value.public_reflects(scan, identifier),
+            Self::Redacted => false,
+        }
+    }
 }
 
 impl<T: Default> Default for Field<T> {
@@ -47,9 +64,21 @@ impl<T> Field<T> {
 }
 
 /// A DNS timestamp with its original offset and nanosecond precision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Timestamp(#[serde(with = "rfc3339")] pub OffsetDateTime);
+
+crate::error::debug_record!(Timestamp(0));
+
+impl crate::wire::product::output::PublicOutput for Timestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
 
 impl Default for Timestamp {
     fn default() -> Self {
@@ -82,22 +111,28 @@ mod rfc3339 {
 }
 
 /// A VPC association returned with a hosted zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
 )]
 pub struct VpcMapRegion {
     /// Associated VPC identifier.
-    #[serde(rename(serialize = "VPCID"), deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "VPCID"),
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
+    )]
     pub vpc_id: String,
     /// Region of the associated VPC.
     #[serde(deserialize_with = "null_default")]
     pub region: String,
 }
 
+crate::wire::product::output::public_fields!(VpcMapRegion { vpc_id, region });
+
 /// A hosted DNS zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -106,7 +141,8 @@ pub struct HostedZone {
     /// Hosted zone identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "hostedZoneId"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Zone domain name.
@@ -130,7 +166,8 @@ pub struct HostedZone {
     /// Associated VPC identifiers.
     #[serde(
         rename(serialize = "AssociatedVPCIDs", deserialize = "assocVpcIds"),
-        deserialize_with = "null_items"
+        deserialize_with = "null_items",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub associated_vpc_ids: Vec<String>,
     /// Associated VPC identifiers with their regions.
@@ -152,8 +189,23 @@ pub struct HostedZone {
     pub updated_at: Field<Timestamp>,
 }
 
+crate::wire::product::output::public_fields!(HostedZone {
+    id,
+    domain_name,
+    status,
+    description,
+    zone_type,
+    count_records,
+    associated_vpc_ids,
+    assoc_vpc_map_region,
+    portal_user_id,
+    created_at,
+    deleted_at,
+    updated_at
+});
+
 /// One value in a DNS record's routing policy.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "PascalCase"))]
 pub struct RecordValue {
     /// The record data.
@@ -165,8 +217,14 @@ pub struct RecordValue {
     pub weight: Option<Field<i64>>,
 }
 
+crate::wire::product::output::public_fields!(RecordValue {
+    value,
+    location,
+    weight
+});
+
 /// A record in a hosted DNS zone.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -175,7 +233,8 @@ pub struct Record {
     /// Record identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "recordId"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Record name.
@@ -217,6 +276,21 @@ pub struct Record {
     pub updated_at: Field<Timestamp>,
 }
 
+crate::wire::product::output::public_fields!(Record {
+    id,
+    sub_domain,
+    hosted_zone_id,
+    status,
+    record_type,
+    routing_policy,
+    value,
+    ttl,
+    enable_sticky_session,
+    created_at,
+    deleted_at,
+    updated_at
+});
+
 pub(super) trait Resource: Default {
     const SHAPE: Shape<'static>;
 
@@ -250,14 +324,14 @@ impl Resource for HostedZone {
             &mut self.status,
             &mut self.description,
             &mut self.zone_type,
-        ]
-        .into_iter()
-        .chain(&mut self.associated_vpc_ids)
-        {
+        ] {
             redact_string(value, credentials);
         }
+        for id in &mut self.associated_vpc_ids {
+            crate::wire::product::evidence::redact_identifier(id, credentials);
+        }
         for association in &mut self.assoc_vpc_map_region {
-            redact_string(&mut association.vpc_id, credentials);
+            redact_id(&mut association.vpc_id, &|id| !credentials.id_reflects(id));
             redact_string(&mut association.region, credentials);
         }
         for value in [&mut self.count_records, &mut self.portal_user_id] {
@@ -326,7 +400,9 @@ impl Resource for Record {
         }
         redact_integer(&mut self.ttl, credentials);
         if let Some(sticky) = &mut self.enable_sticky_session {
-            sticky.redact_if(|value| credentials.reflects(if *value { b"true" } else { b"false" }));
+            sticky.redact_if(|value| {
+                credentials.text_reflects(if *value { "true" } else { "false" })
+            });
         }
         redact_times(
             &mut self.created_at,
@@ -350,16 +426,13 @@ fn redact_id(id: &mut String, keep: &impl Fn(&str) -> bool) {
 }
 
 fn redact_string(value: &mut String, credentials: &SentCredentials) {
-    if credentials.reflects(value.as_bytes()) {
+    if credentials.text_reflects(value) {
         *value = REDACTED.into();
     }
 }
 
 pub(super) fn redact_integer(value: &mut Field<i64>, credentials: &SentCredentials) {
-    value.redact_if(|value| {
-        credentials.reflects(value.to_string().as_bytes())
-            || crate::output_number::reflects(*value as f64, credentials, false)
-    });
+    value.redact_if(|value| credentials.integer_output_reflects(*value));
 }
 
 fn redact_times(
@@ -376,7 +449,7 @@ fn redact_times(
             value
                 .0
                 .format(&Rfc3339)
-                .map_or(true, |text| credentials.reflects(text.as_bytes()))
+                .map_or(true, |text| credentials.text_reflects(&text))
         });
     }
 }

@@ -2,7 +2,7 @@ use http::{Method, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::policy_guard::{Guard, Protection, protection_error};
+use super::policy_guard::{Guard, Protection};
 use super::writes::write_operation;
 use super::{Api, Client};
 use crate::wire::product::redirect::Retry;
@@ -21,13 +21,15 @@ macro_rules! attachment {
     ($(#[$doc:meta])* $method:ident, $input:ident, $output:ident, $first:ident, $second:ident,
      $guard:ident, $op:literal, $field1:literal, $field2:literal, $method_type:ident, $retry:ident, $route:literal) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $input {
             /// Required IAM identifier using ASCII letters, digits, or hyphens.
             pub $first: String,
             /// Required IAM identifier using ASCII letters, digits, or hyphens.
             pub $second: String,
         }
+
+        crate::error::debug_record!($input { $first, $second });
 
         impl $input {
             /// Sets both required identifiers.
@@ -37,23 +39,27 @@ macro_rules! attachment {
         }
 
         /// A completed IAM attachment or membership change.
-        #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+        #[derive(Clone, PartialEq, Eq, Serialize)]
         pub struct $output {}
+
+        crate::wire::product::output::public_fields!($output {});
 
         #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
         impl Client {
             $(#[$doc])*
             pub async fn $method(&self, ctx: &RequestContext, input: $input) -> Result<$output, Failure<$output>> {
-                let first = input.$first.as_str();
-                let second = input.$second.as_str();
-                let mut evidence = self.write_evidence(ctx, $op, &[($field1, first), ($field2, second)], &[])?;
-                let mut guard = Guard::new(self, ctx, $op, &mut evidence).await?;
-                pre_guard!($guard, guard)?;
-                guard.load_actions().await?;
-                $guard(&mut guard, $op, first, second).await?;
-                let operation = write_operation($op, Method::$method_type, $route, Retry::$retry, &[StatusCode::NO_CONTENT]);
-                self.write::<Value, _>(ctx, Api::Policies, &operation, &[first, second], None, &mut evidence).await?;
-                Ok($output {})
+                crate::wire::product::exit::finish!(async {
+                    let first = input.$first.as_str();
+                    let second = input.$second.as_str();
+                    let mut evidence = self.write_evidence(ctx, $op, &[($field1, first), ($field2, second)], &[])?;
+                    let mut guard = Guard::new(self, ctx, $op, &mut evidence).await?;
+                    pre_guard!($guard, guard)?;
+                    guard.load_actions().await?;
+                    $guard(&mut guard, $op, first, second).await?;
+                    let operation = write_operation($op, Method::$method_type, $route, Retry::$retry, &[StatusCode::NO_CONTENT]);
+                    self.write::<Value, _>(ctx, Api::Policies, &operation, &[first, second], None, &mut evidence).await?;
+                    Ok($output {})
+                })
             }
         }
     };
@@ -188,9 +194,10 @@ async fn account_policy<O>(
     policy_id: &str,
     account_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(
+    let protection = guard.account(account_id).await?;
+    guard.check_protection(
         op,
-        guard.account(account_id).await?,
+        protection,
         "the service account has a privileged policy attached",
     )?;
     require_non_privileged_policy(guard, op, policy_id).await
@@ -203,9 +210,8 @@ async fn membership<O>(
     group_id: &str,
     user_id: &str,
 ) -> Result<(), Failure<O>> {
-    let user = guard.user(user_id).await?;
-    let group = guard.group(group_id).await?;
-    protection_error(op, user.max(group), "the user or the group is protected")
+    let protection = guard.membership_protection(user_id, group_id).await?;
+    guard.check_protection(op, protection, "the user or the group is protected")
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -215,7 +221,8 @@ async fn group_policy<O>(
     policy_id: &str,
     group_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(op, guard.group(group_id).await?, "the group is protected")?;
+    let protection = guard.group(group_id).await?;
+    guard.check_protection(op, protection, "the group is protected")?;
     require_non_privileged_policy(guard, op, policy_id).await
 }
 
@@ -226,7 +233,8 @@ async fn user_policy<O>(
     policy_id: &str,
     user_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(op, guard.user(user_id).await?, "the user is protected")?;
+    let protection = guard.user(user_id).await?;
+    guard.check_protection(op, protection, "the user is protected")?;
     require_non_privileged_policy(guard, op, policy_id).await
 }
 
@@ -238,7 +246,7 @@ async fn require_non_privileged_policy<O>(
 ) -> Result<(), Failure<O>> {
     let policy = guard.policy(policy_id).await?;
     if guard.privileged(&policy.statements)? {
-        protection_error(
+        guard.check_protection(
             op,
             Protection::Privileged,
             "the policy grants an IAM write action",

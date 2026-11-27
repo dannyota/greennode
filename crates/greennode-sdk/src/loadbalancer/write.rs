@@ -45,7 +45,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| not_sent(error.screen_api(&|text| evidence.text_reflects(text))))?;
+            .map_err(|error| not_sent(evidence.screen_error(*error)))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(ids.iter().copied())
             .collect();
@@ -72,7 +72,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: true,
             sensitive: request.sensitive,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -93,11 +93,7 @@ impl Client {
         .await;
         let reply = result.map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            Failure::new(
-                error.screen_api(&|text| evidence.text_reflects(text)),
-                None,
-                dispatch,
-            )
+            Failure::new(evidence.screen_error(error), None, dispatch)
         })?;
         Ok((reply.status, Bytes::from(reply.reply.body)))
     }
@@ -127,7 +123,7 @@ pub(super) fn reject<O>(
             let code = error.api_error().map_or("", ApiError::code);
             api(request.id, Some(status), code, message, evidence)
         } else {
-            error.screen_api(&|text| evidence.text_reflects(text))
+            evidence.screen_error(*error)
         };
         Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
     })
@@ -141,14 +137,13 @@ pub(super) fn api(
     evidence: &Evidence,
 ) -> Error {
     use crate::error::SafeText;
-    Error::from_api(ApiError::without_fallback(
+    evidence.screen_error(Error::from_api(ApiError::without_fallback(
         operation,
         status.map(|status| status.as_u16()),
         SafeText::new(code, &[]),
         SafeText::new(message, &[]),
         false,
-    ))
-    .screen_api(&|text| evidence.text_reflects(text))
+    )))
 }
 
 pub(super) fn advise<O>(failure: Failure<O>, message: &str, evidence: &Evidence) -> Failure<O> {

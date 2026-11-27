@@ -80,6 +80,23 @@ fn delete_output_uses_baseline_projection_name() {
 }
 
 #[tokio::test]
+async fn cluster_settlement_refuses_reflected_active_state() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"id":"cluster-1","status":"ACTIVE"}"#,
+    )]);
+    let result = test_client(&server, "hcm-3", "ACTIVE")
+        .cluster_state(
+            &RequestContext::new().0,
+            "cluster-1",
+            &mut crate::wire::product::evidence::Evidence::new(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn delete_preflights_sends_once_and_confirms_absence() {
     let server = Server::start(vec![
         response("200 OK", r#"{"id":"cluster-1","status":"ACTIVE"}"#),
@@ -367,11 +384,11 @@ async fn reflected_bearers_in_strings_are_redacted_before_projection() {
     let server = Server::start(vec![
         response(
             "200 OK",
-            r#"[{"version":"prefix synthetic-vks-\u0062earer-canary","enable":false,"stage":"STABLE"}]"#,
+            r#"[{"version":"prefix synthetic-vks-%62earer-canary","enable":false,"stage":"STABLE"}]"#,
         ),
         response(
             "200 OK",
-            r#"{"items":[{"name":"synthetic-vks-\u0062earer-canary","description":"resource-canary","numNodes":3}],"total":1,"page":0,"pageSize":10}"#,
+            r#"{"items":[{"name":"synthetic-vks-%62earer-canary","description":"resource-canary","numNodes":3}],"total":1,"page":0,"pageSize":10}"#,
         ),
         response(
             "200 OK",

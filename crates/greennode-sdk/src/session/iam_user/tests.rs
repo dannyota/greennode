@@ -445,3 +445,82 @@ async fn expiry_uses_token_step_clock_sample_after_wall_jump() {
         .duration_since(clock.monotonic_now());
     assert_eq!(remaining, Duration::from_secs(3600));
 }
+
+fn totp_rejection_peers(cookie: &str) -> (Server, Server) {
+    let page = r#"<input name="_csrf" value="toy-csrf">"#;
+    let signin = Server::start(vec![
+        Response::Http {
+            status: "200 OK".into(),
+            headers: vec![
+                ("Content-Length".into(), page.len().to_string()),
+                (
+                    "Set-Cookie".into(),
+                    format!("session={cookie}; Path=/; Secure"),
+                ),
+            ],
+            body: page.as_bytes().to_vec(),
+        },
+        response("302 Found", Some("/ap/auth/iam/google"), ""),
+        response("200 OK", None, page),
+        response("200 OK", None, "rejected"),
+        response("400 Bad Request", None, ""),
+    ]);
+    let token = Server::start(Vec::new());
+    (signin, token)
+}
+
+#[tokio::test]
+async fn screened_totp_rejection_still_uses_thirty_second_failure_cache() {
+    let (signin, token) = totp_rejection_peers("rejection");
+    let mut source = source(&signin, &token, None, Duration::from_secs(5));
+    source.clock = Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
+    let ctx = RequestContext::new().0;
+    for _ in 0..2 {
+        let error = source.token(&ctx).await.err().unwrap();
+        assert_eq!(error.class(), ErrorClass::Auth);
+        assert!(error.login_error().unwrap().reason().is_empty());
+    }
+    assert_eq!(signin.requests(), 4);
+    assert_eq!(token.requests(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn screened_token_cache_failure_keeps_its_error_class() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Dir::new();
+    let directory = dir.0.join("cache");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let (signin, token) = totp_rejection_peers("cache");
+    let mut source = source(
+        &signin,
+        &token,
+        Some(directory.clone()),
+        Duration::from_secs(5),
+    );
+    let stem = crate::cache::iam_stem(
+        &source.profile,
+        &source.root_email,
+        &source.username,
+        source.signin.as_str().trim_end_matches('/'),
+        source.token_url.as_str(),
+    );
+    let marker = directory.join(format!("{stem}.totp"));
+    struct MarkerConflict(PathBuf);
+    impl crate::TotpProvider for MarkerConflict {
+        fn code<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Secret, Error>> + Send + 'a>> {
+            Box::pin(async {
+                std::fs::create_dir(&self.0).unwrap();
+                Ok(Secret::new("123456"))
+            })
+        }
+    }
+    source.provider = Some(Arc::new(MarkerConflict(marker)));
+    let error = source.token(&RequestContext::new().0).await.err().unwrap();
+    assert_eq!(error.class(), ErrorClass::TokenCache);
+    assert_eq!(signin.requests(), 3);
+}

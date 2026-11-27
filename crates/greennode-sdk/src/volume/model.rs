@@ -1,3 +1,4 @@
+use crate::wire::strict_json::FieldNames;
 use serde::{Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
 
@@ -14,20 +15,41 @@ fn slice_or_empty<S: Serializer>(
 macro_rules! row {
     ($(#[$doc:meta])* $name:ident { $($(#[$field_doc:meta])* $field:ident : $ty:ty = $key:literal, $wire:literal, $read:ident;)* }) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+        #[derive(Clone, Default, PartialEq, Serialize)]
+        #[serde(remote = "Self")]
         pub struct $name {
             $($(#[$field_doc])* #[serde(rename = $key)] pub $field: $ty,)*
         }
 
+        crate::error::debug_record!($name { $($field),* });
+
+        impl crate::wire::product::output::PublicOutput for $name {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $key) ||)* false
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if crate::wire::product::identifier::declared($wire, $key) {
+                    crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
+        }
         impl FromWire for $name {
-            fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
-                let fields = Object::parse(raw)?;
+            fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
+                let fields = Object::parse(raw, names)?;
                 Ok(Self { $($field: fields.$read($wire)?,)* })
             }
         }
         impl Redact for $name {
             fn redact(&mut self, evidence: &Evidence) {
-                $(self.$field.redact(evidence);)*
+                $(if crate::wire::product::identifier::declared($wire, $key) {
+                    self.$field.redact_identifier(evidence);
+                } else {
+                    self.$field.redact(evidence);
+                })*
             }
         }
     };

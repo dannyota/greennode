@@ -11,8 +11,8 @@ macro_rules! model {
         $($(#[$field_meta:meta])* $field:ident: $type:ty => $wire:literal, $go:literal;)*
     }) => {
         $(#[$model_meta])*
-        #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-        #[serde(default)]
+        #[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
+        #[serde(default, remote = "Self")]
         pub struct $model {
             $(
                 $(#[$field_meta])*
@@ -21,13 +21,40 @@ macro_rules! model {
             )*
         }
 
+        crate::error::debug_record!($model { $($field),* });
+
+        impl crate::wire::product::output::PublicOutput for $model {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $go) ||)* false
+            }
+        }
+
+        impl Serialize for $model {
+            fn serialize<S: serde::Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if crate::wire::product::identifier::declared($wire, $go) {
+                    crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $model {
+            fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
+                Self::deserialize(input)
+            }
+        }
+
         impl WireField for $model {
             const SHAPE: Shape<'static> = Shape::Object(&[
                 $(ShapeField { name: $wire, shape: <$type as WireField>::SHAPE },)*
             ]);
 
             fn redact(&mut self, evidence: &Evidence) -> bool {
-                $(self.$field.redact(evidence) &&)* true
+                $((if crate::wire::product::identifier::declared($wire, $go) {
+                    self.$field.redact_identifier(evidence)
+                } else {
+                    self.$field.redact(evidence)
+                }) &&)* true
             }
         }
     };

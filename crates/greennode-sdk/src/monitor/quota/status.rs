@@ -14,7 +14,7 @@ use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 const OPERATION: &str = "monitor.GetQuotaStatus";
 
 /// Service-specific Monitor failure identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// At least one row of the quota status snapshot was unavailable.
@@ -27,16 +27,32 @@ pub enum ErrorDetail {
     UnexpectedStatus,
 }
 
+crate::error::debug_record!(ErrorDetail; QuotaStatusIncomplete, InvalidQuotaKind, QuotaChanged, UnexpectedStatus);
+
 /// Selects which quotas to include in a status snapshot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetQuotaStatusInput {
     /// Optional kind, matched case insensitively. Empty selects all quotas.
     pub kind: String,
 }
 
+crate::error::debug_record!(GetQuotaStatusInput { kind });
+
 /// A timestamp returned by a Monitor quota read.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct QuotaTimestamp(pub OffsetDateTime);
+
+crate::error::debug_record!(QuotaTimestamp(0));
+
+impl crate::wire::product::output::PublicOutput for QuotaTimestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
 
 impl QuotaTimestamp {
     /// Returns the same instant with a UTC offset, if representable.
@@ -181,80 +197,83 @@ impl Client {
         ctx: &RequestContext,
         input: GetQuotaStatusInput,
     ) -> Result<GetQuotaStatusOutput, Failure<GetQuotaStatusOutput>> {
-        let all = [Kind::Synthetic, Kind::Email, Kind::Sms];
-        let kinds = match input.kind.to_ascii_lowercase().as_str() {
-            "" => &all[..],
-            "synthetic" => &all[..1],
-            "email" => &all[1..2],
-            "sms" => &all[2..],
-            _ => {
-                return Err(failure(
-                    Error::new(ErrorClass::InvalidInput)
-                        .with_outer_detail(ErrorDetail::InvalidQuotaKind),
-                ));
+        crate::wire::product::exit::finish!(async {
+            let all = [Kind::Synthetic, Kind::Email, Kind::Sms];
+            let kinds = match input.kind.to_ascii_lowercase().as_str() {
+                "" => &all[..],
+                "synthetic" => &all[..1],
+                "email" => &all[1..2],
+                "sms" => &all[2..],
+                _ => {
+                    return Err(failure(
+                        Error::new(ErrorClass::InvalidInput)
+                            .with_outer_detail(ErrorDetail::InvalidQuotaKind),
+                    ));
+                }
+            };
+            let now = self.session.clock().utc_now().to_offset(UtcOffset::UTC);
+            let mut reader = Reader::new(self, ctx, OPERATION);
+            let mut rows = Vec::with_capacity(kinds.len());
+            let mut causes = Vec::new();
+            let mut row_ids = Vec::with_capacity(kinds.len());
+            for kind in kinds {
+                let retained_ids = reader.decision_ids.len();
+                match status_row(*kind, now, &mut reader).await {
+                    Ok(row) => rows.push(row),
+                    Err(error) => {
+                        reader.decision_ids.truncate(retained_ids);
+                        rows.push(unavailable_row(*kind, &error));
+                        causes.push(error);
+                    }
+                }
+                row_ids.push(reader.decision_ids[retained_ids..].to_vec());
             }
-        };
-        let now = self.session.clock().utc_now().to_offset(UtcOffset::UTC);
-        let mut reader = Reader::new(self, ctx, OPERATION);
-        let mut rows = Vec::with_capacity(kinds.len());
-        let mut causes = Vec::new();
-        let mut row_ids = Vec::with_capacity(kinds.len());
-        for kind in kinds {
-            let retained_ids = reader.decision_ids.len();
-            match status_row(*kind, now, &mut reader).await {
-                Ok(row) => rows.push(row),
-                Err(error) => {
-                    reader.decision_ids.truncate(retained_ids);
-                    rows.push(unavailable_row(*kind, &error));
+            for (index, ids) in row_ids.iter().enumerate() {
+                if ids.iter().any(|id| reader.evidence.id_reflects(id)) {
+                    let error = reader.invalid();
+                    rows[index] = unavailable_row(kinds[index], &error);
                     causes.push(error);
                 }
             }
-            row_ids.push(reader.decision_ids[retained_ids..].to_vec());
-        }
-        for (index, ids) in row_ids.iter().enumerate() {
-            if ids.iter().any(|id| reader.evidence.id_reflects(id)) {
-                let error = reader.invalid();
-                rows[index] = unavailable_row(kinds[index], &error);
-                causes.push(error);
-            }
-        }
-        let mut output = GetQuotaStatusOutput {
-            as_of: ResponseField::Value(QuotaTimestamp(now)),
-            items: rows,
-            complete: ResponseField::Value(causes.is_empty()),
-        };
-        for row in &mut output.items {
-            if let Some(ResponseField::Value(seconds)) = row.time_left_seconds {
-                let minutes = (seconds / 60).unsigned_abs();
-                let display = format!(
-                    "{}d {}h {}m",
-                    minutes / 1440,
-                    minutes % 1440 / 60,
-                    minutes % 60
-                );
-                if reader.evidence.text_reflects(&display) {
-                    row.time_left_seconds = Some(ResponseField::Redacted);
+            let mut output = GetQuotaStatusOutput {
+                as_of: ResponseField::Value(QuotaTimestamp(now)),
+                items: rows,
+                complete: ResponseField::Value(causes.is_empty()),
+            };
+            for row in &mut output.items {
+                if let Some(ResponseField::Value(seconds)) = row.time_left_seconds {
+                    let minutes = (seconds / 60).unsigned_abs();
+                    let display = format!(
+                        "{}d {}h {}m",
+                        minutes / 1440,
+                        minutes % 1440 / 60,
+                        minutes % 60
+                    );
+                    if reader.evidence.text_reflects(&display) {
+                        row.time_left_seconds = Some(ResponseField::Redacted);
+                    }
                 }
             }
-        }
-        let safe_output = reader.evidence.can_retain_partial() && output.screen(&reader.evidence);
-        if !causes.is_empty() {
-            let mut error =
-                Error::new(ErrorClass::Api).with_outer_detail(ErrorDetail::QuotaStatusIncomplete);
-            for cause in causes {
-                error = error.with_cause(Error::new(cause.class()).with_cause(cause));
+            let safe_output =
+                reader.evidence.can_retain_partial() && output.screen(&reader.evidence);
+            if !causes.is_empty() {
+                let mut error = Error::new(ErrorClass::Api)
+                    .with_outer_detail(ErrorDetail::QuotaStatusIncomplete);
+                for cause in causes {
+                    error = error.with_cause(Error::new(cause.class()).with_cause(cause));
+                }
+                let error = reader.evidence.screen_error(error);
+                return Err(Failure::new(
+                    error,
+                    safe_output.then_some(output),
+                    WriteDispatch::NotAWrite,
+                ));
             }
-            let error = error.screen_api(&|text| reader.evidence.text_reflects(text));
-            return Err(Failure::new(
-                error,
-                safe_output.then_some(output),
-                WriteDispatch::NotAWrite,
-            ));
-        }
-        if !safe_output {
-            return Err(failure(reader.invalid()));
-        }
-        Ok(output)
+            if !safe_output {
+                return Err(failure(reader.invalid()));
+            }
+            Ok(output)
+        })
     }
 }
 

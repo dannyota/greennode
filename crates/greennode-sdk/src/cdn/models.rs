@@ -7,12 +7,29 @@ use crate::wire::product::evidence::Evidence;
 const REDACTED: &str = "<redacted>";
 
 /// A typed field that can withhold a reflected credential.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field<T> {
     /// The response value was retained.
     Value(T),
     /// The response value matched credential material.
     Redacted,
+}
+
+crate::error::debug_record!(Field<T>; Value, Redacted);
+
+impl<T: crate::wire::product::output::PublicOutput> crate::wire::product::output::PublicOutput
+    for Field<T>
+{
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        match self {
+            Self::Value(value) => value.public_reflects(scan, identifier),
+            Self::Redacted => false,
+        }
+    }
 }
 
 impl<T: Default> Default for Field<T> {
@@ -39,7 +56,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Field<T> {
 impl<T: Serialize> Field<T> {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         if let Self::Value(value) = self
-            && serde_json::to_value(value).map_or(true, |value| evidence.reflected_in(&value))
+            && serde_json::to_value(value).map_or(true, |value| evidence.output_reflects(&value))
         {
             *self = Self::Redacted;
         }
@@ -47,8 +64,20 @@ impl<T: Serialize> Field<T> {
 }
 
 /// A timestamp with its offset and nanosecond precision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp(pub OffsetDateTime);
+
+crate::error::debug_record!(Timestamp(0));
+
+impl crate::wire::product::output::PublicOutput for Timestamp {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.0.public_reflects(scan, identifier)
+    }
+}
 
 impl Default for Timestamp {
     fn default() -> Self {
@@ -81,15 +110,24 @@ pub(super) fn redact_text(text: &mut String, evidence: &Evidence) {
     }
 }
 
+pub(super) fn redact_id(text: &mut String, evidence: &Evidence) {
+    if evidence.id_reflects(text) {
+        *text = REDACTED.to_owned();
+    }
+}
+
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
+    let raw_reflects = !evidence.peer_body_screen(text.get().as_bytes()).is_clean();
     match serde_json::from_str::<Value>(text.get()) {
-        Ok(mut value) if evidence.reflected_in(&value) => {
-            evidence.redact(&mut value);
-            *raw = serde_json::value::to_raw_value(&value).ok();
+        Ok(mut value) if evidence.output_reflects(&value) => {
+            *raw = evidence
+                .redact(&mut value)
+                .then(|| serde_json::value::to_raw_value(&value).ok())
+                .flatten();
         }
-        Ok(_) => {}
-        Err(_) => *raw = None,
+        Ok(_) if !raw_reflects => {}
+        _ => *raw = None,
     }
 }
 
@@ -141,13 +179,14 @@ pub fn status_name(status: i64) -> String {
 }
 
 /// A certificate and its public PEM chain.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Certificate {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "cdnSslcertificateId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// CommonName returned by the service.
@@ -212,9 +251,23 @@ pub struct Certificate {
     pub ca_root: String,
 }
 
+crate::wire::product::output::public_fields!(Certificate {
+    id,
+    common_name,
+    c_name,
+    issuer,
+    valid_from,
+    expires_on,
+    status,
+    cdn_using,
+    created_time,
+    certificate,
+    ca_root
+});
+
 impl Certificate {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         redact_text(&mut self.common_name, evidence);
         redact_text(&mut self.c_name, evidence);
         redact_text(&mut self.issuer, evidence);
@@ -229,13 +282,14 @@ impl Certificate {
 }
 
 /// Metadata for an API key.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ApiKey {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "apiKeyId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: Field<i64>,
     /// ExpiresAt returned by the service.
@@ -267,6 +321,15 @@ pub struct ApiKey {
     pub current: bool,
 }
 
+crate::wire::product::output::public_fields!(ApiKey {
+    id,
+    expires_at,
+    create_time,
+    update_time,
+    allow_origin_header,
+    current
+});
+
 impl ApiKey {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         self.id.redact(evidence);
@@ -278,12 +341,13 @@ impl ApiKey {
 }
 
 /// A Web Accelerator in the account inventory.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct WebAcceleratorSummary {
     /// Web Accelerator identifier.
     #[serde(
         rename(serialize = "CDNID", deserialize = "cdnId"),
+        serialize_with = "crate::wire::product::identifier::serialize",
         deserialize_with = "flex_id"
     )]
     pub cdn_id: String,
@@ -316,12 +380,21 @@ pub struct WebAcceleratorSummary {
     pub status_name: String,
 }
 
+crate::wire::product::output::public_fields!(WebAcceleratorSummary {
+    cdn_id,
+    domain_name,
+    cdn_domain,
+    c_names,
+    status,
+    status_name
+});
+
 impl WebAcceleratorSummary {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         if let Field::Value(status) = self.status {
             self.status_name = status_name(status);
         }
-        redact_text(&mut self.cdn_id, evidence);
+        redact_id(&mut self.cdn_id, evidence);
         redact_text(&mut self.domain_name, evidence);
         redact_text(&mut self.cdn_domain, evidence);
         for text in &mut self.c_names {
@@ -333,13 +406,14 @@ impl WebAcceleratorSummary {
 }
 
 /// An origin configured on a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Upstream {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "cdnUpstreamId"),
-        deserialize_with = "flex_id"
+        deserialize_with = "flex_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Priority returned by the service.
@@ -362,9 +436,16 @@ pub struct Upstream {
     pub status: Field<i64>,
 }
 
+crate::wire::product::output::public_fields!(Upstream {
+    id,
+    priority,
+    ip_address,
+    status
+});
+
 impl Upstream {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         self.priority.redact(evidence);
         redact_text(&mut self.ip_address, evidence);
         self.status.redact(evidence);
@@ -372,13 +453,14 @@ impl Upstream {
 }
 
 /// A default action configured on a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct RuleAction {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
-        deserialize_with = "flex_id"
+        deserialize_with = "flex_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Name returned by the service.
@@ -401,9 +483,16 @@ pub struct RuleAction {
     pub order: Field<i64>,
 }
 
+crate::wire::product::output::public_fields!(RuleAction {
+    id,
+    name,
+    value,
+    order
+});
+
 impl RuleAction {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         redact_text(&mut self.name, evidence);
         redact_text(&mut self.value, evidence);
         self.order.redact(evidence);
@@ -411,12 +500,13 @@ impl RuleAction {
 }
 
 /// The configuration and state of a Web Accelerator.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WebAccelerator {
     /// Web Accelerator identifier.
     #[serde(
         rename(serialize = "CDNID", deserialize = "cdnId"),
+        serialize_with = "crate::wire::product::identifier::serialize",
         deserialize_with = "flex_id"
     )]
     pub cdn_id: String,
@@ -456,7 +546,8 @@ pub struct WebAccelerator {
     /// Identifier of the assigned certificate.
     #[serde(
         rename(serialize = "CertificateID", deserialize = "sslId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub certificate_id: String,
     /// Origin load-balancing policy.
@@ -523,12 +614,33 @@ pub struct WebAccelerator {
     pub advanced_rule: Option<Box<RawValue>>,
 }
 
+crate::wire::product::output::public_fields!(WebAccelerator {
+    cdn_id,
+    kind,
+    domain_name,
+    cdn_domain,
+    c_names,
+    status,
+    status_name,
+    certificate_id,
+    lb_type,
+    origin_host_header,
+    fail_over_error_codes,
+    use_ssl,
+    use_small_file,
+    enable_gzip,
+    upstreams,
+    default_rule_actions,
+    page_rules,
+    advanced_rule
+});
+
 impl WebAccelerator {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
         if let Field::Value(status) = self.status {
             self.status_name = status_name(status);
         }
-        redact_text(&mut self.cdn_id, evidence);
+        redact_id(&mut self.cdn_id, evidence);
         redact_text(&mut self.kind, evidence);
         redact_text(&mut self.domain_name, evidence);
         redact_text(&mut self.cdn_domain, evidence);
@@ -537,7 +649,7 @@ impl WebAccelerator {
         }
         self.status.redact(evidence);
         redact_text(&mut self.status_name, evidence);
-        redact_text(&mut self.certificate_id, evidence);
+        redact_id(&mut self.certificate_id, evidence);
         redact_text(&mut self.lb_type, evidence);
         redact_text(&mut self.origin_host_header, evidence);
         for text in &mut self.fail_over_error_codes {
@@ -551,5 +663,37 @@ impl WebAccelerator {
         }
         redact_raw(&mut self.page_rules, evidence);
         redact_raw(&mut self.advanced_rule, evidence);
+    }
+}
+
+#[cfg(test)]
+mod screening_tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn raw_cdn_rules_withhold_reflection_in_original_number_spelling() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("1E06"));
+        let mut rule = Some(RawValue::from_string(r#"{"score":1E06}"#.into()).unwrap());
+        redact_raw(&mut rule, &evidence);
+        assert!(
+            rule.is_none()
+                || rule
+                    .as_ref()
+                    .is_some_and(|value| !value.get().contains("1E06"))
+        );
+    }
+
+    #[test]
+    fn cdn_certificate_redacts_short_encoding_inside_identifier() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let mut certificate = Certificate {
+            id: "pre6A6B6Cpost".into(),
+            ..Default::default()
+        };
+        certificate.redact(&evidence);
+        assert!(certificate.id == REDACTED);
     }
 }

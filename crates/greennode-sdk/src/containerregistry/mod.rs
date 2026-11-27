@@ -30,7 +30,7 @@ pub struct Client {
 }
 
 /// Selects repository filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRepositoriesInput {
     /// Access level, defaulting to `ALL` when empty.
     pub access_level: String,
@@ -38,18 +38,22 @@ pub struct ListRepositoriesInput {
     pub name: String,
 }
 
+crate::error::debug_record!(ListRepositoriesInput { access_level, name });
+
 /// Repository list and pagination metadata.
 pub type ListRepositoriesOutput = PagedList<Repository>;
 
 /// Selects all available permissions.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListPermissionsInput {}
+
+crate::error::debug_record!(ListPermissionsInput {});
 
 /// Available registry permissions.
 pub type ListPermissionsOutput = List<Permission>;
 
 /// A container registry repository.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -58,7 +62,8 @@ pub struct Repository {
     /// Repository identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Repository name.
@@ -99,14 +104,28 @@ pub struct Repository {
     pub created_at: String,
 }
 
+crate::wire::product::output::public_fields!(Repository {
+    id,
+    name,
+    backend_name,
+    access_level,
+    registry_url,
+    quota_limit_gb,
+    quota_used,
+    image_count,
+    attached_users,
+    created_at
+});
+
 /// A registry permission and its policy identifier.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Permission {
     /// Permission identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Permitted action.
@@ -116,6 +135,8 @@ pub struct Permission {
     )]
     pub action: String,
 }
+
+crate::wire::product::output::public_fields!(Permission { id, action });
 
 fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
     d: D,
@@ -177,7 +198,7 @@ impl Output for Repositories {
         field("totalPage"),
         field("totalItem"),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
@@ -199,23 +220,18 @@ impl Output for Repositories {
             result.total_item.unwrap_or_default(),
         ]
         .into_iter()
-        .any(|v| {
-            credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, credentials, false)
-        }) || result
-            .data
-            .iter()
-            .chain(result.list_data.iter())
-            .flatten()
-            .any(|item| {
-                [item.quota_limit_gb, item.image_count, item.attached_users]
-                    .into_iter()
-                    .any(|v| {
-                        credentials.reflects(v.to_string().as_bytes())
-                            || crate::output_number::reflects(v as f64, credentials, false)
-                    })
-                    || crate::output_number::reflects(item.quota_used, credentials, true)
-            });
+        .any(|v| credentials.integer_output_reflects(v))
+            || result
+                .data
+                .iter()
+                .chain(result.list_data.iter())
+                .flatten()
+                .any(|item| {
+                    [item.quota_limit_gb, item.image_count, item.attached_users]
+                        .into_iter()
+                        .any(|v| credentials.integer_output_reflects(v))
+                        || crate::output_number::reflects(item.quota_used, credentials, true)
+                });
         if reflected {
             return Err(Box::new(Error::new(ErrorClass::Api)));
         }
@@ -241,14 +257,16 @@ impl Client {
         ctx: &RequestContext,
         _input: ListPermissionsInput,
     ) -> Result<ListPermissionsOutput, Failure<ListPermissionsOutput>> {
-        let items: Permissions = self
-            .read(
-                ctx,
-                &read_operation("containerregistry.ListPermissions", "v1/user/permissions"),
-                &[],
-            )
-            .await?;
-        Ok(List { items: items.0 })
+        crate::wire::product::exit::finish!(async {
+            let items: Permissions = self
+                .read(
+                    ctx,
+                    &read_operation("containerregistry.ListPermissions", "v1/user/permissions"),
+                    &[],
+                )
+                .await?;
+            Ok(List { items: items.0 })
+        })
     }
 
     /// Reads repository summaries, returning partial output if continuation is required.
@@ -257,51 +275,53 @@ impl Client {
         ctx: &RequestContext,
         input: ListRepositoriesInput,
     ) -> Result<ListRepositoriesOutput, Failure<ListRepositoriesOutput>> {
-        let access = if input.access_level.is_empty() {
-            "ALL"
-        } else {
-            &input.access_level
-        };
-        let result: Repositories = self
-            .read(
-                ctx,
-                &read_operation("containerregistry.ListRepositories", "v1/repository"),
-                &[("accessLevel", access), ("name", &input.name)],
-            )
-            .await?;
-        let (items, total_page, total_item) = match (
-            result.data,
-            result.list_data,
-            result.total_page,
-            result.total_item,
-        ) {
-            (Some(items), None, Some(pages), Some(total))
-            | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
-            _ => return Err(failure(Error::new(ErrorClass::Api))),
-        };
-        let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
-        if result.page < 0
-            || result.page_size < 0
-            || total_page < 0
-            || total_item < 0
-            || len > total_item
-            || (total_page == 0 && total_item != 0)
-            || (total_item == 0 && total_page > 1)
-            || (total_page <= 1 && len != total_item)
-        {
-            return Err(failure(Error::new(ErrorClass::Api)));
-        }
-        let output = PagedList {
-            items,
-            page: result.page,
-            page_size: result.page_size,
-            total_page,
-            total_item,
-        };
-        if total_page > 1 || total_item > len {
-            return Err(Failure::new(Error::new(ErrorClass::Api).with_detail("containerregistry.ListRepositories: incomplete list; continuation parameters are unverified"), Some(output), WriteDispatch::NotAWrite));
-        }
-        Ok(output)
+        crate::wire::product::exit::finish!(async {
+            let access = if input.access_level.is_empty() {
+                "ALL"
+            } else {
+                &input.access_level
+            };
+            let result: Repositories = self
+                .read(
+                    ctx,
+                    &read_operation("containerregistry.ListRepositories", "v1/repository"),
+                    &[("accessLevel", access), ("name", &input.name)],
+                )
+                .await?;
+            let (items, total_page, total_item) = match (
+                result.data,
+                result.list_data,
+                result.total_page,
+                result.total_item,
+            ) {
+                (Some(items), None, Some(pages), Some(total))
+                | (None, Some(items), Some(pages), Some(total)) => (items, pages, total),
+                _ => return Err(failure(Error::new(ErrorClass::Api))),
+            };
+            let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+            if result.page < 0
+                || result.page_size < 0
+                || total_page < 0
+                || total_item < 0
+                || len > total_item
+                || (total_page == 0 && total_item != 0)
+                || (total_item == 0 && total_page > 1)
+                || (total_page <= 1 && len != total_item)
+            {
+                return Err(failure(Error::new(ErrorClass::Api)));
+            }
+            let output = PagedList {
+                items,
+                page: result.page,
+                page_size: result.page_size,
+                total_page,
+                total_item,
+            };
+            if total_page > 1 || total_item > len {
+                return Err(Failure::new(Error::new(ErrorClass::Api).with_detail("containerregistry.ListRepositories: incomplete list; continuation parameters are unverified"), Some(output), WriteDispatch::NotAWrite));
+            }
+            Ok(output)
+        })
     }
 
     async fn read<T: Output, O>(
@@ -340,6 +360,26 @@ impl Client {
         body: bytes::Bytes,
         evidence: &mut Evidence,
     ) -> Result<T, Failure<O>> {
+        self.request_with_options(
+            ctx,
+            operation,
+            path,
+            query,
+            (body, Options::DEFAULT),
+            evidence,
+        )
+        .await
+    }
+
+    async fn request_with_options<T: Output, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+        (body, options): (bytes::Bytes, Options<'_>),
+        evidence: &mut Evidence,
+    ) -> Result<T, Failure<O>> {
         let dispatch = if matches!(operation.class, Classification::Write) {
             WriteDispatch::NotSent
         } else {
@@ -359,7 +399,7 @@ impl Client {
             runtime,
             base,
             operation,
-            &Options::DEFAULT,
+            &options,
             path,
             query,
             session.bearer_source(),
@@ -370,11 +410,30 @@ impl Client {
         .map(|(_, response)| response.0)
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            let error = if operation.sensitive {
-                withhold_registry_error(operation, error)
-            } else {
-                error
-            };
+            let error =
+                if error.detail::<operation::MalformedGuard>().is_some() && operation.sensitive {
+                    registry_error(
+                        operation.id,
+                        None,
+                        "",
+                        "invalid JSON response; body withheld",
+                    )
+                    .with_cause(error)
+                } else if error.detail::<operation::RefusedGuard>().is_some()
+                    && matches!(operation.class, Classification::Read)
+                {
+                    registry_error(
+                        "",
+                        None,
+                        "InvalidResponse",
+                        "containerregistry: unsafe registry response",
+                    )
+                    .with_cause(error)
+                } else if operation.sensitive {
+                    withhold_registry_error(operation, error)
+                } else {
+                    error
+                };
             Failure::new(error, None, dispatch)
         })
     }
@@ -386,13 +445,21 @@ struct RegistryResponse<T>(T);
 
 impl<T: Output> Output for RegistryResponse<T> {
     const SCHEMA: Shape<'static> = T::SCHEMA;
-    const CHECK_RENDERED_NUMBERS: bool = T::CHECK_RENDERED_NUMBERS;
 
     fn credential_error(
         op: &Operation,
         sent: &crate::wire::product::sender::SentCredentials,
     ) -> Option<Box<Error>> {
         T::credential_error(op, sent)
+    }
+
+    fn reflected_response(_: &Operation, _: &Response) -> Box<Error> {
+        Box::new(registry_error(
+            "",
+            None,
+            "",
+            "containerregistry: unsafe registry response",
+        ))
     }
 
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
@@ -406,17 +473,9 @@ impl<T: Output> Output for RegistryResponse<T> {
             if !op.success.contains(&response.status) {
                 return error;
             }
-            let reflected = op.reject_reflected_credentials
-                && operation::reflects_json(
-                    &response.body,
-                    &response.credentials,
-                    T::CHECK_RENDERED_NUMBERS,
-                ) == Some(true);
             let malformed =
                 serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err();
-            let (operation, message) = if reflected {
-                ("", "containerregistry: unsafe registry response")
-            } else if malformed && op.sensitive {
+            let (operation, message) = if malformed && op.sensitive {
                 (op.id, "invalid JSON response; body withheld")
             } else if op.sensitive {
                 (op.id, "response failed to decode; body withheld")
@@ -448,14 +507,14 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }
 }
 
 /// Service-specific registry failure identities.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// The repository contains images and the delete was refused.
@@ -467,6 +526,8 @@ pub enum ErrorDetail {
     /// The SDK rejected locally invalid input.
     InvalidInput,
 }
+
+crate::error::debug_record!(ErrorDetail; RepositoryNotEmpty, UserNotFound, ImageCountUnknown, InvalidInput);
 
 fn registry_error(
     operation: &'static str,

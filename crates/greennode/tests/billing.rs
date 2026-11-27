@@ -101,6 +101,35 @@ fn assert_numeric_bearer_rejected(args: &[&str], body: &str, number: &str) {
 }
 
 #[test]
+fn final_error_code_withholds_a_matching_bearer() {
+    let server = Server::start(vec![response("302 Found", "{}".into())]);
+    let (status, stdout, stderr) =
+        invoke_with_bearer(&["billing", "get-balances"], Some(&server), "RequestFailed");
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert!(error["error"]["code"] == "");
+    assert_eq!(server.requests(), 1);
+}
+
+#[test]
+fn final_error_message_withholds_a_matching_bearer() {
+    let server = Server::start(vec![
+        response("599 Unassigned", "{}".into()),
+        response("599 Unassigned", "{}".into()),
+    ]);
+    for (bearer, expected) in [("failed", ""), (BEARER, "request failed")] {
+        let (status, stdout, stderr) =
+            invoke_with_bearer(&["billing", "get-balances"], Some(&server), bearer);
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stdout.is_empty());
+        assert!(error["error"]["message"] == expected);
+    }
+    assert_eq!(server.requests(), 2);
+}
+
+#[test]
 fn list_budgets_matches_json_table_and_text() {
     let server = Server::start(
         (0..3)
@@ -268,3 +297,15 @@ fn non_null_cost_matches_the_go_json_golden() {
 
 #[path = "billing/history.rs"]
 mod history;
+
+#[test]
+fn authenticated_error_writer_refuses_credential_created_by_escaping() {
+    let server = Server::start(vec![response("403 Forbidden", r#"{"message":"<"}"#.into())]);
+    let (exit, stdout, stderr) =
+        invoke_with_bearer(&["billing", "get-balances"], Some(&server), "u003c");
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "OutputWithheld");
+}

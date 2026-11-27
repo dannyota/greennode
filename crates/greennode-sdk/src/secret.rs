@@ -1,5 +1,3 @@
-use std::fmt;
-
 use serde::{Serialize, Serializer};
 use zeroize::Zeroizing;
 
@@ -19,11 +17,9 @@ impl Secret {
     }
 }
 
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("[redacted]")
-    }
-}
+crate::error::debug_record!(Secret => |self, f| {
+    f.write_str("[redacted]")
+});
 
 impl Serialize for Secret {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

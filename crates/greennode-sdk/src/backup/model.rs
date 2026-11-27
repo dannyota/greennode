@@ -4,14 +4,15 @@ use serde_json::value::RawValue;
 use crate::wire::product::sender::SentCredentials;
 
 /// A Backup Center storage backend.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Backend {
     /// Backend identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Backend display name.
@@ -19,29 +20,34 @@ pub struct Backend {
     pub name: String,
 }
 
+crate::wire::product::output::public_fields!(Backend { id, name });
+
 /// A Backup Center policy and its verified schedule settings.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Policy {
     /// Policy identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Storage backend identifier.
     #[serde(
         rename(serialize = "BackendID", deserialize = "backendId"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub backend_id: String,
     /// Project associated with the policy.
     #[serde(
         rename(serialize = "ProjectID", deserialize = "projectId"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub project_id: String,
     /// Product covered by the policy.
@@ -67,8 +73,21 @@ pub struct Policy {
     pub updated_at: String,
 }
 
+crate::wire::product::output::public_fields!(Policy {
+    id,
+    backend_id,
+    project_id,
+    product,
+    name,
+    is_default,
+    backup_instance_count,
+    config,
+    created_at,
+    updated_at
+});
+
 /// Schedule start time and cadence flags. Only daily settings are projected.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct PolicyConfig {
     /// Hour of the scheduled start.
@@ -99,8 +118,20 @@ pub struct PolicyConfig {
     pub daily_config: Option<DailyConfig>,
 }
 
+crate::wire::product::output::public_fields!(PolicyConfig {
+    hour,
+    minute,
+    time_zone,
+    hourly_enabled,
+    daily_enabled,
+    weekly_enabled,
+    monthly_enabled,
+    is_protected_server,
+    daily_config
+});
+
 /// Daily backup settings with absent values preserved.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct DailyConfig {
     /// Retention setting, including an explicit zero.
@@ -113,26 +144,32 @@ pub struct DailyConfig {
     pub incremental_quantity: Option<i64>,
 }
 
+crate::wire::product::output::public_fields!(DailyConfig {
+    retention,
+    backup_type,
+    incremental_quantity
+});
+
 impl Policy {
     pub(super) fn reflects(&self, credentials: &SentCredentials) -> bool {
-        [
-            self.id.as_str(),
-            &self.backend_id,
-            &self.project_id,
-            &self.product,
-            &self.name,
-            &self.created_at,
-            &self.updated_at,
-            &self.config.time_zone,
-        ]
-        .into_iter()
-        .chain(
-            self.config
-                .daily_config
-                .as_ref()
-                .and_then(|daily| daily.backup_type.as_deref()),
-        )
-        .any(|text| credentials.reflects(text.as_bytes()))
+        [&self.id, &self.backend_id, &self.project_id]
+            .into_iter()
+            .any(|id| credentials.id_reflects(id))
+            || [
+                self.product.as_str(),
+                &self.name,
+                &self.created_at,
+                &self.updated_at,
+                &self.config.time_zone,
+            ]
+            .into_iter()
+            .chain(
+                self.config
+                    .daily_config
+                    .as_ref()
+                    .and_then(|daily| daily.backup_type.as_deref()),
+            )
+            .any(|text| credentials.text_reflects(text))
             || [
                 self.is_default,
                 self.config.hourly_enabled,
@@ -142,7 +179,7 @@ impl Policy {
                 self.config.is_protected_server,
             ]
             .into_iter()
-            .any(|value| credentials.reflects(if value { b"true" } else { b"false" }))
+            .any(|value| credentials.text_reflects(if value { "true" } else { "false" }))
             || [
                 self.backup_instance_count,
                 self.config.hour,
@@ -159,8 +196,7 @@ impl Policy {
 }
 
 pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> bool {
-    credentials.reflects(value.to_string().as_bytes())
-        || crate::output_number::reflects(value as f64, credentials, false)
+    credentials.integer_output_reflects(value)
 }
 
 fn default_if_null<'de, D, T>(deserializer: D) -> Result<T, D::Error>

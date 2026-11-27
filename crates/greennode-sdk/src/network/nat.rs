@@ -5,7 +5,7 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, operation, options::PathIds};
+use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, List, RequestContext};
 
 use super::wire::{Fields, PAGING, Read, Style};
@@ -29,13 +29,15 @@ const REGIONS: Read = Read::new(
 );
 
 /// Identifies the Public NAT instance to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetNatInstanceInput {
     /// Path-safe NAT identifier.
     pub nat_id: String,
     /// Zone identifier. An empty value discovers the zone for the configured region.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(GetNatInstanceInput { nat_id, zone_id });
 
 impl GetNatInstanceInput {
     /// Selects a NAT instance in the configured region.
@@ -48,15 +50,17 @@ impl GetNatInstanceInput {
 }
 
 /// Detail of the selected Public NAT.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct GetNatInstanceOutput {
     /// NAT configuration and status.
     #[serde(rename = "NAT")]
     pub nat: NatDetail,
 }
 
+crate::wire::product::output::public_fields!(GetNatInstanceOutput { nat });
+
 /// Public NAT configuration and status.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct NatDetail {
     /// Identifier matching the requested NAT.
     #[serde(rename = "ID")]
@@ -90,14 +94,29 @@ pub struct NatDetail {
     pub vpc_name: String,
 }
 
+crate::wire::product::output::public_fields!(NatDetail {
+    id,
+    name,
+    status,
+    gateway_ip,
+    public_ip,
+    created_at,
+    package_id,
+    package_name,
+    vpc_id,
+    vpc_name
+});
+
 /// Identifies the Public NAT whose inbound rules to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListNatInboundRulesInput {
     /// Path-safe NAT identifier.
     pub nat_id: String,
     /// Zone identifier. An empty value discovers the zone for the configured region.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListNatInboundRulesInput { nat_id, zone_id });
 
 impl ListNatInboundRulesInput {
     /// Selects a NAT instance in the configured region.
@@ -113,7 +132,7 @@ impl ListNatInboundRulesInput {
 pub type ListNatInboundRulesOutput = List<NatInboundRule>;
 
 /// Inbound rule for a Public NAT instance.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct NatInboundRule {
     /// Provider rule identifier.
     #[serde(rename = "ID")]
@@ -144,6 +163,18 @@ pub struct NatInboundRule {
     pub system: bool,
 }
 
+crate::wire::product::output::public_fields!(NatInboundRule {
+    id,
+    protocol,
+    ether_type,
+    direction,
+    port_range_min,
+    port_range_max,
+    description,
+    created_at,
+    system
+});
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     /// Reads one Public NAT instance in Hanoi or HCM.
@@ -152,14 +183,16 @@ impl Client {
         ctx: &RequestContext,
         input: GetNatInstanceInput,
     ) -> Result<GetNatInstanceOutput, Failure<GetNatInstanceOutput>> {
-        let (raw, evidence) = self
-            .nat_read(ctx, DETAIL, &input.nat_id, input.zone_id)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let nat = decode_detail(&text, &input.nat_id, &evidence)
-            .map_err(|()| failure(DETAIL.invalid(&evidence)))?;
-        Ok(GetNatInstanceOutput { nat })
+        crate::wire::product::exit::finish!(async {
+            let (raw, evidence) = self
+                .nat_read(ctx, DETAIL, &input.nat_id, input.zone_id)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let nat = decode_detail(&text, &input.nat_id, &evidence)
+                .map_err(|()| failure(DETAIL.invalid(&evidence)))?;
+            Ok(GetNatInstanceOutput { nat })
+        })
     }
 
     /// Lists a Public NAT instance's inbound rules in Hanoi or HCM.
@@ -168,14 +201,16 @@ impl Client {
         ctx: &RequestContext,
         input: ListNatInboundRulesInput,
     ) -> Result<ListNatInboundRulesOutput, Failure<ListNatInboundRulesOutput>> {
-        let (raw, evidence) = self
-            .nat_read(ctx, RULES, &input.nat_id, input.zone_id)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let items =
-            decode_rules(&text, &evidence).map_err(|()| failure(RULES.invalid(&evidence)))?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let (raw, evidence) = self
+                .nat_read(ctx, RULES, &input.nat_id, input.zone_id)
+                .await
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let items =
+                decode_rules(&text, &evidence).map_err(|()| failure(RULES.invalid(&evidence)))?;
+            Ok(List { items })
+        })
     }
 
     async fn nat_read(
@@ -262,7 +297,7 @@ impl Client {
         let raw = self.read(ctx, base, REGIONS, &[], evidence).await?;
         let invalid = || INVALID_REGIONS.invalid_as(evidence, "invalid regions envelope");
         let text = go_json(&raw);
-        if operation::reflects_json(text.as_bytes(), evidence.credentials(), true) != Some(false) {
+        if !evidence.go_peer_body_screen(&raw).is_clean() {
             return Err(invalid());
         }
         let data: &RawValue = nat_data(&text).map_err(|()| invalid())?;

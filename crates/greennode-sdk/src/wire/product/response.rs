@@ -1,20 +1,75 @@
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Screen {
+    Clean,
+    Reflected,
+    Indeterminate,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Clean(());
+
+impl Screen {
+    pub(crate) fn clean(self) -> Option<Clean> {
+        match self {
+            Self::Clean => Some(Clean(())),
+            Self::Reflected | Self::Indeterminate => None,
+        }
+    }
+
+    pub(crate) fn is_clean(self) -> bool {
+        self.clean().is_some()
+    }
+
+    pub(super) fn diagnostic_status(
+        self,
+        status: Option<http::StatusCode>,
+    ) -> Option<http::StatusCode> {
+        match self {
+            Self::Clean | Self::Indeterminate => status,
+            Self::Reflected => None,
+        }
+    }
+
+    pub(super) fn then(self, next: impl FnOnce() -> Self) -> Self {
+        if self.is_clean() { next() } else { self }
+    }
+
+    fn from_match(result: Option<bool>) -> Self {
+        match result {
+            Some(false) => Self::Clean,
+            Some(true) => Self::Reflected,
+            None => Self::Indeterminate,
+        }
+    }
+}
+
+mod automaton;
 mod encoded;
 mod full_error;
 mod marker;
+mod matching;
+mod patterns;
 
-use super::{redirect::Retry, sender::SentCredentials};
+use super::{
+    evidence::Evidence,
+    operation::RefusedGuard,
+    redirect::Retry,
+    sender::{self, SentCredentials},
+};
+use crate::wire::send;
 use bytes::Bytes;
-use encoded::{Base64Alphabet, EncodedNeedle};
 use full_error::full_error;
-pub(crate) use full_error::inspect_error_message;
+
 use http::StatusCode;
 pub(crate) use marker::has_credential_marker;
+pub(super) use matching::BodyMatcher;
+use matching::{MatchContext, matches_credential_forms};
+pub(super) use patterns::Patterns;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use zeroize::Zeroizing;
 
-#[allow(dead_code)]
 pub(crate) fn classify(
     operation: &'static str,
     status: StatusCode,
@@ -102,10 +157,16 @@ fn classify_with_decoder(
             retryable,
         )
     };
-    Err(Box::new(crate::Error::from_api(api)))
+    let error = super::evidence::Evidence::from_credentials(credentials)
+        .screen_error(crate::Error::from_api(api));
+    Err(Box::new(error))
 }
 
-pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) -> bool) -> bool {
+pub(crate) fn error_message_matches(
+    body: &[u8],
+    credentials: &SentCredentials,
+    predicate: impl FnOnce(&str) -> bool,
+) -> bool {
     let fields = [crate::wire::strict_json::Field {
         name: "message",
         children: &[],
@@ -114,7 +175,19 @@ pub(crate) fn error_message_matches(body: &[u8], predicate: impl FnOnce(&str) ->
         return false;
     }
     let (_, message) = decode(body, true);
-    predicate(&Zeroizing::new(message))
+    decision_text(&Zeroizing::new(message), credentials)
+        .is_some_and(|text| predicate(text.as_str()))
+}
+
+pub(crate) fn inspect_error_message<T>(
+    body: &[u8],
+    credentials: &SentCredentials,
+    predicate: impl FnOnce(&str) -> T,
+) -> Option<T> {
+    full_error::inspect_error_message(body, |message| {
+        decision_text(message, credentials).map(|text| predicate(text.as_str()))
+    })
+    .flatten()
 }
 
 pub(crate) fn sanitize_error_text(
@@ -130,6 +203,14 @@ pub(crate) fn sanitize_error_text(
     } else {
         sanitized
     }
+}
+
+pub(crate) fn decision_text(
+    text: &str,
+    credentials: &SentCredentials,
+) -> Option<crate::error::SafeText> {
+    let safe = sanitize_error_text(text, credentials);
+    (!safe.as_str().is_empty() && text.starts_with(safe.as_str())).then_some(safe)
 }
 
 fn contains_address_marker(text: &str) -> bool {
@@ -152,329 +233,22 @@ fn unsafe_message(text: &str, credentials: &SentCredentials) -> bool {
 }
 
 pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredentials) -> bool {
-    matches_credential_forms(text, credentials, MatchContext::ErrorText)
+    matches_credential_forms(text.as_bytes(), credentials, MatchContext::ErrorText)
 }
 
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
     !credentials.values().is_empty()
-        && matches_credential_forms(text, credentials, MatchContext::Text)
+        && matches_credential_forms(text.as_bytes(), credentials, MatchContext::Text)
 }
 
 pub(super) fn reflects_identifier(value: &str, credentials: &SentCredentials) -> bool {
     !credentials.values().is_empty()
-        && matches_credential_forms(value, credentials, MatchContext::Identifier)
+        && matches_credential_forms(value.as_bytes(), credentials, MatchContext::Identifier)
 }
 
-#[derive(Clone, Copy)]
-enum MatchContext {
-    ErrorText,
-    Text,
-    Identifier,
-}
-
-fn matches_credential_forms(
-    text: &str,
-    credentials: &SentCredentials,
-    context: MatchContext,
-) -> bool {
-    let mut needles = Vec::new();
-    let mut encoded_needles = Vec::new();
-    let mut hex_needles = Vec::new();
-    for secret in credentials.values() {
-        let value = secret.expose_secret();
-        if !value.is_empty() && value.len() < 6 {
-            for (encoding, alphabet) in [
-                (data_encoding::BASE64, Base64Alphabet::Standard),
-                (data_encoding::BASE64_NOPAD, Base64Alphabet::Standard),
-                (data_encoding::BASE64URL, Base64Alphabet::UrlSafe),
-                (data_encoding::BASE64URL_NOPAD, Base64Alphabet::UrlSafe),
-            ] {
-                EncodedNeedle::insert(
-                    &mut encoded_needles,
-                    Zeroizing::new(encoding.encode(value.as_bytes())),
-                    alphabet,
-                    false,
-                );
-            }
-        }
-        for part in std::iter::once(value).chain(
-            value
-                .lines()
-                .map(str::trim)
-                .filter(|line| line.len() >= 8 && *line != value),
-        ) {
-            if part.is_empty() {
-                continue;
-            }
-            for offset in 0..3 {
-                let mut aligned = Zeroizing::new(vec![0; offset]);
-                aligned.extend_from_slice(part.as_bytes());
-                let start = (offset * 8).div_ceil(6);
-                let end = offset.saturating_add(part.len()).saturating_mul(8) / 6;
-                if end.saturating_sub(start) >= encoded::STABLE_FLOOR {
-                    for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
-                        let encoded = Zeroizing::new(encoding.encode(&aligned));
-                        if let Some(stable) = encoded.get(start..end) {
-                            EncodedNeedle::insert(
-                                &mut encoded_needles,
-                                Zeroizing::new(stable.to_owned()),
-                                Base64Alphabet::Both,
-                                true,
-                            );
-                        }
-                    }
-                }
-            }
-            encoded::insert_hex(&mut hex_needles, part);
-            let needle = Zeroizing::new(part.as_bytes().to_ascii_lowercase());
-            if !needles
-                .iter()
-                .any(|existing: &Zeroizing<Vec<u8>>| existing.as_slice() == needle.as_slice())
-            {
-                needles.push(needle);
-            }
-        }
-    }
-    let error_text = matches!(context, MatchContext::ErrorText);
-    let mut state = MatchState {
-        work: matching_work_limit(text.len(), error_text),
-        forms: Vec::new(),
-        visited: Vec::new(),
-        encoded_needles,
-        hex_needles,
-        error_text,
-        strict_base64: matches!(context, MatchContext::Identifier),
-    };
-    matches_forms(text.as_bytes(), &needles, [0; 4], &mut state)
-}
-
-fn matching_work_limit(length: usize, error_text: bool) -> usize {
-    const LIMIT: usize = 8 << 20;
-    if error_text {
-        LIMIT
-    } else {
-        (length.min(LIMIT) * 24).max(LIMIT)
-    }
-}
-
-struct MatchState {
-    work: usize,
-    forms: Vec<Zeroizing<Vec<u8>>>,
-    visited: Vec<(usize, [u8; 4])>,
-    encoded_needles: Vec<EncodedNeedle>,
-    hex_needles: Vec<Zeroizing<String>>,
-    error_text: bool,
-    strict_base64: bool,
-}
-
-impl MatchState {
-    fn charge(&mut self, work: usize) -> bool {
-        if work >= self.work {
-            return false;
-        }
-        self.work -= work;
-        true
-    }
-}
-
-fn matches_forms(
-    input: &[u8],
-    needles: &[Zeroizing<Vec<u8>>],
-    counts: [u8; 4],
-    state: &mut MatchState,
-) -> bool {
-    let mut found = None;
-    for index in 0..state.forms.len() {
-        if !state.charge(input.len()) {
-            return true;
-        }
-        if state.forms[index].as_slice() == input {
-            found = Some(index);
-            break;
-        }
-    }
-    let index = if let Some(index) = found {
-        index
-    } else {
-        if !state.charge(input.len()) {
-            return true;
-        }
-        for index in 0..state.encoded_needles.len() {
-            if !state.charge(
-                input
-                    .len()
-                    .saturating_add(state.encoded_needles[index].len()),
-            ) {
-                return true;
-            }
-            if state.encoded_needles[index].matches(input, state.strict_base64) {
-                return true;
-            }
-        }
-        let lower = Zeroizing::new(input.to_ascii_lowercase());
-        for index in 0..state.hex_needles.len() {
-            if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
-                || encoded::contains_hex(&lower, &state.hex_needles[index], state.strict_base64)
-            {
-                return true;
-            }
-        }
-        if state.error_text && marker::has_credential_marker_bytes(input) {
-            return true;
-        }
-        if !needles.is_empty() {
-            if state.error_text && std::str::from_utf8(&lower).is_err() {
-                return true;
-            }
-            for needle in needles {
-                if !state.charge(lower.len().saturating_add(needle.len())) {
-                    return true;
-                }
-                let Ok(needle) = std::str::from_utf8(needle) else {
-                    return true;
-                };
-                if lower
-                    .utf8_chunks()
-                    .any(|chunk| chunk.valid().contains(needle))
-                {
-                    return true;
-                }
-            }
-        }
-        state.forms.push(Zeroizing::new(input.to_vec()));
-        state.forms.len() - 1
-    };
-    if state.visited.contains(&(index, counts)) {
-        return false;
-    }
-    state.visited.push((index, counts));
-    for step in 0..4 {
-        if !state.charge(input.len()) {
-            return true;
-        }
-        let next = match step {
-            0 => Zeroizing::new(
-                input
-                    .iter()
-                    .copied()
-                    .filter(|byte| !byte.is_ascii_control())
-                    .collect(),
-            ),
-            1 => json_unescape(input),
-            2 => Zeroizing::new(percent_decode(input)),
-            _ if needles
-                .iter()
-                .map(|needle| needle.len().saturating_mul(8).saturating_add(5) / 6)
-                .min()
-                .is_some_and(|minimum| input.len() >= minimum) =>
-            {
-                decode_base64(input).unwrap_or_else(|| Zeroizing::new(input.to_vec()))
-            }
-            _ => Zeroizing::new(input.to_vec()),
-        };
-        if next.as_slice() != input {
-            if counts[step] == 2 {
-                if step == 3 {
-                    let lower = Zeroizing::new(next.to_ascii_lowercase());
-                    if needles.iter().any(|needle| {
-                        lower
-                            .windows(needle.len())
-                            .any(|window| window == needle.as_slice())
-                    }) {
-                        return true;
-                    }
-                    continue;
-                }
-                return true;
-            }
-            let mut next_counts = counts;
-            next_counts[step] += 1;
-            let error_text = state.error_text;
-            if step == 3 {
-                state.error_text = false;
-            }
-            let matched = matches_forms(&next, needles, next_counts, state);
-            state.error_text = error_text;
-            if matched {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-    [
-        data_encoding::BASE64,
-        data_encoding::BASE64_NOPAD,
-        data_encoding::BASE64URL,
-        data_encoding::BASE64URL_NOPAD,
-    ]
-    .iter()
-    .find_map(|encoding| {
-        let len = encoding.decode_len(input.len()).ok()?;
-        let mut decoded = Zeroizing::new(vec![0; len]);
-        let written = encoding.decode_mut(input, &mut decoded).ok()?;
-        decoded.truncate(written);
-        Some(decoded)
-    })
-}
-
-fn json_unescape(input: &[u8]) -> Zeroizing<Vec<u8>> {
-    let mut unescaped = Zeroizing::new(Vec::with_capacity(input.len()));
-    let mut index = 0;
-    while index < input.len() {
-        if input[index] == b'\\'
-            && let Some(&next) = input.get(index + 1)
-        {
-            if next == b'u' && index + 6 <= input.len() {
-                let mut end = index + 6;
-                if end + 6 <= input.len() && &input[end..end + 2] == b"\\u" {
-                    end += 6;
-                }
-                let mut quoted = Zeroizing::new(Vec::with_capacity(end - index + 2));
-                quoted.push(b'"');
-                quoted.extend_from_slice(&input[index..end]);
-                quoted.push(b'"');
-                if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
-                    let value = Zeroizing::new(value);
-                    unescaped.extend_from_slice(value.as_bytes());
-                    index = end;
-                    continue;
-                }
-                if end != index + 6 {
-                    quoted.truncate(1);
-                    quoted.extend_from_slice(&input[index..index + 6]);
-                    quoted.push(b'"');
-                    if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
-                        let value = Zeroizing::new(value);
-                        unescaped.extend_from_slice(value.as_bytes());
-                        index += 6;
-                        continue;
-                    }
-                }
-            }
-            let decoded = match next {
-                b'"' => Some(b'"'),
-                b'\\' => Some(b'\\'),
-                b'/' => Some(b'/'),
-                b'b' => Some(8),
-                b'f' => Some(12),
-                b'n' => Some(b'\n'),
-                b'r' => Some(b'\r'),
-                b't' => Some(b'\t'),
-                _ => None,
-            };
-            if let Some(byte) = decoded {
-                unescaped.push(byte);
-                index += 2;
-                continue;
-            }
-        }
-        unescaped.push(input[index]);
-        index += 1;
-    }
-    unescaped
+pub(crate) fn reflects_bytes(bytes: &[u8], credentials: &SentCredentials) -> bool {
+    !credentials.values().is_empty()
+        && matches_credential_forms(bytes, credentials, MatchContext::Text)
 }
 
 fn retryable(status: StatusCode, retry: Retry) -> bool {
@@ -657,29 +431,78 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
     (envelope.code, message)
 }
 
-fn percent_decode(data: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(data.len());
-    let mut index = 0;
-    while index < data.len() {
-        if data[index] == b'%'
-            && index + 2 < data.len()
-            && let (Some(a), Some(b)) = (
-                (data[index + 1] as char).to_digit(16),
-                (data[index + 2] as char).to_digit(16),
-            )
-        {
-            output.push(((a << 4) | b) as u8);
-            index += 3;
+#[derive(Clone, Copy)]
+pub(crate) struct ProjectDiscovery {
+    pub(crate) id: &'static str,
+    pub(crate) accepted: &'static [StatusCode],
+}
+
+impl sender::Operation<'_> {
+    pub(super) fn screen_reply(
+        &self,
+        opaque: bool,
+        reply: &send::Reply,
+        known: &sender::SentCredentials,
+        sent: &sender::SentCredentials,
+    ) -> Screen {
+        let mut evidence = Evidence::from_credentials(known);
+        evidence.absorb(sent);
+        if self.guard.is_some() {
+            evidence = evidence.transport_only();
+        }
+        if let Some(project) = self.project_discovery {
+            evidence.discovery_body_screen(&reply.body, project.accepted.contains(&reply.status))
+        } else if opaque {
+            evidence.opaque_body_screen(&reply.body)
         } else {
-            output.push(data[index]);
-            index += 1;
+            evidence.go_peer_body_screen(&reply.body)
         }
     }
-    output
+
+    pub(super) fn refuse_before_retry(
+        &self,
+        reply: &send::Reply,
+        screen: Screen,
+        known: &sender::SentCredentials,
+        sent: &sender::SentCredentials,
+    ) -> Option<Box<crate::Error>> {
+        if let Some(project) = self.project_discovery
+            && !screen.is_clean()
+        {
+            return Some(project_discovery_error(project.id, reply.status));
+        }
+        let (id, guard) = self.response_guard?;
+        guard(id, reply.status, &reply.body, known, sent)
+    }
+}
+
+pub(crate) fn project_discovery_error(id: &'static str, status: StatusCode) -> Box<crate::Error> {
+    Box::new(
+        crate::Error::from_api(crate::ApiError::without_fallback(
+            id,
+            Some(status.as_u16()),
+            crate::error::SafeText::new("InvalidResponse", &[]),
+            crate::error::SafeText::new("invalid discovery response; body withheld", &[]),
+            false,
+        ))
+        .with_detail(RefusedGuard)
+        .with_http_status(status),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn budget_test_credentials() -> SentCredentials {
+    SentCredentials::for_test(
+        (b'0'..=b'9')
+            .chain(b'b'..=b'z')
+            .map(|byte| crate::Secret::new(format!("a{}-test-operand", char::from(byte))))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use super::matching::matching_work_limit;
     use super::*;
 
     fn error(
@@ -702,6 +525,16 @@ mod tests {
             credentials,
         )
         .unwrap_err()
+    }
+
+    #[test]
+    fn decision_text_is_sanitized_and_bounded() {
+        let raw = format!("{} is updating", "x".repeat(600));
+        let safe = decision_text(&raw, &SentCredentials::default()).unwrap();
+        let chosen = safe.as_str();
+        assert!(decision_text("is updat\ting", &SentCredentials::default()).is_none());
+        assert_eq!(chosen.len(), 512);
+        assert!(!chosen.contains("is updating"));
     }
 
     macro_rules! withheld_peer_text {
@@ -1262,7 +1095,8 @@ mod tests {
                     )
                     .as_bytes(),
             );
-            assert!(!reflects_credential(&ordinary, &credentials));
+            let matcher = BodyMatcher::new(&credentials, ordinary.len());
+            assert_eq!(matcher.scan(ordinary.as_bytes(), false), Screen::Clean);
         }
         assert!(!reflects_credential("glb-1", &credentials));
     }
@@ -1272,11 +1106,12 @@ mod tests {
         assert_eq!(matching_work_limit(usize::MAX, false), 192 << 20);
         assert_eq!(matching_work_limit(usize::MAX, true), 8 << 20);
         let credentials = SentCredentials::for_test(
-            (0..20)
-                .map(|index| crate::Secret::new(format!("sample-{index}")))
+            (b'!'..=b'~')
+                .filter(|byte| !byte.is_ascii_uppercase() && *byte != b'a')
+                .map(|byte| crate::Secret::new(format!("a{}-test-operand", char::from(byte))))
                 .collect(),
         );
-        let text = "ordinary%2520".repeat(1 << 18);
+        let text = format!("!{}", "a".repeat(256 << 10));
         assert!(reflects_credential(&text, &credentials));
     }
 
@@ -1284,24 +1119,11 @@ mod tests {
     fn long_prefix_search_is_charged_within_budget() {
         let mut input = vec![b'a'; 1 << 20];
         input[0] = b'!';
-        let mut needle = vec![b'a'; 8192];
-        needle[8191] = b'b';
-        let mut state = MatchState {
-            work: 8 << 20,
-            forms: Vec::new(),
-            visited: Vec::new(),
-            encoded_needles: Vec::new(),
-            hex_needles: Vec::new(),
-            error_text: true,
-            strict_base64: false,
-        };
-        assert!(!matches_forms(
-            &input,
-            &[Zeroizing::new(needle)],
-            [0; 4],
-            &mut state
-        ));
-        assert_eq!(state.work, (8 << 20) - 6 * (1 << 20) - 8192);
+        let credentials =
+            SentCredentials::for_test(vec![crate::Secret::new(format!("{}b", "a".repeat(8191)))]);
+        let matcher = BodyMatcher::with_work(&credentials, 8 << 20);
+        assert!(!matcher.reflects(&input, false));
+        assert!(matcher.remaining() > 0);
     }
 
     #[test]

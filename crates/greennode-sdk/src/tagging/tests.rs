@@ -74,7 +74,7 @@ fn snapshot_requires_complete_unique_keys() {
 async fn list_reads_the_resource_and_redacts_reflected_credentials() {
     use crate::wire::test_server::{Response, Server};
     use crate::{ConfigOptions, EndpointOverrides, Secret};
-    let body = r#"[{"key":"env","value":"toy-secret","systemTag":false,"createdAt":""}]"#;
+    let body = r#"[{"key":"env","value":"toy%2Dsecret","systemTag":false,"createdAt":""}]"#;
     let server = Server::start(vec![Response::Http {
         status: "200 OK".into(),
         headers: vec![("Content-Length".into(), body.len().to_string())],
@@ -135,6 +135,26 @@ async fn tag_replaces_once_and_confirms() {
 }
 
 #[tokio::test]
+async fn decision_snapshot_refuses_a_reflection_even_for_a_noop() {
+    let server = Server::start(vec![http_response(
+        r#"[{"key":"env","value":"toy%2Dtoken","systemTag":false}]"#,
+    )]);
+    let failure = test_client(&server, "toy-token")
+        .untag_resource(
+            &RequestContext::new().0,
+            UntagResourceInput {
+                resource_id: "res-1".into(),
+                resource_type: "SERVER".into(),
+                key: "absent".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn untag_noop_sends_no_write() {
     let server = Server::start(vec![http_response("[]")]);
     let (ctx, _) = RequestContext::new();
@@ -182,7 +202,7 @@ impl crate::CredentialsProvider for Rotating {
 }
 
 #[tokio::test]
-async fn discovery_bearer_stays_redacted_after_rotation() {
+async fn tagging_refuses_a_snapshot_that_reflects_the_discovery_bearer() {
     let before = r#"[{"key":"env","value":"old-toy-bearer","systemTag":false}]"#;
     let after = r#"[{"key":"env","value":"new","systemTag":false},{"key":"other","value":"old-toy-bearer","systemTag":true}]"#;
     let server = Server::start(vec![
@@ -205,13 +225,12 @@ async fn discovery_bearer_stays_redacted_after_rotation() {
         .session()
         .set_test_product_root(server.root_der.clone());
     let (ctx, _) = RequestContext::new();
-    let output = Client::new(&config)
+    let failure = Client::new(&config)
         .tag_resource(&ctx, write_input("env"))
         .await
-        .unwrap();
-    assert_eq!(output["Previous"], "<redacted>");
-    assert_eq!(output["Tags"][1]["Value"], "<redacted>");
-    assert!(!output.to_string().contains("old-toy-bearer"));
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 2);
 }
 
 fn write_input(key: &str) -> TagResourceInput {
@@ -233,7 +252,7 @@ fn error_response(status: &str) -> Response {
 
 #[tokio::test]
 async fn failed_write_and_confirm_are_not_settled_with_partial() {
-    let before = r#"[{"key":"env","value":"toy-token","systemTag":false}]"#;
+    let before = r#"[{"key":"env","value":"old","systemTag":false}]"#;
     for responses in [
         vec![
             http_response(before),
@@ -250,7 +269,7 @@ async fn failed_write_and_confirm_are_not_settled_with_partial() {
         assert_eq!(failure.error().class(), ErrorClass::NotSettled);
         assert!(failure.error().has_class(ErrorClass::Api));
         assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-        assert_eq!(failure.partial().unwrap()["Previous"], "<redacted>");
+        assert_eq!(failure.partial().unwrap()["Previous"], "old");
     }
 }
 
@@ -348,7 +367,9 @@ async fn system_tag_refusal_falls_back_to_fixed_text_for_a_reflected_credential(
         .tag_resource(&ctx, write_input("toy-token"))
         .await
         .unwrap_err();
-    assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
+    assert!(refusal_text(&failure).is_empty());
+    assert_eq!(failure.error().detail::<ErrorDetail>(), None);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
 }
 
 #[tokio::test]
@@ -376,4 +397,36 @@ async fn system_tag_prefix_screen_survives_a_cancelled_context() {
         .await
         .unwrap_err();
     assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
+}
+
+#[tokio::test]
+async fn tag_read_exit_refuses_a_reflected_redaction_marker() {
+    let raw = br#"[{"key":"env","value":"redacted","systemTag":false}]"#;
+    let server = Server::start(vec![Response::Http {
+        status: "200 OK".into(),
+        headers: vec![("Content-Length".into(), raw.len().to_string())],
+        body: raw.to_vec(),
+    }]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_static_token(Secret::new("redacted"))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(server.origin.clone()),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let result = Client::new(&config)
+        .list_resource_tags(
+            &RequestContext::new().0,
+            ListResourceTagsInput::new("res-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
 }

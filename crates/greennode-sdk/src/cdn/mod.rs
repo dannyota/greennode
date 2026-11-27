@@ -33,7 +33,7 @@ impl Client {
 }
 
 /// Additional identities for CDN failures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// This operation requires a vCDN API key.
@@ -49,6 +49,8 @@ pub enum ErrorDetail {
     /// The observed CDN status does not allow the operation to proceed.
     UnexpectedStatus,
 }
+
+crate::error::debug_record!(ErrorDetail; MissingApiKey, PageFormat, ResourceBusy, PurgeCooldown, StatusUnconfirmed, UnexpectedStatus);
 
 fn invalid<T>() -> Failure<T> {
     Failure::new(

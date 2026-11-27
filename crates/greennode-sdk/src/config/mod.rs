@@ -177,11 +177,9 @@ impl ConfigOptions {
     }
 }
 
-impl std::fmt::Debug for ConfigOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ConfigOptions([REDACTED])")
-    }
-}
+crate::error::debug_record!(ConfigOptions => |self, f| {
+    f.write_str("ConfigOptions([REDACTED])")
+});
 
 /// A management configuration.
 #[derive(Clone)]
@@ -191,11 +189,9 @@ pub struct Config {
     session: std::sync::Arc<session::Session>,
 }
 
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Config([REDACTED])")
-    }
-}
+crate::error::debug_record!(Config => |self, f| {
+    f.write_str("Config([REDACTED])")
+});
 
 /// The settings and file provenance selected by an offline lookup.
 pub struct ResolvedProfile {
@@ -206,11 +202,9 @@ pub struct ResolvedProfile {
     credentials_source: Option<&'static str>,
 }
 
-impl std::fmt::Debug for ResolvedProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ResolvedProfile([REDACTED])")
-    }
-}
+crate::error::debug_record!(ResolvedProfile => |self, f| {
+    f.write_str("ResolvedProfile([REDACTED])")
+});
 
 impl ResolvedProfile {
     /// Returns the selected profile name.
@@ -298,7 +292,20 @@ impl Config {
         reason = "The public API returns Error by value"
     )]
     pub async fn authenticate(&self, ctx: &crate::RequestContext) -> Result<(), crate::Error> {
-        self.session.authenticate(ctx).await
+        crate::wire::product::exit::scope(self.authenticate_scoped(ctx))
+            .await
+            .map_err(|error| *error)
+    }
+    async fn authenticate_scoped(
+        &self,
+        ctx: &crate::RequestContext,
+    ) -> Result<(), Box<crate::Error>> {
+        self.session.authenticate(ctx).await.map_err(|error| {
+            Box::new(crate::wire::product::exit::authenticate_error(
+                error,
+                self.session.configured_credentials(),
+            ))
+        })
     }
     /// Loads configuration offline; requires a Tokio runtime with timers.
     #[expect(

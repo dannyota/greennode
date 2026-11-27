@@ -1,13 +1,12 @@
 mod accounting;
 mod prepare;
 
-use super::{Client, EstimateArithmeticError, EstimateInput, EstimateItem, EstimateOutput};
+use super::{Client, EstimateInput, EstimateItem, EstimateOutput};
 use crate::model::pricing::DiscoveryPrice;
 use crate::quote::{
     catalog::{self, Catalog, Encryption, Image, StorageCatalog, StorageRegion, VolumeType, Zone},
     request::{self, Product, Request, decode},
 };
-use crate::wire::product::evidence::Evidence;
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 use serde_json::Value;
 use std::{
@@ -99,58 +98,65 @@ impl Client {
         ctx: &RequestContext,
         input: EstimateInput,
     ) -> Result<EstimateOutput, Failure<EstimateOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        super::validate::setup(&input, &self.region)
-            .map_err(|field| failure(invalid_input(field)))?;
-        let catalog = Catalog::new(&self.session, ctx, input.max_requests);
-        let mut run = Run {
-            input: &input,
-            catalog,
-            region: &self.region,
-            memo: Memo::default(),
-            output: accounting::initialize(&input, &self.region, self.session.clock().utc_now()),
-            errors: Vec::new(),
-            stopped: false,
-        };
-        let outcome = run.quote().await.and_then(|()| run.finish());
-        let Run {
-            output,
-            errors,
-            catalog,
-            memo,
-            ..
-        } = run;
-        drop(memo);
-        let evidence = &catalog.evidence;
-        if let Err(error) = outcome {
-            drop(errors);
-            return Err(failure(safe_error(recover(error), evidence)));
-        }
-        if let Some(first) = errors.first()
-            && output
-                .items
-                .iter()
-                .all(|item| item.price.status == "failed")
-        {
-            let error = Arc::clone(first);
-            drop(errors);
-            return Err(failure(safe_error(recover(error), evidence)));
-        }
-        if serde_json::to_value(&output).map_or(true, |value| evidence.reflected_in(&value))
-            || accounting::table_amounts(&output).any(|amount| evidence.reflects_fixed_two(amount))
-        {
-            return Err(failure(safe_error(*request::invalid(OP, 200), evidence)));
-        }
-        if errors.is_empty() {
-            return Ok(output);
-        }
-        let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
-        for cause in errors {
-            if let Some(cause) = Arc::into_inner(cause) {
-                error = error.with_cause(safe_error(cause, evidence));
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            super::validate::setup(&input, &self.region)
+                .map_err(|field| failure(invalid_input(field)))?;
+            let catalog = Catalog::new(&self.session, ctx, input.max_requests);
+            let mut run = Run {
+                input: &input,
+                catalog,
+                region: &self.region,
+                memo: Memo::default(),
+                output: accounting::initialize(
+                    &input,
+                    &self.region,
+                    self.session.clock().utc_now(),
+                ),
+                errors: Vec::new(),
+                stopped: false,
+            };
+            let outcome = run.quote().await.and_then(|()| run.finish());
+            let Run {
+                output,
+                errors,
+                catalog,
+                memo,
+                ..
+            } = run;
+            drop(memo);
+            let evidence = &catalog.evidence;
+            if let Err(error) = outcome {
+                drop(errors);
+                return Err(failure(safe_error(recover(error))));
             }
-        }
-        Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
+            if let Some(first) = errors.first()
+                && output
+                    .items
+                    .iter()
+                    .all(|item| item.price.status == "failed")
+            {
+                let error = Arc::clone(first);
+                drop(errors);
+                return Err(failure(safe_error(recover(error))));
+            }
+            if serde_json::to_value(&output).map_or(true, |value| evidence.output_reflects(&value))
+                || accounting::table_amounts(&output)
+                    .any(|amount| evidence.reflects_fixed_two(amount))
+            {
+                return Err(failure(safe_error(*request::invalid(OP, 200))));
+            }
+            if errors.is_empty() {
+                return Ok(output);
+            }
+            let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
+            for cause in errors {
+                if let Some(cause) = Arc::into_inner(cause) {
+                    error = error.with_cause(safe_error(cause));
+                }
+            }
+            Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
+        })
     }
 }
 
@@ -269,16 +275,7 @@ fn failure_code(error: &crate::ApiError) -> String {
     .into()
 }
 
-fn safe_error(error: Error, evidence: &Evidence) -> Error {
-    if let Some(arithmetic) = error.detail::<EstimateArithmeticError>()
-        && evidence.text_reflects(&arithmetic.item_key)
-    {
-        let screened = EstimateArithmeticError {
-            stage: arithmetic.stage,
-            item_key: "<redacted>".into(),
-        };
-        return error.with_detail(screened);
-    }
+fn safe_error(error: Error) -> Error {
     if error.has_class(ErrorClass::InvalidInput)
         && error
             .api_error()

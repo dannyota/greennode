@@ -8,19 +8,23 @@ use crate::{Failure, List, RequestContext};
 use serde::{Deserialize, Serialize, Serializer};
 
 /// Selects the account's current billing period without filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetCurrentPeriodCostInput {}
 
+crate::error::debug_record!(GetCurrentPeriodCostInput {});
+
 /// The account's actual and forecasted cost for its current period.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetCurrentPeriodCostOutput {
     /// Costs and dates for the current period.
     #[serde(rename = "PeriodCost")]
     pub period_cost: PeriodCost,
 }
 
+crate::wire::product::output::public_fields!(GetCurrentPeriodCostOutput { period_cost });
+
 /// Dates and spend for the current billing period.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct PeriodCost {
     /// Billing period key in `YYYY-MM` form.
@@ -38,12 +42,22 @@ pub struct PeriodCost {
     pub forecasted_cost: f64,
 }
 
+crate::wire::product::output::public_fields!(PeriodCost {
+    period_key,
+    period_start,
+    period_end,
+    actual_cost,
+    forecasted_cost
+});
+
 /// Selects the budget whose thresholds to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListBudgetThresholdsInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(ListBudgetThresholdsInput { budget_uuid });
 
 impl ListBudgetThresholdsInput {
     /// Stores the UUID for validation by [`Client::list_budget_thresholds`].
@@ -58,7 +72,7 @@ impl ListBudgetThresholdsInput {
 pub type ListBudgetThresholdsOutput = List<Threshold>;
 
 /// The settings and notification state of a budget threshold.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -93,14 +107,31 @@ pub struct Threshold {
     pub last_alert_at: String,
 }
 
+crate::wire::product::output::public_fields!(Threshold {
+    uuid,
+    threshold_type,
+    threshold_percentage,
+    comparison_operator,
+    enabled,
+    max_alerts_per_period,
+    reminder_interval_hours,
+    notification_state,
+    last_alert_at
+});
+
 /// Selects a budget and optionally filters its alerts by period.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListBudgetAlertsInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
     /// Billing period in `YYYY-MM` form. An empty string includes all periods.
     pub period_key: String,
 }
+
+crate::error::debug_record!(ListBudgetAlertsInput {
+    budget_uuid,
+    period_key
+});
 
 impl ListBudgetAlertsInput {
     /// Selects all periods for the budget. The request validates the UUID.
@@ -116,7 +147,7 @@ impl ListBudgetAlertsInput {
 pub type ListBudgetAlertsOutput = List<Alert>;
 
 /// A notification sent when spend breached a budget threshold.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(from = "AlertWire", rename_all = "PascalCase")]
 pub struct Alert {
     /// Time the threshold triggered, as reported by the API.
@@ -137,6 +168,17 @@ pub struct Alert {
     /// Original recipients string when the API did not encode a valid list.
     pub recipients_raw: String,
 }
+
+crate::wire::product::output::public_fields!(Alert {
+    triggered_at,
+    threshold_type,
+    threshold_percentage,
+    triggered_value,
+    actual_percentage,
+    delivery_status,
+    recipients,
+    recipients_raw
+});
 
 #[derive(Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -201,18 +243,20 @@ impl Client {
         ctx: &RequestContext,
         _input: GetCurrentPeriodCostInput,
     ) -> Result<GetCurrentPeriodCostOutput, Failure<GetCurrentPeriodCostOutput>> {
-        let period_cost = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.GetCurrentPeriodCost",
-                    "gateway/api/v1/budgets/cost/overview",
-                ),
-                &[],
-                &[],
-            )
-            .await?;
-        Ok(GetCurrentPeriodCostOutput { period_cost })
+        crate::wire::product::exit::finish!(async {
+            let period_cost = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.GetCurrentPeriodCost",
+                        "gateway/api/v1/budgets/cost/overview",
+                    ),
+                    &[],
+                    &[],
+                )
+                .await?;
+            Ok(GetCurrentPeriodCostOutput { period_cost })
+        })
     }
 
     /// Reads a budget's thresholds. An invalid UUID fails before authentication.
@@ -221,18 +265,20 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetThresholdsInput,
     ) -> Result<ListBudgetThresholdsOutput, Failure<ListBudgetThresholdsOutput>> {
-        let items = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.ListBudgetThresholds",
-                    "gateway/api/v1/budgets/{}/thresholds",
-                ),
-                &[&input.budget_uuid],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.ListBudgetThresholds",
+                        "gateway/api/v1/budgets/{}/thresholds",
+                    ),
+                    &[&input.budget_uuid],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads a budget's alerts for the selected period or all periods.
@@ -241,24 +287,26 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetAlertsInput,
     ) -> Result<ListBudgetAlertsOutput, Failure<ListBudgetAlertsOutput>> {
-        let query = [("periodKey", input.period_key.as_str())];
-        let query: &[_] = if input.period_key.is_empty() {
-            &[]
-        } else {
-            &query
-        };
-        let items = self
-            .read(
-                ctx,
-                &read_operation(
-                    "billing.ListBudgetAlerts",
-                    "gateway/api/v1/budgets/{}/alerts",
-                ),
-                &[&input.budget_uuid],
-                query,
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let query = [("periodKey", input.period_key.as_str())];
+            let query: &[_] = if input.period_key.is_empty() {
+                &[]
+            } else {
+                &query
+            };
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation(
+                        "billing.ListBudgetAlerts",
+                        "gateway/api/v1/budgets/{}/alerts",
+                    ),
+                    &[&input.budget_uuid],
+                    query,
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 }
 

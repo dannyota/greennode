@@ -164,3 +164,49 @@ async fn nested_and_offset_times_keep_go_representation() {
     assert!(value["HostedZone"]["DeletedAt"].is_null());
     assert_eq!(value["HostedZone"]["UpdatedAt"], "2026-01-01T03:00:03Z");
 }
+
+#[tokio::test]
+async fn dns_redacts_encoded_descriptions() {
+    let body = r#"{"data":{"hostedZoneId":"zone-1","description":"synthetic-sdk-dns%2Dbearer"}}"#;
+    let server = Server::start(vec![response("200 OK", body), response("200 OK", ZONE)]);
+    let client = client(&server, BEARER);
+    let (ctx, _) = RequestContext::new();
+    let entry = client
+        .get_hosted_zone(&ctx, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(entry.hosted_zone.description == "<redacted>");
+    let entry = client
+        .get_hosted_zone(&ctx, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(entry.hosted_zone.description != "<redacted>");
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn dns_exit_refuses_a_short_encoding_in_a_projected_id() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"hostedZoneId":"pre6A6B6Cpost"}}"#,
+    )]);
+    let result = client(&server, "jkl")
+        .get_hosted_zone(&RequestContext::new().0, GetHostedZoneInput::new("zone-1"))
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn hosted_zone_redacts_identifiers_in_the_associated_vpc_projection() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"hostedZoneId":"zone-1","assocVpcIds":["vpc-1","pre6A6B6Cpost"]}}"#,
+    )]);
+    let output = client(&server, "jkl")
+        .get_hosted_zone(&RequestContext::new().0, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(output.hosted_zone.associated_vpc_ids == ["vpc-1", "<redacted>"]);
+    assert_eq!(server.requests(), 1);
+}

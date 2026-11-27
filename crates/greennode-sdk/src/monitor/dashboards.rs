@@ -23,10 +23,13 @@ const GET: Read = Read {
 };
 
 /// Public dashboard metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Dashboard {
     /// Dashboard identifier.
-    #[serde(rename(deserialize = "id", serialize = "ID"))]
+    #[serde(
+        rename(deserialize = "id", serialize = "ID"),
+        serialize_with = "crate::wire::product::identifier::serialize"
+    )]
     pub id: String,
     /// Display name.
     #[serde(
@@ -61,8 +64,17 @@ pub struct Dashboard {
     pub updated_at: String,
 }
 
+crate::wire::product::output::public_fields!(Dashboard {
+    id,
+    name,
+    system,
+    favorite,
+    created_at,
+    updated_at
+});
+
 /// Filter and pagination for dashboard listing.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListDashboardsInput {
     /// One-based page number. Zero selects the first page.
     pub page: i64,
@@ -72,15 +84,19 @@ pub struct ListDashboardsInput {
     pub system: bool,
 }
 
+crate::error::debug_record!(ListDashboardsInput { page, size, system });
+
 /// A page of matching dashboards.
 pub type ListDashboardsOutput = PagedList<Dashboard>;
 
 /// Dashboard selection for a detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetDashboardInput {
     /// Path-safe dashboard identifier.
     pub dashboard_id: String,
 }
+
+crate::error::debug_record!(GetDashboardInput { dashboard_id });
 
 impl GetDashboardInput {
     /// Selects a dashboard by identifier.
@@ -92,12 +108,14 @@ impl GetDashboardInput {
 }
 
 /// The selected dashboard's metadata.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetDashboardOutput {
     /// Dashboard without widgets.
     #[serde(rename = "Dashboard")]
     pub dashboard: Dashboard,
 }
+
+crate::wire::product::output::public_fields!(GetDashboardOutput { dashboard });
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -166,32 +184,34 @@ impl Client {
         ctx: &RequestContext,
         input: ListDashboardsInput,
     ) -> Result<ListDashboardsOutput, Failure<ListDashboardsOutput>> {
-        if input.page < 0 || !(0..=100).contains(&input.size) {
-            return Err(failure(input_error(format!(
-                "vngcloud: invalid input: {}: invalid page or size",
-                LIST.id
-            ))));
-        }
-        let page = input.page.max(1);
-        let size = if input.size == 0 { 10 } else { input.size };
-        let filter = if input.system {
-            "systemType:productVng"
-        } else {
-            "system:false"
-        };
-        let query = [
-            ("filter", filter),
-            ("page", &page.to_string()),
-            ("searching-field", ""),
-            ("searching-text", ""),
-            ("size", &size.to_string()),
-        ];
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &LIST, &[], &query, &mut evidence)
-            .await
-            .map_err(failure)?;
-        page_output(&raw, input.system, page, size, &evidence).map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            if input.page < 0 || !(0..=100).contains(&input.size) {
+                return Err(failure(input_error(format!(
+                    "vngcloud: invalid input: {}: invalid page or size",
+                    LIST.id
+                ))));
+            }
+            let page = input.page.max(1);
+            let size = if input.size == 0 { 10 } else { input.size };
+            let filter = if input.system {
+                "systemType:productVng"
+            } else {
+                "system:false"
+            };
+            let query = [
+                ("filter", filter),
+                ("page", &page.to_string()),
+                ("searching-field", ""),
+                ("searching-text", ""),
+                ("size", &size.to_string()),
+            ];
+            let mut evidence = Evidence::new();
+            let raw = self
+                .read(ctx, &LIST, &[], &query, &mut evidence)
+                .await
+                .map_err(failure)?;
+            page_output(&raw, input.system, page, size, &evidence).map_err(failure)
+        })
     }
 
     /// Reads a dashboard by identifier.
@@ -200,20 +220,22 @@ impl Client {
         ctx: &RequestContext,
         input: GetDashboardInput,
     ) -> Result<GetDashboardOutput, Failure<GetDashboardOutput>> {
-        if !PathIds::Strict.allows(&input.dashboard_id) {
-            return Err(path_id_failure(GET.id, "DashboardID"));
-        }
-        let mut evidence = Evidence::new();
-        let raw = self
-            .read(ctx, &GET, &[&input.dashboard_id], &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let mut dashboard: Dashboard =
-            decode(&raw, &DASHBOARD, &GET, &evidence).map_err(failure)?;
-        if dashboard.id != input.dashboard_id || !dashboard.redact(&evidence) {
-            return Err(failure(GET.invalid(&evidence)));
-        }
-        Ok(GetDashboardOutput { dashboard })
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.dashboard_id) {
+                return Err(path_id_failure(GET.id, "DashboardID"));
+            }
+            let mut evidence = Evidence::new();
+            let raw = self
+                .read(ctx, &GET, &[&input.dashboard_id], &[], &mut evidence)
+                .await
+                .map_err(failure)?;
+            let mut dashboard: Dashboard =
+                decode(&raw, &DASHBOARD, &GET, &evidence).map_err(failure)?;
+            if dashboard.id != input.dashboard_id || !dashboard.redact(&evidence) {
+                return Err(failure(GET.invalid(&evidence)));
+            }
+            Ok(GetDashboardOutput { dashboard })
+        })
     }
 }
 

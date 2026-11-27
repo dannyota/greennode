@@ -1,4 +1,3 @@
-use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -8,7 +7,7 @@ use crate::wire::product::{
     sender::{BearerSource, Response, Runtime, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{ApiError, Clock, Error, ErrorClass, Project, RequestContext};
+use crate::{Clock, Error, ErrorClass, Project, RequestContext};
 use http::{Method, StatusCode};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -184,6 +183,7 @@ async fn read_projects_with_evidence(
         &projects_operation(),
         &Options {
             pacing,
+            project_discovery: true,
             response_guard: pacing.map(|_| guard_estimate_project_response as _),
             ..Options::DEFAULT
         },
@@ -197,7 +197,7 @@ async fn read_projects_with_evidence(
     .map_err(|failure| {
         let (error, _, _) = failure.into_parts();
         if error.class() == ErrorClass::Api
-            && error.detail::<StatusCode>() == Some(&StatusCode::OK)
+            && error.http_status() == Some(StatusCode::OK)
             && !error.is_body_too_large()
         {
             invalid_response(StatusCode::OK)
@@ -239,10 +239,9 @@ async fn read_projects_with_evidence(
     });
     let credentials = &inventory.credentials;
     if (!projects.is_empty() && credentials.reflects(region.as_bytes()))
-        || projects.iter().any(|project| {
-            credentials.reflects(project.user_id.to_string().as_bytes())
-                || crate::output_number::reflects(project.user_id as f64, credentials, false)
-        })
+        || projects
+            .iter()
+            .any(|project| credentials.integer_output_reflects(project.user_id))
     {
         return Err(invalid_response(StatusCode::OK));
     }
@@ -250,18 +249,10 @@ async fn read_projects_with_evidence(
 }
 
 const LIST_PROJECTS: &str = "project.ListProjects";
+const PROJECTS_OK: &[StatusCode] = &[StatusCode::OK];
 
 fn invalid_response(status: StatusCode) -> Box<Error> {
-    Box::new(
-        Error::from_api(ApiError::without_fallback(
-            LIST_PROJECTS,
-            Some(status.as_u16()),
-            SafeText::new("InvalidResponse", &[]),
-            SafeText::new("invalid discovery response; body withheld", &[]),
-            false,
-        ))
-        .with_outer_detail(status),
-    )
+    crate::wire::product::response::project_discovery_error(LIST_PROJECTS, status)
 }
 
 fn select(
@@ -295,7 +286,7 @@ fn projects_operation() -> Operation {
         method: Method::GET,
         class: Classification::Read,
         retry: Retry::Repeatable,
-        success: &[StatusCode::OK],
+        success: PROJECTS_OK,
         cap: 8 << 20,
         allow_recovery: true,
         allow_empty: false,
@@ -303,7 +294,7 @@ fn projects_operation() -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }
@@ -321,9 +312,6 @@ struct Inventory {
 }
 
 impl Output for Inventory {
-    const RESPONSE_GUARD: Option<crate::wire::product::sender::ResponseGuard> =
-        Some(guard_project_response);
-
     const SCHEMA: Shape<'static> = Shape::Object(&[ShapeField {
         name: "projects",
         shape: Shape::Array(&Shape::Object(&[
@@ -355,12 +343,6 @@ impl Output for Inventory {
     }]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        if !operation.success.contains(&response.status)
-            && operation::reflects_json(&response.body, &response.credentials, false)
-                .unwrap_or(false)
-        {
-            return Err(invalid_response(response.status));
-        }
         Ok(Self {
             credentials: response.credentials.clone(),
             bytes: response.body.len(),
@@ -372,23 +354,16 @@ impl Output for Inventory {
 #[cfg(test)]
 mod tests;
 
-fn guard_project_response(
-    _: &'static str,
-    status: StatusCode,
-    body: &[u8],
-    known: &crate::wire::product::sender::SentCredentials,
-    sent: &crate::wire::product::sender::SentCredentials,
-) -> Option<Box<Error>> {
-    operation::unsafe_json_response(body, known, sent, status.is_success())
-        .then(|| invalid_response(status))
-}
-
 fn guard_estimate_project_response(
     _: &'static str,
     status: StatusCode,
     body: &[u8],
-    known: &SentCredentials,
-    sent: &SentCredentials,
+    _: &SentCredentials,
+    _: &SentCredentials,
 ) -> Option<Box<Error>> {
-    operation::unsafe_json_response(body, known, sent, true).then(|| invalid_response(status))
+    (!PROJECTS_OK.contains(&status)
+        && !body.iter().all(u8::is_ascii_whitespace)
+        && serde_json::from_str::<&serde_json::value::RawValue>(&crate::model::wire::go_json(body))
+            .is_err())
+    .then(|| invalid_response(status))
 }

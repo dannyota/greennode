@@ -1,4 +1,5 @@
 pub(crate) use super::evidence::SentCredentials;
+use super::response::{ProjectDiscovery, Screen};
 use super::{redirect, retry, unauthorized};
 use crate::wire::{
     connection::{OneSendClient, PooledClient},
@@ -12,8 +13,8 @@ use tokio::time::Instant;
 use url::Url;
 
 mod uri;
+use uri::uri_contains_credential;
 pub(super) use uri::uri_reflects_credential_forms;
-use uri::{contains_secret, uri_contains_credential};
 
 pub(crate) struct BearerToken {
     pub(crate) token: Token,
@@ -82,7 +83,9 @@ pub(crate) type ResponseGuard = fn(
 ) -> Option<Box<crate::Error>>;
 
 pub(crate) struct Operation<'a> {
+    pub(crate) guard: Option<&'static str>,
     pub(crate) pacing: Option<&'a super::options::Pacing>,
+    pub(crate) project_discovery: Option<ProjectDiscovery>,
     pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
     pub(crate) attempt_check: Option<super::options::AttemptCheck<'a>>,
     pub(crate) method: Method,
@@ -125,9 +128,43 @@ fn credential_value(secret: &Secret, bearer: bool) -> Result<http::HeaderValue, 
     Ok(header)
 }
 
+fn attempt_headers(
+    request: &Request,
+    bearer: Option<&BearerToken>,
+) -> Result<(HeaderMap, SentCredentials), Error> {
+    let mut headers = request.headers.clone();
+    let mut credentials = SentCredentials::default();
+    let declared = request.credentials.iter().map(|credential| {
+        (
+            credential.name.clone(),
+            &credential.value,
+            credential.bearer,
+        )
+    });
+    let authorization = bearer.map(|bearer| {
+        (
+            http::header::AUTHORIZATION,
+            &bearer.token.access_token,
+            true,
+        )
+    });
+    for (name, secret, bearer) in declared.chain(authorization) {
+        if headers.contains_key(&name) {
+            return Err(Error::InvalidRequest);
+        }
+        let value = credential_value(secret, bearer)?;
+        let wire = std::str::from_utf8(value.as_bytes()).map_err(|_| Error::InvalidRequest)?;
+        credentials.record_product_credential(secret);
+        credentials.record(&Secret::new(wire));
+        headers.insert(name, value);
+    }
+    Ok((headers, credentials))
+}
+
 pub(crate) struct Response {
     pub(crate) reply: send::Reply,
     pub(crate) credentials: SentCredentials,
+    pub(crate) reflection: Screen,
 }
 impl std::ops::Deref for Response {
     type Target = send::Reply;
@@ -158,7 +195,7 @@ impl Failure {
             _ => error,
         };
         let error = match self.status {
-            Some(status) => error.with_outer_detail(status),
+            Some(status) => error.with_http_status(status),
             None => error,
         };
         crate::Failure::new(error, None, self.dispatch)
@@ -223,20 +260,6 @@ async fn acquire_bearer(
         credentials.mark_incomplete_signin();
     }
     result
-}
-
-fn system_time(time: time::OffsetDateTime) -> Option<std::time::SystemTime> {
-    let nanos = time.unix_timestamp_nanos();
-    let absolute = nanos.unsigned_abs();
-    let duration = std::time::Duration::new(
-        u64::try_from(absolute / 1_000_000_000).ok()?,
-        u32::try_from(absolute % 1_000_000_000).ok()?,
-    );
-    if nanos >= 0 {
-        std::time::SystemTime::UNIX_EPOCH.checked_add(duration)
-    } else {
-        std::time::SystemTime::UNIX_EPOCH.checked_sub(duration)
-    }
 }
 
 fn unauthorized_decision<'a>(
@@ -337,8 +360,13 @@ pub(super) async fn run(
     let result = run_inner(runtime, op, auth, request, route_inputs, &mut evidence).await;
     let mut credentials = evidence.reflection;
     credentials.extend(&evidence.sent);
+    super::exit::record(&credentials, &evidence.sent, evidence.dispatch);
     match result {
-        Ok(reply) => Ok(Response { reply, credentials }),
+        Ok((reply, reflection)) => Ok(Response {
+            reply,
+            credentials,
+            reflection,
+        }),
         Err(error) => Err(Failure {
             error,
             status: evidence.status,
@@ -364,7 +392,7 @@ async fn run_inner(
     request: &Request,
     route_inputs: RouteInputs<'_>,
     evidence: &mut Evidence,
-) -> Result<send::Reply, Error> {
+) -> Result<(send::Reply, Screen), Error> {
     let sent = &mut evidence.sent;
     let reflection = &mut evidence.reflection;
     let Runtime {
@@ -427,15 +455,42 @@ async fn run_inner(
             .and_then(|value| value.signin_credentials.as_deref())
         {
             reflection.extend(credentials);
-            if route_inputs.reflects(credentials) {
-                return Err(Error::InvalidRequest);
-            }
+            sent.extend(credentials);
         }
         evidence.status = None;
+        let (headers, header_credentials) = attempt_headers(request, bearer.as_ref())?;
+        let mut outgoing_credentials = sent.clone();
+        outgoing_credentials.extend(&header_credentials);
+        reflection.extend(&header_credentials);
+        let mut credentials = reflection.clone();
+        credentials.extend(&outgoing_credentials);
         if let Some(check) = op.attempt_check
-            && let Some(error) = (check.0)(reflection)
+            && let Some(error) = (check.0)(&credentials)
         {
             return Err(Error::Provider(error));
+        }
+        if request.headers.iter().any(|(name, value)| {
+            let fixed_json = (name == http::header::ACCEPT || name == http::header::CONTENT_TYPE)
+                && value.as_bytes() == b"application/json";
+            let fixed_html = matches!(auth, Auth::None)
+                && name == http::header::ACCEPT
+                && value.as_bytes() == b"text/html";
+            !(fixed_json || fixed_html)
+                && match std::str::from_utf8(value.as_bytes()) {
+                    Ok(text) => super::response::reflects_credential_forms(text, &credentials),
+                    Err(_) => credentials.reflects(value.as_bytes()),
+                }
+        }) || uri_contains_credential(&request.url, &outgoing_credentials)
+        {
+            return Err(Error::InvalidRequest);
+        }
+        let transport = credentials.transport_only();
+        if route_inputs.reflects(&transport)
+            || super::evidence::body_reflects(&request.body, &transport, route_inputs.password_slot)
+        {
+            return Err(Error::Provider(Box::new(crate::Error::new(
+                crate::ErrorClass::InvalidInput,
+            ))));
         }
         let mut url = request.url.clone();
         let mut visited = std::collections::HashSet::new();
@@ -443,94 +498,38 @@ async fn run_inner(
         let mut hops = 0usize;
         loop {
             evidence.status = None;
-            let mut headers = request.headers.clone();
-            let mut pending = Vec::new();
-            for credential in &request.credentials {
-                if headers.contains_key(&credential.name) {
-                    return Err(Error::InvalidRequest);
-                }
-                let value = credential_value(&credential.value, credential.bearer)?;
-                headers.insert(credential.name.clone(), value);
-                pending.push(&credential.value);
-            }
-            if let Some(token) = &bearer {
-                if headers.contains_key(http::header::AUTHORIZATION) {
-                    return Err(Error::InvalidRequest);
-                }
-                let secret = &token.token.access_token;
-                headers.insert(http::header::AUTHORIZATION, credential_value(secret, true)?);
-                pending.push(secret);
-            }
-            if request.headers.iter().any(|(name, value)| {
-                let fixed_json = (name == http::header::ACCEPT
-                    || name == http::header::CONTENT_TYPE)
-                    && value.as_bytes() == b"application/json";
-                let fixed_html = matches!(auth, Auth::None)
-                    && name == http::header::ACCEPT
-                    && value.as_bytes() == b"text/html";
-                !(fixed_json || fixed_html)
-                    && (std::str::from_utf8(value.as_bytes()).is_ok_and(|text| {
-                        super::response::reflects_credential_forms(text, reflection)
-                            || super::response::reflects_credential_forms(text, sent)
-                    }) || reflection.reflects(value.as_bytes())
-                        || sent.reflects(value.as_bytes())
-                        || pending
-                            .iter()
-                            .any(|secret| contains_secret(value.as_bytes(), secret)))
-            }) {
-                return Err(Error::InvalidRequest);
-            }
-            if hops == 0 && uri_contains_credential(&url, sent, &pending) {
-                return Err(Error::InvalidRequest);
-            }
-            let mut credentials = reflection.transport_only();
-            credentials.extend(sent);
-            for secret in &pending {
-                credentials.record(secret);
-            }
-            let reflected_route = route_inputs.reflects(&credentials);
-            if reflected_route {
-                reflection.extend(&credentials);
-            }
-            if reflected_route
-                || super::evidence::body_reflects(
-                    &request.body,
-                    &credentials,
-                    route_inputs.password_slot,
-                )
-            {
-                return Err(Error::Provider(Box::new(crate::Error::new(
-                    crate::ErrorClass::InvalidInput,
-                ))));
-            }
             if let Some(pacing) = op.pacing {
                 bounded(&ctx, clock, || pacing.before_send(&ctx, clock))
                     .await?
                     .map_err(Error::Context)?;
-            }
-            for secret in pending {
-                sent.record_product_credential(secret);
             }
             let mut outgoing = http::Request::builder()
                 .method(op.method.clone())
                 .uri(url.as_str())
                 .body(http_body_util::Full::new(request.body.clone()))
                 .map_err(|_| Error::InvalidRequest)?;
-            *outgoing.headers_mut() = headers;
+            *outgoing.headers_mut() = headers.clone();
             let mut observed = send::Evidence::default();
             #[cfg(test)]
             if matches!(op.class, redirect::Classification::Write) {
                 observed.attempt_counter = Some(sleeper);
             }
             let result = bounded(&ctx, clock, || {
-                send::once_with_evidence(
-                    client,
-                    outgoing,
-                    op.cap,
-                    op.encoding,
-                    clock,
-                    deadline,
-                    &mut observed,
+                sent.extend(&header_credentials);
+                if let Some(slot) = route_inputs.password_slot {
+                    super::exit::observe_operation_password(slot);
+                }
+                send::with_sent_credentials(
+                    sent,
+                    send::once_with_evidence(
+                        client,
+                        outgoing,
+                        op.cap,
+                        op.encoding,
+                        clock,
+                        deadline,
+                        &mut observed,
+                    ),
                 )
             })
             .await;
@@ -547,11 +546,19 @@ async fn run_inner(
                 evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
             }
             let result = result?;
-            if let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
-                && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
+            let body_reflection = result.as_ref().map_or(Screen::Indeterminate, |reply| {
+                op.screen_reply(matches!(auth, Auth::None), reply, reflection, sent)
+            });
+            let refused = op.guard.filter(|_| {
+                op.project_discovery.is_none() && result.is_ok() && !body_reflection.is_clean()
+            });
+            let callback_refusal = if refused.is_none()
+                && let Ok(reply) = &result
             {
-                return Err(Error::Provider(error));
-            }
+                op.refuse_before_retry(reply, body_reflection, reflection, sent)
+            } else {
+                None
+            };
             let is_401 = match &result {
                 Ok(reply) => reply.status == http::StatusCode::UNAUTHORIZED,
                 Err(error) => error
@@ -563,7 +570,7 @@ async fn run_inner(
                     auth,
                     bearer.as_ref(),
                     op,
-                    result.is_err(),
+                    result.is_err() || refused.is_some() || callback_refusal.is_some(),
                     recovered,
                     clock,
                 );
@@ -583,6 +590,25 @@ async fn run_inner(
                     attempt = 0;
                     continue 'attempt;
                 }
+            }
+            if let Some(id) = refused {
+                evidence.status = body_reflection.diagnostic_status(evidence.status);
+                let error = super::operation::unsafe_guard_response(id);
+                let error = if body_reflection == Screen::Indeterminate
+                    && let Ok(reply) = &result
+                    && serde_json::from_str::<&serde_json::value::RawValue>(
+                        &crate::model::wire::go_json(&reply.body),
+                    )
+                    .is_err()
+                {
+                    error.with_outer_detail(super::operation::MalformedGuard)
+                } else {
+                    error
+                };
+                return Err(Error::Provider(Box::new(error)));
+            }
+            if let Some(error) = callback_refusal {
+                return Err(Error::Provider(error));
             }
             let outcome = match &result {
                 Ok(reply) => {
@@ -608,7 +634,6 @@ async fn run_inner(
                                 return Err(Error::Redirect(refusal));
                             }
                         };
-                        credentials.extend(reflection);
                         let reflected = match auth {
                             Auth::Bearer(_) => {
                                 super::response::reflects_credential(location, &credentials)
@@ -630,7 +655,7 @@ async fn run_inner(
                         if reflected
                             || reflected_path
                             || reflected_query
-                            || uri_contains_credential(&next, &credentials, &[])
+                            || uri_contains_credential(&next, &credentials)
                         {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }
@@ -647,7 +672,7 @@ async fn run_inner(
                 }
                 Err(error) => error.retry_outcome(),
             };
-            let now = system_time(clock.utc_now()).ok_or(Error::InvalidRequest)?;
+            let now = retry::system_time(clock.utc_now()).ok_or(Error::InvalidRequest)?;
             if let Some(delay) = outcome.and_then(|outcome| {
                 retry::decide(op.retry, attempt, &op.retry_config, outcome, now, jitter())
             }) {
@@ -655,7 +680,9 @@ async fn run_inner(
                 attempt += 1;
                 continue 'attempt;
             }
-            return result.map_err(Error::Send);
+            return result
+                .map(|reply| (reply, body_reflection))
+                .map_err(Error::Send);
         }
     }
 }

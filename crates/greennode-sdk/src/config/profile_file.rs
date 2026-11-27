@@ -25,10 +25,12 @@ pub fn select(
 /// Parsed sections and values from one configuration slot.
 ///
 /// Secret fields retain only an empty/nonempty mask.
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct ProfileFile {
     sections: BTreeMap<String, BTreeMap<String, Secret>>,
 }
+
+crate::error::debug_record!(ProfileFile { sections });
 
 impl ProfileFile {
     /// Returns sections keyed by their stored names; secret fields contain only an empty/nonempty mask.

@@ -2,104 +2,57 @@ use zeroize::Zeroizing;
 
 pub(super) const STABLE_FLOOR: usize = 7;
 const WHOLE_FLOOR: usize = 8;
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum Base64Alphabet {
-    Standard,
-    UrlSafe,
-    Both,
-}
+pub(super) const UNBOUNDED: u8 = 1 << 2;
+pub(super) const BOUNDED_HEX: u8 = 1 << 3;
+const STANDARD: u8 = 1 << 4;
+const URL_SAFE: u8 = 1 << 5;
 
 pub(super) struct EncodedNeedle {
-    value: Zeroizing<String>,
-    alphabet: Base64Alphabet,
-    fragment: bool,
+    pub(super) value: Zeroizing<String>,
+    pub(super) flags: u8,
 }
 
 impl EncodedNeedle {
-    pub(super) fn len(&self) -> usize {
-        self.value.len()
+    pub(super) fn short(value: Zeroizing<String>, url_safe: bool) -> Self {
+        let flags = if value.len() >= WHOLE_FLOOR {
+            UNBOUNDED
+        } else if url_safe {
+            URL_SAFE
+        } else {
+            STANDARD
+        };
+        Self { value, flags }
     }
 
-    pub(super) fn insert(
-        needles: &mut Vec<Self>,
-        value: Zeroizing<String>,
-        alphabet: Base64Alphabet,
-        fragment: bool,
-    ) {
-        if let Some(needle) = needles
-            .iter_mut()
-            .find(|needle| needle.value.as_str() == value.as_str())
-        {
-            needle.fragment |= fragment;
-            if needle.alphabet != alphabet {
-                needle.alphabet = Base64Alphabet::Both;
-            }
-        } else {
-            needles.push(Self {
-                value,
-                alphabet,
-                fragment,
-            });
+    pub(super) fn fragment(value: Zeroizing<String>) -> Self {
+        Self {
+            value,
+            flags: UNBOUNDED,
         }
     }
 
-    pub(super) fn matches(&self, input: &[u8], strict: bool) -> bool {
-        let needle = self.value.as_str();
-        input.utf8_chunks().any(|chunk| {
-            let text = chunk.valid();
-            text.match_indices(needle).any(|(start, _)| {
-                if strict
-                    || needle.len() >= WHOLE_FLOOR
-                    || (self.fragment && needle.len() >= STABLE_FLOOR)
-                {
-                    return true;
-                }
-                let left = start
-                    .checked_sub(1)
-                    .and_then(|index| text.as_bytes().get(index));
-                let right = text.as_bytes().get(start + needle.len());
-                let bounded = |symbols: &[u8]| {
-                    [left, right]
-                        .into_iter()
-                        .flatten()
-                        .all(|byte| !byte.is_ascii_alphanumeric() && !symbols.contains(byte))
-                };
-                (matches!(
-                    self.alphabet,
-                    Base64Alphabet::Standard | Base64Alphabet::Both
-                ) && bounded(b"+/"))
-                    || (matches!(
-                        self.alphabet,
-                        Base64Alphabet::UrlSafe | Base64Alphabet::Both
-                    ) && bounded(b"-_"))
-            })
-        })
-    }
-}
-
-pub(super) fn contains_hex(input: &[u8], needle: &str, strict: bool) -> bool {
-    input.utf8_chunks().any(|chunk| {
-        let text = chunk.valid();
-        text.match_indices(needle).any(|(start, _)| {
-            if strict || needle.len() >= STABLE_FLOOR {
-                return true;
+    pub(super) fn dedup(needles: &mut Vec<Self>) {
+        needles.sort_unstable_by(|a, b| a.value.as_str().cmp(b.value.as_str()));
+        needles.dedup_by(|next, kept| {
+            if next.value != kept.value {
+                return false;
             }
-            let left = start
-                .checked_sub(1)
-                .and_then(|index| text.as_bytes().get(index));
-            let right = text.as_bytes().get(start + needle.len());
-            [left, right]
-                .into_iter()
-                .flatten()
-                .all(|byte| !byte.is_ascii_alphanumeric())
-        })
-    })
+            kept.flags |= next.flags;
+            true
+        });
+    }
 }
 
-pub(super) fn insert_hex(needles: &mut Vec<Zeroizing<String>>, part: &str) {
-    let hex = Zeroizing::new(data_encoding::HEXLOWER.encode(part.as_bytes()));
-    if !needles.contains(&hex) {
-        needles.push(hex);
-    }
+pub(super) fn bounded(input: &[u8], start: usize, end: usize, flags: u8) -> bool {
+    let left = start.checked_sub(1).map(|index| input[index]);
+    let right = input.get(end).copied();
+    let outside = |symbols: &[u8]| {
+        [left, right]
+            .into_iter()
+            .flatten()
+            .all(|byte| !byte.is_ascii_alphanumeric() && !symbols.contains(&byte))
+    };
+    (flags & BOUNDED_HEX != 0 && outside(b""))
+        || (flags & STANDARD != 0 && outside(b"+/"))
+        || (flags & URL_SAFE != 0 && outside(b"-_"))
 }

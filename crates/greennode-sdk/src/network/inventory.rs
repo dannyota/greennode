@@ -3,7 +3,7 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::Base;
 use crate::error::SafeText;
-use crate::model::wire::{WireField, go_json};
+use crate::model::wire::WireField;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, RouteAuth},
@@ -151,7 +151,7 @@ impl Client {
             keep_status: protected,
             overflow_overrides_status: protected,
             sensitive: protected,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
             retry_config: retry::Config::default(),
         };
@@ -186,15 +186,8 @@ impl Client {
             evidence.credentials(),
         )
         .map_err(|error| screen(*error, evidence))?;
-        if protected {
-            let text = go_json(&body);
-            if operation::reflects_json(text.as_bytes(), evidence.credentials(), true)
-                != Some(false)
-                || !serde_json::from_str::<serde_json::Value>(&text)
-                    .is_ok_and(|value| !evidence.reflected_in(&value))
-            {
-                return Err(read.shape(evidence));
-            }
+        if protected && !evidence.go_peer_body_screen(&body).is_clean() {
+            return Err(read.shape(evidence));
         }
         Ok(response.reply.body)
     }
@@ -211,25 +204,5 @@ fn api(id: &'static str, code: &str, message: &str) -> Error {
 }
 
 pub(super) fn screen(error: Error, evidence: &Evidence) -> Error {
-    error.screen_api(&|text| evidence.text_reflects(text))
-}
-
-pub(super) fn value_reflects_id(evidence: &Evidence, value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(text) => evidence.id_reflects(text),
-        serde_json::Value::Number(number) => {
-            evidence.id_reflects(&number.to_string())
-                || number
-                    .as_f64()
-                    .filter(|value| value.fract() == 0.0 && value.abs() < 1e15)
-                    .is_some_and(|value| evidence.id_reflects(&format!("{value:.0}")))
-        }
-        serde_json::Value::Array(items) => {
-            items.iter().any(|item| value_reflects_id(evidence, item))
-        }
-        serde_json::Value::Object(map) => map
-            .iter()
-            .any(|(key, item)| evidence.id_reflects(key) || value_reflects_id(evidence, item)),
-        serde_json::Value::Null | serde_json::Value::Bool(_) => false,
-    }
+    evidence.screen_error(error)
 }

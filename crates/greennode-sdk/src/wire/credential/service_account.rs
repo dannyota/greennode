@@ -222,10 +222,9 @@ async fn exchange_timed_at(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Basic "))
         .ok_or_else(|| failed(None))?;
     let mut credentials = SentCredentials::default();
-    credentials.record(&Secret::new(authorization));
+    credentials.record_basic(authorization);
     credentials.record(&Secret::new(id));
     credentials.record(secret);
     let client = OneSendClient::new(HeadLimit::Api, trust).map_err(|_| failed(None))?;
@@ -242,14 +241,17 @@ async fn exchange_timed_at(
     let started = clock.monotonic_now();
     let mut evidence = send::Evidence::default();
     let result = {
-        let send = send::once_with_expected(
-            client.as_client(),
-            request,
-            64 * 1024,
-            Encoding::Gzip,
-            clock,
-            bounded.deadline().ok_or_else(|| failed(None))?,
-            (&mut evidence, &[http::StatusCode::OK]),
+        let send = send::with_sent_credentials(
+            &credentials,
+            send::once_with_expected(
+                client.as_client(),
+                request,
+                64 * 1024,
+                Encoding::Gzip,
+                clock,
+                bounded.deadline().ok_or_else(|| failed(None))?,
+                (&mut evidence, &[http::StatusCode::OK]),
+            ),
         );
         let mut send = Box::pin(send);
         let mut ended = Box::pin(context.wait(clock));

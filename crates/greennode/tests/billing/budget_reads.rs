@@ -171,7 +171,7 @@ fn budget_reads_refuse_invalid_input_without_connecting() {
 }
 
 #[test]
-fn budget_lists_report_not_found_without_printing_credentials() {
+fn budget_lists_do_not_classify_using_a_reflected_message() {
     for command in ["list-budget-thresholds", "list-budget-alerts"] {
         let server = Server::start(vec![response(
             "400 Bad Request",
@@ -181,10 +181,10 @@ fn budget_lists_report_not_found_without_printing_credentials() {
             &["billing", command, "--budget-uuid", "budget-1"],
             Some(&server),
         );
-        assert_eq!(status, ExitCode::from(4));
+        assert_eq!(status, ExitCode::from(1));
         assert!(stdout.is_empty());
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
-        assert_eq!(error["error"]["code"], "NotFound");
+        assert_eq!(error["error"]["code"], "BadRequest");
         assert_eq!(error["error"]["status"], 400);
     }
 }

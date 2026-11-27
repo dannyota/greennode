@@ -8,6 +8,7 @@ pub(crate) mod password;
 mod query;
 pub mod render;
 mod root;
+mod screened_output;
 pub(crate) mod secret_file;
 mod stdin;
 
@@ -101,7 +102,44 @@ async fn run_registered(
         );
         return ExitCode::from(exit);
     };
-    ExitCode::from((handler.execute)(operation, matches, &mut invocation).await)
+    greennode_sdk::RequestContext::with_response_screening(async {
+        let write = matches!(
+            operation.operation.kind,
+            op::Kind::Write | op::Kind::DestructiveWrite | op::Kind::WriteReplacement
+        );
+        let budget = screened_output::Budget::new();
+        let mut output = screened_output::Stream::new(&budget);
+        let mut diagnostics = screened_output::Stream::new(&budget);
+        let stdout = invocation.stdout;
+        let stderr = invocation.stderr;
+        let exit = (handler.execute)(
+            operation,
+            matches,
+            &mut Invocation {
+                args: invocation.args,
+                source: invocation.source,
+                config_options: invocation.config_options,
+                stdin: invocation.stdin,
+                stdout: &mut output,
+                stderr: &mut diagnostics,
+                stdin_terminal: invocation.stdin_terminal,
+                stdout_terminal: invocation.stdout_terminal,
+                stderr_terminal: invocation.stderr_terminal,
+                clock: invocation.clock,
+                context: invocation.context,
+            },
+        )
+        .await;
+        ExitCode::from(screened_output::publish(
+            stdout,
+            stderr,
+            output,
+            diagnostics,
+            exit,
+            write,
+        ))
+    })
+    .await
 }
 
 #[cfg(test)]

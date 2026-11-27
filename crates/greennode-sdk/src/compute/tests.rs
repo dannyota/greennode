@@ -44,6 +44,68 @@ fn client_with_token(server: &TestServer, token: &str) -> Client {
 }
 
 #[tokio::test]
+async fn resize_poll_refuses_a_reflecting_server_snapshot() {
+    use super::mutation::Settlement;
+    let peer = r#"{"data":{"uuid":"server-1","status":"ACTIVE","flavor":{"flavorId":"flavor-2"},"description":"toy-secret"}}"#;
+    let server = TestServer::start(vec![response(peer)]);
+    let mut last = Server::default();
+    let result = client(&server)
+        .settle_server(
+            &RequestContext::new().0,
+            "server-1",
+            Settlement::Resized("flavor-2"),
+            &mut last,
+            &mut crate::wire::product::evidence::Evidence::new(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(last.uuid.is_empty());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn terminal_flavor_list_keeps_redaction() {
+    let server = TestServer::start(vec![response(
+        r#"{"flavors":[{"id":"offer-1","name":"toy-secret"}]}"#,
+    )]);
+    let result = client(&server)
+        .list_flavors(
+            &RequestContext::new().0,
+            ListFlavorsInput {
+                zone_id: String::new(),
+                flavor_zone_id: "fz-1".into(),
+                name: String::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.items.len(), 1);
+    assert!(result.items[0].name == "<redacted>");
+}
+
+#[tokio::test]
+async fn flavor_zone_discovery_refuses_a_reflected_non_retained_field() {
+    let server = TestServer::start(vec![
+        response(
+            r#"{"flavorZones":[{"id":"flavor-1","zoneId":"zone-1","description":"toy-secret"}]}"#,
+        ),
+        response(r#"{"flavors":[]}"#),
+    ]);
+    let result = client(&server)
+        .list_flavors(
+            &RequestContext::new().0,
+            ListFlavorsInput {
+                zone_id: "zone-1".into(),
+                flavor_zone_id: String::new(),
+                name: String::new(),
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn server_detail_matches_identity_and_redacts_encoded_reflection() {
     let server = TestServer::start(vec![
         response(
@@ -532,4 +594,19 @@ async fn repeated_image_versions_count_against_the_retained_byte_limit() {
             .starts_with("zone-1/offer-1/flavor-")
     );
     assert_eq!(server.heads().len(), 7);
+}
+
+#[tokio::test]
+async fn user_image_page_redacts_a_short_encoding_in_a_projected_id() {
+    let server = TestServer::start(vec![response(
+        r#"{"listData":[{"uuid":"image-1","projectId":"pre6A6B6Cpost"}],"page":1,"totalPage":1,"totalItem":1}"#,
+    )]);
+    let page = client_with_token(&server, "jkl")
+        .list_user_images(&RequestContext::new().0, ListUserImagesInput::default())
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 1);
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].uuid, "image-1");
+    assert!(page.items[0].project_id == "<redacted>");
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 
 /// An account's configured spend cap and its available period summary.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -76,6 +76,31 @@ pub struct Budget {
     pub alarm_threshold_count: i64,
 }
 
+crate::wire::product::output::public_fields!(Budget {
+    uuid,
+    id,
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    currency,
+    status,
+    period_key,
+    period_start,
+    period_end,
+    start_date,
+    created_at,
+    updated_at,
+    actual_cost,
+    forecasted_cost,
+    actual_percentage,
+    forecasted_percentage,
+    threshold_percentage,
+    alarm,
+    threshold_count,
+    alarm_threshold_count
+});
+
 impl Budget {
     pub(super) const SCHEMA: Shape<'static> = Shape::Object(&[
         field("uuid"),
@@ -135,8 +160,7 @@ pub(super) const fn field(name: &'static str) -> ShapeField<'static> {
 }
 
 pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> bool {
-    credentials.reflects(value.to_string().as_bytes())
-        || crate::output_number::reflects(value as f64, credentials, false)
+    credentials.integer_output_reflects(value)
 }
 
 pub(super) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(

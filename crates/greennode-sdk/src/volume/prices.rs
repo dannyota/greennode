@@ -13,14 +13,14 @@ use crate::quote::{
 };
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
-use super::wire::{failure, invalid, reflects};
+use super::wire::{failure, invalid};
 use super::{Client, VolumeType, inventory::response_id};
 
 const OP: &str = "volume.ListVolumePrices";
 const QUOTE: &str = "pricing.GetQuote";
 
 /// Selects offerings, quoted size and encryption, and discovery limits.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumePricesInput {
     /// Exact catalog zone. Empty includes all catalog zones.
     pub zone_id: String,
@@ -38,8 +38,18 @@ pub struct ListVolumePricesInput {
     pub allow_partial: bool,
 }
 
+crate::error::debug_record!(ListVolumePricesInput {
+    zone_id,
+    volume_type_id,
+    iops,
+    size,
+    encryption,
+    max_requests,
+    allow_partial
+});
+
 /// Available volume offerings with their quoted prices and coverage.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ListVolumePricesOutput {
     /// Rows in zone, type name, type ID, and encryption order.
@@ -48,8 +58,10 @@ pub struct ListVolumePricesOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(ListVolumePricesOutput { items, metadata });
+
 /// One volume offering and the price quoted for the requested size.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VolumePrice {
     /// Volume type and supported size bounds.
@@ -73,6 +85,17 @@ pub struct VolumePrice {
     /// Monthly quote and status.
     pub price: DiscoveryPrice,
 }
+
+crate::wire::product::output::public_fields!(VolumePrice {
+    volume_type,
+    zone_id,
+    zone_name,
+    encryption_type_id,
+    zone_enabled,
+    size_gb,
+    price_per_gb,
+    price
+});
 
 impl VolumePrice {
     fn type_id(&self) -> &str {
@@ -121,40 +144,42 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumePricesInput,
     ) -> Result<ListVolumePricesOutput, Failure<ListVolumePricesOutput>> {
-        validate(&input).map_err(failure)?;
-        let mut notes = discovery_notes();
-        notes.retain(|note| {
-            !matches!(
-                note.scope.as_str(),
-                "compute" | "network" | "object-storage"
-            )
-        });
-        notes.push(note(
-            "exclusions",
-            "volume",
-            "Provisioned volume quotes exclude snapshots, backups, and server CES.",
-            "",
-            "observed",
-        ));
-        let mut run = Discovery {
-            catalog: Catalog::new(&self.session, ctx, input.max_requests),
-            out: ListVolumePricesOutput {
-                items: Vec::new(),
-                metadata: DiscoveryMetadata {
-                    region: self.region.clone(),
-                    complete: true,
-                    requests: 0,
-                    quoted_at: self.session.clock().utc_now(),
-                    failures: Vec::new(),
-                    notes,
-                    excluded_groups: None,
+        crate::wire::product::exit::finish!(async {
+            validate(&input).map_err(failure)?;
+            let mut notes = discovery_notes();
+            notes.retain(|note| {
+                !matches!(
+                    note.scope.as_str(),
+                    "compute" | "network" | "object-storage"
+                )
+            });
+            notes.push(note(
+                "exclusions",
+                "volume",
+                "Provisioned volume quotes exclude snapshots, backups, and server CES.",
+                "",
+                "observed",
+            ));
+            let mut run = Discovery {
+                catalog: Catalog::new(&self.session, ctx, input.max_requests),
+                out: ListVolumePricesOutput {
+                    items: Vec::new(),
+                    metadata: DiscoveryMetadata {
+                        region: self.region.clone(),
+                        complete: true,
+                        requests: 0,
+                        quoted_at: self.session.clock().utc_now(),
+                        failures: Vec::new(),
+                        notes,
+                        excluded_groups: None,
+                    },
                 },
-            },
-            errors: Vec::new(),
-            allow_partial: input.allow_partial,
-        };
-        run.discover(&input).await.map_err(failure)?;
-        run.finish()
+                errors: Vec::new(),
+                allow_partial: input.allow_partial,
+            };
+            run.discover(&input).await.map_err(failure)?;
+            run.finish()
+        })
     }
 }
 
@@ -278,7 +303,7 @@ impl Discovery<'_> {
                             },
                         };
                         if serde_json::to_value(&row)
-                            .map_or(true, |value| reflects(&self.catalog.evidence, &value))
+                            .map_or(true, |value| self.catalog.evidence.output_reflects(&value))
                         {
                             if self.record(OP, "rows", request::invalid(OP, 200))? {
                                 return Ok(());
@@ -337,7 +362,10 @@ impl Discovery<'_> {
                 if let Ok(price) = &result
                     && !rate.is_some_and(|rate| {
                         self.catalog.evidence.reflects_fixed_two(rate)
-                            || reflects(&self.catalog.evidence, &serde_json::json!(rate))
+                            || self
+                                .catalog
+                                .evidence
+                                .output_reflects(&serde_json::json!(rate))
                     })
                 {
                     row.price.clone_from(price);
@@ -360,7 +388,7 @@ impl Discovery<'_> {
     }
 
     async fn quote_group(&mut self, body: &Value) -> Result<DiscoveryPrice, Box<Error>> {
-        if reflects(&self.catalog.evidence, body) {
+        if self.catalog.evidence.output_reflects(body) {
             return Err(invalid(
                 "vngcloud: invalid input: request contains credential material",
             ));
@@ -379,7 +407,7 @@ impl Discovery<'_> {
         let data = catalog::value(QUOTE, &raw)?;
         let price = decode::monthly(QUOTE, &data)?;
         if serde_json::to_value(&price)
-            .map_or(true, |value| reflects(&self.catalog.evidence, &value))
+            .map_or(true, |value| self.catalog.evidence.output_reflects(&value))
             || price
                 .monthly_price
                 .is_some_and(|amount| self.catalog.evidence.reflects_fixed_two(amount))
@@ -448,16 +476,12 @@ impl Discovery<'_> {
             item.item_key = safe_text(&item.item_key, &self.catalog.evidence);
         }
         let safe = serde_json::to_value(&self.out)
-            .is_ok_and(|value| !reflects(&self.catalog.evidence, &value));
+            .is_ok_and(|value| !self.catalog.evidence.output_reflects(&value));
         let rounded_reflection = self.out.items.iter().any(|row| {
             [row.price.monthly_price, row.price_per_gb]
                 .into_iter()
                 .flatten()
-                .any(|amount| {
-                    self.catalog
-                        .evidence
-                        .text_reflects(&crate::output_number::fixed_two(amount))
-                })
+                .any(|amount| self.catalog.evidence.reflects_fixed_two(amount))
         });
         if !safe || rounded_reflection {
             return Err(failure(request::invalid(OP, 200)));

@@ -129,7 +129,13 @@ impl Session {
 
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn is_write_fixture(&self, product: crate::testing::Product) -> bool {
-        self.auth_kind() == AuthKind::Static
+        (self.auth_kind() == AuthKind::Static
+            || (cfg!(test)
+                && matches!(
+                    product,
+                    crate::testing::Product::Database | crate::testing::Product::GlobalLoadBalancer
+                )
+                && self.auth_kind() == AuthKind::Custom))
             && self
                 .product_fixtures
                 .get()

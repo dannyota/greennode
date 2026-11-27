@@ -119,6 +119,31 @@ macro_rules! fixture {
 }
 
 #[test]
+fn web_accelerator_refuses_when_redaction_would_publish_the_key() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"domainName":"redacted"}}"#,
+        "application/json",
+    )]);
+    let (status, stdout, _stderr) = invoke(
+        &[
+            "--read-only",
+            "cdn",
+            "get-web-accelerator",
+            "--cdn-id",
+            "cdn-1",
+        ],
+        &server,
+        false,
+        Some("redacted"),
+        true,
+    );
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert_eq!(server.requests(), 1);
+}
+
+#[test]
 fn all_cdn_reads_match_the_go_renderer() {
     let cases = [
         fixture!("get-cache-status", "analytics-cache-status.json", DOMAIN),

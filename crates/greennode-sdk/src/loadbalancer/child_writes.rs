@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use std::{collections::BTreeMap, time::Duration};
 
 use bytes::Bytes;
@@ -29,7 +30,9 @@ const LOAD_BALANCER: Read = Read {
     route: "v2/{}/loadBalancers/{}",
 };
 
+#[derive(Debug)]
 pub(super) struct BusyRefusal;
+#[derive(Debug)]
 pub(super) struct CompleteRefusal;
 
 pub(super) type WriteResult<T> = Result<T, Failure<T>>;
@@ -74,7 +77,7 @@ impl<'a> ChildWriter<'a> {
         validate_ids(operation, ids, PathIds::Strict)?;
         let mut jitter = || client.session.retry_jitter();
         let runtime = client.session.runtime(ctx, &mut jitter)?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
@@ -96,7 +99,13 @@ impl<'a> ChildWriter<'a> {
     ) -> Result<String, Box<Error>> {
         let text = self
             .client
-            .read_text(ctx, read, ids, &[], &mut self.evidence, true)
+            .read_guard_text(
+                ctx,
+                super::wire::GuardRead(read),
+                ids,
+                &[],
+                &mut self.evidence,
+            )
             .await?;
         let wrapper = Envelope::parse(&text, read, &self.evidence)?;
         Ok(wrapper
@@ -120,21 +129,23 @@ impl<'a> ChildWriter<'a> {
     ) -> Result<Ready, Box<Error>> {
         let clock = self.client.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
-        loop {
+        guarded_poll!(self.evidence, {
             self.ready_time(ctx, &wait, child)?;
             let lb = self.parent(&wait).await;
             self.ready_time(ctx, &wait, child)?;
-            let (status, lb_type) = lb?;
-            if !lb_busy(&status) {
+            let lb = lb?;
+            let (status, lb_type) = lb.recheck(&self.evidence)?;
+            if !lb_busy(status) {
                 let Some(child) = child else {
                     return Ok(Ready {
-                        lb_type,
+                        lb_type: lb_type.clone(),
                         child: None,
                     });
                 };
                 let row = self.read_data(&wait, child.read, child.ids).await;
                 self.ready_time(ctx, &wait, Some(child))?;
                 let row = row?;
+                let (_, lb_type) = lb.recheck(&self.evidence)?;
                 if let Some(field) = child.guard_field {
                     validate_guard_string(child.read, &row, field, &self.evidence)?;
                 }
@@ -143,7 +154,7 @@ impl<'a> ChildWriter<'a> {
                 (child.validate)(child.read, &row, &self.evidence)?;
                 if !child_busy(&progress(child.read, &row, child.id, &self.evidence)?) {
                     return Ok(Ready {
-                        lb_type,
+                        lb_type: lb_type.clone(),
                         child: Some(row),
                     });
                 }
@@ -151,7 +162,7 @@ impl<'a> ChildWriter<'a> {
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     pub(super) fn ready_time(
@@ -184,18 +195,91 @@ impl<'a> ChildWriter<'a> {
     pub(super) async fn parent(
         &mut self,
         ctx: &RequestContext,
-    ) -> Result<(String, String), Box<Error>> {
+    ) -> Result<Guarded<(String, String)>, Box<Error>> {
         let data = self
             .read_data(ctx, &LOAD_BALANCER, &[("LoadBalancerID", self.lb_id)])
             .await?;
+        let evidence = &self.evidence;
         let ZonedLoadBalancer(parent) =
-            guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, &self.evidence)?;
-        validate_guard_string(&LOAD_BALANCER, &data, "type", &self.evidence)?;
-        screen_input(&self.evidence, [parent.r#type.as_str()])?;
-        Ok((
-            progress(&LOAD_BALANCER, &data, self.lb_id, &self.evidence)?,
-            parent.r#type,
-        ))
+            guard::parse(&LOAD_BALANCER, &data, &guard::LOAD_BALANCER, evidence)?;
+        validate_guard_string(&LOAD_BALANCER, &data, "type", evidence)?;
+        screen_input(evidence, [parent.r#type.as_str()])?;
+        let status = progress(&LOAD_BALANCER, &data, self.lb_id, evidence)?;
+        Guarded::latest((status, parent.r#type), evidence)
+    }
+
+    pub(super) async fn settle_child<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        wait: &RequestContext,
+        target: &ChildTarget<'_>,
+        creating: bool,
+        last: &mut T,
+        fields: impl Fn(&T) -> (&str, &str),
+    ) -> Result<(), Box<Error>> {
+        let clock = self.client.session.clock();
+        guarded_poll!(self.evidence, {
+            wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
+                .wait(clock)
+                .await;
+            self.confirm_time(ctx, wait, target)?;
+            let data = self.read_data(wait, target.read, target.ids).await;
+            self.confirm_time(ctx, wait, target)?;
+            let data = match data {
+                Ok(data) => data,
+                Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
+                Err(error) => return Err(self.unconfirmed(target, *error)),
+            };
+            let row: T = guard::parse(target.read, &data, target.shape, &self.evidence)
+                .map_err(|error| self.unconfirmed(target, *error))?;
+            let (id, status) = fields(&row);
+            if id != target.id || status.is_empty() {
+                let error = target
+                    .read
+                    .decode_error(&self.evidence, DecodeError::InvalidShape);
+                return Err(self.unconfirmed(target, *error));
+            }
+            screen_input(&self.evidence, [id, status])
+                .map_err(|error| self.unconfirmed(target, *error))?;
+            let created = status == "CREATED";
+            let row = Guarded::latest(row, &self.evidence)?;
+            let parent = if created {
+                let parent = self.parent(wait).await;
+                self.confirm_time(ctx, wait, target)?;
+                Some(parent.map_err(|error| self.unconfirmed(target, *error))?)
+            } else {
+                None
+            };
+            if self.child_settled(target, row, parent, last, &fields)? {
+                return Ok(());
+            }
+        });
+    }
+
+    fn child_settled<T>(
+        &self,
+        target: &ChildTarget<'_>,
+        row: Guarded<T>,
+        parent: Option<Guarded<(String, String)>>,
+        last: &mut T,
+        fields: impl Fn(&T) -> (&str, &str),
+    ) -> Result<bool, Box<Error>> {
+        let unconfirmed = |error: Box<Error>| self.unconfirmed(target, *error);
+        let row = row.into_checked(&self.evidence).map_err(unconfirmed)?;
+        let parent = parent
+            .map(|parent| parent.into_checked(&self.evidence))
+            .transpose()
+            .map_err(unconfirmed)?;
+        let failed = fields(&row).1 == "ERROR";
+        *last = row;
+        if failed {
+            return Err(self.failed(target.kind, target.id));
+        }
+        match parent {
+            Some((status, _)) if status == "ERROR" => Err(self.failed("load balancer", self.lb_id)),
+            Some((status, _)) => Ok(!lb_busy(&status)),
+            None => Ok(false),
+        }
     }
 
     pub(super) async fn send<O>(
@@ -246,7 +330,7 @@ impl<'a> ChildWriter<'a> {
             .await
             .map_err(|error| {
                 Failure::new(
-                    error.screen_api(&|text| self.evidence.text_reflects(text)),
+                    self.evidence.screen_error(*error),
                     None,
                     WriteDispatch::NotSent,
                 )
@@ -277,7 +361,7 @@ impl<'a> ChildWriter<'a> {
             keep_status: false,
             overflow_overrides_status: true,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -298,21 +382,14 @@ impl<'a> ChildWriter<'a> {
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            Failure::new(
-                error.screen_api(&|text| self.evidence.text_reflects(text)),
-                None,
-                dispatch,
-            )
+            Failure::new(self.evidence.screen_error(error), None, dispatch)
         })?;
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
         let refusal = status.is_client_error();
         let busy = refusal
-            && response::inspect_error_message(&body, |message| {
-                !response::reflects_credential_forms(message, self.evidence.credentials())
-                    && busy_message(message)
-            })
-            .unwrap_or(false);
+            && response::inspect_error_message(&body, self.evidence.credentials(), busy_message)
+                .unwrap_or(false);
         let body = response::classify(
             op.id,
             status,
@@ -322,7 +399,7 @@ impl<'a> ChildWriter<'a> {
             self.evidence.credentials(),
         )
         .map_err(|error| {
-            let mut error = error.screen_api(&|text| self.evidence.text_reflects(text));
+            let mut error = self.evidence.screen_error(*error);
             if refusal {
                 error = error.with_outer_detail(CompleteRefusal);
             }
@@ -390,10 +467,10 @@ impl<'a> ChildWriter<'a> {
         let id = (valid.allows(&id) && !self.evidence.id_reflects(&id)).then_some(id);
         id.ok_or_else(|| {
             let message = format!("create response had no id; the resource may exist, check with {list} and match the name exactly");
-            let error = Error::from_api(ApiError::without_fallback(
+            let error = self.evidence.screen_error(Error::from_api(ApiError::without_fallback(
                 self.operation, Some(status.as_u16()), crate::error::SafeText::new("", &[]),
                 crate::error::SafeText::new(&message, &[]), false,
-            )).screen_api(&|text| self.evidence.text_reflects(text));
+            )));
             Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
         })
     }
@@ -524,7 +601,7 @@ pub(super) fn encode_body(body: &impl Serialize, evidence: &Evidence) -> Result<
 fn screen_body(body: &Bytes, evidence: &Evidence) -> Result<(), Box<Error>> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|_| invalid_input("cannot encode request body"))?;
-    if evidence.reflected_in(&value) || evidence.text_reflects(&String::from_utf8_lossy(body)) {
+    if evidence.output_reflects(&value) || evidence.text_reflects(&String::from_utf8_lossy(body)) {
         return Err(invalid_input("request contains credential material"));
     }
     Ok(())

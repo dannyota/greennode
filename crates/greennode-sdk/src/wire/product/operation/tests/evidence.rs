@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[derive(Default, serde::Deserialize)]
-struct Json(Value);
+pub(super) struct Json(Value);
 
 impl std::fmt::Debug for Json {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -15,6 +15,179 @@ impl std::fmt::Debug for Json {
 
 impl Output for Json {
     const SCHEMA: Shape<'static> = Shape::Any;
+}
+
+#[tokio::test]
+async fn the_live_guard_receipt_limit_fails_closed_and_retirement_frees_space() {
+    let server = Server::start(vec![response("200 OK", b"{}"), response("200 OK", b"{}")]);
+    let mut evidence = Evidence::new();
+    assert!(evidence.keep_guard_for_test("test", b"{}"));
+    let checkpoint = evidence.guard_checkpoint();
+    for _ in checkpoint..512 {
+        assert!(evidence.keep_guard_for_test("test", b"{}"));
+    }
+    let mut op = declaration();
+    op.reflection = Reflection::Guard;
+    let options = Options::default();
+    let refused = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
+        .await
+        .unwrap_err();
+    assert!(refused.error().detail::<RefusedGuard>().is_some());
+    assert_eq!(evidence.guard_checkpoint(), 512);
+    evidence.discard_guards_after(checkpoint);
+    assert_eq!(evidence.guard_checkpoint(), checkpoint);
+    assert!(evidence.credentials().text_reflects("toy-first"));
+    assert!(
+        call_evidence(&server, &op, &options, "one", "toy-next", &mut evidence)
+            .await
+            .is_ok()
+    );
+    assert_eq!(evidence.guard_checkpoint(), checkpoint + 1);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn ordinary_operation_refuses_reflected_wire_before_decode() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projectId":"pre6A6B6Cpost"}"#,
+    )]);
+    let result = call_evidence(
+        &server,
+        &declaration(),
+        &Options::default(),
+        "one",
+        "jkl",
+        &mut Evidence::new(),
+    )
+    .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn fallback_api_code_cannot_reflect_the_bearer() {
+    let server = Server::start(vec![response("403 Forbidden", br#"{"message":"denied"}"#)]);
+    let failure = call_evidence(
+        &server,
+        &declaration(),
+        &Options::default(),
+        "one",
+        "Forbidden",
+        &mut Evidence::new(),
+    )
+    .await
+    .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert!(api.code().is_empty());
+    assert_eq!(api.message(), "denied");
+}
+
+#[tokio::test]
+async fn body_screens_bearer_spanning_key_and_delimiter() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"TAIL":"public"}"#),
+        response("200 OK", br#"{"other":"public"}"#),
+    ]);
+    let mut op = declaration();
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let token = "tail\":";
+    let reflected = call_evidence(&server, &op, &options, "one", token, &mut evidence).await;
+    let clean = call_evidence(&server, &op, &options, "one", token, &mut evidence).await;
+    assert_eq!(server.requests(), 2);
+    assert!(reflected.is_err());
+    assert!(clean.is_ok());
+}
+
+#[tokio::test]
+async fn body_screens_bearer_in_raw_escape_spelling() {
+    let body = format!(r#"{{"name":"{}u005A"}}"#, char::from(92));
+    let server = Server::start(vec![
+        response("200 OK", body.as_bytes()),
+        response("200 OK", br#"{"name":"Z"}"#),
+    ]);
+    let mut op = declaration();
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let reflected = call_evidence(&server, &op, &options, "one", "u005a", &mut evidence).await;
+    let clean = call_evidence(&server, &op, &options, "one", "u005a", &mut evidence).await;
+    assert_eq!(server.requests(), 2);
+    assert!(reflected.is_err());
+    assert!(clean.is_ok());
+}
+
+#[tokio::test]
+async fn body_screens_short_encodings_under_identifier_keys() {
+    let bodies = [
+        br#"{"projectId":"pre6A6B6Cpost"}"#.as_slice(),
+        br#"{"project_uuid":"pre6A6B6Cpost"}"#,
+        br#"{"ids":[["pre6A6B6Cpost"]]}"#,
+        br#"{"UUID":"pre6A6B6Cpost"}"#,
+        br#"{"paid":"pre6A6B6Cpost","valid":"pre6A6B6Cpost"}"#,
+    ];
+    let server = Server::start(bodies.map(|body| response("200 OK", body)).into());
+    let mut op = declaration();
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let mut refused = Vec::new();
+    for _ in bodies {
+        refused.push(
+            call_evidence(&server, &op, &options, "one", "jkl", &mut evidence)
+                .await
+                .is_err(),
+        );
+    }
+    assert_eq!(server.requests(), bodies.len());
+    assert_eq!(refused, [true, true, true, true, false]);
+}
+
+#[tokio::test]
+async fn body_does_not_render_ignored_numbers() {
+    let body = br#"{"ignored":1e6}"#;
+    let server = Server::start(vec![response("200 OK", body), response("200 OK", body)]);
+    let mut op = declaration();
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
+    op.no_output = true;
+    let options = Options::default();
+    let mut outcomes = Vec::new();
+    for token in ["e+06", "1000000"] {
+        outcomes.push(
+            call_evidence(&server, &op, &options, "one", token, &mut Evidence::new())
+                .await
+                .is_ok(),
+        );
+    }
+    assert_eq!(server.requests(), 2);
+    assert_eq!(outcomes, [true, true]);
+}
+
+#[tokio::test]
+async fn retained_identifier_is_rescreened_after_later_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            br#"{"projectId":"pre6A6B6Cpost","valid":"pre6A6B6Cpost"}"#,
+        ),
+        response("403 Forbidden", b"{}"),
+    ]);
+    let mut op = declaration();
+    op.reflection = Reflection::Redact;
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    let (_, retained) = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
+        .await
+        .unwrap();
+    assert!(!evidence.output_reflects(&retained.0));
+    let failed = call_evidence(&server, &op, &options, "one", "jkl", &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 2);
+    let failure = evidence.with_partial(failed, retained.0, WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial() == Some(&json!({"projectId":"<redacted>","valid":"pre6A6B6Cpost"})));
 }
 
 enum EvidenceSource {
@@ -51,7 +224,7 @@ impl sender::BearerSource for EvidenceSource {
 }
 
 #[allow(clippy::result_large_err)]
-async fn call_evidence(
+pub(super) async fn call_evidence(
     server: &Server,
     op: &Operation,
     options: &Options<'_>,
@@ -125,17 +298,17 @@ async fn evidence_accumulates_across_success_and_send_failure() {
             .await
             .is_ok()
     );
-    assert!(evidence.reflected_in(&json!("toy-first")));
-    assert!(evidence.reflected_in(&json!("toy-signin")));
-    assert!(evidence.reflected_in(&json!("toy-configured")));
+    assert!(evidence.output_reflects(&json!("toy-first")));
+    assert!(evidence.output_reflects(&json!("toy-signin")));
+    assert!(evidence.output_reflects(&json!("toy-configured")));
     assert!(
         call_evidence(&server, &op, &options, "one", "toy-second", &mut evidence)
             .await
             .is_err()
     );
-    assert!(evidence.reflected_in(&json!("toy-first")));
-    assert!(evidence.reflected_in(&json!("toy-second")));
-    assert!(!evidence.reflected_in(&json!("public")));
+    assert!(evidence.output_reflects(&json!("toy-first")));
+    assert!(evidence.output_reflects(&json!("toy-second")));
+    assert!(!evidence.output_reflects(&json!("public")));
 }
 
 #[tokio::test]
@@ -143,7 +316,7 @@ async fn later_call_rejects_a_reflected_service_secret() {
     let body = br#"{"id":"issued-pw"}"#;
     let server = Server::start(vec![response("200 OK", body), response("200 OK", body)]);
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let (_, output) = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
@@ -193,7 +366,7 @@ async fn settlement_failure_preserves_sanitized_decoded_output_and_dispatch() {
     assert_eq!(failure.error().class(), ErrorClass::PermissionDenied);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let partial = failure.partial().unwrap();
-    assert!(!evidence.reflected_in(partial));
+    assert!(!evidence.output_reflects(partial));
     assert!(
         partial
             == &json!({
@@ -408,7 +581,14 @@ async fn key_routes_send_only_the_cdn_key_and_record_reflection() {
         .await
         .unwrap();
     assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
-    assert!(evidence.reflected_in(&json!("toy-cdn-key")));
+    assert!(evidence.output_reflects(&json!("toy-cdn-key")));
+    assert!(
+        evidence
+            .credentials()
+            .values()
+            .iter()
+            .any(|secret| secret.expose_secret() == "Bearer toy-cdn-key")
+    );
     let heads = server.heads();
     let req = String::from_utf8_lossy(&heads[0]);
     assert!(
@@ -478,4 +658,22 @@ async fn raw_route(
         evidence,
     )
     .await
+}
+
+#[tokio::test]
+async fn product_sender_records_bearer_before_a_dropped_exchange() {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let op = declaration();
+    let options = Options::default();
+    let mut evidence = Evidence::new();
+    crate::RequestContext::with_response_screening(async {
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = call_evidence(&server, &op, &options, "one", "toy-inflight-token", &mut evidence) => panic!("exchange should still be pending"),
+        }
+        assert!(crate::RequestContext::response_bytes_reflect(b"toy-inflight-token"));
+        assert!(crate::wire::product::exit::recorded_exactly("Bearer toy-inflight-token"));
+    }).await;
+    assert_eq!(server.requests(), 1);
 }

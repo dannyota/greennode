@@ -125,7 +125,7 @@ async fn reads_use_regional_backup_center_without_project_scope() {
 
 #[tokio::test]
 async fn retained_response_strings_refuse_reflected_bearer() {
-    let reflected = format!("prefix-{}-suffix", TOKEN.replace('-', "\\u002d"));
+    let reflected = format!("prefix-{}-suffix", TOKEN.replace('-', "%2D"));
     let backend = BACKENDS.replace("\"backend\"", &format!("\"{reflected}\""));
     let policies = POLICIES.replace("\"incremental\"", &format!("\"{reflected}\""));
     let policy = POLICY.replace(
@@ -510,4 +510,46 @@ async fn status_and_overflow_errors_withhold_peer_fields() {
         assert_eq!(api.message(), "Backup Center response withheld");
         assert!(!format!("{error:?} {error}").contains(TOKEN));
     }
+}
+
+#[tokio::test]
+async fn backup_exit_screens_the_locally_selected_forbidden_code() {
+    let server = Server::start(vec![response("403 Forbidden", "{}")]);
+    let client = configured_client(
+        &server,
+        "han-1",
+        ConfigOptions::default().with_static_token(Secret::new("Forbidden")),
+    );
+    let failure = client
+        .get_policy(&RequestContext::new().0, GetPolicyInput::new("policy-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert!(api.code().is_empty());
+    assert_eq!(api.status(), Some(403));
+    assert_eq!(failure.error().class(), ErrorClass::PermissionDenied);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn backup_overflow_screens_a_reflected_static_detail() {
+    let body = "x".repeat((8 << 20) + 1);
+    let server = Server::start(vec![response("200 OK", &body)]);
+    let client = configured_client(
+        &server,
+        "han-1",
+        ConfigOptions::default().with_static_token(Secret::new("exceeds")),
+    );
+    let failure = client
+        .list_backends(&RequestContext::new().0, ListBackendsInput)
+        .await
+        .unwrap_err();
+    assert!(failure.error().is_body_too_large());
+    assert!(
+        failure
+            .error()
+            .detail::<&'static str>()
+            .is_none_or(|detail| !detail.contains("exceeds"))
+    );
+    assert_eq!(server.requests(), 1);
 }

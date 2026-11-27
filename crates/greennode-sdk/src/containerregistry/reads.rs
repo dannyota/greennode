@@ -1,7 +1,7 @@
 use super::*;
 
 /// Filters and selects a page of registry users.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListUsersInput {
     /// User name filter.
     pub name: String,
@@ -10,11 +10,13 @@ pub struct ListUsersInput {
     /// Page size, defaulting to 10000 when not positive.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListUsersInput { name, page, size });
 /// A page of registry users.
 pub type ListUsersOutput = PagedList<User>;
 
 /// Selects a repository and a page of its users.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListRepositoryUsersInput {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
@@ -25,15 +27,24 @@ pub struct ListRepositoryUsersInput {
     /// Page size, defaulting to 10000 when not positive.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListRepositoryUsersInput {
+    repository_id,
+    name,
+    page,
+    size
+});
 /// A page of users attached to a repository.
 pub type ListRepositoryUsersOutput = PagedList<User>;
 
 /// Selects a repository by identifier.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetRepositoryInput {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
 }
+
+crate::error::debug_record!(GetRepositoryInput { repository_id });
 impl GetRepositoryInput {
     /// Stores the identifier for validation by the read.
     pub fn new(id: impl Into<String>) -> Self {
@@ -43,15 +54,17 @@ impl GetRepositoryInput {
     }
 }
 /// The requested repository.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetRepositoryOutput {
     /// Repository with its matching identifier.
     #[serde(rename = "Repository")]
     pub repository: Repository,
 }
 
+crate::wire::product::output::public_fields!(GetRepositoryOutput { repository });
+
 /// A registry user and its repository permissions.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(
     default,
     rename_all(serialize = "PascalCase", deserialize = "camelCase")
@@ -60,7 +73,8 @@ pub struct User {
     /// User identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// User name.
@@ -93,7 +107,8 @@ pub struct User {
     /// Account identifier, accepted as a number or string.
     #[serde(
         rename(deserialize = "userId", serialize = "UserID"),
-        deserialize_with = "user_id"
+        deserialize_with = "user_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub user_id: String,
     /// Repository permissions.
@@ -103,14 +118,28 @@ pub struct User {
     )]
     pub repositories: Vec<RepositoryPermission>,
 }
+
+crate::wire::product::output::public_fields!(User {
+    id,
+    name,
+    backend_name,
+    description,
+    disabled,
+    expired_at,
+    created_at,
+    number_of_repositories,
+    user_id,
+    repositories
+});
 /// Permissions for a particular repository.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RepositoryPermission {
     /// Repository identifier.
     #[serde(
         rename(deserialize = "repoId", serialize = "RepositoryID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub repository_id: String,
     /// Repository name.
@@ -132,6 +161,13 @@ pub struct RepositoryPermission {
     )]
     pub policies: Vec<Permission>,
 }
+
+crate::wire::product::output::public_fields!(RepositoryPermission {
+    repository_id,
+    repository_name,
+    backend_repository_name,
+    policies
+});
 fn user_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     let raw = Option::<Box<serde_json::value::RawValue>>::deserialize(deserializer)?;
     let Some(raw) = raw else {
@@ -197,7 +233,7 @@ impl Output for Users {
         field("totalPage"),
         field("totalItem"),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
@@ -218,10 +254,7 @@ impl Output for Users {
                 .flatten()
                 .map(|u| u.number_of_repositories),
         )
-        .any(|v| {
-            response.credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, &response.credentials, false)
-        });
+        .any(|v| response.credentials.integer_output_reflects(v));
         if reflected
             || keys
                 .keys()
@@ -238,7 +271,7 @@ impl Output for Users {
 }
 impl Output for Repository {
     const SCHEMA: Shape<'static> = REPOSITORY;
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let value: Self = operation::decode_response(op, response)?;
         if [
@@ -247,10 +280,8 @@ impl Output for Repository {
             value.attached_users,
         ]
         .into_iter()
-        .any(|v| {
-            response.credentials.reflects(v.to_string().as_bytes())
-                || crate::output_number::reflects(v as f64, &response.credentials, false)
-        }) || crate::output_number::reflects(value.quota_used, &response.credentials, true)
+        .any(|v| response.credentials.integer_output_reflects(v))
+            || crate::output_number::reflects(value.quota_used, &response.credentials, true)
         {
             return Err(Box::new(Error::new(ErrorClass::Api)));
         }
@@ -272,15 +303,17 @@ impl Client {
         ctx: &RequestContext,
         input: ListUsersInput,
     ) -> Result<ListUsersOutput, Failure<ListUsersOutput>> {
-        self.users(
-            ctx,
-            "containerregistry.ListUsers",
-            "v1/user",
-            &[],
-            &input.name,
-            (input.page, input.size),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.users(
+                ctx,
+                "containerregistry.ListUsers",
+                "v1/user",
+                &[],
+                &input.name,
+                (input.page, input.size),
+            )
+            .await
+        })
     }
     /// Lists one page of users attached to a repository.
     pub async fn list_repository_users(
@@ -288,18 +321,20 @@ impl Client {
         ctx: &RequestContext,
         input: ListRepositoryUsersInput,
     ) -> Result<ListRepositoryUsersOutput, Failure<ListRepositoryUsersOutput>> {
-        if !valid_id(&input.repository_id) {
-            return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.ListRepositoryUsers requires RepositoryID to match ^[A-Za-z0-9-]+$")));
-        }
-        self.users(
-            ctx,
-            "containerregistry.ListRepositoryUsers",
-            "v1/repository/{}/user",
-            &[&input.repository_id],
-            &input.name,
-            (input.page, input.size),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            if !valid_id(&input.repository_id) {
+                return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.ListRepositoryUsers requires RepositoryID to match ^[A-Za-z0-9-]+$")));
+            }
+            self.users(
+                ctx,
+                "containerregistry.ListRepositoryUsers",
+                "v1/repository/{}/user",
+                &[&input.repository_id],
+                &input.name,
+                (input.page, input.size),
+            )
+            .await
+        })
     }
     async fn users(
         &self,
@@ -330,11 +365,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetRepositoryInput,
     ) -> Result<GetRepositoryOutput, Failure<GetRepositoryOutput>> {
-        let result = self
-            .get_repository_evidenced(ctx, &input.repository_id, &mut Evidence::new())
-            .await?;
-        Ok(GetRepositoryOutput {
-            repository: result.repository,
+        crate::wire::product::exit::finish!(async {
+            let result = self
+                .get_repository_evidenced(ctx, &input.repository_id, &mut Evidence::new())
+                .await?;
+            Ok(GetRepositoryOutput {
+                repository: result.repository,
+            })
         })
     }
 
@@ -461,7 +498,6 @@ pub(super) struct RepositoryRead {
 
 impl Output for RepositoryRead {
     const SCHEMA: Shape<'static> = REPOSITORY;
-    const CHECK_RENDERED_NUMBERS: bool = true;
 
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         #[derive(Deserialize)]

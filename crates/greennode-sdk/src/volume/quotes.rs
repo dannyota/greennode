@@ -12,7 +12,7 @@ use super::wire::{failure, invalid, screen};
 use super::{Client, path_id};
 
 /// Parameters for the price of a new volume.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateVolumeInput {
     /// Volume name, ignored by the quote.
     pub name: String,
@@ -32,8 +32,19 @@ pub struct CreateVolumeInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateVolumeInput {
+    name,
+    zone_id,
+    size,
+    volume_type_id,
+    encryption_type_id,
+    auto_renew,
+    max_price,
+    no_wait
+});
+
 /// Parameters for the price of growing an existing volume.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeVolumeInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -44,6 +55,13 @@ pub struct ResizeVolumeInput {
     /// Settlement selection, ignored by the quote.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeVolumeInput {
+    volume_id,
+    size,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,
@@ -56,10 +74,12 @@ impl Client {
         ctx: &RequestContext,
         volume: CreateVolumeInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let quote = create_quote("volume.QuoteCreateVolume", &volume).map_err(failure)?;
-        self.request_volume_quote(ctx, quote, &mut Evidence::new())
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            let quote = create_quote("volume.QuoteCreateVolume", &volume).map_err(failure)?;
+            self.request_volume_quote(ctx, quote, &mut Evidence::new())
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Reads the current size and type, then quotes a grow without resizing the volume.
@@ -68,30 +88,32 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeVolumeInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "volume.QuoteResizeVolume";
-        if input.size == 0 {
-            return Err(failure(invalid(
-                "vngcloud: invalid input: volume.QuoteResizeVolume requires Size",
-            )));
-        }
-        path_id(OP, "VolumeID", &input.volume_id).map_err(failure)?;
-        let mut evidence = Evidence::new();
-        self.guard_body(ctx, &mut evidence, &json!([input.volume_id, input.size]))
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "volume.QuoteResizeVolume";
+            if input.size == 0 {
+                return Err(failure(invalid(
+                    "vngcloud: invalid input: volume.QuoteResizeVolume requires Size",
+                )));
+            }
+            path_id(OP, "VolumeID", &input.volume_id).map_err(failure)?;
+            let mut evidence = Evidence::new();
+            self.guard_body(ctx, &mut evidence, &json!([input.volume_id, input.size]))
+                .map_err(failure)?;
+            let current = self
+                .volume(ctx, &input.volume_id, &mut evidence)
+                .await
+                .map_err(failure)?;
+            self.guard_body(
+                ctx,
+                &mut evidence,
+                &json!([current.size, current.volume_type_id]),
+            )
             .map_err(failure)?;
-        let current = self
-            .volume(ctx, &input.volume_id, &mut evidence)
-            .await
-            .map_err(failure)?;
-        self.guard_body(
-            ctx,
-            &mut evidence,
-            &json!([current.size, current.volume_type_id]),
-        )
-        .map_err(failure)?;
-        let (_, _, quote) = resize_bodies(OP, &input, &current).map_err(failure)?;
-        self.request_volume_quote(ctx, quote, &mut evidence)
-            .await
-            .map_err(failure)
+            let (_, _, quote) = resize_bodies(OP, &input, &current).map_err(failure)?;
+            self.request_volume_quote(ctx, quote, &mut evidence)
+                .await
+                .map_err(failure)
+        })
     }
 
     pub(super) async fn request_volume_quote(

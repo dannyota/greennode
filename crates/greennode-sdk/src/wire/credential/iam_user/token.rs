@@ -110,41 +110,51 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<TimedToken, LoginErr
         })
         .map_err(|_| failure())?,
     );
-    let authorization = format!(
-        "Basic {}",
-        BASE64.encode(b"c9e78411-f2a2-41ba-a9e4-3c56263c181a:")
-    );
+    let client_id = Secret::new(super::CLIENT_ID);
+    let encoded =
+        zeroize::Zeroizing::new(BASE64.encode(format!("{}:", super::CLIENT_ID).as_bytes()));
+    let authorization = Secret::new(format!("Basic {}", *encoded));
+    let mut header_value =
+        http::HeaderValue::from_str(authorization.expose_secret()).map_err(|_| failure())?;
+    header_value.set_sensitive(true);
+    let mut credentials = SentCredentials::default();
+    credentials.record_basic(authorization.expose_secret());
+    for secret in [&client_id, input.code, input.verifier] {
+        credentials.record(secret);
+    }
     let request = Request::post(input.token_url.as_str())
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::AUTHORIZATION, authorization)
+        .header(header::AUTHORIZATION, header_value)
         .header(header::ACCEPT_ENCODING, "gzip")
         .body(Full::new(Bytes::copy_from_slice(
             body.expose_secret().as_bytes(),
         )))
         .map_err(|_| failure())?;
+    let failure = |status| {
+        let mut error = LoginError::new("token exchange", status, false);
+        error.screen(|text| credentials.text_reflects(text));
+        error
+    };
     let started = input.clock.utc_now();
     let started_monotonic = input.clock.monotonic_now();
-    let response = send::once(
-        input.client.as_client(),
-        request,
-        1 << 20,
-        Encoding::Gzip,
-        input.clock,
-        input.deadline,
+    let response = send::with_sent_credentials(
+        &credentials,
+        send::once(
+            input.client.as_client(),
+            request,
+            1 << 20,
+            Encoding::Gzip,
+            input.clock,
+            input.deadline,
+        ),
     )
     .await
-    .map_err(|error| {
-        LoginError::new(
-            "token exchange",
-            error.observed().map(|head| head.status.as_u16()),
-            false,
-        )
-    })?;
+    .map_err(|error| failure(error.observed().map(|head| head.status.as_u16())))?;
     let status = Some(response.status.as_u16());
     if response.status != http::StatusCode::OK {
-        return Err(LoginError::new("token exchange", status, false));
+        return Err(failure(status));
     }
-    decode(
+    let token = decode(
         &response.body,
         started,
         input
@@ -152,13 +162,13 @@ pub(super) async fn exchange(input: Exchange<'_>) -> Result<TimedToken, LoginErr
             .monotonic_now()
             .saturating_duration_since(started_monotonic),
     )
-    .map(|token| TimedToken {
+    .map_err(|_| failure(status))?;
+    Ok(TimedToken {
         token,
-        credentials: SentCredentials::default(),
+        credentials,
         started_wall: started,
         started_monotonic,
     })
-    .map_err(|_| LoginError::new("token exchange", status, false))
 }
 
 #[cfg(test)]
@@ -181,6 +191,10 @@ mod tests {
     }
 
     async fn run(server: &Server) -> Result<Token, LoginError> {
+        run_with_code(server, "auth-code-canary").await
+    }
+
+    async fn run_with_code(server: &Server, code: &str) -> Result<Token, LoginError> {
         let client =
             OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone())).unwrap();
         let token_url = url::Url::parse(&format!("{}/token", server.origin)).unwrap();
@@ -194,7 +208,7 @@ mod tests {
             client: &client,
             token_url: &token_url,
             dashboard: &dashboard,
-            code: &Secret::new("auth-code-canary"),
+            code: &Secret::new(code),
             verifier: &verifier,
             clock: &SystemClock,
             deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
@@ -216,6 +230,18 @@ mod tests {
         let head = String::from_utf8_lossy(&server.heads()[0]).to_ascii_lowercase();
         assert!(head.starts_with("post /token "));
         assert!(head.contains("content-type: application/json"));
+    }
+
+    #[tokio::test]
+    async fn token_exchange_failure_screens_attempt_credentials() {
+        for (code, status, reason) in [("401", None, "token exchange"), ("exchange", Some(401), "")]
+        {
+            let server = Server::start(vec![response("401 Unauthorized", "{}")]);
+            let error = run_with_code(&server, code).await.unwrap_err();
+            assert_eq!(server.requests(), 1);
+            assert_eq!(error.status(), status);
+            assert!(error.reason() == reason);
+        }
     }
 
     #[tokio::test]

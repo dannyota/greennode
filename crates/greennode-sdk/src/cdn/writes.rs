@@ -43,13 +43,15 @@ const PURGE: Call = Call {
 macro_rules! toggle_types {
     ($input:ident, $output:ident) => {
         /// Input for changing a Web Accelerator's enabled state.
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         pub struct $input {
             /// CDN identifier.
             pub cdn_id: String,
             /// Skips settlement after a read confirms the toggle began.
             pub no_wait: bool,
         }
+
+        crate::error::debug_record!($input { cdn_id, no_wait });
 
         impl $input {
             /// Creates the input with settlement enabled.
@@ -62,7 +64,7 @@ macro_rules! toggle_types {
         }
 
         /// Result of changing a Web Accelerator's enabled state.
-        #[derive(Clone, Debug, Serialize)]
+        #[derive(Clone, Serialize)]
         #[serde(rename_all = "PascalCase")]
         pub struct $output {
             /// Last confirmed Web Accelerator detail.
@@ -70,6 +72,11 @@ macro_rules! toggle_types {
             /// Whether a toggle was sent and confirmed by a read.
             pub changed: bool,
         }
+
+        crate::wire::product::output::public_fields!($output {
+            web_accelerator,
+            changed
+        });
     };
 }
 
@@ -77,11 +84,13 @@ toggle_types!(EnableWebAcceleratorInput, EnableWebAcceleratorOutput);
 toggle_types!(DisableWebAcceleratorInput, DisableWebAcceleratorOutput);
 
 /// Input for deleting a Web Accelerator.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteWebAcceleratorInput {
     /// CDN identifier.
     pub cdn_id: String,
 }
+
+crate::error::debug_record!(DeleteWebAcceleratorInput { cdn_id });
 
 impl DeleteWebAcceleratorInput {
     /// Creates the input with the CDN identifier.
@@ -93,17 +102,21 @@ impl DeleteWebAcceleratorInput {
 }
 
 /// An accepted Web Accelerator deletion.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteWebAcceleratorOutput {}
 
+crate::wire::product::output::public_fields!(DeleteWebAcceleratorOutput {});
+
 /// Input for purging exact cached paths.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PurgePathsInput {
     /// Generated CDN domain.
     pub cdn_domain: String,
     /// Nonempty paths without wildcard asterisks.
     pub paths: Vec<String>,
 }
+
+crate::error::debug_record!(PurgePathsInput { cdn_domain, paths });
 
 impl PurgePathsInput {
     /// Creates the input with a generated CDN domain and its paths.
@@ -116,8 +129,10 @@ impl PurgePathsInput {
 }
 
 /// An accepted purge of the requested paths.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct PurgePathsOutput {}
+
+crate::wire::product::output::public_fields!(PurgePathsOutput {});
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WriteKind {
@@ -134,28 +149,30 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteWebAcceleratorInput,
     ) -> Result<DeleteWebAcceleratorOutput, Failure<DeleteWebAcceleratorOutput>> {
-        let mut evidence = self
-            .write_evidence(ctx, None, Some(&input.cdn_id))
-            .map_err(super::wire::convert)?;
-        self.preflight(
-            ctx,
-            &DELETE,
-            &input.cdn_id,
-            WriteKind::Delete,
-            &mut evidence,
-        )
-        .await
-        .map_err(super::wire::convert)?;
-        if let Err(failure) = self
-            .call_with_evidence(ctx, &DELETE, &[&input.cdn_id], Bytes::new(), &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self
+                .write_evidence(ctx, None, Some(&input.cdn_id))
+                .map_err(super::wire::convert)?;
+            self.preflight(
+                ctx,
+                &DELETE,
+                &input.cdn_id,
+                WriteKind::Delete,
+                &mut evidence,
+            )
             .await
-        {
-            let failure = self
-                .explain_401(ctx, &DELETE, &input.cdn_id, failure, &mut evidence)
-                .await;
-            return Err(super::wire::convert(possibly_applied(failure, "delete")));
-        }
-        Ok(DeleteWebAcceleratorOutput {})
+            .map_err(super::wire::convert)?;
+            if let Err(failure) = self
+                .call_with_evidence(ctx, &DELETE, &[&input.cdn_id], Bytes::new(), &mut evidence)
+                .await
+            {
+                let failure = self
+                    .explain_401(ctx, &DELETE, &input.cdn_id, failure, &mut evidence)
+                    .await;
+                return Err(super::wire::convert(possibly_applied(failure, "delete")));
+            }
+            Ok(DeleteWebAcceleratorOutput {})
+        })
     }
 
     /// Enables a disabled Web Accelerator and confirms that its status changed.
@@ -164,18 +181,20 @@ impl Client {
         ctx: &RequestContext,
         input: EnableWebAcceleratorInput,
     ) -> Result<EnableWebAcceleratorOutput, Failure<EnableWebAcceleratorOutput>> {
-        self.toggle(
-            ctx,
-            &ENABLE,
-            &input.cdn_id,
-            WriteKind::Enable,
-            input.no_wait,
-            |web_accelerator, changed| EnableWebAcceleratorOutput {
-                web_accelerator,
-                changed,
-            },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.toggle(
+                ctx,
+                &ENABLE,
+                &input.cdn_id,
+                WriteKind::Enable,
+                input.no_wait,
+                |web_accelerator, changed| EnableWebAcceleratorOutput {
+                    web_accelerator,
+                    changed,
+                },
+            )
+            .await
+        })
     }
 
     /// Disables an active Web Accelerator and confirms that its status changed.
@@ -184,18 +203,20 @@ impl Client {
         ctx: &RequestContext,
         input: DisableWebAcceleratorInput,
     ) -> Result<DisableWebAcceleratorOutput, Failure<DisableWebAcceleratorOutput>> {
-        self.toggle(
-            ctx,
-            &DISABLE,
-            &input.cdn_id,
-            WriteKind::Disable,
-            input.no_wait,
-            |web_accelerator, changed| DisableWebAcceleratorOutput {
-                web_accelerator,
-                changed,
-            },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.toggle(
+                ctx,
+                &DISABLE,
+                &input.cdn_id,
+                WriteKind::Disable,
+                input.no_wait,
+                |web_accelerator, changed| DisableWebAcceleratorOutput {
+                    web_accelerator,
+                    changed,
+                },
+            )
+            .await
+        })
     }
 
     /// Purges exact paths. Retries only a failed dial or HTTP 429.
@@ -205,26 +226,28 @@ impl Client {
         ctx: &RequestContext,
         input: PurgePathsInput,
     ) -> Result<PurgePathsOutput, Failure<PurgePathsOutput>> {
-        if input.cdn_domain.is_empty()
-            || input.paths.is_empty()
-            || input
-                .paths
-                .iter()
-                .any(|path| path.is_empty() || path.contains('*'))
-        {
-            return Err(invalid(
-                "cdn.PurgePaths requires a CDNDomain and nonempty Paths without *",
-            ));
-        }
-        let supplied = json!([input.cdn_domain, input.paths]);
-        let mut evidence = self
-            .write_evidence(ctx, Some(&supplied), None)
-            .map_err(super::wire::convert)?;
-        let body = json!({"cdnDomain":input.cdn_domain,"type":"URI","patterns":input.paths});
-        self.call_with_evidence(ctx, &PURGE, &[], encode(&body)?, &mut evidence)
-            .await
-            .map_err(super::wire::convert)?;
-        Ok(PurgePathsOutput {})
+        crate::wire::product::exit::finish!(async {
+            if input.cdn_domain.is_empty()
+                || input.paths.is_empty()
+                || input
+                    .paths
+                    .iter()
+                    .any(|path| path.is_empty() || path.contains('*'))
+            {
+                return Err(invalid(
+                    "cdn.PurgePaths requires a CDNDomain and nonempty Paths without *",
+                ));
+            }
+            let supplied = json!([input.cdn_domain, input.paths]);
+            let mut evidence = self
+                .write_evidence(ctx, Some(&supplied), None)
+                .map_err(super::wire::convert)?;
+            let body = json!({"cdnDomain":input.cdn_domain,"type":"URI","patterns":input.paths});
+            self.call_with_evidence(ctx, &PURGE, &[], encode(&body)?, &mut evidence)
+                .await
+                .map_err(super::wire::convert)?;
+            Ok(PurgePathsOutput {})
+        })
     }
 
     fn write_evidence(
@@ -243,12 +266,12 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|err| before_send(*err))?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
-        if cdn_id.is_some_and(|id| evidence.reflected_in(&Value::String(id.into())))
-            || body.is_some_and(|body| evidence.reflected_in(body))
+        if cdn_id.is_some_and(|id| evidence.output_reflects(&Value::String(id.into())))
+            || body.is_some_and(|body| evidence.output_reflects(body))
         {
             return Err(invalid("the write input contains a configured credential"));
         }
@@ -264,9 +287,12 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(WebDetail, bool), Failure<()>> {
         let detail = self
-            .read_web_detail(ctx, call.id, cdn_id, evidence)
+            .read_guard_detail(ctx, call.id, cdn_id, evidence)
             .await
             .map_err(|failure| before_send(failure.into_parts().0))?;
+        let detail = detail
+            .into_checked(evidence)
+            .map_err(|error| before_send(*error))?;
         let send = match detail.status {
             0 if kind == WriteKind::Update => {
                 return Err(invalid(
@@ -309,7 +335,7 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Failure<()> {
         if failure.error().api_error().and_then(ApiError::status) == Some(401)
-            && let Err(read) = self.read_web_detail(ctx, call.id, cdn_id, evidence).await
+            && let Err(read) = self.read_guard_detail(ctx, call.id, cdn_id, evidence).await
             && read.error().has_class(ErrorClass::NotFound)
         {
             return Failure::new(read.into_parts().0, None, failure.write_dispatch());

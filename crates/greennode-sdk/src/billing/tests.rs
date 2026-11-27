@@ -339,3 +339,21 @@ mod cost;
 
 #[path = "history/tests.rs"]
 mod history;
+
+#[tokio::test]
+async fn reflected_billing_code_cannot_select_a_not_found_branch() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"code":"denied","message":"Budget not found"}"#,
+    )]);
+    let failure = client(&server, "denied")
+        .get_budget(&RequestContext::new().0, GetBudgetInput::new("budget-1"))
+        .await
+        .unwrap_err();
+    assert!(!failure.error().has_class(ErrorClass::NotFound));
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert_eq!(server.requests(), 1);
+}

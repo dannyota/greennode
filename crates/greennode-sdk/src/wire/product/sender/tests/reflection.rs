@@ -41,14 +41,16 @@ async fn prior_bearer_remains_available_for_response_reflection() {
     .unwrap();
     assert_eq!(reply.status, 200);
     assert!(reply.credentials.reflects(&reply.body));
-    assert!(
-        reply
-            .credentials
-            .values()
-            .iter()
-            .any(|secret| secret.expose_secret() == "toy-next")
-    );
-    assert_eq!(reply.credentials.values().len(), 2);
+    let values = reply.credentials.values();
+    assert_eq!(values.len(), 4);
+    for expected in [
+        "toy-first",
+        "Bearer toy-first",
+        "toy-next",
+        "Bearer toy-next",
+    ] {
+        assert!(values.iter().any(|value| value.expose_secret() == expected));
+    }
 }
 
 #[tokio::test]
@@ -80,13 +82,116 @@ async fn typed_key_header_is_attached_and_recorded() {
     .await
     .unwrap();
     assert!(reply.credentials.reflects(&reply.body));
-    assert_eq!(reply.credentials.values().len(), 1);
+    let values = reply.credentials.values();
+    assert_eq!(values.len(), 2);
+    for expected in ["toy-key", "Bearer toy-key"] {
+        assert!(values.iter().any(|value| value.expose_secret() == expected));
+    }
     let heads = server.heads();
     assert_eq!(heads.len(), 2);
     assert!(heads.iter().all(|head| {
         head.windows(b"authorization: Bearer toy-key".len())
             .any(|v| v.eq_ignore_ascii_case(b"authorization: Bearer toy-key"))
     }));
+}
+
+#[tokio::test]
+async fn write_route_and_body_cannot_reflect_the_full_credential_header() {
+    let encoded_header = format!(
+        "pre{}post",
+        data_encoding::BASE64URL_NOPAD.encode(b"Bearer jkl")
+    );
+    for in_route in [true, false] {
+        let server = Server::start(vec![response("200 OK", &[])]);
+        let clients = client(&server);
+        let (ctx, clock, deadline) = ctx();
+        let sleeper = Immediate::default();
+        let mut req = request(&server.origin);
+        req.credentials.push(CredentialHeader {
+            name: http::header::AUTHORIZATION,
+            value: Secret::new("jkl"),
+            bearer: true,
+        });
+        let route = [encoded_header.as_str()];
+        let mut inputs = RouteInputs::default();
+        if in_route {
+            req.url = req.url.join(&encoded_header).unwrap();
+            inputs.path = &route;
+        } else {
+            req.body = Bytes::from(serde_json::json!({"value": &encoded_header}).to_string());
+        }
+        let write = Operation {
+            class: redirect::Classification::Write,
+            ..operation(Method::POST, redirect::Retry::Once)
+        };
+        let failure = super::super::run(
+            Runtime {
+                configured_credentials: None,
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &sleeper,
+                jitter: &mut || 0,
+            },
+            &write,
+            Auth::Key,
+            &req,
+            inputs,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(failure.error, Error::Provider(_)));
+        assert_eq!(failure.dispatch, crate::WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 0);
+    }
+}
+
+#[tokio::test]
+async fn raw_uri_and_header_checks_refuse_uncompiled_credentials() {
+    let credentials = SentCredentials::for_test(vec![Secret::new("x".repeat(64 << 10))]);
+    let mut refused = [false; 2];
+    for (index, raw_header) in [false, true].into_iter().enumerate() {
+        let server = Server::start(vec![response("200 OK", &[])]);
+        let (ctx, clock, deadline) = ctx();
+        let mut req = request(&format!("{}/ordinary?path=ordinary", server.origin));
+        let auth = if raw_header {
+            req.headers.insert(
+                "x-note",
+                http::HeaderValue::from_bytes(b"\xffordinary").unwrap(),
+            );
+            Auth::None
+        } else {
+            req.credentials.push(CredentialHeader {
+                name: http::header::AUTHORIZATION,
+                value: credentials.values()[0].clone(),
+                bearer: true,
+            });
+            Auth::Key
+        };
+        let result = super::super::run(
+            Runtime {
+                configured_credentials: Some(&credentials),
+                client: &client(&server),
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &Immediate::default(),
+                jitter: &mut || 0,
+            },
+            &operation(Method::GET, redirect::Retry::Once),
+            auth,
+            &req,
+            RouteInputs::default(),
+        )
+        .await;
+        refused[index] = result
+            .err()
+            .is_some_and(|failure| matches!(failure.error, Error::InvalidRequest))
+            && server.requests() == 0;
+    }
+    assert_eq!(refused, [true, true]);
 }
 
 #[tokio::test]
@@ -438,6 +543,54 @@ async fn database_password_slot_refuses_reused_configured_iam_password() {
         };
     }
     assert_eq!(refused, [false, true, true]);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn dropped_database_write_records_the_submitted_password() {
+    use crate::wire::product::{evidence::Evidence, exit, options::PasswordSlot};
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(sent)]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let operation = operation(Method::POST, redirect::Retry::Once);
+    let password = Secret::new("toy-database-password");
+    let mut evidence = Evidence::new();
+    evidence.add_operation_password(&password);
+    let mut request = request(&server.origin);
+    request.body =
+        Bytes::from(serde_json::json!({"user":{"password":password.expose_secret()}}).to_string());
+    crate::RequestContext::with_response_screening(async {
+        let mut jitter = || 0;
+        let sleeper = Immediate::default();
+        let source = Provider::default();
+        let source = PublicSource(&source);
+        let send = super::super::run(
+            Runtime {
+                configured_credentials: Some(evidence.credentials()),
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &sleeper,
+                jitter: &mut jitter,
+            },
+            &operation,
+            Auth::Bearer(&source),
+            &request,
+            RouteInputs {
+                password_slot: Some(PasswordSlot::DatabaseUser(&password)),
+                ..RouteInputs::default()
+            },
+        );
+        tokio::select! {
+            signal = received => signal.unwrap(),
+            _ = send => panic!("write should still be pending"),
+        }
+        assert!(exit::recorded_exactly(password.expose_secret()));
+        assert!(exit::private_safe(&password));
+    })
+    .await;
     assert_eq!(server.requests(), 1);
 }
 

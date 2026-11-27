@@ -110,14 +110,13 @@ impl Read {
     }
 
     pub(super) fn invalid_as(self, evidence: &Evidence, message: &str) -> Error {
-        api(
+        evidence.screen_error(api(
             self.id,
             Some(StatusCode::OK),
             "InvalidResponse",
             message,
             false,
-        )
-        .screen_api(&|text| evidence.text_reflects(text))
+        ))
     }
 
     fn withheld(self, status: Option<StatusCode>, retryable: bool) -> Error {
@@ -154,7 +153,7 @@ fn guard_bandwidth(
     sent: &SentCredentials,
 ) -> Option<Box<Error>> {
     let body = go_json(body);
-    (operation::unsafe_json_response(body.as_bytes(), known, sent, true)
+    (operation::unsafe_json_response(body.as_bytes(), known, sent)
         || (!status.is_success()
             && [known, sent]
                 .into_iter()
@@ -166,30 +165,6 @@ fn guard_bandwidth(
             BANDWIDTH_MESSAGE
         };
         Box::new(api(id, Some(status), "InvalidResponse", message, false))
-    })
-}
-
-fn guard_bandwidth_project(
-    id: &'static str,
-    status: StatusCode,
-    body: &[u8],
-    known: &SentCredentials,
-    sent: &SentCredentials,
-) -> Option<Box<Error>> {
-    let body = go_json(body);
-    (operation::unsafe_json_response(body.as_bytes(), known, sent, status.is_success())
-        || (!status.is_success()
-            && [known, sent]
-                .into_iter()
-                .any(|credentials| reflects_credential_forms(&body, credentials))))
-    .then(|| {
-        Box::new(api(
-            id,
-            Some(status),
-            "InvalidResponse",
-            "invalid discovery response; body withheld",
-            false,
-        ))
     })
 }
 
@@ -253,21 +228,23 @@ impl Client {
             keep_status: read.style != Style::NatList,
             overflow_overrides_status: !matches!(read.style, Style::NatCatalog | Style::NatList),
             sensitive: true,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.style != Style::NatList,
             retry_config: retry::Config::default(),
         };
         let options = Options {
+            project_discovery: read.style == Style::BandwidthProject,
             response_guard: match read.style {
-                Style::Nat | Style::NatCatalog | Style::NatList | Style::EndpointQuote => None,
+                Style::Nat
+                | Style::NatCatalog
+                | Style::NatList
+                | Style::EndpointQuote
+                | Style::BandwidthProject => None,
                 Style::Bandwidth => Some(guard_bandwidth),
-                Style::BandwidthProject => Some(guard_bandwidth_project),
             },
             ..Options::DEFAULT
         };
-        let screen = |error: Error, evidence: &Evidence| {
-            error.screen_api(&|text| evidence.text_reflects(text))
-        };
+        let screen = |error: Error, evidence: &Evidence| evidence.screen_error(error);
         let response = operation::execute_raw(
             runtime,
             base,
@@ -283,7 +260,7 @@ impl Client {
         .map_err(|error: Failure<()>| {
             let error = error.into_parts().0;
             let api = error.api_error();
-            let status = error.detail::<StatusCode>().copied().or_else(|| {
+            let status = error.http_status().or_else(|| {
                 api.and_then(ApiError::status)
                     .and_then(|status| StatusCode::from_u16(status).ok())
             });
@@ -375,10 +352,7 @@ impl Client {
         };
         let text = go_json(&raw);
         let fields = Fields::decode(&text).map_err(|()| invalid())?;
-        if read.style == Style::Nat
-            && operation::reflects_json(text.as_bytes(), evidence.credentials(), true)
-                != Some(false)
-        {
+        if read.style == Style::Nat && !evidence.go_peer_body_screen(&raw).is_clean() {
             return Err(invalid());
         }
         let rows: Vec<Fields<'_>> = fields.required("projects").map_err(|()| invalid())?;

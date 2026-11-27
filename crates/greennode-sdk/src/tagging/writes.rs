@@ -98,7 +98,7 @@ fn operation(id: &'static str, write: bool) -> Operation {
         keep_status: write,
         overflow_overrides_status: !write,
         sensitive: false,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: write,
         retry_config: retry::Config::default(),
     }
@@ -115,14 +115,16 @@ impl Client {
         ctx: &RequestContext,
         input: TagResourceInput,
     ) -> Result<Value, Failure<Value>> {
-        self.replace_tag(
-            ctx,
-            &input.resource_id,
-            &input.resource_type,
-            &input.key,
-            Some(&input.value),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.replace_tag(
+                ctx,
+                &input.resource_id,
+                &input.resource_type,
+                &input.key,
+                Some(&input.value),
+            )
+            .await
+        })
     }
 
     /// Removes a user tag while preserving the resource's other user tags.
@@ -131,14 +133,16 @@ impl Client {
         ctx: &RequestContext,
         input: UntagResourceInput,
     ) -> Result<Value, Failure<Value>> {
-        self.replace_tag(
-            ctx,
-            &input.resource_id,
-            &input.resource_type,
-            &input.key,
-            None,
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.replace_tag(
+                ctx,
+                &input.resource_id,
+                &input.resource_type,
+                &input.key,
+                None,
+            )
+            .await
+        })
     }
 
     #[expect(
@@ -167,11 +171,10 @@ impl Client {
             "tagging.UntagResource"
         };
         if key.starts_with("vng.") {
-            let mut known = Evidence::new();
-            known.absorb(self.session.configured_credentials());
+            let known = Evidence::from_credentials(self.session.configured_credentials());
             return Err(fail(system_tag_error(&known, op_id, None, key)));
         }
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let project = self
             .session
             .require_project_id_with_evidence(ctx, &mut evidence)
@@ -183,30 +186,32 @@ impl Client {
             .vserver
             .as_ref()
             .ok_or_else(|| fail(Error::new(ErrorClass::InvalidConfig)))?;
-        let read = operation(op_id, false);
+        let read = crate::wire::product::operation::GuardOperation::new(operation(op_id, false));
         let write = operation(op_id, true);
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|e| fail(*e))?;
-        let (_, snapshot) = operation::execute_with_evidence::<RawSnapshot>(
-            runtime,
-            base,
-            &read,
-            &Options::DEFAULT,
-            &[&project, id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-            &mut evidence,
-        )
-        .await
-        .map_err(|f| {
-            let (e, _, _) = f.into_parts();
-            fail(e)
-        })?;
-        let current = snapshot.0;
+        let (_, snapshot) = read
+            .execute::<RawSnapshot>(
+                runtime,
+                base,
+                &Options::DEFAULT,
+                &[&project, id],
+                &[],
+                self.session.bearer_source(),
+                &mut evidence,
+            )
+            .await
+            .map_err(|f| {
+                let (e, _, _) = f.into_parts();
+                fail(e)
+            })?;
+        let current = snapshot
+            .into_checked(&evidence)
+            .map_err(|error| fail(*error))?
+            .0;
         if current.iter().any(|tag| tag.system_tag && tag.key == key) {
             return Err(fail(system_tag_error(&evidence, op_id, Some(id), key)));
         }
@@ -263,7 +268,7 @@ impl Client {
         .await;
         if let Err(failure) = result {
             let dispatch = failure.write_dispatch();
-            let status = failure.error().detail::<StatusCode>().copied().or_else(|| {
+            let status = failure.error().http_status().or_else(|| {
                 failure
                     .error()
                     .api_error()
@@ -301,18 +306,17 @@ impl Client {
                 WriteDispatch::MayHaveBeenSent,
             )
         })?;
-        let confirmed = operation::execute_with_evidence::<RawSnapshot>(
-            runtime,
-            base,
-            &read,
-            &Options::DEFAULT,
-            &[&project, id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-            &mut evidence,
-        )
-        .await;
+        let confirmed = read
+            .execute::<RawSnapshot>(
+                runtime,
+                base,
+                &Options::DEFAULT,
+                &[&project, id],
+                &[],
+                self.session.bearer_source(),
+                &mut evidence,
+            )
+            .await;
         let (_, snapshot) = confirmed.map_err(|failure| {
             let failure = Failure::<Value>::wrap(
                 Error::new(ErrorClass::NotSettled).with_detail(ErrorDetail::NotSettled),
@@ -322,6 +326,17 @@ impl Client {
             );
             evidence.with_partial(
                 failure,
+                safe_partial(&evidence, output(&current)),
+                WriteDispatch::MayHaveBeenSent,
+            )
+        })?;
+        let snapshot = snapshot.into_checked(&evidence).map_err(|error| {
+            evidence.with_partial(
+                Failure::<Value>::new(
+                    (*error).with_cause(Error::new(ErrorClass::NotSettled)),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ),
                 safe_partial(&evidence, output(&current)),
                 WriteDispatch::MayHaveBeenSent,
             )

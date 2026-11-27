@@ -1,10 +1,8 @@
-use super::{
-    EstimateArithmeticError, EstimateInput, EstimateItem, EstimateOutput, OP, Run, Shared, failed,
-    failure_code,
-};
+use super::{EstimateInput, EstimateItem, EstimateOutput, OP, Run, Shared, failed, failure_code};
 use crate::model::pricing::{
     DiscoveryFailure, DiscoveryMetadata, PricingNote, discovery_notes, note,
 };
+use crate::pricing::EstimateArithmeticError;
 use crate::pricing::{EstimateCharge, EstimateCoverage, EstimateTotal};
 use crate::quote::request::decode::Quote;
 use crate::wire::product::evidence::Evidence;

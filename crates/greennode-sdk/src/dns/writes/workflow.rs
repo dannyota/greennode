@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::future::{Future, poll_fn};
 use std::task::Poll;
 use std::time::Duration;
@@ -12,7 +13,8 @@ use super::wire::{Detail, ZoneSnapshot};
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, Output},
+    guard::Guarded,
+    operation::{self, GuardOperation, Operation, Output},
     options::Options,
     redirect::{Classification, Retry},
 };
@@ -28,12 +30,14 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const POLL_BOUND: Duration = Duration::from_secs(60);
 
 /// A local DNS write failure with a stable reason.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorDetail {
     /// The hosted zone did not become ready before the preflight deadline.
     ZoneBusy,
 }
+
+crate::error::debug_record!(ErrorDetail; ZoneBusy);
 
 pub(super) struct Workflow<'a> {
     client: &'a Client,
@@ -60,7 +64,7 @@ impl<'a> Workflow<'a> {
             client,
             ctx,
             id,
-            evidence: Evidence::new(),
+            evidence: Evidence::for_write(),
             _guard: guard,
         })
     }
@@ -141,18 +145,31 @@ impl<'a> Workflow<'a> {
         template: &'static str,
         path: &[&str],
     ) -> Result<T, Box<Error>> {
-        let op = Operation {
+        let op = GuardOperation::new(Operation {
             cap: 256 << 10,
             allow_empty: false,
             ..read_operation(self.id, template)
-        };
-        self.call(ctx, &op, path, Bytes::new())
+        });
+        self.read_guard(ctx, &op, path).await
+    }
+
+    async fn read_guard<T: Output>(
+        &mut self,
+        ctx: &RequestContext,
+        op: &GuardOperation,
+        path: &[&str],
+    ) -> Result<T, Box<Error>> {
+        self.call(ctx, op, path, Bytes::new())
             .await
             .map(|(_, data)| data)
             .map_err(|err| Box::new(err.into_parts().0))
     }
 
-    async fn zone(&mut self, ctx: &RequestContext, id: &str) -> Result<HostedZone, Box<Error>> {
+    async fn zone(
+        &mut self,
+        ctx: &RequestContext,
+        id: &str,
+    ) -> Result<Guarded<HostedZone>, Box<Error>> {
         let data: Detail<Option<ZoneSnapshot>> = self.read(ctx, ZONE, &[id]).await?;
         let Some((zone, complete)) = data
             .data
@@ -172,7 +189,7 @@ impl<'a> Workflow<'a> {
                 "dns.UpdateHostedZone: incomplete hosted zone replacement snapshot",
             )));
         }
-        Ok(zone)
+        Guarded::latest(zone, &self.evidence)
     }
 
     async fn record(
@@ -180,9 +197,10 @@ impl<'a> Workflow<'a> {
         ctx: &RequestContext,
         zone_id: &str,
         id: &str,
-    ) -> Result<Record, Box<Error>> {
+    ) -> Result<Guarded<Record>, Box<Error>> {
         let data: Detail<Option<Record>> = self.read(ctx, RECORD, &[zone_id, id]).await?;
-        data.data
+        let record = data
+            .data
             .filter(|record| {
                 record.id == id && record.hosted_zone_id == zone_id && !record.status.is_empty()
             })
@@ -192,10 +210,14 @@ impl<'a> Workflow<'a> {
                     "",
                     &format!("{}: record identity or state is unproven", self.id),
                 ))
-            })
+            })?;
+        Guarded::latest(record, &self.evidence)
     }
 
-    pub(super) async fn ready<T>(&mut self, zone_id: &str) -> Result<HostedZone, Failure<T>> {
+    pub(super) async fn ready<T>(
+        &mut self,
+        zone_id: &str,
+    ) -> Result<Guarded<HostedZone>, Failure<T>> {
         self.poll(
             |flow| {
                 flow.diagnostic(
@@ -210,7 +232,11 @@ impl<'a> Workflow<'a> {
             },
             async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, zone_id).await?;
-                Ok(matches!(zone.status.as_str(), ACTIVE | ERROR).then_some(zone))
+                Ok(matches!(
+                    zone.recheck(&flow.evidence)?.status.as_str(),
+                    ACTIVE | ERROR
+                )
+                .then_some(zone))
             },
         )
         .await
@@ -228,13 +254,16 @@ impl<'a> Workflow<'a> {
         let resource = |flow: &Self| flow.zone_label(id);
         let mut last = fallback;
         let result = if no_wait {
-            self.zone(self.ctx, id).await.map(|zone| last = zone)
+            self.zone(self.ctx, id)
+                .await
+                .and_then(|zone| zone.into_checked(&self.evidence))
+                .map(|zone| last = zone)
         } else {
             self.poll(
                 |flow| flow.unconfirmed(&format!("{} was accepted; do not send the same write again", resource(flow))),
                 async |flow: &mut Self, ctx: &RequestContext| {
                 let zone = flow.zone(ctx, id).await?;
-                last = zone;
+                last = zone.into_checked(&flow.evidence)?;
                 if settled(&last) {
                     Ok(Some(()))
                 } else if last.status == ERROR {
@@ -263,6 +292,7 @@ impl<'a> Workflow<'a> {
         let result = if no_wait {
             self.record(self.ctx, zone_id, id)
                 .await
+                .and_then(|record| record.into_checked(&self.evidence))
                 .map(|record| last = record)
         } else {
             self.poll(
@@ -274,24 +304,38 @@ impl<'a> Workflow<'a> {
                 },
                 async |flow: &mut Self, ctx: &RequestContext| {
                     let zone = flow.zone(ctx, zone_id).await?;
-                    last = flow.record(ctx, zone_id, id).await?;
-                    if zone.status == ERROR || last.status == ERROR {
-                        Err(Box::new(flow.diagnostic(
-                            ErrorClass::Failed,
-                            &format!(
-                                "vngcloud: write failed: {}: {} is ERROR",
-                                flow.id,
-                                resource(flow)
-                            ),
-                        )))
-                    } else {
-                        Ok((zone.status == ACTIVE && settled(&last, &zone)).then_some(()))
-                    }
+                    let record = flow.record(ctx, zone_id, id).await?;
+                    flow.record_settlement(zone_id, id, zone, record, &mut last, &mut settled)
                 },
             )
             .await
         };
         self.finish(result, last, &resource(self), output)
+    }
+
+    fn record_settlement(
+        &self,
+        zone_id: &str,
+        id: &str,
+        zone: Guarded<HostedZone>,
+        record: Guarded<Record>,
+        last: &mut Record,
+        settled: &mut impl FnMut(&Record, &HostedZone) -> bool,
+    ) -> Result<Option<()>, Box<Error>> {
+        let zone = zone.recheck(&self.evidence)?;
+        *last = record.into_checked(&self.evidence)?;
+        if zone.status == ERROR || last.status == ERROR {
+            Err(Box::new(self.diagnostic(
+                ErrorClass::Failed,
+                &format!(
+                    "vngcloud: write failed: {}: {} is ERROR",
+                    self.id,
+                    self.record_label(id, Some(zone_id))
+                ),
+            )))
+        } else {
+            Ok((zone.status == ACTIVE && settled(last, zone)).then_some(()))
+        }
     }
 
     pub(super) async fn wait_gone<O>(
@@ -341,7 +385,10 @@ impl<'a> Workflow<'a> {
         let clock = self.client.session.clock();
         let bound = clock.monotonic_now() + POLL_BOUND;
         let child = self.ctx.child_with_deadline(bound);
-        while child.check(clock).is_none() {
+        guarded_poll!(self.evidence, {
+            if child.check(clock).is_some() {
+                break;
+            }
             let result = step(self, &child).await;
             if child.check(clock).is_some() {
                 break;
@@ -353,7 +400,7 @@ impl<'a> Workflow<'a> {
             if until(&child, clock, clock.sleep_until(wake)).await.is_err() {
                 break;
             }
-        }
+        });
         Err(Box::new(
             self.ctx
                 .check(clock)

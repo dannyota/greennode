@@ -10,20 +10,20 @@ const GROUP: &str = "/global-pools/pool-1/pool-members/group-1";
 const LISTENERS: &str = "/global-listeners";
 const LISTENER: &str = "/global-listeners/listener-1";
 
-fn child_fixture() -> Value {
+pub(in crate::globalloadbalancer) fn child_fixture() -> Value {
     serde_json::from_str(include_str!(
         "../../../tests/fixtures/globalloadbalancer/child_writes.json"
     ))
     .unwrap()
 }
 
-fn ok(value: &Value) -> Response {
+pub(in crate::globalloadbalancer) fn ok(value: &Value) -> Response {
     response("200 OK", value.to_string())
 }
-fn accepted(value: &Value) -> Response {
+pub(in crate::globalloadbalancer) fn accepted(value: &Value) -> Response {
     response("202 Accepted", value.to_string())
 }
-fn empty() -> Response {
+pub(in crate::globalloadbalancer) fn empty() -> Response {
     response("200 OK", "[]")
 }
 fn gone() -> Response {
@@ -39,15 +39,29 @@ fn servers(
     project: bool,
     token: &str,
 ) -> (Client, Server, Server) {
+    servers_with_auth(
+        glb,
+        regional,
+        project,
+        ConfigOptions::default().with_static_token(Secret::new(token)),
+    )
+}
+
+pub(in crate::globalloadbalancer) fn servers_with_auth(
+    glb: Vec<Response>,
+    regional: Vec<Response>,
+    project: bool,
+    options: ConfigOptions,
+) -> (Client, Server, Server) {
     let glb = Server::start(glb);
     let regional = Server::start(regional);
-    let mut options = ConfigOptions::default()
-        .with_region("han-1".into())
-        .with_static_token(Secret::new(token))
-        .with_endpoint_overrides(EndpointOverrides {
-            global_load_balancer: Some(format!("{}/glb-controller/", glb.origin)),
-            ..Default::default()
-        });
+    let mut options =
+        options
+            .with_region("han-1".into())
+            .with_endpoint_overrides(EndpointOverrides {
+                global_load_balancer: Some(format!("{}/glb-controller/", glb.origin)),
+                ..Default::default()
+            });
     if project {
         options = options.with_project_id("project-1".into());
     }
@@ -56,10 +70,10 @@ fn servers(
     (Client::new(&Config::new(options).unwrap()), glb, regional)
 }
 
-fn catalog(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn catalog(f: &Value) -> Vec<Response> {
     vec![ok(&f["parent"]), ok(&f["regions"]), ok(&f["packages"])]
 }
-fn chain(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn chain(f: &Value) -> Vec<Response> {
     vec![
         ok(&json!([f["pool"]])),
         ok(&f["pool"]),
@@ -67,10 +81,10 @@ fn chain(f: &Value) -> Vec<Response> {
         ok(&f["group"]),
     ]
 }
-fn placement(f: &Value) -> Vec<Response> {
+pub(in crate::globalloadbalancer) fn placement(f: &Value) -> Vec<Response> {
     vec![ok(&f["server"]), ok(&f["vpc"]), ok(&f["subnet"])]
 }
-fn pool_input() -> CreatePoolInput {
+pub(in crate::globalloadbalancer) fn pool_input() -> CreatePoolInput {
     CreatePoolInput::new(
         "glb-1",
         "demo-pool",
@@ -224,6 +238,37 @@ async fn delete_listener_confirms_list_and_detail_then_preserves_pool_and_group(
 }
 
 #[tokio::test]
+async fn reflective_internal_error_cannot_settle_a_pool_delete() {
+    let f = child_fixture();
+    let mut glb = catalog(&f);
+    glb.extend([
+        ok(&json!([f["pool"]])),
+        ok(&f["pool"]),
+        empty(),
+        ok(&json!([f["group"]])),
+        ok(&f["group"]),
+        response("202 Accepted", ""),
+        empty(),
+        internal(),
+        ok(&f["parent"]),
+        response(
+            "500 Internal Server Error",
+            json!({"code":"internal_error","message":TOKEN}).to_string(),
+        ),
+    ]);
+    let (client, glb, _) = servers(glb, vec![], true, TOKEN);
+    let failure = client
+        .delete_pool(
+            &RequestContext::new().0,
+            DeletePoolInput::new("glb-1", "pool-1"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(glb.requests(), 13);
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+}
+
+#[tokio::test]
 async fn delete_pool_accepts_complete_internal_error_only_after_pool_disappears() {
     let f = child_fixture();
     for code in ["internal_error", "other_error"] {
@@ -344,6 +389,37 @@ async fn unrestricted_and_noncanonical_listener_sources_fail_before_io() {
     }
     assert_eq!(glb.requests(), 0);
     assert_eq!(regional.requests(), 0);
+}
+
+#[tokio::test]
+async fn glb_guard_does_not_render_an_ignored_peer_number() {
+    let f = child_fixture();
+    let mut replies = catalog(&f);
+    let mut parent = f["parent"].to_string();
+    parent.pop();
+    parent.push_str(r#", "note": 987654e-3}"#);
+    replies[0] = response("200 OK", parent);
+    replies.extend([
+        empty(),
+        empty(),
+        accepted(&f["pool_accept"]),
+        ok(&f["parent"]),
+    ]);
+    replies.extend(chain(&f));
+    replies.push(empty());
+    let (client, glb, regional) = servers(replies, placement(&f), true, "987.654");
+    let output = client
+        .create_pool(&RequestContext::new().0, pool_input())
+        .await
+        .unwrap_or_else(|failure| {
+            panic!(
+                "GLB fixture after {} regional and {} GLB requests: {:?}",
+                regional.requests(),
+                glb.requests(),
+                failure.write_dispatch()
+            )
+        });
+    assert_eq!(output.pool.id, "pool-1");
 }
 
 #[tokio::test]

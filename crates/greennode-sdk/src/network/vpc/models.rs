@@ -234,7 +234,7 @@ model! {
 macro_rules! page_input {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, Default)]
+        #[derive(Clone, Default)]
         #[non_exhaustive]
         pub struct $name {
             /// Resource name filter.
@@ -244,6 +244,8 @@ macro_rules! page_input {
             /// Requested page size. Nonpositive values use the default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { name, page, size });
     };
 }
 
@@ -267,11 +269,13 @@ page_input!(
 macro_rules! id_input {
     ($(#[$doc:meta])* $name:ident { $($(#[$field_doc:meta])* $field:ident),+ $(,)? }) => {
         $(#[$doc])*
-        #[derive(Clone, Debug)]
+        #[derive(Clone)]
         #[non_exhaustive]
         pub struct $name {
             $($(#[$field_doc])* pub $field: String,)+
         }
+
+        crate::error::debug_record!($name { $($field),+ });
 
         impl $name {
             /// Creates the input with its required identifiers.
@@ -335,14 +339,18 @@ id_input!(
 );
 
 /// Lists subnets across the VPCs in the default inventory page.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct ListSubnetsInput {}
 
+crate::error::debug_record!(ListSubnetsInput {});
+
 /// Lists rules across the project's complete security group inventory.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct ListAllSecurityGroupRulesInput {}
+
+crate::error::debug_record!(ListAllSecurityGroupRulesInput {});
 
 /// One page of VPCs.
 pub type ListVpcsOutput = PagedList<Vpc>;
@@ -362,44 +370,54 @@ pub type ListSecurityGroupRulesOutput = List<SecurityGroupRule>;
 pub type ListAllSecurityGroupRulesOutput = List<SecurityGroupRule>;
 
 /// VPC detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetVpcOutput {
     /// The VPC.
     #[serde(rename = "VPC")]
     pub vpc: Vpc,
 }
 
+crate::wire::product::output::public_fields!(GetVpcOutput { vpc });
+
 /// Subnet detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetSubnetOutput {
     /// The subnet.
     #[serde(rename = "Subnet")]
     pub subnet: Subnet,
 }
 
+crate::wire::product::output::public_fields!(GetSubnetOutput { subnet });
+
 /// DHCP options detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetDhcpOptionsOutput {
     /// The DHCP options set.
     #[serde(rename = "DHCPOptions")]
     pub dhcp_options: DhcpOptions,
 }
 
+crate::wire::product::output::public_fields!(GetDhcpOptionsOutput { dhcp_options });
+
 /// Network ACL detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetNetworkAclOutput {
     /// The network ACL.
     #[serde(rename = "ACL")]
     pub acl: NetworkAcl,
 }
 
+crate::wire::product::output::public_fields!(GetNetworkAclOutput { acl });
+
 /// Security group detail.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetSecurityGroupOutput {
     /// The security group.
     #[serde(rename = "SecurityGroup")]
     pub security_group: SecurityGroup,
 }
+
+crate::wire::product::output::public_fields!(GetSecurityGroupOutput { security_group });
 
 model! {
     @ true;

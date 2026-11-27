@@ -21,7 +21,7 @@ const ALL: &str = "volume.ListAllSnapshots";
 const MAX_PAGES: i64 = 50;
 
 /// Volume and page selection for its snapshots.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotsInput {
     /// Volume UUID.
     pub volume_id: String,
@@ -31,28 +31,38 @@ pub struct ListSnapshotsInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListSnapshotsInput {
+    volume_id,
+    page,
+    size
+});
+
 /// One page of snapshots.
 pub type ListSnapshotsOutput = PagedList<Snapshot>;
 
 /// Input for collecting all snapshots in the project.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListAllSnapshotsInput;
+
+crate::error::debug_record!(ListAllSnapshotsInput unit);
 
 /// Complete set of snapshots reached through the project's volumes.
 pub type ListAllSnapshotsOutput = List<Snapshot>;
 
 /// Selects Backup Center snapshot backends by name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotBackendsInput {
     /// Backend name, such as `HAN-01`.
     pub name: String,
 }
 
+crate::error::debug_record!(ListSnapshotBackendsInput { name });
+
 /// Backends matching the requested name.
 pub type ListSnapshotBackendsOutput = List<SnapshotBackend>;
 
 /// Selects a snapshot backend and a page of its policies.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSnapshotPoliciesInput {
     /// Snapshot backend identifier.
     pub backend_id: String,
@@ -61,6 +71,12 @@ pub struct ListSnapshotPoliciesInput {
     /// Requested page size. Zero selects 10 items.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListSnapshotPoliciesInput {
+    backend_id,
+    page,
+    size
+});
 
 /// One page of policies at the selected snapshot backend.
 pub type ListSnapshotPoliciesOutput = PagedList<SnapshotPolicy>;
@@ -76,16 +92,18 @@ impl Client {
         ctx: &RequestContext,
         input: ListSnapshotsInput,
     ) -> Result<ListSnapshotsOutput, Failure<ListSnapshotsOutput>> {
-        output(
-            self.snapshots(
-                ctx,
-                &input.volume_id,
-                input.page,
-                input.size,
-                &mut Evidence::new(),
+        crate::wire::product::exit::finish!(async {
+            output(
+                self.snapshots(
+                    ctx,
+                    &input.volume_id,
+                    input.page,
+                    input.size,
+                    &mut Evidence::new(),
+                )
+                .await,
             )
-            .await,
-        )
+        })
     }
 
     async fn snapshots(
@@ -105,7 +123,7 @@ impl Client {
             &[&project, id],
             &[("page", &page), ("size", &size)],
             evidence,
-            |raw| paged(raw, "items", "totalPages", "totalItems"),
+            |raw, names| paged(raw, names, "items", "totalPages", "totalItems"),
         )
         .await
     }
@@ -116,7 +134,7 @@ impl Client {
         ctx: &RequestContext,
         _input: ListAllSnapshotsInput,
     ) -> Result<ListAllSnapshotsOutput, Failure<ListAllSnapshotsOutput>> {
-        output(self.all_snapshots(ctx).await)
+        crate::wire::product::exit::finish!(async { output(self.all_snapshots(ctx).await) })
     }
 
     async fn all_snapshots(
@@ -170,30 +188,32 @@ impl Client {
         ctx: &RequestContext,
         input: ListSnapshotBackendsInput,
     ) -> Result<ListSnapshotBackendsOutput, Failure<ListSnapshotBackendsOutput>> {
-        output(
-            async {
-                if input.name.trim().is_empty() {
-                    return Err(invalid(
-                        "vngcloud: invalid input: volume.ListSnapshotBackends requires Name",
-                    ));
+        crate::wire::product::exit::finish!(async {
+            output(
+                async {
+                    if input.name.trim().is_empty() {
+                        return Err(invalid(
+                            "vngcloud: invalid input: volume.ListSnapshotBackends requires Name",
+                        ));
+                    }
+                    self.snapshot_region(BACKENDS.id)?;
+                    self.read(
+                        ctx,
+                        BACKENDS,
+                        &[],
+                        &[("backend", &input.name)],
+                        &mut Evidence::new(),
+                        |raw, names| {
+                            Ok(List {
+                                items: Object::parse(raw, names)?.require("items")?,
+                            })
+                        },
+                    )
+                    .await
                 }
-                self.snapshot_region(BACKENDS.id)?;
-                self.read(
-                    ctx,
-                    BACKENDS,
-                    &[],
-                    &[("backend", &input.name)],
-                    &mut Evidence::new(),
-                    |raw| {
-                        Ok(List {
-                            items: Object::parse(raw)?.require("items")?,
-                        })
-                    },
-                )
-                .await
-            }
-            .await,
-        )
+                .await,
+            )
+        })
     }
 
     /// Reads a page of project-scoped snapshot policies at one backend.
@@ -202,22 +222,24 @@ impl Client {
         ctx: &RequestContext,
         input: ListSnapshotPoliciesInput,
     ) -> Result<ListSnapshotPoliciesOutput, Failure<ListSnapshotPoliciesOutput>> {
-        output(async {
-            if !response_id(&input.backend_id) {
-                return Err(invalid("vngcloud: invalid input: volume.ListSnapshotPolicies requires BackendID to match ^[A-Za-z0-9_-]+$"));
-            }
-            if input.page < 0 || input.size < 0 {
-                return Err(invalid("vngcloud: invalid input: volume.ListSnapshotPolicies requires non-negative Page and Size"));
-            }
-            self.snapshot_region(POLICIES.id)?;
-            let mut evidence = Evidence::new();
-            let project = self.project(ctx, &mut evidence).await?;
-            let page = input.page.max(1).to_string();
-            let size = if input.size == 0 { 10 } else { input.size }.to_string();
-            self.read(ctx, POLICIES, &[], &[("backendId", &input.backend_id), ("projectId", &project), ("page", &page), ("size", &size)], &mut evidence,
-                |raw| paged(raw, "items", "totalPages", "totalItems"),
-            ).await
-        }.await)
+        crate::wire::product::exit::finish!(async {
+            output(async {
+                if !response_id(&input.backend_id) {
+                    return Err(invalid("vngcloud: invalid input: volume.ListSnapshotPolicies requires BackendID to match ^[A-Za-z0-9_-]+$"));
+                }
+                if input.page < 0 || input.size < 0 {
+                    return Err(invalid("vngcloud: invalid input: volume.ListSnapshotPolicies requires non-negative Page and Size"));
+                }
+                self.snapshot_region(POLICIES.id)?;
+                let mut evidence = Evidence::new();
+                let project = self.project(ctx, &mut evidence).await?;
+                let page = input.page.max(1).to_string();
+                let size = if input.size == 0 { 10 } else { input.size }.to_string();
+                self.read(ctx, POLICIES, &[], &[("backendId", &input.backend_id), ("projectId", &project), ("page", &page), ("size", &size)], &mut evidence,
+                    |raw, names| paged(raw, names, "items", "totalPages", "totalItems"),
+                ).await
+            }.await)
+        })
     }
 
     fn snapshot_region(&self, op: &str) -> Result<(), Box<Error>> {

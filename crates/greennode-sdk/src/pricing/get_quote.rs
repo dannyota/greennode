@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 const OP: &str = "pricing.GetQuote";
 
 /// Describes a resource to quote on the regional gateway.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetQuoteInput {
     /// Resource type sent to the quote gateway.
     pub resource_type: String,
@@ -21,6 +21,12 @@ pub struct GetQuoteInput {
     /// Optional gateway resource details.
     pub resource_info: Option<BTreeMap<String, Value>>,
 }
+
+crate::error::debug_record!(GetQuoteInput {
+    resource_type,
+    action,
+    resource_info
+});
 
 impl GetQuoteInput {
     /// Creates an input for the given resource type using the default action.
@@ -34,7 +40,7 @@ impl GetQuoteInput {
 }
 
 /// Current account quote. A negative resize amount indicates an expected credit.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetQuoteOutput {
     /// Final amount.
@@ -49,8 +55,16 @@ pub struct GetQuoteOutput {
     pub properties: Vec<PriceProperty>,
 }
 
+crate::wire::product::output::public_fields!(GetQuoteOutput {
+    optimum_price,
+    original_price,
+    discount_price,
+    discount_percent,
+    properties
+});
+
 /// One line of a regional quote.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PriceProperty {
     /// Line name.
@@ -67,6 +81,15 @@ pub struct PriceProperty {
     pub discount_percent: f64,
 }
 
+crate::wire::product::output::public_fields!(PriceProperty {
+    name,
+    description,
+    optimum_price,
+    monthly_price,
+    current_price,
+    discount_percent
+});
+
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"
@@ -78,8 +101,10 @@ impl Client {
         ctx: &RequestContext,
         input: GetQuoteInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote_with_evidence(ctx, input, &mut Evidence::new())
-            .await
+        crate::wire::product::exit::finish!(async {
+            self.quote_with_evidence(ctx, input, &mut Evidence::new())
+                .await
+        })
     }
 
     pub(crate) async fn quote_with_evidence(
@@ -141,12 +166,12 @@ impl Client {
             None,
         )
         .await
-        .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))));
+        .map_err(|error| Box::new(evidence.screen_error(*error)));
         let numeric = evidence.credentials().has_numeric_product_credential();
         match raw {
             Err(error) => {
                 let observed = error
-                    .detail::<http::StatusCode>()
+                    .http_status()
                     .map(|status| status.as_u16())
                     .or_else(|| error.api_error().and_then(|api| api.status()));
                 if numeric || observed.is_some_and(|status| (200..400).contains(&status)) {
@@ -163,7 +188,8 @@ impl Client {
                     .ok()
                     .and_then(|value| project(&value, action, require_totals).ok());
                 let output = output.filter(|result| {
-                    serde_json::to_value(result).is_ok_and(|value| !evidence.reflected_in(&value))
+                    serde_json::to_value(result)
+                        .is_ok_and(|value| !evidence.output_reflects(&value))
                 });
                 output.ok_or_else(|| failure(decode::invalid_quote(OP, Some(200))))
             }

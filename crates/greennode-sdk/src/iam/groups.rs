@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json, value::RawValue};
 
 use super::wire::{self, Screen, Wire};
-use super::writes::{WriteError, guard_failed, guard_refusal, settle, write_operation};
+use super::writes::{guard_failed, guard_refusal, settle, write_operation};
 use super::{Api, Client, Group, OBJECT_CAP, invalid_input, read_operation};
 use crate::error::RecoveryAdvice;
 use crate::error::SafeText;
@@ -25,13 +25,15 @@ const UPDATE: &str = "iam.UpdateGroup";
 const DELETE: &str = "iam.DeleteGroup";
 
 /// Creates an IAM-mode group with no members or policies.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateGroupInput {
     /// Required group name.
     pub name: String,
     /// Group description.
     pub description: String,
 }
+
+crate::error::debug_record!(CreateGroupInput { name, description });
 
 impl CreateGroupInput {
     /// Sets the name and leaves the description empty.
@@ -44,15 +46,17 @@ impl CreateGroupInput {
 }
 
 /// Group returned by a create or its confirmation failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateGroupOutput {
     /// The confirmed group, or only its ID when confirmation failed.
     #[serde(rename = "Group")]
     pub group: Group,
 }
 
+crate::wire::product::output::public_fields!(CreateGroupOutput { group });
+
 /// Updates a group's name or description.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateGroupInput {
     /// Group ID using ASCII letters, digits, or hyphens.
     pub group_id: String,
@@ -61,6 +65,12 @@ pub struct UpdateGroupInput {
     /// When absent, omits the description from the update.
     pub description: Option<String>,
 }
+
+crate::error::debug_record!(UpdateGroupInput {
+    group_id,
+    name,
+    description
+});
 
 impl UpdateGroupInput {
     /// Selects the group and preserves its name and description by default.
@@ -74,12 +84,14 @@ impl UpdateGroupInput {
 }
 
 /// Group returned by an update or its confirmation failure.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct UpdateGroupOutput {
     /// The confirmed group, the pre-write read, or the supplied ID.
     #[serde(rename = "Group")]
     pub group: Group,
 }
+
+crate::wire::product::output::public_fields!(UpdateGroupOutput { group });
 
 super::id_input!(
     /// Identifies an empty IAM group to delete.
@@ -89,8 +101,10 @@ super::id_input!(
 );
 
 /// A completed group deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteGroupOutput {}
+
+crate::wire::product::output::public_fields!(DeleteGroupOutput {});
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {
@@ -100,72 +114,74 @@ impl Client {
         ctx: &RequestContext,
         input: CreateGroupInput,
     ) -> Result<CreateGroupOutput, Failure<CreateGroupOutput>> {
-        if input.name.is_empty() {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE} requires Name"
-            ))));
-        }
-        let mut evidence =
-            self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
-        let operation = Operation {
-            keep_status: true,
-            ..write_operation(
-                CREATE,
-                Method::POST,
-                GROUPS,
-                Retry::Once,
-                &[StatusCode::CREATED],
-            )
-        };
-        let body = json!({"name": input.name, "description": input.description, "mode": "iam"});
-        let id = self
-            .write::<CreatedId, _>(
-                ctx,
-                Api::Policies,
-                &operation,
-                &[],
-                Some(body),
-                &mut evidence,
-            )
-            .await
-            .map_err(|failed| create_failed(failed, &evidence))?
-            .0;
-        if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
-            return Err(Failure::new(
-                Error::from_api(ApiError::without_fallback(
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty() {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE} requires Name"
+                ))));
+            }
+            let mut evidence =
+                self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
+            let operation = Operation {
+                keep_status: true,
+                ..write_operation(
                     CREATE,
+                    Method::POST,
+                    GROUPS,
+                    Retry::Once,
+                    &[StatusCode::CREATED],
+                )
+            };
+            let body = json!({"name": input.name, "description": input.description, "mode": "iam"});
+            let id = self
+                .write::<CreatedId, _>(
+                    ctx,
+                    Api::Policies,
+                    &operation,
+                    &[],
+                    Some(body),
+                    &mut evidence,
+                )
+                .await
+                .map_err(|failed| create_failed(failed, &evidence))?
+                .0;
+            if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
+                return Err(Failure::new(
+                    Error::from_api(ApiError::without_fallback(
+                        CREATE,
+                        None,
+                        SafeText::new("", &[]),
+                        SafeText::new(
+                            "create response had no id; a group may exist, check with list-groups",
+                            &[],
+                        ),
+                        false,
+                    )),
                     None,
-                    SafeText::new("", &[]),
-                    SafeText::new(
-                        "create response had no id; a group may exist, check with list-groups",
-                        &[],
-                    ),
-                    false,
-                )),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        let confirmed = if Options::DEFAULT.path_ids.allows(&id) {
-            self.fetch_group(ctx, &id, false, &mut evidence).await
-        } else {
-            let shown_id = id.get(..64).unwrap_or(&id);
-            Err(invalid_input(format!(
-                "iam.GetGroup requires GroupID to match ^[A-Za-z0-9-]+$, got {shown_id:?}"
-            )))
-        };
-        let group = confirmed.map_err(|failed| {
-            let mut group = Group::default();
-            group.id.clone_from(&id);
-            group.screen(&evidence);
-            settle(
-                failed,
-                (!evidence.id_reflects(&id)).then_some(CreateGroupOutput { group }),
-                &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
-                &evidence,
-            )
-        })?;
-        Ok(CreateGroupOutput { group })
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            let confirmed = if Options::DEFAULT.path_ids.allows(&id) {
+                self.fetch_group(ctx, &id, false, &mut evidence).await
+            } else {
+                let shown_id = id.get(..64).unwrap_or(&id);
+                Err(invalid_input(format!(
+                    "iam.GetGroup requires GroupID to match ^[A-Za-z0-9-]+$, got {shown_id:?}"
+                )))
+            };
+            let group = confirmed.map_err(|failed| {
+                let mut group = Group::default();
+                group.id.clone_from(&id);
+                group.screen(&evidence);
+                settle(
+                    failed,
+                    (!evidence.id_reflects(&id)).then_some(CreateGroupOutput { group }),
+                    &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
+                    &evidence,
+                )
+            })?;
+            Ok(CreateGroupOutput { group })
+        })
     }
 
     /// Updates group metadata and reads the group back after acceptance.
@@ -174,63 +190,67 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateGroupInput,
     ) -> Result<UpdateGroupOutput, Failure<UpdateGroupOutput>> {
-        let id = input.group_id.as_str();
-        let mut evidence = self.write_evidence(
-            ctx,
-            UPDATE,
-            &[("GroupID", id)],
-            &[
-                input.name.as_deref().unwrap_or_default(),
-                input.description.as_deref().unwrap_or_default(),
-            ],
-        )?;
-        let mut fallback = Group::default();
-        fallback.id = id.to_owned();
-        let name = match input.name {
-            Some(name) => name,
-            None => {
-                fallback = self
-                    .fetch_group(ctx, id, true, &mut evidence)
-                    .await
-                    .map_err(guard_failed)?;
-                fallback.name.clone()
+        crate::wire::product::exit::finish!(async {
+            let id = input.group_id.as_str();
+            let mut evidence = self.write_evidence(
+                ctx,
+                UPDATE,
+                &[("GroupID", id)],
+                &[
+                    input.name.as_deref().unwrap_or_default(),
+                    input.description.as_deref().unwrap_or_default(),
+                ],
+            )?;
+            let mut fallback = Group::default();
+            fallback.id = id.to_owned();
+            let name = match input.name {
+                Some(name) => name,
+                None => {
+                    fallback = self
+                        .fetch_group(ctx, id, true, &mut evidence)
+                        .await
+                        .map_err(guard_failed)?;
+                    fallback.name.clone()
+                }
+            };
+            let mut body = serde_json::Map::new();
+            body.insert("name".into(), Value::from(name));
+            if let Some(description) = input.description {
+                body.insert("description".into(), Value::from(description));
             }
-        };
-        let mut body = serde_json::Map::new();
-        body.insert("name".into(), Value::from(name));
-        if let Some(description) = input.description {
-            body.insert("description".into(), Value::from(description));
-        }
-        let op = write_operation(
-            UPDATE,
-            Method::PATCH,
-            GROUP,
-            Retry::Repeatable,
-            &[StatusCode::NO_CONTENT],
-        );
-        self.write::<Value, _>(
-            ctx,
-            Api::Policies,
-            &op,
-            &[id],
-            Some(Value::Object(body)),
-            &mut evidence,
-        )
-        .await?;
-        let group = self
-            .fetch_group(ctx, id, false, &mut evidence)
-            .await
-            .map_err(|failed| {
-                let safe_id = !evidence.id_reflects(id) && !evidence.id_reflects(&fallback.id);
-                fallback.screen(&evidence);
-                settle(
-                    failed,
-                    safe_id.then_some(UpdateGroupOutput { group: fallback }),
-                    &format!("{UPDATE}: group {id} was updated but the read to confirm it failed"),
-                    &evidence,
-                )
-            })?;
-        Ok(UpdateGroupOutput { group })
+            let op = write_operation(
+                UPDATE,
+                Method::PATCH,
+                GROUP,
+                Retry::Repeatable,
+                &[StatusCode::NO_CONTENT],
+            );
+            self.write::<Value, _>(
+                ctx,
+                Api::Policies,
+                &op,
+                &[id],
+                Some(Value::Object(body)),
+                &mut evidence,
+            )
+            .await?;
+            let group = self
+                .fetch_group(ctx, id, false, &mut evidence)
+                .await
+                .map_err(|failed| {
+                    let safe_id = !evidence.id_reflects(id) && !evidence.id_reflects(&fallback.id);
+                    fallback.screen(&evidence);
+                    settle(
+                        failed,
+                        safe_id.then_some(UpdateGroupOutput { group: fallback }),
+                        &format!(
+                            "{UPDATE}: group {id} was updated but the read to confirm it failed"
+                        ),
+                        &evidence,
+                    )
+                })?;
+            Ok(UpdateGroupOutput { group })
+        })
     }
 
     /// Deletes an IAM group only after proving it has no users or policies.
@@ -239,33 +259,35 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteGroupInput,
     ) -> Result<DeleteGroupOutput, Failure<DeleteGroupOutput>> {
-        let id = input.group_id.as_str();
-        let ids = &[("GroupID", id)];
-        let mut evidence = self.write_evidence(ctx, DELETE, ids, &[])?;
-        self.require_classified_caller(ctx, DELETE, &mut evidence)
-            .await?;
-        let group: GroupAttachments = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &read_operation(DELETE, GROUP, OBJECT_CAP, false),
-                ids,
-                &[],
-                &mut evidence,
-            )
-            .await
-            .map_err(guard_failed)?;
-        group.require_empty(id, &evidence)?;
-        let op = write_operation(
-            DELETE,
-            Method::DELETE,
-            GROUP,
-            Retry::Repeatable,
-            &[StatusCode::NO_CONTENT],
-        );
-        self.write::<Value, _>(ctx, Api::Policies, &op, &[id], None, &mut evidence)
-            .await?;
-        Ok(DeleteGroupOutput {})
+        crate::wire::product::exit::finish!(async {
+            let id = input.group_id.as_str();
+            let ids = &[("GroupID", id)];
+            let mut evidence = self.write_evidence(ctx, DELETE, ids, &[])?;
+            self.require_classified_caller(ctx, DELETE, &mut evidence)
+                .await?;
+            let group: GroupAttachments = self
+                .fetch(
+                    ctx,
+                    Api::Policies,
+                    &read_operation(DELETE, GROUP, OBJECT_CAP, false),
+                    ids,
+                    &[],
+                    &mut evidence,
+                )
+                .await
+                .map_err(guard_failed)?;
+            group.require_empty(id, &evidence)?;
+            let op = write_operation(
+                DELETE,
+                Method::DELETE,
+                GROUP,
+                Retry::Repeatable,
+                &[StatusCode::NO_CONTENT],
+            );
+            self.write::<Value, _>(ctx, Api::Policies, &op, &[id], None, &mut evidence)
+                .await?;
+            Ok(DeleteGroupOutput {})
+        })
     }
 
     pub(super) async fn fetch_group<O>(
@@ -359,6 +381,14 @@ impl Wire for GroupRead {
             has_name,
         })
     }
+
+    fn scan_operands(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.group.scan_operands(scan, identifier)
+    }
 }
 
 #[derive(Default)]
@@ -409,6 +439,12 @@ impl Wire for GroupAttachments {
             unrecognized,
         })
     }
+
+    fn scan_operands(&self, scan: &crate::wire::product::output::FieldScan<'_>, _: bool) -> bool {
+        self.id.scan_operands(scan, true)
+            || self.iam_users.scan_operands(scan, true)
+            || self.policies.scan_operands(scan, true)
+    }
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -416,9 +452,10 @@ impl GroupAttachments {
     fn require_empty<O>(self, id: &str, evidence: &Evidence) -> Result<(), Failure<O>> {
         let (policies, users) = self.checked(DELETE, id, evidence)?;
         if !policies.is_empty() || !users.is_empty() {
-            return Err(guard_refusal(
+            return Err(super::writes::proved_refusal(
+                evidence,
+                super::writes::ProofRefusal::InUse,
                 "iam: refused: resource in use: iam.DeleteGroup: the group has a member or a policy",
-                Some(WriteError::ResourceInUse),
             ));
         }
         Ok(())

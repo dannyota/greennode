@@ -3,6 +3,7 @@ use super::{Client, Instance};
 use crate::config::session::AuthKind;
 use crate::endpoint::Base;
 use crate::error::SafeText;
+use crate::wire::product::guard::guarded_poll;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -19,9 +20,9 @@ use std::{task::Poll, time::Duration};
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const POLL_BOUND: Duration = Duration::from_secs(30 * 60);
 
-#[derive(Clone, Copy)]
 pub(super) enum Settlement {
     NotSettled(&'static str),
+    ReadFailed(&'static str, Box<Error>),
     Failed,
 }
 
@@ -99,11 +100,20 @@ impl Client {
         let clock = self.session.clock();
         let deadline = clock.monotonic_now() + POLL_BOUND;
         let ctx = context.child_with_deadline(deadline);
-        while ctx.check(clock).is_none() {
+        guarded_poll!(evidence, {
+            if ctx.check(clock).is_some() {
+                break;
+            }
             let instance = match self.get_instance::<()>(&ctx, id, evidence).await {
                 Ok(instance) => Some(instance),
                 Err(failure) if failure.error().detail::<CompletedNotFound>().is_some() => None,
-                Err(_) => break,
+                Err(failure) => {
+                    let error = Box::new(failure.into_parts().0);
+                    return Err(match interrupted {
+                        Settlement::NotSettled(reason) => Settlement::ReadFailed(reason, error),
+                        other => other,
+                    });
+                }
             };
             if ctx.check(clock).is_some() {
                 break;
@@ -113,7 +123,7 @@ impl Client {
             }
             let wake = clock.monotonic_now() + POLL_INTERVAL;
             ctx.child_with_deadline(wake).wait(clock).await;
-        }
+        });
         Err(interrupted)
     }
 }
@@ -185,7 +195,7 @@ pub(super) fn safe_rejection(operation: &'static str, error: &Error, message: &s
 pub(super) fn rejection<T, O>(failure: Failure<T>, operation: &'static str) -> Option<Failure<O>> {
     let (error, _, dispatch) = failure.into_parts();
     let api_status = error.api_error().and_then(ApiError::status);
-    let status = api_status.or_else(|| error.detail::<StatusCode>().map(StatusCode::as_u16));
+    let status = api_status.or_else(|| error.http_status().map(|status| status.as_u16()));
     if dispatch != WriteDispatch::NotSent
         && !status.is_some_and(|status| (400..500).contains(&status))
     {
@@ -214,13 +224,18 @@ pub(super) fn unsettled<O>(
     evidence: &Evidence,
     partial: impl FnOnce(String) -> O,
 ) -> Failure<O> {
-    let (class, reason) = match settlement {
-        Settlement::NotSettled(reason) => (ErrorClass::NotSettled, reason),
-        Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed"),
+    let (class, reason, cause) = match settlement {
+        Settlement::NotSettled(reason) => (ErrorClass::NotSettled, reason, None),
+        Settlement::ReadFailed(reason, cause) => (ErrorClass::NotSettled, reason, Some(cause)),
+        Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed", None),
     };
     let message =
         format!("{operation}: inspect inventory and billing before another mutation: {reason}");
     let error = local_error(class, "", &message);
+    let error = match cause {
+        Some(cause) => error.with_cause(*cause),
+        None => error,
+    };
     let dispatch = WriteDispatch::MayHaveBeenSent;
     let Some(id) = id else {
         return Failure::new(error, None, dispatch);
@@ -261,7 +276,7 @@ pub(super) fn write_operation(
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

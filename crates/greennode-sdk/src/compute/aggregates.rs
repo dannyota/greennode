@@ -21,32 +21,34 @@ impl Client {
         ctx: &RequestContext,
         _: ListServerSecurityGroupsInput,
     ) -> Result<ListServerSecurityGroupsOutput, Failure<ListServerSecurityGroupsOutput>> {
-        let mut evidence = Evidence::new();
-        let mut walk = Inventory::default();
-        let mut items = Vec::new();
-        for page in 1..=50 {
-            let rows = self.server_page(ctx, page, 0, &mut evidence).await?;
-            let complete = walk
-                .account(page, &rows, |row| &row.uuid)
-                .ok_or_else(|| failure(SECURITY.invalid(&evidence)))?;
-            for row in rows.items {
-                let groups = row
-                    .security_groups
-                    .filter(|groups| distinct(groups, |group| &group.uuid))
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let mut walk = Inventory::default();
+            let mut items = Vec::new();
+            for page in 1..=50 {
+                let rows = self.server_page(ctx, page, 0, &mut evidence).await?;
+                let complete = walk
+                    .account(page, &rows, |row| &row.uuid)
                     .ok_or_else(|| failure(SECURITY.invalid(&evidence)))?;
-                items.extend(groups.into_iter().map(|group| ServerSecurityGroup {
-                    server_id: row.uuid.clone(),
-                    name: group.name,
-                    uuid: group.uuid,
-                }));
+                for row in rows.items {
+                    let groups = row
+                        .security_groups
+                        .filter(|groups| distinct(groups, |group| &group.uuid))
+                        .ok_or_else(|| failure(SECURITY.invalid(&evidence)))?;
+                    items.extend(groups.into_iter().map(|group| ServerSecurityGroup {
+                        server_id: row.uuid.clone(),
+                        name: group.name,
+                        uuid: group.uuid,
+                    }));
+                }
+                if complete {
+                    return Ok(List {
+                        items: SECURITY.retain(items, &evidence)?,
+                    });
+                }
             }
-            if complete {
-                return Ok(List {
-                    items: SECURITY.retain(items, &evidence)?,
-                });
-            }
-        }
-        Err(failure(SECURITY.invalid(&evidence)))
+            Err(failure(SECURITY.invalid(&evidence)))
+        })
     }
 
     /// Lists group memberships throughout the selected project.
@@ -55,41 +57,43 @@ impl Client {
         ctx: &RequestContext,
         _: ListServerGroupMembersInput,
     ) -> Result<ListServerGroupMembersOutput, Failure<ListServerGroupMembersOutput>> {
-        let mut evidence = Evidence::new();
-        let mut walk = Inventory::default();
-        let mut items = Vec::new();
-        for page in 1..=50 {
-            let rows = self
-                .group_page(
-                    ctx,
-                    &ListServerGroupsInput {
-                        offset: walk.count,
-                        ..ListServerGroupsInput::default()
-                    },
-                    &mut evidence,
-                )
-                .await?;
-            let complete = walk
-                .account(page, &rows, |row| &row.uuid)
-                .ok_or_else(|| failure(LIST_GROUPS.invalid(&evidence)))?;
-            for row in rows.items {
-                let servers = row
-                    .servers
-                    .filter(|servers| distinct(servers, |server| &server.uuid))
-                    .ok_or_else(|| failure(MEMBERS.invalid(&evidence)))?;
-                items.extend(servers.into_iter().map(|server| ServerGroupMembership {
-                    server_group_id: row.uuid.clone(),
-                    name: server.name,
-                    uuid: server.uuid,
-                }));
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = Evidence::new();
+            let mut walk = Inventory::default();
+            let mut items = Vec::new();
+            for page in 1..=50 {
+                let rows = self
+                    .group_page(
+                        ctx,
+                        &ListServerGroupsInput {
+                            offset: walk.count,
+                            ..ListServerGroupsInput::default()
+                        },
+                        &mut evidence,
+                    )
+                    .await?;
+                let complete = walk
+                    .account(page, &rows, |row| &row.uuid)
+                    .ok_or_else(|| failure(LIST_GROUPS.invalid(&evidence)))?;
+                for row in rows.items {
+                    let servers = row
+                        .servers
+                        .filter(|servers| distinct(servers, |server| &server.uuid))
+                        .ok_or_else(|| failure(MEMBERS.invalid(&evidence)))?;
+                    items.extend(servers.into_iter().map(|server| ServerGroupMembership {
+                        server_group_id: row.uuid.clone(),
+                        name: server.name,
+                        uuid: server.uuid,
+                    }));
+                }
+                if complete {
+                    return Ok(List {
+                        items: MEMBERS.retain(items, &evidence)?,
+                    });
+                }
             }
-            if complete {
-                return Ok(List {
-                    items: MEMBERS.retain(items, &evidence)?,
-                });
-            }
-        }
-        Err(failure(LIST_GROUPS.invalid(&evidence)))
+            Err(failure(LIST_GROUPS.invalid(&evidence)))
+        })
     }
 }
 

@@ -16,7 +16,7 @@ use crate::wire::strict_json::{self, Shape};
 use crate::{ApiError, Error, output_number};
 
 /// Failure while decoding a successful global load balancer response.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body was not valid JSON.
@@ -27,6 +27,8 @@ pub enum DecodeError {
     ReflectedCredential,
 }
 
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape, ReflectedCredential);
+
 pub(super) trait WireField: Default + DeserializeOwned {
     const SHAPE: Shape<'static> = Shape::Any;
 
@@ -35,6 +37,14 @@ pub(super) trait WireField: Default + DeserializeOwned {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool;
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool
+    where
+        Self: Serialize,
+    {
+        serde_json::to_value(&*self).is_ok_and(|value| !evidence.identifier_output_reflects(&value))
+            && self.redact(evidence)
+    }
 }
 
 pub(super) fn deserialize_field<'de, D: Deserializer<'de>, T: WireField>(
@@ -84,6 +94,13 @@ impl WireField for String {
         }
         true
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        if evidence.id_reflects(self) {
+            *self = "<redacted>".into();
+        }
+        !evidence.id_reflects(self)
+    }
 }
 
 impl WireField for i64 {
@@ -95,8 +112,7 @@ impl WireField for i64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !evidence.credentials().reflects(self.to_string().as_bytes())
-            && !output_number::reflects(*self as f64, evidence.credentials(), false)
+        !evidence.integer_output_reflects(*self)
     }
 }
 
@@ -121,8 +137,7 @@ impl WireField for Value {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        evidence.redact(self);
-        !evidence.reflected_in(self)
+        evidence.redact(self)
     }
 }
 

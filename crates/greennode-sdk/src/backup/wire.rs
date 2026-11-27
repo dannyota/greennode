@@ -51,7 +51,7 @@ impl Row for Backend {
         Shape::Object(&[field("id", Shape::Any), field("name", Shape::Any)]);
 
     fn reflects(&self, credentials: &SentCredentials) -> bool {
-        credentials.reflects(self.id.as_bytes()) || credentials.reflects(self.name.as_bytes())
+        credentials.id_reflects(&self.id) || credentials.text_reflects(&self.name)
     }
 }
 
@@ -195,7 +195,7 @@ pub(super) fn withhold(operation: &Operation, error: Error) -> Error {
                 .with_detail("transport: response body exceeds limit")
                 .with_body_too_large();
         }
-        return match error.detail::<StatusCode>() {
+        return match error.http_status() {
             Some(status) => {
                 response_error(operation, status.as_u16(), "", WITHHELD, false).with_cause(error)
             }

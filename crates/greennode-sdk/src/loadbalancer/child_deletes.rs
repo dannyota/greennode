@@ -1,3 +1,10 @@
+use super::deletes::resource_in_use;
+use crate::wire::product::guard::decide;
+use crate::wire::product::guard::{Guarded, guarded_poll};
+mod timing;
+
+use timing::{check_confirm_time, check_ready_time};
+
 use std::{collections::BTreeSet, time::Duration};
 
 use bytes::Bytes;
@@ -63,10 +70,11 @@ const POLICY: Shape<'_> = shape!("uuid", "name", "description", "redirectPoolId"
     "action", "redirectUrl", "redirectHttpCode", "keepQueryString", "position", "displayStatus",
     "createdAt", "updatedAt", "progressStatus"; "l7Rules" => Shape::Array(&RULE));
 
+#[derive(Debug)]
 struct BusyRefusal;
 
 /// Identifies a pool to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeletePoolInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -76,12 +84,20 @@ pub struct DeletePoolInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(DeletePoolInput {
+    load_balancer_id,
+    pool_id,
+    no_wait
+});
+
 /// A pool delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePoolOutput {}
 
+crate::wire::product::output::public_fields!(DeletePoolOutput {});
+
 /// Identifies a listener to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeleteListenerInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -91,12 +107,20 @@ pub struct DeleteListenerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(DeleteListenerInput {
+    load_balancer_id,
+    listener_id,
+    no_wait
+});
+
 /// A listener delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeleteListenerOutput {}
 
+crate::wire::product::output::public_fields!(DeleteListenerOutput {});
+
 /// Identifies a policy to delete and controls confirmation.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct DeletePolicyInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -108,9 +132,18 @@ pub struct DeletePolicyInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(DeletePolicyInput {
+    load_balancer_id,
+    listener_id,
+    policy_id,
+    no_wait
+});
+
 /// A policy delete has no output fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DeletePolicyOutput {}
+
+crate::wire::product::output::public_fields!(DeletePolicyOutput {});
 
 struct Child<'a> {
     operation: &'static str,
@@ -134,25 +167,27 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePoolInput,
     ) -> ChildFailure<DeletePoolOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeletePool",
-                kind: "pool",
-                read: Read {
-                    id: "loadbalancer.GetPool",
-                    route: "v2/{}/loadBalancers/{}/pools/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeletePool",
+                    kind: "pool",
+                    read: Read {
+                        id: "loadbalancer.GetPool",
+                        route: "v2/{}/loadBalancers/{}/pools/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("PoolID", &input.pool_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.pool_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("PoolID", &input.pool_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.pool_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     /// Deletes a listener and confirms that it is absent.
@@ -161,25 +196,27 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteListenerInput,
     ) -> ChildFailure<DeleteListenerOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeleteListener",
-                kind: "listener",
-                read: Read {
-                    id: "loadbalancer.GetListener",
-                    route: "v2/{}/loadBalancers/{}/listeners/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeleteListener",
+                    kind: "listener",
+                    read: Read {
+                        id: "loadbalancer.GetListener",
+                        route: "v2/{}/loadBalancers/{}/listeners/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("ListenerID", &input.listener_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.listener_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("ListenerID", &input.listener_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.listener_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     /// Deletes an L7 policy and confirms that it is absent.
@@ -188,26 +225,28 @@ impl Client {
         ctx: &RequestContext,
         input: DeletePolicyInput,
     ) -> ChildFailure<DeletePolicyOutput> {
-        self.delete_child(
-            ctx,
-            Child {
-                operation: "loadbalancer.DeletePolicy",
-                kind: "policy",
-                read: Read {
-                    id: "loadbalancer.GetPolicy",
-                    route: "v2/{}/loadBalancers/{}/listeners/{}/l7policies/{}",
+        crate::wire::product::exit::finish!(async {
+            self.delete_child(
+                ctx,
+                Child {
+                    operation: "loadbalancer.DeletePolicy",
+                    kind: "policy",
+                    read: Read {
+                        id: "loadbalancer.GetPolicy",
+                        route: "v2/{}/loadBalancers/{}/listeners/{}/l7policies/{}",
+                    },
+                    ids: &[
+                        ("LoadBalancerID", &input.load_balancer_id),
+                        ("ListenerID", &input.listener_id),
+                        ("PolicyID", &input.policy_id),
+                    ],
+                    load_balancer: &input.load_balancer_id,
+                    id: &input.policy_id,
                 },
-                ids: &[
-                    ("LoadBalancerID", &input.load_balancer_id),
-                    ("ListenerID", &input.listener_id),
-                    ("PolicyID", &input.policy_id),
-                ],
-                load_balancer: &input.load_balancer_id,
-                id: &input.policy_id,
-            },
-            input.no_wait,
-        )
-        .await
+                input.no_wait,
+            )
+            .await
+        })
     }
 
     async fn delete_child<O: Default>(
@@ -216,7 +255,7 @@ impl Client {
         child: Child<'_>,
         no_wait: bool,
     ) -> ChildFailure<O> {
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         validate_ids(child.operation, child.ids, PathIds::Strict)
             .map_err(|error| not_sent(*error))?;
         let mut jitter = || self.session.retry_jitter();
@@ -285,13 +324,12 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
         let text = self
-            .read_text(
+            .read_guard_text(
                 ctx,
-                &LISTENERS,
+                super::wire::GuardRead(&LISTENERS),
                 &[("LoadBalancerID", child.load_balancer)],
                 &[],
                 evidence,
-                true,
             )
             .await?;
         let wrapper = Envelope::parse(&text, &LISTENERS, evidence)?;
@@ -328,10 +366,9 @@ impl Client {
                 "loadbalancer: resource in use: {}: pool {} is used in listener {id} as its default pool",
                 child.operation, child.id
             );
-            return Err(Box::new(
-                local(ErrorClass::Api, &message, evidence)
-                    .with_outer_detail(WriteError::ResourceInUse),
-            ));
+            return Err(Box::new(decide(evidence, |decision| {
+                resource_in_use(decision, local(ErrorClass::Api, &message, evidence))
+            })?));
         }
         Ok(())
     }
@@ -345,7 +382,7 @@ impl Client {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
         let lb_ids = [("LoadBalancerID", child.load_balancer)];
-        loop {
+        guarded_poll!(evidence, {
             check_ready_time(ctx, &wait, clock, child, evidence)?;
             let lb = self
                 .read_progress(
@@ -357,19 +394,20 @@ impl Client {
                 )
                 .await;
             check_ready_time(ctx, &wait, clock, child, evidence)?;
-            if !busy(&lb?, true) {
+            let lb = lb?;
+            if !busy(lb.recheck(evidence)?, true) {
                 let status = self
                     .read_progress(&wait, &child.read, child.ids, child.id, evidence)
                     .await;
                 check_ready_time(ctx, &wait, clock, child, evidence)?;
-                if !busy(&status?, false) {
+                if !busy(status?.recheck(evidence)?, false) && !busy(lb.recheck(evidence)?, true) {
                     return Ok(());
                 }
             }
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     async fn confirm_child_deleted(
@@ -381,14 +419,17 @@ impl Client {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + BOUND);
         let lb_ids = [("LoadBalancerID", child.load_balancer)];
-        loop {
+        guarded_poll!(evidence, {
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
+            let checkpoint = evidence.guard_checkpoint();
             let status = self
                 .read_progress(&wait, &child.read, child.ids, child.id, evidence)
                 .await;
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
             match status {
                 Err(error) if error.detail::<CompleteNotFound>().is_some() => {
+                    let absence = Guarded::from_checkpoint((), evidence, checkpoint)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
                     let lb = self
                         .read_progress(
                             &wait,
@@ -399,7 +440,12 @@ impl Client {
                         )
                         .await;
                     check_confirm_time(ctx, &wait, clock, child, evidence)?;
-                    let lb = lb.map_err(|error| child.unconfirmed(evidence, *error))?;
+                    absence
+                        .recheck(evidence)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
+                    let lb = lb
+                        .and_then(|lb| lb.into_checked(evidence))
+                        .map_err(|error| child.unconfirmed(evidence, *error))?;
                     if lb == "ERROR" {
                         return Err(child.failed("load balancer", child.load_balancer, evidence));
                     }
@@ -408,15 +454,20 @@ impl Client {
                     }
                 }
                 Err(error) => return Err(child.unconfirmed(evidence, *error)),
-                Ok(status) if status == "ERROR" => {
-                    return Err(child.failed(child.kind, child.id, evidence));
+                Ok(status) => {
+                    if status
+                        .recheck(evidence)
+                        .map_err(|error| child.unconfirmed(evidence, *error))?
+                        == "ERROR"
+                    {
+                        return Err(child.failed(child.kind, child.id, evidence));
+                    }
                 }
-                Ok(_) => {}
             }
             wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
                 .wait(clock)
                 .await;
-        }
+        });
     }
 
     async fn read_progress(
@@ -426,8 +477,10 @@ impl Client {
         ids: &[(&str, &str)],
         id: &str,
         evidence: &mut Evidence,
-    ) -> Result<String, Box<Error>> {
-        let text = self.read_text(ctx, read, ids, &[], evidence, true).await?;
+    ) -> Result<Guarded<String>, Box<Error>> {
+        let text = self
+            .read_guard_text(ctx, super::wire::GuardRead(read), ids, &[], evidence)
+            .await?;
         let wrapper = Envelope::parse(&text, read, evidence)?;
         let data = wrapper.canonical_raw(read, evidence, "data")?;
         macro_rules! typed_progress {
@@ -446,7 +499,7 @@ impl Client {
             return Err(read.decode_error(evidence, DecodeError::InvalidShape));
         }
         screen_input(evidence, [uuid.as_str(), progress.as_str()])?;
-        Ok(progress)
+        Guarded::latest(progress, evidence)
     }
 
     async fn send_child_delete(
@@ -463,7 +516,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| not_sent(error.screen_api(&|value| evidence.text_reflects(value))))?;
+            .map_err(|error| not_sent(evidence.screen_error(*error)))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(child.ids.iter().map(|(_, id)| *id))
             .collect();
@@ -487,7 +540,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: true,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -503,7 +556,7 @@ impl Client {
             evidence,
         )
         .await;
-        let screen = |error: Error| error.screen_api(&|value| evidence.text_reflects(value));
+        let screen = |error: Error| evidence.screen_error(error);
         let reply = result.map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(screen(error), None, dispatch)
@@ -511,7 +564,7 @@ impl Client {
         let status = reply.status;
         let body = Bytes::from(reply.reply.body);
         let busy = status.is_client_error()
-            && response::inspect_error_message(&body, |message| {
+            && response::inspect_error_message(&body, evidence.credentials(), |message| {
                 message_has_phrase(
                     message,
                     &[
@@ -569,9 +622,13 @@ impl Child<'_> {
             "loadbalancer: resource in use: {}: pool {id}{reason}",
             self.operation
         );
-        local(ErrorClass::Api, &message, evidence)
-            .with_outer_detail(WriteError::ResourceInUse)
-            .with_cause(error)
+        decide(evidence, |decision| {
+            resource_in_use(
+                decision,
+                local(ErrorClass::Api, &message, evidence).with_cause(error),
+            )
+        })
+        .unwrap_or_else(|error| *error)
     }
 
     fn failed(&self, kind: &str, id: &str, evidence: &Evidence) -> Box<Error> {
@@ -613,61 +670,6 @@ fn api_error_text(api: &crate::ApiError) -> String {
         (operation, None) => format!("{operation}: {message}"),
         (operation, Some(status)) => format!("{operation}: {message} (status {status})"),
     }
-}
-
-fn check_ready_time(
-    parent: &RequestContext,
-    wait: &RequestContext,
-    clock: &dyn crate::Clock,
-    child: &Child<'_>,
-    evidence: &Evidence,
-) -> Result<(), Box<Error>> {
-    if let Some(end) = parent.check(clock) {
-        return Err(Box::new(context_error(end)));
-    }
-    if wait.check(clock).is_some() {
-        let lb = safe_text(child.load_balancer, evidence);
-        let id = safe_text(child.id, evidence);
-        let message = format!(
-            "loadbalancer: resource busy: {}: load balancer {lb} or {} {id} is not ready within 10m0s; nothing sent",
-            child.operation, child.kind
-        );
-        return Err(Box::new(
-            local(ErrorClass::Api, &message, evidence).with_outer_detail(WriteError::ResourceBusy),
-        ));
-    }
-    Ok(())
-}
-
-fn check_confirm_time(
-    parent: &RequestContext,
-    wait: &RequestContext,
-    clock: &dyn crate::Clock,
-    child: &Child<'_>,
-    evidence: &Evidence,
-) -> Result<(), Box<Error>> {
-    let Some(end) = wait.check(clock) else {
-        return Ok(());
-    };
-    let reason = match end {
-        ContextEnd::Cancelled => "confirmation cancelled by caller",
-        ContextEnd::DeadlineExceeded if parent.deadline() == wait.deadline() => {
-            "confirmation stopped at the caller's deadline"
-        }
-        ContextEnd::DeadlineExceeded => "did not settle within 10m0s",
-    };
-    let id = safe_text(child.id, evidence);
-    let message = format!(
-        "vngcloud: write outcome not confirmed: {}: {} {id} {reason}; delete was sent and a rerun is safe",
-        child.operation, child.kind
-    );
-    let error = local(ErrorClass::NotSettled, &message, evidence);
-    let error = if let Some(end) = parent.check(clock) {
-        error.with_cause(context_error(end))
-    } else {
-        error
-    };
-    Err(Box::new(error))
 }
 
 fn busy(progress: &str, parent: bool) -> bool {

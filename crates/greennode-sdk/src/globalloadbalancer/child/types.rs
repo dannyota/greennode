@@ -1,12 +1,13 @@
 use super::super::{Listener, Pool, PoolMember};
 use super::{Evidence, safe_id};
+use crate::wire::product::identifier;
 use std::fmt;
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::Value;
 
 /// Selects one TCP pool, one private member group, and one backend.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreatePoolInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -25,6 +26,17 @@ pub struct CreatePoolInput {
     /// TCP service and health check port.
     pub backend_port: i64,
 }
+
+crate::error::debug_record!(CreatePoolInput {
+    load_balancer_id,
+    name,
+    member_name,
+    backend_project_id,
+    backend_server_id,
+    backend_vpc_id,
+    backend_subnet_id,
+    backend_port
+});
 impl CreatePoolInput {
     /// Builds the input with all required fields.
     #[expect(
@@ -55,7 +67,7 @@ impl CreatePoolInput {
 }
 
 /// Selects one restricted TCP listener bound to the only pool.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateListenerInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
@@ -72,6 +84,16 @@ pub struct CreateListenerInput {
     /// Backend vServer identifier.
     pub backend_server_id: String,
 }
+
+crate::error::debug_record!(CreateListenerInput {
+    load_balancer_id,
+    name,
+    pool_id,
+    port,
+    allowed_cidrs,
+    backend_project_id,
+    backend_server_id
+});
 impl CreateListenerInput {
     /// Builds the input with all required fields.
     pub fn new(
@@ -96,13 +118,18 @@ impl CreateListenerInput {
 }
 
 /// Selects the pool and its nested backend group for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeletePoolInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
     /// Pool identifier.
     pub pool_id: String,
 }
+
+crate::error::debug_record!(DeletePoolInput {
+    load_balancer_id,
+    pool_id
+});
 impl DeletePoolInput {
     /// Builds the input with all required fields.
     pub fn new(load_balancer_id: impl Into<String>, pool_id: impl Into<String>) -> Self {
@@ -114,13 +141,18 @@ impl DeletePoolInput {
 }
 
 /// Selects the listener for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteListenerInput {
     /// Parent global load balancer identifier.
     pub load_balancer_id: String,
     /// Listener identifier.
     pub listener_id: String,
 }
+
+crate::error::debug_record!(DeleteListenerInput {
+    load_balancer_id,
+    listener_id
+});
 impl DeleteListenerInput {
     /// Builds the input with all required fields.
     pub fn new(load_balancer_id: impl Into<String>, listener_id: impl Into<String>) -> Self {
@@ -140,6 +172,8 @@ pub struct CreatePoolOutput {
     pub pool_member: PoolMember,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(custom_debug CreatePoolOutput { pool, pool_member; screen });
 impl CreatePoolOutput {
     pub(super) fn new(pool: Pool, pool_member: PoolMember, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -154,6 +188,7 @@ impl CreatePoolOutput {
 impl Serialize for CreatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check_retained::<_, S::Error>(&(&self.pool, &self.pool_member))?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("CreatePoolOutput", 2)?;
@@ -170,6 +205,8 @@ pub struct CreateListenerOutput {
     pub listener: Listener,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(custom_debug CreateListenerOutput { listener; screen });
 impl CreateListenerOutput {
     pub(super) fn new(listener: Listener, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -183,6 +220,7 @@ impl CreateListenerOutput {
 impl Serialize for CreateListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check_retained::<_, S::Error>(&self.listener)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("CreateListenerOutput", 1)?;
@@ -202,6 +240,8 @@ pub struct DeletePoolOutput {
     pub deleted: bool,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(custom_debug DeletePoolOutput { load_balancer_id, pool_id, deleted; screen });
 impl DeletePoolOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -217,11 +257,16 @@ impl DeletePoolOutput {
 impl Serialize for DeletePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check::<_, S::Error>(&(&self.load_balancer_id, &self.pool_id))?;
+            identifier::check_retained::<_, S::Error>(&self.deleted)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeletePoolOutput", 3)?;
-        out.serialize_field("LoadBalancerID", &self.load_balancer_id)?;
-        out.serialize_field("PoolID", &self.pool_id)?;
+        out.serialize_field(
+            "LoadBalancerID",
+            &identifier::checked(&self.load_balancer_id),
+        )?;
+        out.serialize_field("PoolID", &identifier::checked(&self.pool_id))?;
         out.serialize_field("Deleted", &self.deleted)?;
         out.end()
     }
@@ -238,6 +283,8 @@ pub struct DeleteListenerOutput {
     pub deleted: bool,
     screen: Option<Value>,
 }
+
+crate::wire::product::output::public_fields!(custom_debug DeleteListenerOutput { load_balancer_id, listener_id, deleted; screen });
 impl DeleteListenerOutput {
     pub(super) fn new(glb: &str, id: &str, deleted: bool, evidence: &Evidence) -> Self {
         let mut result = Self {
@@ -253,11 +300,16 @@ impl DeleteListenerOutput {
 impl Serialize for DeleteListenerOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if let Some(value) = self.screen.as_ref() {
+            identifier::check::<_, S::Error>(&(&self.load_balancer_id, &self.listener_id))?;
+            identifier::check_retained::<_, S::Error>(&self.deleted)?;
             return value.serialize(serializer);
         }
         let mut out = serializer.serialize_struct("DeleteListenerOutput", 3)?;
-        out.serialize_field("LoadBalancerID", &self.load_balancer_id)?;
-        out.serialize_field("ListenerID", &self.listener_id)?;
+        out.serialize_field(
+            "LoadBalancerID",
+            &identifier::checked(&self.load_balancer_id),
+        )?;
+        out.serialize_field("ListenerID", &identifier::checked(&self.listener_id))?;
         out.serialize_field("Deleted", &self.deleted)?;
         out.end()
     }
@@ -265,14 +317,12 @@ impl Serialize for DeleteListenerOutput {
 
 macro_rules! debug_projection {
     ($($output:ident),+ $(,)?) => {$(
-        impl fmt::Debug for $output {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                match serde_json::to_value(self) {
-                    Ok(value) => fmt::Debug::fmt(&value, f),
-                    Err(_) => f.write_str("<redacted>"),
-                }
+        crate::error::debug_record!($output => |self, f| {
+            match serde_json::to_value(self) {
+                Ok(value) => fmt::Debug::fmt(&value, f),
+                Err(_) => f.write_str("<redacted>"),
             }
-        }
+        });
     )+};
 }
 
@@ -285,7 +335,7 @@ debug_projection!(
 
 fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
     let mut value = serde_json::to_value(output).ok()?;
-    if !evidence.reflected_in(&value) {
+    if !evidence.output_reflects(&value) {
         return None;
     }
     evidence.redact(&mut value);
@@ -296,6 +346,15 @@ fn screen(output: &impl Serialize, evidence: &Evidence) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::Secret;
+
+    #[test]
+    fn delete_output_redacts_the_actual_typed_pool_identifier() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let pool = DeletePoolOutput::new("glb-1", "pre6A6B6Cpost", false, &evidence);
+        assert!(pool.pool_id == "<redacted>");
+        assert!(!evidence.serialized_output_reflects(&pool));
+    }
 
     #[test]
     fn debug_uses_each_child_outputs_screened_projection() {

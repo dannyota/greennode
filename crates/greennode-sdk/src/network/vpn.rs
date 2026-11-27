@@ -17,13 +17,15 @@ const VPN: InventoryRead = InventoryRead::new(
 );
 
 /// Selects a page of VPN connections.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVpnConnectionsInput {
     /// Page number. Zero uses the first page.
     pub page: i64,
     /// Page size. Zero uses ten connections.
     pub size: i64,
 }
+
+crate::error::debug_record!(ListVpnConnectionsInput { page, size });
 
 /// One page of VPN connections, with inline sites and tunnels.
 pub type ListVpnConnectionsOutput = PagedList<VpnConnection>;
@@ -36,45 +38,47 @@ impl Client {
         ctx: &RequestContext,
         input: ListVpnConnectionsInput,
     ) -> Result<ListVpnConnectionsOutput, Failure<ListVpnConnectionsOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        if input.page < 0 || input.size < 0 {
-            return Err(failure(
-                VPN.input_error("requires nonnegative Page and Size", &evidence),
-            ));
-        }
-        if let Some(project) = self
-            .session
-            .project_id_context(ctx)
-            .await
-            .map_err(|error| failure(*error))?
-        {
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            if input.page < 0 || input.size < 0 {
+                return Err(failure(
+                    VPN.input_error("requires nonnegative Page and Size", &evidence),
+                ));
+            }
+            if let Some(project) = self
+                .session
+                .project_id_context(ctx)
+                .await
+                .map_err(|error| failure(*error))?
+            {
+                VPN.check_id("ProjectID", &project, PathIds::Strict, &evidence)
+                    .map_err(failure)?;
+            }
+            let base = self.vpn_base(&evidence).map_err(failure)?;
+            let project = self
+                .inventory_project(ctx, &[], &mut evidence)
+                .await
+                .map_err(failure)?;
             VPN.check_id("ProjectID", &project, PathIds::Strict, &evidence)
                 .map_err(failure)?;
-        }
-        let base = self.vpn_base(&evidence).map_err(failure)?;
-        let project = self
-            .inventory_project(ctx, &[], &mut evidence)
-            .await
-            .map_err(failure)?;
-        VPN.check_id("ProjectID", &project, PathIds::Strict, &evidence)
-            .map_err(failure)?;
-        let page = input.page.max(1);
-        let size = if input.size == 0 { 10 } else { input.size };
-        let params = format!(
-            r#"{{"search":[{{"field":"any","value":""}}],"sort":{{}},"page":{page},"size":{size}}}"#
-        );
-        let raw = self
-            .read_route_inventory(
-                ctx,
-                &base,
-                VPN,
-                &[&project],
-                &[("params", &params)],
-                &mut evidence,
-            )
-            .await
-            .map_err(failure)?;
-        decode_vpn(&go_json(&raw), &evidence).map_err(failure)
+            let page = input.page.max(1);
+            let size = if input.size == 0 { 10 } else { input.size };
+            let params = format!(
+                r#"{{"search":[{{"field":"any","value":""}}],"sort":{{}},"page":{page},"size":{size}}}"#
+            );
+            let raw = self
+                .read_route_inventory(
+                    ctx,
+                    &base,
+                    VPN,
+                    &[&project],
+                    &[("params", &params)],
+                    &mut evidence,
+                )
+                .await
+                .map_err(failure)?;
+            decode_vpn(&go_json(&raw), &evidence).map_err(failure)
+        })
     }
 
     fn vpn_base(&self, evidence: &Evidence) -> Result<Base, Error> {

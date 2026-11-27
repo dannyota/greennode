@@ -6,6 +6,10 @@ fn body(server: &Server, index: usize) -> Value {
 }
 
 fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Client {
+    client_with_rotating_bearer(server, bearer, 2)
+}
+
+fn client_with_rotating_bearer(server: &Server, bearer: &'static str, after: usize) -> Client {
     use crate::{CredentialsProvider, Token};
     use std::future::{Future, ready};
     use std::pin::Pin;
@@ -17,13 +21,14 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
     struct Provider {
         calls: AtomicUsize,
         confirmation_bearer: &'static str,
+        after: usize,
     }
     impl CredentialsProvider for Provider {
         fn token<'a>(
             &'a self,
             _: &'a RequestContext,
         ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
-            let value = if self.calls.fetch_add(1, Ordering::Relaxed) < 2 {
+            let value = if self.calls.fetch_add(1, Ordering::Relaxed) < self.after {
                 BEARER
             } else {
                 self.confirmation_bearer
@@ -44,6 +49,7 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
             .with_credentials_provider(Arc::new(Provider {
                 calls: AtomicUsize::new(0),
                 confirmation_bearer: bearer,
+                after,
             }))
             .with_endpoint_overrides(EndpointOverrides {
                 dns: Some(format!("{}/vdns-api/", server.origin)),
@@ -55,6 +61,80 @@ fn client_with_confirmation_bearer(server: &Server, bearer: &'static str) -> Cli
         .session()
         .set_test_product_root(server.root_der.clone());
     Client::new(&config)
+}
+
+#[tokio::test]
+async fn readiness_status_is_rechecked_with_the_write_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":[]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let failure = client_with_rotating_bearer(&server, "ACTIVE", 1)
+        .update_hosted_zone(
+            &RequestContext::new().0,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn replacement_rechecks_copied_association_ids_against_the_write_bearer() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":["pre6A6B6Cpost"]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let failure = client_with_rotating_bearer(&server, "jkl", 1)
+        .update_hosted_zone(
+            &RequestContext::new().0,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::InvalidInput));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn readiness_refuses_a_reflected_active_state() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"hostedZoneId":"zone-1","status":"ACTIVE","description":"","assocVpcIds":[]}}"#,
+        ),
+        response("204 No Content", ""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "ACTIVE")
+        .update_hosted_zone(
+            &ctx,
+            UpdateHostedZoneInput {
+                description: Some("new".into()),
+                no_wait: true,
+                ..UpdateHostedZoneInput::new("zone-1")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]
@@ -147,6 +227,37 @@ async fn post_write_reads_cannot_replace_a_partial_with_the_wrong_record() {
     assert_eq!(record.id, "record-1");
     assert!(record.ttl == Field::Redacted);
     assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn record_confirmation_rechecks_the_earlier_zone_with_the_final_bearer() {
+    let late = "toy-zone-description";
+    let observed_zone = ZONE.replace(
+        r#""status""#,
+        &format!(r#""description":"{late}","status""#),
+    );
+    let created = include_str!("../../../tests/fixtures/dns/create_record.json");
+    let server = Server::start(vec![
+        response("200 OK", ZONE),
+        response("200 OK", created),
+        response("200 OK", &observed_zone),
+        response("200 OK", RECORD),
+    ]);
+    let input = CreateRecordInput::new(
+        "zone-1",
+        "A",
+        vec![RecordValue {
+            value: "192.0.2.1".into(),
+            ..Default::default()
+        }],
+    );
+    let failure = client_with_rotating_bearer(&server, late, 3)
+        .create_record(&RequestContext::new().0, input)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(server.requests(), 4);
 }
 
 #[tokio::test]
@@ -381,18 +492,26 @@ async fn strict_preflight_treats_an_empty_success_as_malformed_json() {
 }
 
 #[tokio::test]
-async fn a_delete_probe_preserves_404_when_the_error_body_exceeds_its_cap() {
+async fn oversized_delete_probe_retains_status_without_confirming_absence() {
     let server = Server::start(vec![
         response("200 OK", ZONE),
         response("204 No Content", ""),
         response("404 Not Found", &"x".repeat((256 << 10) + 1)),
     ]);
     let (ctx, _) = RequestContext::new();
-    client(&server, BEARER)
+    let failure = client(&server, BEARER)
         .delete_hosted_zone(&ctx, DeleteHostedZoneInput::new("zone-1"))
         .await
-        .unwrap();
+        .unwrap_err();
     assert_eq!(server.requests(), 3);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
+    );
 }
 
 #[tokio::test]

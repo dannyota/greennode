@@ -43,11 +43,9 @@ pub struct EndpointOverrides {
     pub database: Option<String>,
 }
 
-impl std::fmt::Debug for EndpointOverrides {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("EndpointOverrides([REDACTED])")
-    }
-}
+crate::error::debug_record!(EndpointOverrides => |self, f| {
+    f.write_str("EndpointOverrides([REDACTED])")
+});
 
 impl From<EndpointOverrides> for crate::endpoint::EndpointOverrides {
     fn from(value: EndpointOverrides) -> Self {

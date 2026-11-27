@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 #[allow(dead_code, reason = "Shared volume-zone fields for service ports")]
 pub(crate) struct ParentZone {
@@ -21,7 +21,7 @@ pub(crate) struct ParentZone {
     pub(crate) volume_count: i64,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(default)]
 #[derive(Default)]
 #[allow(dead_code, reason = "Shared fields for service ports")]
@@ -32,7 +32,7 @@ pub(crate) struct VolumeParent {
     pub(crate) zone: Option<ParentZone>,
 }
 
-#[derive(Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct VolumeType {
     pub(crate) id: String,
@@ -57,7 +57,7 @@ impl VolumeType {
     }
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct Encryption {

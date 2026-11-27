@@ -9,15 +9,19 @@ use crate::wire::product::evidence::Evidence;
 use crate::{Failure, List, RequestContext};
 
 /// Inputs for reading the IAM action catalog.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ListActionsInput;
+
+crate::error::debug_record!(ListActionsInput unit);
 
 /// The IAM action catalog.
 pub type ListActionsOutput = List<Action>;
 
 /// Inputs for reading the IAM groups.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct ListGroupsInput;
+
+crate::error::debug_record!(ListGroupsInput unit);
 
 /// The IAM groups visible to the caller.
 pub type ListGroupsOutput = List<GroupSummary>;
@@ -41,12 +45,14 @@ id_input!(
 );
 
 /// The requested IAM policy and its statements.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetPolicyOutput {
     /// Policy details and statement document.
     #[serde(rename = "Policy")]
     pub policy: Policy,
 }
+
+crate::wire::product::output::public_fields!(GetPolicyOutput { policy });
 
 id_input!(
     /// Inputs for reading the principals attached to one policy.
@@ -56,7 +62,7 @@ id_input!(
 );
 
 /// Groups, users, and service accounts attached to one policy.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListPolicyAttachmentsOutput {
     /// Groups attached to the policy.
     #[serde(rename = "Groups")]
@@ -69,6 +75,12 @@ pub struct ListPolicyAttachmentsOutput {
     pub service_account_ids: Vec<String>,
 }
 
+crate::wire::product::output::public_fields!(ListPolicyAttachmentsOutput {
+    groups,
+    user_ids,
+    service_account_ids
+});
+
 id_input!(
     /// Inputs for reading one IAM group.
     GetGroupInput,
@@ -77,12 +89,14 @@ id_input!(
 );
 
 /// The requested IAM group and its members and policies.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetGroupOutput {
     /// Group details.
     #[serde(rename = "Group")]
     pub group: Group,
 }
+
+crate::wire::product::output::public_fields!(GetGroupOutput { group });
 
 id_input!(
     /// Inputs for reading the groups that contain one user.
@@ -135,16 +149,18 @@ impl Client {
         ctx: &RequestContext,
         _: ListActionsInput,
     ) -> Result<ListActionsOutput, Failure<ListActionsOutput>> {
-        let operation = read_operation(
-            "iam.ListActions",
-            "policies-api/v1/actions",
-            LIST_CAP,
-            false,
-        );
-        let items = self
-            .read(ctx, Api::Policies, &operation, &[], &[("product", "iam")])
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListActions",
+                "policies-api/v1/actions",
+                LIST_CAP,
+                false,
+            );
+            let items = self
+                .read(ctx, Api::Policies, &operation, &[], &[("product", "iam")])
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Lists one zero-based page of policies with an optional name filter.
@@ -153,21 +169,23 @@ impl Client {
         ctx: &RequestContext,
         input: ListPoliciesInput,
     ) -> Result<ListPoliciesOutput, Failure<ListPoliciesOutput>> {
-        let operation = read_operation(
-            "iam.ListPolicies",
-            "policies-api/v1/policies",
-            DEFAULT_CAP,
-            true,
-        );
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Policies,
-            &operation,
-            &[],
-            &page.pairs(&input.name),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListPolicies",
+                "policies-api/v1/policies",
+                DEFAULT_CAP,
+                true,
+            );
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Policies,
+                &operation,
+                &[],
+                &page.pairs(&input.name),
+            )
+            .await
+        })
     }
 
     /// Reads and verifies the identity of one policy.
@@ -176,26 +194,29 @@ impl Client {
         ctx: &RequestContext,
         input: GetPolicyInput,
     ) -> Result<GetPolicyOutput, Failure<GetPolicyOutput>> {
-        let operation = read_operation(
-            "iam.GetPolicy",
-            "policies-api/v1/policies/{}",
-            OBJECT_CAP,
-            false,
-        );
-        let (id, mut evidence) = (input.policy_id.as_str(), Evidence::new());
-        let mut policy: Policy = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &operation,
-                &[("PolicyID", id)],
-                &[],
-                &mut evidence,
-            )
-            .await?;
-        require_identity(&policy.id, id, "iam.GetPolicy: policy identity is unproven")?;
-        policy.screen(&evidence);
-        Ok(GetPolicyOutput { policy })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.GetPolicy",
+                "policies-api/v1/policies/{}",
+                OBJECT_CAP,
+                false,
+            );
+            let (id, mut evidence) = (input.policy_id.as_str(), Evidence::new());
+            let mut policy: Policy = self
+                .fetch(
+                    ctx,
+                    Api::Policies,
+                    &operation,
+                    &[("PolicyID", id)],
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            require_identity(&policy.id, id, "iam.GetPolicy: policy identity is unproven")?;
+            policy.screen(&evidence);
+            super::screened_output(GetPolicyOutput { policy }, &evidence)
+                .map_err(|error| super::failure(*error))
+        })
     }
 
     /// Lists the groups, users, and service accounts attached to one policy.
@@ -204,56 +225,62 @@ impl Client {
         ctx: &RequestContext,
         input: ListPolicyAttachmentsInput,
     ) -> Result<ListPolicyAttachmentsOutput, Failure<ListPolicyAttachmentsOutput>> {
-        const OP: &str = "iam.ListPolicyAttachments";
-        let mut evidence = Evidence::new();
-        let ids = &[("PolicyID", input.policy_id.as_str())];
-        let mut groups: Vec<GroupSummary> = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &read_operation(OP, "policies-api/v1/policies/{}/groups", DEFAULT_CAP, true),
-                ids,
-                &[],
-                &mut evidence,
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "iam.ListPolicyAttachments";
+            let mut evidence = Evidence::new();
+            let ids = &[("PolicyID", input.policy_id.as_str())];
+            let mut groups: Vec<GroupSummary> = self
+                .fetch(
+                    ctx,
+                    Api::Policies,
+                    &read_operation(OP, "policies-api/v1/policies/{}/groups", DEFAULT_CAP, true),
+                    ids,
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            let mut user_ids: Vec<String> = self
+                .fetch(
+                    ctx,
+                    Api::Policies,
+                    &read_operation(
+                        OP,
+                        "policies-api/v1/policies/{}/iam-users",
+                        DEFAULT_CAP,
+                        true,
+                    ),
+                    ids,
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            let mut service_account_ids: Vec<String> = self
+                .fetch(
+                    ctx,
+                    Api::Policies,
+                    &read_operation(
+                        OP,
+                        "policies-api/v1/policies/{}/service-accounts",
+                        DEFAULT_CAP,
+                        true,
+                    ),
+                    ids,
+                    &[],
+                    &mut evidence,
+                )
+                .await?;
+            groups.screen(&evidence);
+            user_ids.screen_id(&evidence);
+            service_account_ids.screen_id(&evidence);
+            super::screened_output(
+                ListPolicyAttachmentsOutput {
+                    groups,
+                    user_ids,
+                    service_account_ids,
+                },
+                &evidence,
             )
-            .await?;
-        let mut user_ids: Vec<String> = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &read_operation(
-                    OP,
-                    "policies-api/v1/policies/{}/iam-users",
-                    DEFAULT_CAP,
-                    true,
-                ),
-                ids,
-                &[],
-                &mut evidence,
-            )
-            .await?;
-        let mut service_account_ids: Vec<String> = self
-            .fetch(
-                ctx,
-                Api::Policies,
-                &read_operation(
-                    OP,
-                    "policies-api/v1/policies/{}/service-accounts",
-                    DEFAULT_CAP,
-                    true,
-                ),
-                ids,
-                &[],
-                &mut evidence,
-            )
-            .await?;
-        groups.screen(&evidence);
-        user_ids.screen_id(&evidence);
-        service_account_ids.screen_id(&evidence);
-        Ok(ListPolicyAttachmentsOutput {
-            groups,
-            user_ids,
-            service_account_ids,
+            .map_err(|error| super::failure(*error))
         })
     }
 
@@ -263,14 +290,16 @@ impl Client {
         ctx: &RequestContext,
         _: ListGroupsInput,
     ) -> Result<ListGroupsOutput, Failure<ListGroupsOutput>> {
-        let operation = read_operation(
-            "iam.ListGroups",
-            "policies-api/v1/groups",
-            DEFAULT_CAP,
-            true,
-        );
-        let items = self.read(ctx, Api::Policies, &operation, &[], &[]).await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListGroups",
+                "policies-api/v1/groups",
+                DEFAULT_CAP,
+                true,
+            );
+            let items = self.read(ctx, Api::Policies, &operation, &[], &[]).await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads and verifies the identity of one group.
@@ -279,10 +308,12 @@ impl Client {
         ctx: &RequestContext,
         input: GetGroupInput,
     ) -> Result<GetGroupOutput, Failure<GetGroupOutput>> {
-        let group = self
-            .fetch_group(ctx, &input.group_id, false, &mut Evidence::new())
-            .await?;
-        Ok(GetGroupOutput { group })
+        crate::wire::product::exit::finish!(async {
+            let group = self
+                .fetch_group(ctx, &input.group_id, false, &mut Evidence::new())
+                .await?;
+            Ok(GetGroupOutput { group })
+        })
     }
 
     /// Lists the groups containing an IAM user.
@@ -291,22 +322,24 @@ impl Client {
         ctx: &RequestContext,
         input: ListUserGroupsInput,
     ) -> Result<ListUserGroupsOutput, Failure<ListUserGroupsOutput>> {
-        let operation = read_operation(
-            "iam.ListUserGroups",
-            "policies-api/v1/user-attachments/iam-users/{}/groups",
-            DEFAULT_CAP,
-            true,
-        );
-        let items = self
-            .read(
-                ctx,
-                Api::Policies,
-                &operation,
-                &[("UserID", &input.user_id)],
-                &[],
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListUserGroups",
+                "policies-api/v1/user-attachments/iam-users/{}/groups",
+                DEFAULT_CAP,
+                true,
+            );
+            let items = self
+                .read(
+                    ctx,
+                    Api::Policies,
+                    &operation,
+                    &[("UserID", &input.user_id)],
+                    &[],
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Lists one zero-based page of policies attached to an IAM group.
@@ -315,21 +348,23 @@ impl Client {
         ctx: &RequestContext,
         input: ListGroupPoliciesInput,
     ) -> Result<ListGroupPoliciesOutput, Failure<ListGroupPoliciesOutput>> {
-        let operation = read_operation(
-            "iam.ListGroupPolicies",
-            "policies-api/v1/groups/{}/policies",
-            DEFAULT_CAP,
-            true,
-        );
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Policies,
-            &operation,
-            &[("GroupID", &input.group_id)],
-            &page.pairs(""),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListGroupPolicies",
+                "policies-api/v1/groups/{}/policies",
+                DEFAULT_CAP,
+                true,
+            );
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Policies,
+                &operation,
+                &[("GroupID", &input.group_id)],
+                &page.pairs(""),
+            )
+            .await
+        })
     }
 
     /// Lists one zero-based page of policies attached to an IAM user.
@@ -338,21 +373,23 @@ impl Client {
         ctx: &RequestContext,
         input: ListUserPoliciesInput,
     ) -> Result<ListUserPoliciesOutput, Failure<ListUserPoliciesOutput>> {
-        let operation = read_operation(
-            "iam.ListUserPolicies",
-            "policies-api/v1/user-attachments/iam-users/{}/policies",
-            DEFAULT_CAP,
-            true,
-        );
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Policies,
-            &operation,
-            &[("UserID", &input.user_id)],
-            &page.pairs(""),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListUserPolicies",
+                "policies-api/v1/user-attachments/iam-users/{}/policies",
+                DEFAULT_CAP,
+                true,
+            );
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Policies,
+                &operation,
+                &[("UserID", &input.user_id)],
+                &page.pairs(""),
+            )
+            .await
+        })
     }
 
     /// Lists one zero-based page of policies attached to a service account.
@@ -361,20 +398,22 @@ impl Client {
         ctx: &RequestContext,
         input: ListServiceAccountPoliciesInput,
     ) -> Result<ListServiceAccountPoliciesOutput, Failure<ListServiceAccountPoliciesOutput>> {
-        let operation = read_operation(
-            "iam.ListServiceAccountPolicies",
-            "policies-api/v1/user-attachments/service-accounts/{}/policies",
-            DEFAULT_CAP,
-            true,
-        );
-        let page = PageQuery::new(input.page, input.size);
-        self.read(
-            ctx,
-            Api::Policies,
-            &operation,
-            &[("ServiceAccountID", &input.service_account_id)],
-            &page.pairs(""),
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(
+                "iam.ListServiceAccountPolicies",
+                "policies-api/v1/user-attachments/service-accounts/{}/policies",
+                DEFAULT_CAP,
+                true,
+            );
+            let page = PageQuery::new(input.page, input.size);
+            self.read(
+                ctx,
+                Api::Policies,
+                &operation,
+                &[("ServiceAccountID", &input.service_account_id)],
+                &page.pairs(""),
+            )
+            .await
+        })
     }
 }

@@ -36,6 +36,7 @@ use crate::wire::product::{
     redirect::{Classification, Retry},
     retry,
 };
+use crate::wire::strict_json::FieldNames;
 use crate::{Config, Error, ErrorClass, Failure, RequestContext};
 use wire::{CAP, Document, ShapeResult, decode, failure, invalid, screen, shape};
 
@@ -106,7 +107,7 @@ impl Client {
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
-        if wire::reflects(evidence, body) {
+        if evidence.output_reflects(body) {
             return Err(invalid(
                 "vngcloud: invalid input: request contains credential material",
             ));
@@ -141,9 +142,9 @@ impl Client {
             allow_empty: false,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: false,
+            overflow_overrides_status: matches!(evidence.field_names(), FieldNames::Canonical),
             sensitive: read.backup,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: false,
             retry_config: retry::Config::default(),
         };
@@ -178,18 +179,21 @@ impl Client {
         .map_err(|failure| Box::new(failure.into_parts().0))
     }
 
-    async fn read<T: Serialize>(
+    async fn read<T: Serialize + crate::wire::product::output::PublicOutput>(
         &self,
         ctx: &RequestContext,
         read: Read,
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        from_wire: impl FnOnce(&RawValue) -> ShapeResult<T>,
+        from_wire: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
     ) -> Result<T, Box<Error>> {
         let value = self
             .read_value(ctx, read, path, query, evidence, from_wire)
             .await?;
+        if matches!(evidence.field_names(), FieldNames::Canonical) {
+            evidence.keep_decoded_operands(read.id, &value)?;
+        }
         screen(evidence, value, read.id)
     }
 
@@ -200,10 +204,22 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        from_wire: impl FnOnce(&RawValue) -> ShapeResult<T>,
+        from_wire: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
     ) -> Result<T, Box<Error>> {
         let document = self.document(ctx, read, path, query, evidence).await?;
-        decode(&document, from_wire).map_err(|()| shape(read.id, read.shape_error))
+        let names = evidence.field_names();
+        decode(&document, names, from_wire).map_err(|()| {
+            if matches!(names, FieldNames::Canonical) {
+                Box::new(wire::api(
+                    read.id,
+                    Some(200),
+                    "InvalidResponse",
+                    read.shape_error,
+                ))
+            } else {
+                shape(read.id, read.shape_error)
+            }
+        })
     }
 }
 

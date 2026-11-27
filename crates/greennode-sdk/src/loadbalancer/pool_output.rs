@@ -18,16 +18,15 @@ impl PoolProjection {
             return Err(());
         }
         let mut value = serde_json::to_value(&*pool).map_err(|_| ())?;
-        if !evidence.reflected_in(&value) {
+        if !evidence.output_reflects(&value) {
             return Ok(None);
         }
-        evidence.redact(&mut value);
-        if evidence.reflected_in(&value) {
+        if !evidence.redact(&mut value) {
             return Err(());
         }
         scrub_pool(pool, evidence);
         let typed = serde_json::to_value(&*pool).map_err(|_| ())?;
-        if evidence.reflected_in(&typed) {
+        if evidence.output_reflects(&typed) {
             return Err(());
         }
         Ok(Some(Self(value)))
@@ -194,7 +193,7 @@ fn scrub_pool(pool: &mut Pool, evidence: &Evidence) {
 }
 
 fn scrub_scalar<T: Copy + Default + Into<Value>>(value: &mut T, evidence: &Evidence) {
-    if evidence.reflected_in(&(*value).into()) {
+    if evidence.output_reflects(&(*value).into()) {
         *value = T::default();
     }
 }

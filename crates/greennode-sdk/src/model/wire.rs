@@ -4,7 +4,6 @@ use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use serde_json::{Number, Value, value::RawValue};
 
-use crate::output_number;
 use crate::wire::product::evidence::Evidence;
 
 thread_local! {
@@ -27,11 +26,21 @@ pub(crate) fn decode_lenient<T>(decode: impl FnOnce() -> T) -> T {
 }
 
 pub(crate) trait WireField: Default + DeserializeOwned {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> = crate::wire::strict_json::Shape::Any;
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Option::<Self>::deserialize(d).map(Option::unwrap_or_default)
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool;
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.redact(evidence)
+    }
+
+    fn identifiers_reflect(&self, _: &Evidence) -> bool {
+        false
+    }
 }
 
 pub(crate) struct Field<T>(pub(crate) T);
@@ -43,6 +52,9 @@ impl<'de, T: WireField> Deserialize<'de> for Field<T> {
 }
 
 impl<T: WireField> WireField for Vec<T> {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> =
+        crate::wire::strict_json::Shape::Array(&T::SCHEMA);
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let rows = Option::<Vec<Field<T>>>::deserialize(d)?.unwrap_or_default();
         Ok(rows.into_iter().map(|row| row.0).collect())
@@ -51,9 +63,19 @@ impl<T: WireField> WireField for Vec<T> {
     fn redact(&mut self, evidence: &Evidence) -> bool {
         self.iter_mut().all(|item| item.redact(evidence))
     }
+
+    fn identifiers_reflect(&self, evidence: &Evidence) -> bool {
+        self.iter().any(|item| item.identifiers_reflect(evidence))
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.iter_mut().all(|item| item.redact_identifier(evidence))
+    }
 }
 
 impl<T: WireField> WireField for Option<T> {
+    const SCHEMA: crate::wire::strict_json::Shape<'static> = T::SCHEMA;
+
     fn read<'de, D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Option::<Field<T>>::deserialize(d).map(|field| field.map(|field| field.0))
     }
@@ -62,6 +84,18 @@ impl<T: WireField> WireField for Option<T> {
         self.as_mut().map_or_else(
             || !evidence.text_reflects("null"),
             |item| item.redact(evidence),
+        )
+    }
+
+    fn identifiers_reflect(&self, evidence: &Evidence) -> bool {
+        self.as_ref()
+            .is_some_and(|item| item.identifiers_reflect(evidence))
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        self.as_mut().map_or_else(
+            || !evidence.text_reflects("null"),
+            |item| item.redact_identifier(evidence),
         )
     }
 }
@@ -74,6 +108,11 @@ impl WireField for String {
         }
         true
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        crate::wire::product::evidence::redact_identifier(self, evidence.credentials());
+        !evidence.id_reflects(self)
+    }
 }
 
 impl WireField for i64 {
@@ -85,8 +124,11 @@ impl WireField for i64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !evidence.credentials().reflects(self.to_string().as_bytes())
-            && !output_number::reflects(*self as f64, evidence.credentials(), false)
+        !evidence.integer_output_reflects(*self)
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        !evidence.identifier_output_reflects(&Value::from(*self))
     }
 }
 
@@ -105,7 +147,11 @@ impl WireField for f64 {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        !output_number::reflects(*self, evidence.credentials(), true)
+        !evidence.output_number_reflects(*self, true)
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        !evidence.identifier_output_reflects(&Value::from(*self))
     }
 }
 
@@ -124,8 +170,11 @@ impl WireField for Value {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        evidence.redact(self);
-        !evidence.reflected_in(self)
+        evidence.redact(self)
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        evidence.redact_identifier_value(self)
     }
 }
 
@@ -297,7 +346,8 @@ macro_rules! model {
         $(#[$derived_meta:meta])* $derived:ident: $derived_type:ty => $derived_go:literal, $derive:expr;
     })?) => {
         $(#[$model_meta])*
-        #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+        #[derive(Clone, Default, PartialEq, serde::Serialize)]
+        #[serde(remote = "Self")]
         $vis struct $model {
             $(
                 $(#[$field_meta])*
@@ -309,6 +359,23 @@ macro_rules! model {
                 #[serde(rename = $derived_go)]
                 pub $derived: $derived_type,
             )?
+        }
+
+        crate::error::debug_record!($model { $($field,)* $($derived)? });
+
+        impl crate::wire::product::output::PublicOutput for $model {
+            fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(scan.field(&self.$field, identifier, $wire, $go) ||)* $(scan.field(&self.$derived, identifier, stringify!($derived), $derived_go) ||)? false
+            }
+        }
+
+        impl serde::Serialize for $model {
+            fn serialize<S: serde::Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if $crate::wire::product::identifier::declared($wire, $go) {
+                    $crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
         }
 
         impl<'de> serde::Deserialize<'de> for $model {
@@ -359,8 +426,22 @@ macro_rules! model {
         }
 
         impl $crate::model::wire::WireField for $model {
+            const SCHEMA: $crate::wire::strict_json::Shape<'static> = $crate::wire::strict_json::Shape::Object(&[
+                $($crate::wire::strict_json::ShapeField { name: $wire, shape: <$type as $crate::model::wire::WireField>::SCHEMA },)*
+            ]);
+
             fn redact(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
-                $(self.$field.redact(evidence) &&)* $(self.$derived.redact(evidence) &&)? true
+                $((if $crate::wire::product::identifier::declared($wire, $go) {
+                    self.$field.redact_identifier(evidence)
+                } else {
+                    self.$field.redact(evidence)
+                }) &&)* $(self.$derived.redact(evidence) &&)? true
+            }
+
+            fn identifiers_reflect(&self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
+                $( (($crate::wire::product::identifier::declared($wire, $go))
+                    && serde_json::to_value(&self.$field).map_or(true, |value| evidence.identifier_output_reflects(&value)))
+                    || self.$field.identifiers_reflect(evidence) ||)* false
             }
         }
     };

@@ -56,21 +56,25 @@ pub struct Client {
 }
 
 /// Filters a budget summary list.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListBudgetsInput {
     /// Budget status to send to the API. An empty value includes all statuses.
     pub status: String,
 }
 
+crate::error::debug_record!(ListBudgetsInput { status });
+
 /// Budget summaries without pagination metadata.
 pub type ListBudgetsOutput = List<Budget>;
 
 /// Identifies a budget to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(GetBudgetInput { budget_uuid });
 
 impl GetBudgetInput {
     /// Stores the UUID for validation by [`Client::get_budget`].
@@ -82,12 +86,14 @@ impl GetBudgetInput {
 }
 
 /// Details of a single budget.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetBudgetOutput {
     /// Budget details with costs and percentages when the API supplies them.
     #[serde(rename = "Budget")]
     pub budget: Budget,
 }
+
+crate::wire::product::output::public_fields!(GetBudgetOutput { budget });
 
 #[expect(
     clippy::result_large_err,
@@ -107,19 +113,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListBudgetsInput,
     ) -> Result<ListBudgetsOutput, Failure<ListBudgetsOutput>> {
-        let mut query = vec![("view", "summary")];
-        if !input.status.is_empty() {
-            query.push(("status", input.status.as_str()));
-        }
-        let items = self
-            .read(
-                ctx,
-                &read_operation("billing.ListBudgets", "gateway/api/v1/budgets"),
-                &[],
-                &query,
-            )
-            .await?;
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut query = vec![("view", "summary")];
+            if !input.status.is_empty() {
+                query.push(("status", input.status.as_str()));
+            }
+            let items = self
+                .read(
+                    ctx,
+                    &read_operation("billing.ListBudgets", "gateway/api/v1/budgets"),
+                    &[],
+                    &query,
+                )
+                .await?;
+            Ok(List { items })
+        })
     }
 
     /// Reads an account-wide budget. An invalid path ID fails before authentication.
@@ -128,15 +136,17 @@ impl Client {
         ctx: &RequestContext,
         input: GetBudgetInput,
     ) -> Result<GetBudgetOutput, Failure<GetBudgetOutput>> {
-        let budget = self
-            .read(
-                ctx,
-                &read_operation("billing.GetBudget", "gateway/api/v1/budgets/{}"),
-                &[&input.budget_uuid],
-                &[],
-            )
-            .await?;
-        Ok(GetBudgetOutput { budget })
+        crate::wire::product::exit::finish!(async {
+            let budget = self
+                .read(
+                    ctx,
+                    &read_operation("billing.GetBudget", "gateway/api/v1/budgets/{}"),
+                    &[&input.budget_uuid],
+                    &[],
+                )
+                .await?;
+            Ok(GetBudgetOutput { budget })
+        })
     }
 
     async fn read<T: BudgetData, O>(
@@ -170,7 +180,7 @@ impl Client {
         .map(|(_, envelope)| envelope.data)
         .map_err(|error| {
             let (error, _, dispatch) = error.into_parts();
-            let error = match error.detail::<StatusCode>().copied() {
+            let error = match error.http_status() {
                 Some(status)
                     if status.is_success()
                         && error.class() == ErrorClass::Api
@@ -202,7 +212,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }

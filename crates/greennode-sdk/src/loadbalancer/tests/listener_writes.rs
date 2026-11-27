@@ -86,21 +86,20 @@ async fn listener_update_refuses_ambiguous_guard_reads_before_the_put() {
 }
 
 #[tokio::test]
-async fn listener_output_redacts_a_reflected_immutable_port() {
+async fn listener_update_refuses_a_preflight_with_a_reflected_port() {
     let server = Server::start(vec![
         response("200 OK", PARENT),
         response("200 OK", CHILD),
         response("202 Accepted", ""),
     ]);
     let (ctx, _) = RequestContext::new();
-    let output = client(&server, "443")
+    let failure = client(&server, "443")
         .update_listener(&ctx, update())
         .await
-        .unwrap();
-    assert_eq!(output.listener.protocol_port, 0);
-    let value = serde_json::to_value(output).unwrap();
-    assert_eq!(value["Listener"]["ProtocolPort"], "<redacted>");
-    assert_eq!(server.requests(), 3);
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
 }
 
 #[tokio::test]
@@ -202,7 +201,7 @@ async fn aliased_listener_protocol_cannot_authorize_a_merge() {
 }
 
 #[tokio::test]
-async fn busy_resend_uses_the_original_complete_message() {
+async fn busy_resend_uses_only_the_bounded_message() {
     for (body, resends) in [
         (
             String::from(r#"{"message":"load balancer is updat\ting"}"#),
@@ -213,6 +212,10 @@ async fn busy_resend_uses_the_original_complete_message() {
                 r#"{{"message":"{} load balancer is updating"}}"#,
                 "a".repeat(550)
             ),
+            false,
+        ),
+        (
+            String::from(r#"{"message":"load balancer is updating"}"#),
             true,
         ),
     ] {

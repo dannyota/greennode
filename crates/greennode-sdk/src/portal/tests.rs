@@ -6,6 +6,16 @@ const USER: &[u8] = include_bytes!("../../tests/fixtures/portal/get_user_info.js
 const BEARER: &str = "synthetic-portal-bearer";
 
 #[tokio::test]
+async fn quota_refuses_a_credential_in_a_normalized_number() {
+    let server = Server::start(vec![response("200 OK", br#"{"quotas":[{"used":1e6}]}"#)]);
+    let output = client_with_bearer(&server, "1000000")
+        .list_quota_used(&RequestContext::new().0, ListQuotaUsedInput::default())
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(output.is_err());
+}
+
+#[tokio::test]
 async fn sdk_serialization_redacts_nested_dynamic_keys() {
     let server = Server::start(vec![response(
         "200 OK",
@@ -40,7 +50,7 @@ async fn list_metadata_rejects_invalid_values() {
 
 #[test]
 fn failed_refresh_omits_status_but_preserves_auth() {
-    let error = Error::new(ErrorClass::Auth).with_outer_detail(StatusCode::UNAUTHORIZED);
+    let error = Error::new(ErrorClass::Auth).with_http_status(StatusCode::UNAUTHORIZED);
     let error = withheld(&user_info_operation(), error);
     assert!(error.has_class(ErrorClass::Auth));
     assert_eq!(error.api_error().unwrap().status(), None);
@@ -144,6 +154,36 @@ async fn quota_lookup_matches_names_case_insensitively() {
         .await
         .unwrap();
     assert_eq!(output.quota.fields["used"], 2);
+}
+
+#[test]
+fn quota_lookup_runs_on_a_small_stack() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"[{"resourceName":"cpu","used":2}]"#,
+    )]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            runtime.block_on(async {
+                let output = client(&server)
+                    .get_quota(
+                        &RequestContext::new().0,
+                        GetQuotaInput { name: "CPU".into() },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(output.quota.fields["used"], 2);
+                assert_eq!(server.requests(), 1);
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn response(status: &str, body: &[u8]) -> Response {

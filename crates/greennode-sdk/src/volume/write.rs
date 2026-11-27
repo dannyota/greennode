@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::time::Duration;
 
 use http::{Method, StatusCode};
@@ -14,7 +15,7 @@ use crate::wire::product::{
 use crate::wire::strict_json::Shape;
 use crate::{ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
-use super::wire::{CAP, Redact, api, invalid, reflects};
+use super::wire::{CAP, Redact, api, invalid};
 use super::{Client, Volume};
 
 #[derive(Clone)]
@@ -107,7 +108,7 @@ impl Client {
             keep_status: true,
             overflow_overrides_status: false,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -151,7 +152,7 @@ impl Client {
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(300));
-        loop {
+        guarded_poll!(evidence, {
             check(&wait, clock)?;
             let next = self.volume(&wait, id, evidence).await;
             check(&wait, clock)?;
@@ -181,7 +182,7 @@ impl Client {
             if tick.wait(clock).await == ContextEnd::Cancelled {
                 return Err(Box::new(ContextEnd::Cancelled.into()));
             }
-        }
+        });
     }
 }
 
@@ -222,18 +223,8 @@ pub(super) fn attached(volume: &Volume, server: &str) -> bool {
 }
 
 pub(super) fn screen_state(evidence: &Evidence, volume: &Volume) -> Result<(), Box<Error>> {
-    if reflects(
-        evidence,
-        &serde_json::json!([
-            volume.uuid,
-            volume.status,
-            volume.size,
-            volume.server_id,
-            volume.server_id_list,
-            volume.bootable,
-            volume.volume_type_id
-        ]),
-    ) {
+    use crate::wire::product::output::{FieldScan, PublicOutput};
+    if volume.public_reflects(&FieldScan::new(evidence), false) {
         return Err(Box::new(api(
             "volume.GetVolume",
             Some(200),
@@ -288,7 +279,7 @@ pub(super) fn settlement_error(error: Error, op: &str, detail: &str) -> Error {
 pub(super) fn safe<T: Serialize + Redact>(mut output: T, evidence: &Evidence) -> Option<T> {
     output.redact(evidence);
     let screened = evidence.can_retain_partial()
-        && serde_json::to_value(&output).is_ok_and(|value| !reflects(evidence, &value));
+        && serde_json::to_value(&output).is_ok_and(|value| !evidence.output_reflects(&value));
     screened.then_some(output)
 }
 
@@ -322,5 +313,24 @@ pub(super) fn finish<T: Serialize + Redact>(
             partial,
             dispatch,
         )),
+    }
+}
+
+#[cfg(test)]
+mod screening_tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn settlement_rechecks_identifiers_after_a_later_bearer() {
+        let mut evidence = Evidence::new();
+        let volume = Volume {
+            uuid: "volume-1".into(),
+            server_id_list: Some(vec!["pre6A6B6Cpost".into()]),
+            ..Default::default()
+        };
+        assert!(screen_state(&evidence, &volume).is_ok());
+        evidence.add_bearer(&Secret::new("jkl"));
+        assert!(screen_state(&evidence, &volume).is_err());
     }
 }

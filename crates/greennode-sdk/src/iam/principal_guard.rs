@@ -53,6 +53,14 @@ impl Wire for AttachmentPage {
             total_pages: optional_field(&fields, "totalPages")?,
         })
     }
+
+    fn scan_operands(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.items.scan_operands(scan, identifier)
+    }
 }
 
 pub(super) fn optional_field<T: Wire>(
@@ -97,11 +105,12 @@ impl Client {
             .policy_ids_are_privileged(ctx, ids, &actions, &mut HashMap::new(), evidence)
             .await?;
         if protected {
-            return Err(guard_refusal(
+            return Err(super::writes::proved_refusal(
+                evidence,
+                super::writes::ProofRefusal::Privileged,
                 &format!(
                     "iam: refused: target is protected: {op}: the service account has a privileged policy attached"
                 ),
-                Some(WriteError::PrivilegedChange),
             ));
         }
         if evidence.id_reflects(id) {
@@ -287,7 +296,7 @@ pub(super) fn require_safe<O>(
     message: &str,
     evidence: &Evidence,
 ) -> Result<(), Failure<O>> {
-    if serde_json::to_value(value).is_ok_and(|value| !evidence.reflected_in(&value)) {
+    if serde_json::to_value(value).is_ok_and(|value| !evidence.output_reflects(&value)) {
         Ok(())
     } else {
         Err(guard_refusal(message, None))

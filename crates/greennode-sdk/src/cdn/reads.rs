@@ -11,7 +11,7 @@ use super::wire::{Call, convert, list, read_failure};
 use super::{ApiKey, Certificate, Client, WebAccelerator, WebAcceleratorSummary, invalid};
 use crate::wire::{
     product::options::PathIds,
-    strict_json::{Shape, ShapeField, validate_shape},
+    strict_json::{Shape, ShapeField},
 };
 use crate::{Error, ErrorClass, Failure, List, RequestContext, Secret};
 
@@ -35,18 +35,22 @@ const LIST_KEYS: Call = Call {
 };
 
 /// Input for listing Web Accelerators.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListWebAcceleratorsInput;
+
+crate::error::debug_record!(ListWebAcceleratorsInput unit);
 
 /// Web Accelerators in the account.
 pub type ListWebAcceleratorsOutput = List<WebAcceleratorSummary>;
 
 /// Input for a Web Accelerator detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetWebAcceleratorInput {
     /// The Web Accelerator identifier.
     pub cdn_id: String,
 }
+
+crate::error::debug_record!(GetWebAcceleratorInput { cdn_id });
 
 impl GetWebAcceleratorInput {
     /// Selects the Web Accelerator to read.
@@ -58,26 +62,32 @@ impl GetWebAcceleratorInput {
 }
 
 /// The selected Web Accelerator.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct GetWebAcceleratorOutput {
     /// The configuration and status of the selected CDN.
     #[serde(rename = "WebAccelerator")]
     pub web_accelerator: WebAccelerator,
 }
 
+crate::wire::product::output::public_fields!(GetWebAcceleratorOutput { web_accelerator });
+
 /// Input for listing certificates.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListCertificatesInput;
+
+crate::error::debug_record!(ListCertificatesInput unit);
 
 /// Certificate metadata without PEM text.
 pub type ListCertificatesOutput = List<Certificate>;
 
 /// Input for a certificate detail read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetCertificateInput {
     /// The certificate identifier.
     pub certificate_id: String,
 }
+
+crate::error::debug_record!(GetCertificateInput { certificate_id });
 
 impl GetCertificateInput {
     /// Selects the certificate to read.
@@ -89,16 +99,20 @@ impl GetCertificateInput {
 }
 
 /// The selected certificate and public PEM chain.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct GetCertificateOutput {
     /// The certificate detail.
     #[serde(rename = "Certificate")]
     pub certificate: Certificate,
 }
 
+crate::wire::product::output::public_fields!(GetCertificateOutput { certificate });
+
 /// Input for listing API key metadata.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListApiKeysInput;
+
+crate::error::debug_record!(ListApiKeysInput unit);
 
 /// API key metadata without key values.
 pub type ListApiKeysOutput = List<ApiKey>;
@@ -145,6 +159,17 @@ pub(super) struct WebDetail {
     pub(super) model: WebAccelerator,
 }
 
+fn screened<T: serde::Serialize>(
+    output: T,
+    call: &Call,
+    evidence: &Evidence,
+) -> Result<T, Failure<T>> {
+    if evidence.serialized_output_reflects(&output) {
+        return Err(read_failure(evidence.screen_error(call.unexpected(200))));
+    }
+    Ok(output)
+}
+
 impl Client {
     /// Lists Web Accelerators in the account.
     pub async fn list_web_accelerators(
@@ -152,16 +177,18 @@ impl Client {
         ctx: &RequestContext,
         _: ListWebAcceleratorsInput,
     ) -> Result<ListWebAcceleratorsOutput, Failure<ListWebAcceleratorsOutput>> {
-        let answer = self
-            .call(ctx, &LIST_WEB, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let mut items = list::<WebAcceleratorSummary>(&LIST_WEB, answer.data.as_deref(), true)
-            .map_err(convert)?;
-        for item in &mut items {
-            item.redact(&answer.evidence);
-        }
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let answer = self
+                .call(ctx, &LIST_WEB, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let mut items = list::<WebAcceleratorSummary>(&LIST_WEB, answer.data.as_deref(), true)
+                .map_err(convert)?;
+            for item in &mut items {
+                item.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_WEB, &answer.evidence)
+        })
     }
 
     /// Reads the Web Accelerator with the requested identifier.
@@ -170,21 +197,27 @@ impl Client {
         ctx: &RequestContext,
         input: GetWebAcceleratorInput,
     ) -> Result<GetWebAcceleratorOutput, Failure<GetWebAcceleratorOutput>> {
-        if !PathIds::Strict.allows(&input.cdn_id) {
-            return Err(invalid());
-        }
-        let mut evidence = Evidence::new();
-        let mut detail = self
-            .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
-            .await
-            .map_err(convert)?;
-        detail.model.redact(&evidence);
-        Ok(GetWebAcceleratorOutput {
-            web_accelerator: detail.model,
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.cdn_id) {
+                return Err(invalid());
+            }
+            let mut evidence = Evidence::new();
+            let mut detail = self
+                .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
+                .await
+                .map_err(convert)?;
+            detail.model.redact(&evidence);
+            screened(
+                GetWebAcceleratorOutput {
+                    web_accelerator: detail.model,
+                },
+                &GET_WEB,
+                &evidence,
+            )
         })
     }
 
-    pub(super) async fn read_web_detail(
+    async fn read_web_detail(
         &self,
         ctx: &RequestContext,
         id: &'static str,
@@ -195,21 +228,26 @@ impl Client {
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;
-        let malformed = || read_failure(call.unexpected(200));
-        let raw = data.ok_or_else(malformed)?;
-        let text = raw.get();
-        validate_shape(text.as_bytes(), &STATE, text.len()).map_err(|_| malformed())?;
-        let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
-        if state.id != cdn_id {
-            return Err(malformed());
-        }
-        let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
-        model.status = super::Field::Value(state.status);
-        Ok(WebDetail {
-            raw,
-            status: state.status,
-            model,
-        })
+        decode_web_detail(&call, cdn_id, data, evidence.field_names())
+    }
+
+    pub(super) async fn read_guard_detail(
+        &self,
+        ctx: &RequestContext,
+        id: &'static str,
+        cdn_id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<crate::wire::product::guard::Guarded<WebDetail>, Failure<()>> {
+        let guard = super::wire::GuardCall(Call { id, ..GET_WEB });
+        let data = self.call_guard(ctx, &guard, &[cdn_id], evidence).await?;
+        let detail = decode_web_detail(
+            &guard.0,
+            cdn_id,
+            data,
+            crate::wire::strict_json::FieldNames::Canonical,
+        )?;
+        crate::wire::product::guard::Guarded::latest(detail, evidence)
+            .map_err(|error| read_failure(*error))
     }
 
     /// Lists certificate metadata without PEM text.
@@ -218,24 +256,26 @@ impl Client {
         ctx: &RequestContext,
         _: ListCertificatesInput,
     ) -> Result<ListCertificatesOutput, Failure<ListCertificatesOutput>> {
-        let mut answer = self
-            .call(ctx, &LIST_CERTIFICATES, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let rows = list::<CertificateWire>(&LIST_CERTIFICATES, answer.data.as_deref(), true)
-            .map_err(convert)?;
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            answer.evidence.add_secret(&Secret::new(row.private_key));
-            let mut certificate = row.certificate;
-            certificate.certificate.clear();
-            certificate.ca_root.clear();
-            items.push(certificate);
-        }
-        for certificate in &mut items {
-            certificate.redact(&answer.evidence);
-        }
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut answer = self
+                .call(ctx, &LIST_CERTIFICATES, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let rows = list::<CertificateWire>(&LIST_CERTIFICATES, answer.data.as_deref(), true)
+                .map_err(convert)?;
+            let mut items = Vec::with_capacity(rows.len());
+            for row in rows {
+                answer.evidence.add_secret(&Secret::new(row.private_key));
+                let mut certificate = row.certificate;
+                certificate.certificate.clear();
+                certificate.ca_root.clear();
+                items.push(certificate);
+            }
+            for certificate in &mut items {
+                certificate.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_CERTIFICATES, &answer.evidence)
+        })
     }
 
     /// Reads certificate metadata and its public PEM chain.
@@ -244,27 +284,33 @@ impl Client {
         ctx: &RequestContext,
         input: GetCertificateInput,
     ) -> Result<GetCertificateOutput, Failure<GetCertificateOutput>> {
-        if !PathIds::Strict.allows(&input.certificate_id) {
-            return Err(invalid());
-        }
-        let mut answer = self
-            .call(
-                ctx,
+        crate::wire::product::exit::finish!(async {
+            if !PathIds::Strict.allows(&input.certificate_id) {
+                return Err(invalid());
+            }
+            let mut answer = self
+                .call(
+                    ctx,
+                    &GET_CERTIFICATE,
+                    &[&input.certificate_id],
+                    Bytes::new(),
+                )
+                .await
+                .map_err(convert)?;
+            let row: CertificateWire = answer
+                .data
+                .as_deref()
+                .and_then(|data| serde_json::from_str(data.get()).ok())
+                .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
+            answer.evidence.add_secret(&Secret::new(row.private_key));
+            let mut certificate = row.certificate;
+            certificate.redact(&answer.evidence);
+            screened(
+                GetCertificateOutput { certificate },
                 &GET_CERTIFICATE,
-                &[&input.certificate_id],
-                Bytes::new(),
+                &answer.evidence,
             )
-            .await
-            .map_err(convert)?;
-        let row: CertificateWire = answer
-            .data
-            .as_deref()
-            .and_then(|data| serde_json::from_str(data.get()).ok())
-            .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
-        answer.evidence.add_secret(&Secret::new(row.private_key));
-        let mut certificate = row.certificate;
-        certificate.redact(&answer.evidence);
-        Ok(GetCertificateOutput { certificate })
+        })
     }
 
     /// Lists key metadata and marks the key used for this request.
@@ -273,40 +319,72 @@ impl Client {
         ctx: &RequestContext,
         _: ListApiKeysInput,
     ) -> Result<ListApiKeysOutput, Failure<ListApiKeysOutput>> {
-        let mut answer = self
-            .call(ctx, &LIST_KEYS, &[], Bytes::new())
-            .await
-            .map_err(convert)?;
-        let rows =
-            list::<ApiKeyWire>(&LIST_KEYS, answer.data.as_deref(), false).map_err(convert)?;
-        let key = self
-            .session
-            .cdn_key()
-            .ok_or_else(|| read_failure(Error::new(ErrorClass::NoCredentials)))?;
-        let comparator = {
-            let mut comparison_key = Zeroizing::new([0; 32]);
-            getrandom::fill(comparison_key.as_mut())
-                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?;
-            Hmac::<Sha256>::new_from_slice(comparison_key.as_ref())
-                .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?
-        };
-        let mut expected = comparator.clone();
-        expected.update(key.expose_secret().as_bytes());
-        let expected = expected.finalize().into_bytes();
-        let mut items = Vec::with_capacity(rows.len());
-        for row in rows {
-            let mut metadata = row.metadata;
-            let token = Secret::new(row.token);
-            let mut tag = comparator.clone();
-            tag.update(token.expose_secret().as_bytes());
-            metadata.current =
-                !token.expose_secret().is_empty() && tag.verify_slice(&expected).is_ok();
-            answer.evidence.add_secret(&token);
-            items.push(metadata);
-        }
-        for metadata in &mut items {
-            metadata.redact(&answer.evidence);
-        }
-        Ok(List { items })
+        crate::wire::product::exit::finish!(async {
+            let mut answer = self
+                .call(ctx, &LIST_KEYS, &[], Bytes::new())
+                .await
+                .map_err(convert)?;
+            let rows =
+                list::<ApiKeyWire>(&LIST_KEYS, answer.data.as_deref(), false).map_err(convert)?;
+            let key = self
+                .session
+                .cdn_key()
+                .ok_or_else(|| read_failure(Error::new(ErrorClass::NoCredentials)))?;
+            let comparator = {
+                let mut comparison_key = Zeroizing::new([0; 32]);
+                getrandom::fill(comparison_key.as_mut())
+                    .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?;
+                Hmac::<Sha256>::new_from_slice(comparison_key.as_ref())
+                    .map_err(|_| read_failure(Error::new(ErrorClass::Api)))?
+            };
+            let mut expected = comparator.clone();
+            expected.update(key.expose_secret().as_bytes());
+            let expected = expected.finalize().into_bytes();
+            let mut items = Vec::with_capacity(rows.len());
+            for row in rows {
+                let mut metadata = row.metadata;
+                let token = Secret::new(row.token);
+                let mut tag = comparator.clone();
+                tag.update(token.expose_secret().as_bytes());
+                metadata.current =
+                    !token.expose_secret().is_empty() && tag.verify_slice(&expected).is_ok();
+                answer.evidence.add_secret(&token);
+                items.push(metadata);
+            }
+            for metadata in &mut items {
+                metadata.redact(&answer.evidence);
+            }
+            screened(List { items }, &LIST_KEYS, &answer.evidence)
+        })
     }
+}
+
+fn decode_web_detail(
+    call: &Call,
+    cdn_id: &str,
+    data: Option<Box<serde_json::value::RawValue>>,
+    names: crate::wire::strict_json::FieldNames,
+) -> Result<WebDetail, Failure<()>> {
+    let malformed = || read_failure(call.unexpected(200));
+    let raw = data.ok_or_else(malformed)?;
+    let text = raw.get();
+    if names.has_case_variant(text.as_bytes(), &STATE) {
+        return Err(read_failure(
+            crate::wire::product::operation::unsafe_guard_response(call.id),
+        ));
+    }
+    names
+        .validate(text.as_bytes(), &STATE, text.len())
+        .map_err(|_| malformed())?;
+    let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
+    if state.id != cdn_id {
+        return Err(malformed());
+    }
+    let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
+    model.status = super::Field::Value(state.status);
+    Ok(WebDetail {
+        raw,
+        status: state.status,
+        model,
+    })
 }

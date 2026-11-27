@@ -3,10 +3,10 @@
 mod error;
 
 use error::{
-    ApiError, Error, ErrorClass, Failure, LoginError, SafeText, ServiceAccountLoginError,
-    WriteDispatch,
+    ApiError, Error, ErrorClass, Failure, LoginError, LoginFailureKind, SafeText,
+    ServiceAccountLoginError, WriteDispatch,
 };
-use greennode_sdk::{ContextEnd, Secret};
+use greennode_sdk::{ContextEnd, Secret, pricing};
 
 fn safe(text: &str) -> SafeText {
     SafeText::new(text, &[])
@@ -66,11 +66,10 @@ fn fallback_handles_absent_status_and_preserves_explicit_codes() {
 
 #[test]
 fn login_details_survive_termination_and_causes() {
-    let login = Error::from(ContextEnd::Cancelled).with_login(LoginError::new(
-        "login failed",
-        Some(401),
-        true,
-    ));
+    let login = Error::from(ContextEnd::Cancelled).with_login(
+        LoginError::new("login failed", Some(401), true)
+            .with_kind(LoginFailureKind::SigninRejected),
+    );
     let outer = Error::new(ErrorClass::Failed).with_cause(login);
     assert!(outer.has_identity(ErrorClass::Cancelled));
     assert!(!outer.has_identity(ErrorClass::Auth));

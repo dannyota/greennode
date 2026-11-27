@@ -1,3 +1,4 @@
+use crate::wire::product::guard::guarded_poll;
 use std::net::Ipv4Addr;
 
 use bytes::Bytes;
@@ -23,7 +24,7 @@ const UPDATE: &str = "loadbalancer.UpdatePoolMember";
 const REMOVE: &str = "loadbalancer.RemovePoolMember";
 
 /// Adds a member to a load balancer pool.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct AddPoolMemberInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -48,8 +49,20 @@ pub struct AddPoolMemberInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(AddPoolMemberInput {
+    load_balancer_id,
+    pool_id,
+    address,
+    port,
+    name,
+    weight,
+    monitor_port,
+    backup,
+    no_wait
+});
+
 /// Changes an existing load balancer pool member.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UpdatePoolMemberInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -78,8 +91,20 @@ pub struct UpdatePoolMemberInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(UpdatePoolMemberInput {
+    load_balancer_id,
+    pool_id,
+    address,
+    port,
+    name,
+    weight,
+    monitor_port,
+    backup,
+    no_wait
+});
+
 /// Identifies a load balancer pool member to remove.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct RemovePoolMemberInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -96,10 +121,18 @@ pub struct RemovePoolMemberInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(RemovePoolMemberInput {
+    load_balancer_id,
+    pool_id,
+    address,
+    port,
+    no_wait
+});
+
 macro_rules! member_output {
     ($(#[$meta:meta])* $output:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq)]
+        #[derive(Clone, PartialEq)]
         pub struct $output {
             /// The observed or submitted pool.
             pub pool: Pool,
@@ -108,6 +141,8 @@ macro_rules! member_output {
             projection: Option<PoolProjection>,
             redact_changed: bool,
         }
+
+        crate::wire::product::output::public_fields!($output { pool, changed; projection, redact_changed });
 
         impl Serialize for $output {
             fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -171,13 +206,15 @@ macro_rules! member_method {
     ($(#[$meta:meta])* $method:ident, $input:ty, $output:ident, $operation:expr, $mutation:expr) => {
         $(#[$meta])*
         pub async fn $method(&self, ctx: &RequestContext, input: $input) -> WriteResult<$output> {
-            let selection = Selection {
-                load_balancer: &input.load_balancer_id, pool: &input.pool_id, address: &input.address,
-                port: input.port, no_wait: input.no_wait,
-            };
-            self.change_members(ctx, $operation, selection, &input, ($mutation)(&input), |result| $output {
-                pool: result.pool, changed: result.changed, projection: result.projection, redact_changed: result.redact_changed,
-            }).await
+            crate::wire::product::exit::finish!(async {
+                let selection = Selection {
+                    load_balancer: &input.load_balancer_id, pool: &input.pool_id, address: &input.address,
+                    port: input.port, no_wait: input.no_wait,
+                };
+                self.change_members(ctx, $operation, selection, &input, ($mutation)(&input), |result| $output {
+                    pool: result.pool, changed: result.changed, projection: result.projection, redact_changed: result.redact_changed,
+                }).await
+            })
         }
     };
 }
@@ -244,7 +281,7 @@ impl Client {
             ..pool_target(selection.pool, &ids)
         };
         let mut previous = WriteDispatch::NotSent;
-        loop {
+        guarded_poll!(write.evidence, {
             let prepared = prepare(ctx, &pre, &mut write, &target).await;
             let (mut pool, members) =
                 prepared.map_err(|error| Failure::new(*error, None, previous))?;
@@ -295,7 +332,7 @@ impl Client {
                 }
             };
             return finish(&write, &target, pool, true, result, dispatch, output);
-        }
+        });
     }
 }
 

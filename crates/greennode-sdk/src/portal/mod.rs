@@ -30,16 +30,20 @@ pub struct Client {
 }
 
 /// Selects the current portal user without filters.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetUserInfoInput {}
 
+crate::error::debug_record!(GetUserInfoInput {});
+
 /// Information about the current portal user.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetUserInfoOutput {
     /// Account data with the keys returned by the API.
     #[serde(rename = "UserInfo")]
     pub user_info: UserInfo,
 }
+
+crate::wire::product::output::public_fields!(GetUserInfoOutput { user_info });
 
 /// Portal user details, including account data and API-defined fields.
 #[derive(Clone, Default, PartialEq)]
@@ -47,6 +51,8 @@ pub struct UserInfo {
     /// Account fields keyed by their API names.
     pub fields: BTreeMap<String, Value>,
 }
+
+crate::wire::product::output::public_fields!(custom_debug UserInfo { fields });
 
 impl Serialize for UserInfo {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -109,11 +115,9 @@ fn redacted(value: &Value) -> Value {
     }
 }
 
-impl std::fmt::Debug for UserInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("UserInfo([REDACTED])")
-    }
-}
+crate::error::debug_record!(UserInfo => |self, f| {
+    f.write_str("UserInfo([REDACTED])")
+});
 
 #[expect(
     clippy::result_large_err,
@@ -133,34 +137,36 @@ impl Client {
         ctx: &RequestContext,
         _input: GetUserInfoInput,
     ) -> Result<GetUserInfoOutput, Failure<GetUserInfoOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        let session = &self.session;
-        let base = session
-            .endpoints()
-            .portal
-            .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let operation = user_info_operation();
-        let deadline = session.clock().monotonic_now() + Duration::from_secs(30);
-        let ctx = ctx.child_with_deadline(deadline);
-        let mut jitter = || session.retry_jitter();
-        let runtime = session
-            .runtime(&ctx, &mut jitter)
-            .map_err(|error| failure(*error))?;
-        operation::execute::<Envelope>(
-            runtime,
-            base,
-            &operation,
-            &[],
-            &[],
-            session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map(|(_, envelope)| GetUserInfoOutput {
-            user_info: envelope.0,
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            let session = &self.session;
+            let base = session
+                .endpoints()
+                .portal
+                .as_ref()
+                .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let operation = user_info_operation();
+            let deadline = session.clock().monotonic_now() + Duration::from_secs(30);
+            let ctx = ctx.child_with_deadline(deadline);
+            let mut jitter = || session.retry_jitter();
+            let runtime = session
+                .runtime(&ctx, &mut jitter)
+                .map_err(|error| failure(*error))?;
+            operation::execute::<Envelope>(
+                runtime,
+                base,
+                &operation,
+                &[],
+                &[],
+                session.bearer_source(),
+                bytes::Bytes::new(),
+            )
+            .await
+            .map(|(_, envelope)| GetUserInfoOutput {
+                user_info: envelope.0,
+            })
+            .map_err(|error| failure(withheld(&operation, error.into_parts().0)))
         })
-        .map_err(|error| failure(withheld(&operation, error.into_parts().0)))
     }
 }
 
@@ -179,7 +185,7 @@ fn user_info_operation() -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

@@ -384,6 +384,22 @@ async fn regression_resize_error_status_precedes_the_confirmation_package_requir
     assert_eq!(server.requests(), 10);
 }
 
+#[tokio::test]
+async fn resize_refuses_reflected_readiness_before_quote() {
+    let current = r#"{"data":{"uuid":"lb-1","packageId":"package-1","progressStatus":"CREATED","description":"toy-resize-token"}}"#;
+    let server = Server::start(vec![
+        response("200 OK", current),
+        response("200 OK", current),
+    ]);
+    let client = client(&server, "toy-resize-token");
+    let failure = client
+        .resize_load_balancer(&RequestContext::new().0, resize(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
 fn resize(no_wait: bool) -> ResizeLoadBalancerInput {
     ResizeLoadBalancerInput {
         load_balancer_id: "lb-1".into(),
@@ -473,5 +489,27 @@ async fn resize_reports_the_redirect_status_and_message() {
         .await
         .unwrap_err();
     assert_reported_redirect(&failure);
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
+async fn resize_ignores_busy_text_that_reflects_a_bearer() {
+    let mut replies: Vec<_> = resize_replies("").into_iter().take(3).collect();
+    replies.push(response(
+        "409 Conflict",
+        r#"{"message":"load balancer is updating: toy%2Dsecret"}"#,
+    ));
+    let server = Server::start(replies);
+    let failure = client(&server, CANARY)
+        .resize_load_balancer(&RequestContext::new().0, resize(true))
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .detail::<crate::loadbalancer::ResourceBusy>()
+            .is_none()
+    );
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
     assert_eq!(server.requests(), 4);
 }

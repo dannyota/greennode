@@ -53,9 +53,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListWanIpsInput,
     ) -> Result<ListWanIpsOutput, Failure<ListWanIpsOutput>> {
-        self.list_route_inventory(ctx, WAN_IPS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, WAN_IPS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of elastic network interfaces in the selected project.
@@ -64,9 +66,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListNetworkInterfacesInput,
     ) -> Result<ListNetworkInterfacesOutput, Failure<ListNetworkInterfacesOutput>> {
-        self.list_route_inventory(ctx, INTERFACES, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, INTERFACES, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of VPC peerings in the selected project.
@@ -75,9 +79,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListPeeringsInput,
     ) -> Result<ListPeeringsOutput, Failure<ListPeeringsOutput>> {
-        self.list_route_inventory(ctx, PEERINGS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, PEERINGS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 
     /// Lists one page of interconnects in the selected project.
@@ -86,9 +92,11 @@ impl Client {
         ctx: &RequestContext,
         input: ListInterconnectsInput,
     ) -> Result<ListInterconnectsOutput, Failure<ListInterconnectsOutput>> {
-        self.list_route_inventory(ctx, INTERCONNECTS, (&input.name, input.page, input.size))
-            .await
-            .map_err(failure)
+        crate::wire::product::exit::finish!(async {
+            self.list_route_inventory(ctx, INTERCONNECTS, (&input.name, input.page, input.size))
+                .await
+                .map_err(failure)
+        })
     }
 }
 
@@ -220,5 +228,39 @@ model! {
         remote_gw01_ip: String => "remoteGw01Ip", "RemoteGW01IP";
         /// Second remote gateway address.
         remote_gw02_ip: String => "remoteGw02Ip", "RemoteGW02IP";
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::*;
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn peering_identifier_uses_its_wire_role_at_the_typed_exit() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&crate::Secret::new("jkl"));
+        let output: Peering = serde_json::from_str(r#"{"fromVpcId":"pre6A6B6Cpost"}"#).unwrap();
+        assert!(evidence.serialized_output_reflects(&output));
+        assert!(
+            !evidence.serialized_output_reflects(&serde_json::json!({"FromVPCID":"pre6A6B6Cpost"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn peering_partial_uses_the_same_identifier_declaration() {
+        let result: Result<Peering, crate::Failure<Peering>> =
+            crate::wire::product::exit::finish!(async {
+                let mut evidence = Evidence::new();
+                evidence.add_secret(&crate::Secret::new("jkl"));
+                let partial: Peering =
+                    serde_json::from_str(r#"{"fromVpcId":"pre6A6B6Cpost"}"#).unwrap();
+                Err(crate::Failure::new(
+                    crate::Error::new(crate::ErrorClass::Api),
+                    Some(partial),
+                    crate::WriteDispatch::NotAWrite,
+                ))
+            });
+        assert!(result.unwrap_err().partial().is_none());
     }
 }

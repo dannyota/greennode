@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 /// Creates an account-wide budget with a limit in billing credits.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateBudgetInput {
     /// Budget name, validated by the API.
     pub name: String,
@@ -27,6 +27,14 @@ pub struct CreateBudgetInput {
     /// An empty status sends `ACTIVE`.
     pub status: String,
 }
+
+crate::error::debug_record!(CreateBudgetInput {
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    status
+});
 
 impl CreateBudgetInput {
     /// Sets the required fields and uses the default active status.
@@ -47,15 +55,17 @@ impl CreateBudgetInput {
 }
 
 /// Details returned for a confirmed create.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateBudgetOutput {
     /// Created budget, including the UUID returned by the API.
     #[serde(rename = "Budget")]
     pub budget: Budget,
 }
 
+crate::wire::product::output::public_fields!(CreateBudgetOutput { budget });
+
 /// Changes selected fields on an existing account-wide budget.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
@@ -70,6 +80,15 @@ pub struct UpdateBudgetInput {
     /// Replacement status, such as `PAUSED`, when set.
     pub status: Option<String>,
 }
+
+crate::error::debug_record!(UpdateBudgetInput {
+    budget_uuid,
+    name,
+    period_type,
+    r#type,
+    limit_amount,
+    status
+});
 
 impl UpdateBudgetInput {
     /// Selects a budget. Set at least one change before calling the API.
@@ -86,15 +105,19 @@ impl UpdateBudgetInput {
 }
 
 /// A confirmed update with no returned budget fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct UpdateBudgetOutput {}
 
+crate::wire::product::output::public_fields!(UpdateBudgetOutput {});
+
 /// Selects a budget and its API-managed thresholds for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteBudgetInput {
     /// Budget UUID, using only ASCII letters, digits, and hyphens.
     pub budget_uuid: String,
 }
+
+crate::error::debug_record!(DeleteBudgetInput { budget_uuid });
 
 impl DeleteBudgetInput {
     /// Stores the UUID for validation by [`Client::delete_budget`].
@@ -106,8 +129,10 @@ impl DeleteBudgetInput {
 }
 
 /// A confirmed deletion with no returned budget fields.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteBudgetOutput {}
+
+crate::wire::product::output::public_fields!(DeleteBudgetOutput {});
 
 #[expect(
     clippy::result_large_err,
@@ -120,39 +145,41 @@ impl Client {
         ctx: &RequestContext,
         input: CreateBudgetInput,
     ) -> Result<CreateBudgetOutput, Failure<CreateBudgetOutput>> {
-        if input.name.is_empty()
-            || input.period_type.is_empty()
-            || input.r#type.is_empty()
-            || input.limit_amount == 0
-        {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
-        }
-        let status = if input.status.is_empty() {
-            "ACTIVE"
-        } else {
-            &input.status
-        };
-        let body = json!({
-            "name": input.name,
-            "periodType": input.period_type,
-            "type": input.r#type,
-            "limitAmount": input.limit_amount,
-            "status": status,
-        });
-        let budget = self
-            .write(
-                ctx,
-                &write_operation(
-                    "billing.CreateBudget",
-                    Method::POST,
-                    "gateway/api/v1/budgets",
-                    false,
-                ),
-                &[],
-                Some(body),
-            )
-            .await?;
-        Ok(CreateBudgetOutput { budget })
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty()
+                || input.period_type.is_empty()
+                || input.r#type.is_empty()
+                || input.limit_amount == 0
+            {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput)));
+            }
+            let status = if input.status.is_empty() {
+                "ACTIVE"
+            } else {
+                &input.status
+            };
+            let body = json!({
+                "name": input.name,
+                "periodType": input.period_type,
+                "type": input.r#type,
+                "limitAmount": input.limit_amount,
+                "status": status,
+            });
+            let budget = self
+                .write(
+                    ctx,
+                    &write_operation(
+                        "billing.CreateBudget",
+                        Method::POST,
+                        "gateway/api/v1/budgets",
+                        false,
+                    ),
+                    &[],
+                    Some(body),
+                )
+                .await?;
+            Ok(CreateBudgetOutput { budget })
+        })
     }
 
     /// Sends only selected fields, once. A request with no changes fails locally.
@@ -161,34 +188,36 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateBudgetInput,
     ) -> Result<UpdateBudgetOutput, Failure<UpdateBudgetOutput>> {
-        let body: Map<_, _> = [
-            ("name", input.name.map(Value::from)),
-            ("periodType", input.period_type.map(Value::from)),
-            ("type", input.r#type.map(Value::from)),
-            ("limitAmount", input.limit_amount.map(Value::from)),
-            ("status", input.status.map(Value::from)),
-        ]
-        .into_iter()
-        .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
-        .collect();
-        if body.is_empty() {
-            return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
-                "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change",
-            )));
-        }
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.UpdateBudget",
-                Method::PUT,
-                "gateway/api/v1/budgets/{}",
-                true,
-            ),
-            &[&input.budget_uuid],
-            Some(Value::Object(body)),
-        )
-        .await?;
-        Ok(UpdateBudgetOutput {})
+        crate::wire::product::exit::finish!(async {
+            let body: Map<_, _> = [
+                ("name", input.name.map(Value::from)),
+                ("periodType", input.period_type.map(Value::from)),
+                ("type", input.r#type.map(Value::from)),
+                ("limitAmount", input.limit_amount.map(Value::from)),
+                ("status", input.status.map(Value::from)),
+            ]
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value)))
+            .collect();
+            if body.is_empty() {
+                return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail(
+                    "vngcloud: invalid input: billing.UpdateBudget requires at least one field to change",
+                )));
+            }
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.UpdateBudget",
+                    Method::PUT,
+                    "gateway/api/v1/budgets/{}",
+                    true,
+                ),
+                &[&input.budget_uuid],
+                Some(Value::Object(body)),
+            )
+            .await?;
+            Ok(UpdateBudgetOutput {})
+        })
     }
 
     /// Deletes the budget and its API-managed thresholds in one request.
@@ -197,19 +226,21 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteBudgetInput,
     ) -> Result<DeleteBudgetOutput, Failure<DeleteBudgetOutput>> {
-        self.write::<(), _>(
-            ctx,
-            &write_operation(
-                "billing.DeleteBudget",
-                Method::DELETE,
-                "gateway/api/v1/budgets/{}",
-                true,
-            ),
-            &[&input.budget_uuid],
-            None,
-        )
-        .await?;
-        Ok(DeleteBudgetOutput {})
+        crate::wire::product::exit::finish!(async {
+            self.write::<(), _>(
+                ctx,
+                &write_operation(
+                    "billing.DeleteBudget",
+                    Method::DELETE,
+                    "gateway/api/v1/budgets/{}",
+                    true,
+                ),
+                &[&input.budget_uuid],
+                None,
+            )
+            .await?;
+            Ok(DeleteBudgetOutput {})
+        })
     }
 
     pub(super) async fn write<T: BudgetData, O>(
@@ -265,8 +296,7 @@ pub(super) fn not_sent<T>(error: Error) -> Failure<T> {
 fn reconcile(operation: &Operation, error: Error) -> Error {
     let api = error.api_error();
     let status = error
-        .detail::<StatusCode>()
-        .copied()
+        .http_status()
         .or_else(|| api.and_then(|api| StatusCode::from_u16(api.status()?).ok()));
     let code = api.map_or("", ApiError::code);
     let message = if let Some(status) = status.filter(StatusCode::is_client_error) {
@@ -314,7 +344,7 @@ pub(super) fn write_operation(
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

@@ -128,13 +128,16 @@ pub(super) async fn complete(
     let request = request
         .body(Full::new(Bytes::new()))
         .map_err(|_| LoginError::new("totp page", None, false))?;
-    let page = send::once(
-        login.client.as_client(),
-        request,
-        1 << 20,
-        Encoding::Gzip,
-        login.clock,
-        login.deadline,
+    let page = send::with_sent_credentials(
+        &jar.sent,
+        send::once(
+            login.client.as_client(),
+            request,
+            1 << 20,
+            Encoding::Gzip,
+            login.clock,
+            login.deadline,
+        ),
     )
     .await
     .map_err(|error| {
@@ -164,15 +167,10 @@ pub(super) async fn complete(
         }
         Source::Provider(provider) => provider_code(provider, login.clock, login.deadline).await,
     }
-    .map_err(|error| {
-        LoginError::new(
-            match error {
-                ProviderError::Failed => "totp code",
-                ProviderError::TokenCache => "token cache",
-            },
-            None,
-            false,
-        )
+    .map_err(|error| match error {
+        ProviderError::Failed => LoginError::new("totp code", None, false),
+        ProviderError::TokenCache => LoginError::new("token cache", None, false)
+            .with_kind(crate::error::LoginFailureKind::TokenCache),
     })?;
     jar.record_form(&csrf);
     jar.record_form(&code);
@@ -196,14 +194,17 @@ pub(super) async fn complete(
         )))
         .map_err(|_| LoginError::new("totp submission", None, false))?;
     let mut evidence = send::Evidence::default();
-    let reply = send::once_with_expected(
-        login.client.as_client(),
-        request,
-        1 << 20,
-        Encoding::Gzip,
-        login.clock,
-        login.deadline,
-        (&mut evidence, &[]),
+    let reply = send::with_sent_credentials(
+        &jar.sent,
+        send::once_with_expected(
+            login.client.as_client(),
+            request,
+            1 << 20,
+            Encoding::Gzip,
+            login.clock,
+            login.deadline,
+            (&mut evidence, &[]),
+        ),
     )
     .await
     .map_err(|error| {
@@ -214,11 +215,10 @@ pub(super) async fn complete(
         )
     })?;
     if reply.status == http::StatusCode::OK {
-        return Err(LoginError::new(
-            "totp rejection",
-            Some(reply.status.as_u16()),
-            false,
-        ));
+        return Err(
+            LoginError::new("totp rejection", Some(reply.status.as_u16()), false)
+                .with_kind(crate::error::LoginFailureKind::TotpRejected),
+        );
     }
     let location = reply
         .headers

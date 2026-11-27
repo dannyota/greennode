@@ -54,7 +54,7 @@ const LIST_CAP: usize = 4 << 20;
 const DEFAULT_CAP: usize = 8 << 20;
 
 /// Cause of a failed IAM success-body decode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body could not be read as one JSON value.
@@ -62,6 +62,8 @@ pub enum DecodeError {
     /// The JSON did not have the response's expected shape.
     InvalidShape,
 }
+
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape);
 
 /// IAM client sharing its configuration's authentication session.
 #[derive(Clone)]
@@ -138,14 +140,23 @@ impl Client {
         )
         .await
         .map_err(|error| {
-            let error = wire::account_error(operation.id, error.into_parts().0);
+            let error = wire::guarded_decode_error(operation, error.into_parts().0);
+            let error = wire::account_error(operation.id, error);
             let error = wire::private_status_error(operation, error, evidence);
             failure(screen_error(error, evidence))
         })?;
+        if matches!(
+            evidence.field_names(),
+            crate::wire::strict_json::FieldNames::Canonical
+        ) {
+            evidence
+                .keep_decoded_operands(operation.id, &wire::WireOperands(&output))
+                .map_err(|error| failure(*error))?;
+        }
         Ok(output)
     }
 
-    async fn read<T: Wire + Screen, O>(
+    async fn read<T: Wire + Screen + serde::Serialize, O>(
         &self,
         ctx: &RequestContext,
         api: Api,
@@ -158,13 +169,20 @@ impl Client {
             .fetch(ctx, api, operation, ids, query, &mut evidence)
             .await?;
         output.screen(&evidence);
-        Ok(output)
+        screened_output(output, &evidence).map_err(|error| failure(*error))
     }
 }
 
+fn screened_output<T: serde::Serialize>(output: T, evidence: &Evidence) -> Result<T, Box<Error>> {
+    if evidence.serialized_output_reflects(&output) {
+        return Err(Box::new(evidence.screen_error(Error::new(ErrorClass::Api))));
+    }
+    Ok(output)
+}
+
 fn screen_error(mut error: Error, evidence: &Evidence) -> Error {
-    let reflects_status = |status| evidence.reflected_in(&serde_json::Value::from(status));
-    error.remove_details::<StatusCode>(|status| reflects_status(status.as_u16()));
+    let reflects_status = |status| evidence.output_reflects(&serde_json::Value::from(status));
+    error.remove_details::<crate::HttpStatus>(|status| reflects_status(status.as_u16()));
     let Some(api) = error.api_error() else {
         return error;
     };
@@ -267,7 +285,7 @@ fn read_operation(
         keep_status: false,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }
@@ -301,11 +319,13 @@ impl PageQuery {
 macro_rules! id_input {
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
         }
+
+        crate::error::debug_record!($name { $field });
 
         impl $name {
             /// Sets the required identifier.
@@ -319,7 +339,7 @@ macro_rules! id_input {
 macro_rules! page_input {
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident, filtered) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, Default, PartialEq, Eq)]
+        #[derive(Clone, Default, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
@@ -328,10 +348,12 @@ macro_rules! page_input {
             /// Page size. Nonpositive values use the service default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { $field, page, size });
     };
     ($(#[$meta:meta])* $name:ident, $(#[$field_meta:meta])* $field:ident, required) => {
         $(#[$meta])*
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        #[derive(Clone, PartialEq, Eq)]
         pub struct $name {
             $(#[$field_meta])*
             pub $field: String,
@@ -340,6 +362,8 @@ macro_rules! page_input {
             /// Page size. Nonpositive values use the service default.
             pub size: i64,
         }
+
+        crate::error::debug_record!($name { $field, page, size });
 
         impl $name {
             /// Sets the required identifier and uses the default page.

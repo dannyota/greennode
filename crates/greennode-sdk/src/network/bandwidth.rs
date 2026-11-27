@@ -21,14 +21,16 @@ const PROJECTS: Read = PACKAGES.at(
 );
 
 /// Selects the configured region and project for the bandwidth catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListBandwidthPackagesInput {}
+
+crate::error::debug_record!(ListBandwidthPackagesInput {});
 
 /// Bandwidth packages in provider order.
 pub type ListBandwidthPackagesOutput = List<BandwidthPackage>;
 
 /// An offer from the regional bandwidth catalog.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct BandwidthPackage {
     /// Package identifier.
     #[serde(rename = "ID")]
@@ -47,6 +49,14 @@ pub struct BandwidthPackage {
     pub bandwidth: i64,
 }
 
+crate::wire::product::output::public_fields!(BandwidthPackage {
+    id,
+    name,
+    kind,
+    description,
+    bandwidth
+});
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     /// Lists the selected project's bandwidth offers in Hanoi or HCM.
@@ -55,27 +65,29 @@ impl Client {
         ctx: &RequestContext,
         _input: ListBandwidthPackagesInput,
     ) -> Result<ListBandwidthPackagesOutput, Failure<ListBandwidthPackagesOutput>> {
-        let base = self.bandwidth_base().map_err(failure)?;
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        let project = if let Some(project) = self.session.configured_project_id() {
-            PACKAGES.path("ProjectID", project).map_err(failure)?;
-            if evidence.text_reflects(project) {
-                return Err(failure(Error::new(ErrorClass::InvalidInput)));
-            }
-            project.to_owned()
-        } else {
-            self.discover_project(ctx, &base, PROJECTS, &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            let base = self.bandwidth_base().map_err(failure)?;
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            let project = if let Some(project) = self.session.configured_project_id() {
+                PACKAGES.path("ProjectID", project).map_err(failure)?;
+                if evidence.text_reflects(project) {
+                    return Err(failure(Error::new(ErrorClass::InvalidInput)));
+                }
+                project.to_owned()
+            } else {
+                self.discover_project(ctx, &base, PROJECTS, &mut evidence)
+                    .await
+                    .map_err(failure)?
+            };
+            let raw = self
+                .read(ctx, &base, PACKAGES, &[&project], &mut evidence)
                 .await
-                .map_err(failure)?
-        };
-        let raw = self
-            .read(ctx, &base, PACKAGES, &[&project], &mut evidence)
-            .await
-            .map_err(failure)?;
-        let text = go_json(&raw);
-        let items =
-            decode_packages(&text, &evidence).map_err(|()| failure(PACKAGES.invalid(&evidence)))?;
-        Ok(List { items })
+                .map_err(failure)?;
+            let text = go_json(&raw);
+            let items = decode_packages(&text, &evidence)
+                .map_err(|()| failure(PACKAGES.invalid(&evidence)))?;
+            Ok(List { items })
+        })
     }
 
     pub(super) fn bandwidth_base(&self) -> Result<Base, Error> {

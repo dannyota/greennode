@@ -180,57 +180,99 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     stderr: &mut dyn Write,
     write_debug: Option<(&'static str, &'static str)>,
 ) -> u8 {
-    if let Some(end) = ctx.check(clock) {
-        let error = Error::from(end);
-        let classified = errors::classify(&error, adapter.rules());
-        errors::write_error(stderr, &classified.envelope);
-        return classified.exit;
-    }
-    if !errors::validate_rules(adapter.rules()) {
-        return local(
-            stderr,
-            LocalError {
-                code: "RequestFailed",
-                message: "invalid error rules".into(),
-                exit: 1,
+    RequestContext::with_response_screening(async {
+        if let Some(end) = ctx.check(clock) {
+            let error = Error::from(end);
+            let classified = errors::classify(&error, adapter.rules());
+            errors::write_error(stderr, &classified.envelope);
+            return classified.exit;
+        }
+        if !errors::validate_rules(adapter.rules()) {
+            return local(
+                stderr,
+                LocalError {
+                    code: "RequestFailed",
+                    message: "invalid error rules".into(),
+                    exit: 1,
+                },
+            );
+        }
+        if let Err(error) = input.before_input() {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        if let Err(error) = input.merge().await {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        if let Err(error) = input.input_guards() {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        if input.is_write()
+            && let Err(error) = input.check_read_only()
+        {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        if let Err(error) = input.required() {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        let query = match input.query().filter(|value| !value.is_empty()) {
+            Some(value) => match query::compile(value) {
+                Ok(query) => Some(query),
+                Err(_) => {
+                    return refuse(
+                        input,
+                        adapter,
+                        LocalError::usage("invalid query"),
+                        stdout,
+                        stderr,
+                    );
+                }
             },
-        );
-    }
-    if let Err(error) = input.before_input() {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    if let Err(error) = input.merge().await {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    if let Err(error) = input.input_guards() {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    if input.is_write()
-        && let Err(error) = input.check_read_only()
-    {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    if let Err(error) = input.required() {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    let query = match input.query().filter(|value| !value.is_empty()) {
-        Some(value) => match query::compile(value) {
-            Ok(query) => Some(query),
-            Err(_) => {
-                return refuse(
-                    input,
-                    adapter,
-                    LocalError::usage("invalid query"),
-                    stdout,
-                    stderr,
-                );
+            None => None,
+        };
+        let explicit_format = match input.output().filter(|value| !value.is_empty()) {
+            Some(value) => match Format::parse(value) {
+                Some(format) => Some(format),
+                None => {
+                    return refuse(
+                        input,
+                        adapter,
+                        LocalError::usage("invalid output format"),
+                        stdout,
+                        stderr,
+                    );
+                }
+            },
+            None => None,
+        };
+        if input.needs_confirmation() && !input.yes() {
+            return refuse(
+                input,
+                adapter,
+                LocalError::usage(
+                    input
+                        .confirmation_message()
+                        .unwrap_or_else(|| "confirmation requires --yes".to_owned()),
+                ),
+                stdout,
+                stderr,
+            );
+        }
+        let settings = match adapter.settings(ctx).await {
+            Ok(settings) => settings,
+            Err(error) => {
+                let classified = errors::classify(&error, adapter.rules());
+                errors::write_error(stderr, &classified.envelope);
+                return classified.exit;
             }
-        },
-        None => None,
-    };
-    let explicit_format = match input.output().filter(|value| !value.is_empty()) {
-        Some(value) => match Format::parse(value) {
-            Some(format) => Some(format),
+        };
+        let format = match explicit_format.or_else(|| {
+            adapter
+                .output(&settings)
+                .filter(|s| !s.is_empty())
+                .and_then(Format::parse)
+        }) {
+            Some(format) => format,
+            None if adapter.output(&settings).is_none_or(str::is_empty) => Format::Json,
             None => {
                 return refuse(
                     input,
@@ -240,170 +282,142 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     stderr,
                 );
             }
-        },
-        None => None,
-    };
-    if input.needs_confirmation() && !input.yes() {
-        return refuse(
-            input,
-            adapter,
-            LocalError::usage(
-                input
-                    .confirmation_message()
-                    .unwrap_or_else(|| "confirmation requires --yes".to_owned()),
-            ),
-            stdout,
-            stderr,
-        );
-    }
-    let settings = match adapter.settings(ctx).await {
-        Ok(settings) => settings,
-        Err(error) => {
-            let classified = errors::classify(&error, adapter.rules());
-            errors::write_error(stderr, &classified.envelope);
-            return classified.exit;
-        }
-    };
-    let format = match explicit_format.or_else(|| {
-        adapter
-            .output(&settings)
-            .filter(|s| !s.is_empty())
-            .and_then(Format::parse)
-    }) {
-        Some(format) => format,
-        None if adapter.output(&settings).is_none_or(str::is_empty) => Format::Json,
-        None => {
-            return refuse(
-                input,
-                adapter,
-                LocalError::usage("invalid output format"),
-                stdout,
-                stderr,
-            );
-        }
-    };
-    if input.is_write()
-        && let Err(error) = adapter.check_profile_read_only(&settings)
-    {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    if let Err(error) = adapter.prepare(ctx, input).await {
-        return refuse(input, adapter, error, stdout, stderr);
-    }
-    let view = adapter.output_view();
-    let log_write = |stderr: &mut dyn Write, message| {
-        if let Some((service, name)) = write_debug.filter(|_| input.is_write()) {
-            let _ = writeln!(
-                stderr,
-                "level=DEBUG msg=\"{message}\" operation=\"{service} {name}\""
-            );
-        }
-    };
-    log_write(stderr, "write started");
-    let result = adapter.execute(ctx, &settings, input).await;
-    log_write(stderr, "write finished");
-    match result {
-        Ok(Some(output)) => match output
-            .map_err(OutputError::from)
-            .and_then(|output| render_output(stdout, stderr, &output, format, query.as_ref(), view))
+        };
+        if input.is_write()
+            && let Err(error) = adapter.check_profile_read_only(&settings)
         {
-            Ok(()) => 0,
-            Err(error) => {
-                let failure = match &error {
-                    OutputError::Query => RenderFailure::Query,
-                    OutputError::Render(render::Error::TableLimit) => RenderFailure::TableLimit,
-                    OutputError::Render(render::Error::Io(_)) => RenderFailure::Output,
-                    OutputError::Render(_) => RenderFailure::Encoding,
-                };
-                if failure != RenderFailure::Output
-                    && let Some(message) = view.withhold
-                {
-                    return local(
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        if let Err(error) = adapter.prepare(ctx, input).await {
+            return refuse(input, adapter, error, stdout, stderr);
+        }
+        let view = adapter.output_view();
+        let log_write = |stderr: &mut dyn Write, message| {
+            if let Some((service, name)) = write_debug.filter(|_| input.is_write()) {
+                let _ = writeln!(
+                    stderr,
+                    "level=DEBUG msg=\"{message}\" operation=\"{service} {name}\""
+                );
+            }
+        };
+        log_write(stderr, "write started");
+        let result = adapter.execute(ctx, &settings, input).await;
+        log_write(stderr, "write finished");
+        match result {
+            Ok(Some(output)) => match output.map_err(OutputError::from).and_then(|output| {
+                render_output(stdout, stderr, &output, format, query.as_ref(), view)
+            }) {
+                Ok(()) => 0,
+                Err(error) => {
+                    let failure = match &error {
+                        OutputError::Query => RenderFailure::Query,
+                        OutputError::Render(render::Error::TableLimit) => RenderFailure::TableLimit,
+                        OutputError::Render(render::Error::Io(_)) => RenderFailure::Output,
+                        OutputError::Render(_) => RenderFailure::Encoding,
+                    };
+                    if failure != RenderFailure::Output
+                        && let Some(message) = view.withhold
+                    {
+                        return local(
+                            stderr,
+                            LocalError {
+                                code: "QueryFailed",
+                                message: message.into(),
+                                exit: 1,
+                            },
+                        );
+                    }
+                    if let Some(classified) = adapter.render_failure(failure) {
+                        return local(stderr, classified);
+                    }
+                    let (code, message, exit) = if matches!(error, OutputError::Query) {
+                        (
+                            "QueryFailed",
+                            if input.is_write() {
+                                "query failed after the write succeeded; do not retry"
+                            } else {
+                                "query failed"
+                            },
+                            1,
+                        )
+                    } else if matches!(error, OutputError::Render(render::Error::TableLimit)) {
+                        if input.is_write() {
+                            (
+                                "QueryFailed",
+                                "write succeeded; do not retry; use --output json",
+                                1,
+                            )
+                        } else {
+                            (
+                                "InvalidUsage",
+                                "table output exceeds limits; use --output json",
+                                2,
+                            )
+                        }
+                    } else {
+                        (
+                            "RequestFailed",
+                            if input.is_write() {
+                                "write succeeded; do not retry"
+                            } else {
+                                "output failed"
+                            },
+                            1,
+                        )
+                    };
+                    local(
                         stderr,
                         LocalError {
-                            code: "QueryFailed",
+                            code,
                             message: message.into(),
-                            exit: 1,
+                            exit,
+                        },
+                    )
+                }
+            },
+            Ok(None) => 0,
+            Err(ExecutionFailure::Local(error)) => local(stderr, error),
+            Err(ExecutionFailure::Sdk(failure)) => {
+                if let Some(partial) = &failure.partial {
+                    let _ = render_output(
+                        stdout,
+                        stderr,
+                        partial,
+                        format,
+                        if failure.query_partial {
+                            query.as_ref()
+                        } else {
+                            None
+                        },
+                        if failure.query_partial || view.use_for_partial {
+                            view
+                        } else {
+                            OutputView::default()
                         },
                     );
                 }
-                if let Some(classified) = adapter.render_failure(failure) {
-                    return local(stderr, classified);
+                let mut classified = errors::classify(&failure.error, adapter.rules());
+                if let Some(advice) = failure.error.detail::<String>() {
+                    classified.envelope.message = advice;
+                } else if let Some(advice) = adapter.advice(&failure.error) {
+                    classified.envelope.message = advice;
                 }
-                let (code, message, exit) = if matches!(error, OutputError::Query) {
-                    (
-                        "QueryFailed",
-                        if input.is_write() {
-                            "query failed after the write succeeded; do not retry"
-                        } else {
-                            "query failed"
-                        },
-                        1,
-                    )
-                } else if matches!(error, OutputError::Render(render::Error::TableLimit)) {
-                    if input.is_write() {
-                        (
-                            "QueryFailed",
-                            "write succeeded; do not retry; use --output json",
-                            1,
-                        )
-                    } else {
-                        (
-                            "InvalidUsage",
-                            "table output exceeds limits; use --output json",
-                            2,
-                        )
-                    }
-                } else {
-                    (
-                        "RequestFailed",
-                        if input.is_write() {
-                            "write succeeded; do not retry"
-                        } else {
-                            "output failed"
-                        },
-                        1,
-                    )
-                };
-                local(
-                    stderr,
-                    LocalError {
-                        code,
-                        message: message.into(),
-                        exit,
-                    },
-                )
+                classified.envelope.code =
+                    RequestContext::screened_response_text(classified.envelope.code);
+                classified.envelope.message =
+                    RequestContext::screened_response_text(classified.envelope.message);
+                classified.envelope.operation = classified
+                    .envelope
+                    .operation
+                    .map(RequestContext::screened_response_text)
+                    .filter(|value| !value.is_empty());
+                classified.envelope.status = classified.envelope.status.filter(|status| {
+                    !RequestContext::screened_response_text(&status.to_string()).is_empty()
+                });
+                errors::write_error(stderr, &classified.envelope);
+                classified.exit
             }
-        },
-        Ok(None) => 0,
-        Err(ExecutionFailure::Local(error)) => local(stderr, error),
-        Err(ExecutionFailure::Sdk(failure)) => {
-            if let Some(partial) = &failure.partial {
-                let _ = render_output(
-                    stdout,
-                    stderr,
-                    partial,
-                    format,
-                    if failure.query_partial {
-                        query.as_ref()
-                    } else {
-                        None
-                    },
-                    if failure.query_partial || view.use_for_partial {
-                        view
-                    } else {
-                        OutputView::default()
-                    },
-                );
-            }
-            let mut classified = errors::classify(&failure.error, adapter.rules());
-            if let Some(advice) = failure.error.detail::<String>() {
-                classified.envelope.message = advice;
-            } else if let Some(advice) = adapter.advice(&failure.error) {
-                classified.envelope.message = advice;
-            }
-            errors::write_error(stderr, &classified.envelope);
-            classified.exit
         }
-    }
+    })
+    .await
 }

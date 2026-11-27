@@ -1,7 +1,7 @@
 use super::model::*;
 use crate::error::SafeText;
 use crate::wire::product::{
-    operation::{self, Operation, Output},
+    operation::{self, Operation, Output, RefusedGuard},
     sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField, field_matches};
@@ -33,12 +33,15 @@ impl<T: Data> Output for Envelope<T> {
         field("message", Shape::Any),
         field("data", T::SHAPE),
     ]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
+    fn reflected_response(operation: &Operation, _: &Response) -> Box<Error> {
+        Box::new(invalid_response(operation))
+    }
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {
             return operation::decode_response(operation, response).map_err(|error| {
-                if response.status == StatusCode::NOT_FOUND {
+                if response.status == StatusCode::NOT_FOUND && response.reflection.is_clean() {
                     Box::new(error.with_detail(CompletedNotFound))
                 } else {
                     error
@@ -81,9 +84,13 @@ impl<T: Data> Output for Envelope<T> {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct CompletedNotFound;
 
 pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
+    if error.detail::<RefusedGuard>().is_some() {
+        return error;
+    }
     let Some(api) = error.api_error() else {
         return error;
     };
@@ -117,7 +124,7 @@ pub(super) fn invalid_response(operation: &Operation) -> Error {
         SafeText::new("invalid response; body withheld", &[]),
         false,
     ))
-    .with_outer_detail(StatusCode::OK)
+    .with_http_status(StatusCode::OK)
 }
 
 pub(super) const fn field(name: &'static str, shape: Shape<'static>) -> ShapeField<'static> {

@@ -70,11 +70,13 @@ const fn action(
 }
 
 /// A server status prevented the requested action.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct UnexpectedStatus;
 
+crate::error::debug_record!(UnexpectedStatus unit);
+
 /// Identifies the server to start.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StartServerInput {
     /// Server to start.
     pub server_id: String,
@@ -82,8 +84,10 @@ pub struct StartServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(StartServerInput { server_id, no_wait });
+
 /// Identifies the server to stop.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct StopServerInput {
     /// Server to stop.
     pub server_id: String,
@@ -91,8 +95,10 @@ pub struct StopServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(StopServerInput { server_id, no_wait });
+
 /// Identifies the server to reboot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RebootServerInput {
     /// Server to reboot.
     pub server_id: String,
@@ -100,8 +106,10 @@ pub struct RebootServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(RebootServerInput { server_id, no_wait });
+
 /// Identifies a server and its new name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RenameServerInput {
     /// Server to rename.
     pub server_id: String,
@@ -109,8 +117,10 @@ pub struct RenameServerInput {
     pub name: String,
 }
 
+crate::error::debug_record!(RenameServerInput { server_id, name });
+
 /// Result of starting a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StartServerOutput {
     /// Last verified server state.
@@ -119,8 +129,10 @@ pub struct StartServerOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(StartServerOutput { server, changed });
+
 /// Result of stopping a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StopServerOutput {
     /// Last verified server state.
@@ -129,24 +141,30 @@ pub struct StopServerOutput {
     pub changed: bool,
 }
 
+crate::wire::product::output::public_fields!(StopServerOutput { server, changed });
+
 /// Result of rebooting a server.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RebootServerOutput {
     /// Last verified server state.
     pub server: Server,
 }
 
+crate::wire::product::output::public_fields!(RebootServerOutput { server });
+
 /// Server returned by a successful rename.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RenameServerOutput {
     /// The renamed server.
     pub server: Server,
 }
 
+crate::wire::product::output::public_fields!(RenameServerOutput { server });
+
 /// Result of changing the server's flavor.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ResizeServerOutput {
     /// Last verified server state.
@@ -154,6 +172,11 @@ pub struct ResizeServerOutput {
     /// Signed quote in VND. Negative values indicate a credit.
     pub quoted_adjustment: f64,
 }
+
+crate::wire::product::output::public_fields!(ResizeServerOutput {
+    server,
+    quoted_adjustment
+});
 
 #[expect(
     clippy::result_large_err,
@@ -166,15 +189,17 @@ impl Client {
         ctx: &RequestContext,
         input: StartServerInput,
     ) -> Result<StartServerOutput, Failure<StartServerOutput>> {
-        self.toggle(
-            ctx,
-            &START,
-            &input.server_id,
-            input.no_wait,
-            ("STOPPED", "ACTIVE"),
-            |server, changed| StartServerOutput { server, changed },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.toggle(
+                ctx,
+                &START,
+                &input.server_id,
+                input.no_wait,
+                ("STOPPED", "ACTIVE"),
+                |server, changed| StartServerOutput { server, changed },
+            )
+            .await
+        })
     }
 
     /// Stops an active server, or returns a stopped server without sending a write.
@@ -183,15 +208,17 @@ impl Client {
         ctx: &RequestContext,
         input: StopServerInput,
     ) -> Result<StopServerOutput, Failure<StopServerOutput>> {
-        self.toggle(
-            ctx,
-            &STOP,
-            &input.server_id,
-            input.no_wait,
-            ("ACTIVE", "STOPPED"),
-            |server, changed| StopServerOutput { server, changed },
-        )
-        .await
+        crate::wire::product::exit::finish!(async {
+            self.toggle(
+                ctx,
+                &STOP,
+                &input.server_id,
+                input.no_wait,
+                ("ACTIVE", "STOPPED"),
+                |server, changed| StopServerOutput { server, changed },
+            )
+            .await
+        })
     }
 
     /// Reboots an active server and optionally waits for it to return to active.
@@ -200,47 +227,49 @@ impl Client {
         ctx: &RequestContext,
         input: RebootServerInput,
     ) -> Result<RebootServerOutput, Failure<RebootServerOutput>> {
-        const ADVICE: &str = "read get-server and inspect the console before repeating reboot";
-        let mut evidence = Evidence::new();
-        let id = &input.server_id;
-        let mut server = self
-            .action_current(ctx, &REBOOT, id, None, &mut evidence)
-            .await?;
-        require_status(&REBOOT, id, &server, &["ACTIVE"], &evidence)
-            .map_err(|error| not_sent(*error))?;
-        let project = |server| RebootServerOutput { server };
-        if let Err(error) = self
-            .send_mutation(ctx, &REBOOT, &[id], None, false, &mut evidence)
-            .await
-        {
-            return Err(ambiguous(
-                error,
+        crate::wire::product::exit::finish!(async {
+            const ADVICE: &str = "read get-server and inspect the console before repeating reboot";
+            let mut evidence = Evidence::for_write();
+            let id = &input.server_id;
+            let mut server = self
+                .action_current(ctx, &REBOOT, id, None, &mut evidence)
+                .await?;
+            require_status(&REBOOT, id, &server, &["ACTIVE"], &evidence)
+                .map_err(|error| not_sent(*error))?;
+            let project = |server| RebootServerOutput { server };
+            if let Err(error) = self
+                .send_mutation(ctx, &REBOOT, &[id], None, false, &mut evidence)
+                .await
+            {
+                return Err(ambiguous(
+                    error,
+                    &REBOOT,
+                    ADVICE,
+                    safe_server(server, &evidence).map(project),
+                    &evidence,
+                ));
+            }
+            let result = if input.no_wait {
+                Ok(())
+            } else {
+                let earliest = self.session.clock().monotonic_now() + Duration::from_secs(10);
+                self.settle_server(
+                    ctx,
+                    id,
+                    Settlement::Rebooted(earliest),
+                    &mut server,
+                    &mut evidence,
+                )
+                .await
+            };
+            finish(
                 &REBOOT,
-                ADVICE,
+                result,
                 safe_server(server, &evidence).map(project),
+                ADVICE,
                 &evidence,
-            ));
-        }
-        let result = if input.no_wait {
-            Ok(())
-        } else {
-            let earliest = self.session.clock().monotonic_now() + Duration::from_secs(10);
-            self.settle_server(
-                ctx,
-                id,
-                Settlement::Rebooted(earliest),
-                &mut server,
-                &mut evidence,
             )
-            .await
-        };
-        finish(
-            &REBOOT,
-            result,
-            safe_server(server, &evidence).map(project),
-            ADVICE,
-            &evidence,
-        )
+        })
     }
 
     /// Renames a server and reads the server returned in the acknowledgement.
@@ -249,37 +278,39 @@ impl Client {
         ctx: &RequestContext,
         input: RenameServerInput,
     ) -> Result<RenameServerOutput, Failure<RenameServerOutput>> {
-        let id = &input.server_id;
-        required(
-            RENAME.id,
-            &[
-                ("ServerID", !id.is_empty()),
-                ("Name", !input.name.is_empty()),
-            ],
-        )
-        .map_err(|error| not_sent(*error))?;
-        path_id(RENAME.id, "ServerID", id).map_err(|error| not_sent(*error))?;
-        let body = json!({"newName": input.name});
-        let mut evidence = Evidence::new();
-        self.guard_write(ctx, &json!([id, body]), &mut evidence)
-            .map_err(|error| not_sent(*error))?;
-        let raw = self
-            .send_mutation(ctx, &RENAME, &[id], Some(&body), false, &mut evidence)
-            .await?;
-        let server = decode_data::<Server>(&raw, &RENAME, &evidence)
-            .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
-        let output = (!server.name.is_empty()
-            && (server.uuid.is_empty() || server.uuid == *id)
-            && !evidence.text_reflects(&server.uuid))
-        .then(|| safe_server(server, &evidence))
-        .flatten()
-        .map(|server| RenameServerOutput { server });
-        output.ok_or_else(|| {
-            Failure::new(
-                invalid_mutation_response(&RENAME, &evidence),
-                None,
-                WriteDispatch::MayHaveBeenSent,
+        crate::wire::product::exit::finish!(async {
+            let id = &input.server_id;
+            required(
+                RENAME.id,
+                &[
+                    ("ServerID", !id.is_empty()),
+                    ("Name", !input.name.is_empty()),
+                ],
             )
+            .map_err(|error| not_sent(*error))?;
+            path_id(RENAME.id, "ServerID", id).map_err(|error| not_sent(*error))?;
+            let body = json!({"newName": input.name});
+            let mut evidence = Evidence::for_write();
+            self.guard_write(ctx, &json!([id, body]), &mut evidence)
+                .map_err(|error| not_sent(*error))?;
+            let raw = self
+                .send_mutation(ctx, &RENAME, &[id], Some(&body), false, &mut evidence)
+                .await?;
+            let server = decode_data::<Server>(&raw, &RENAME, &evidence)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
+            let output = (!server.name.is_empty()
+                && (server.uuid.is_empty() || server.uuid == *id)
+                && !evidence.text_reflects(&server.uuid))
+            .then(|| safe_server(server, &evidence))
+            .flatten()
+            .map(|server| RenameServerOutput { server });
+            output.ok_or_else(|| {
+                Failure::new(
+                    invalid_mutation_response(&RENAME, &evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })
         })
     }
 
@@ -289,88 +320,87 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeServerInput,
     ) -> Result<ResizeServerOutput, Failure<ResizeServerOutput>> {
-        const ADVICE: &str = "call GetServer to check its status";
-        let id = &input.server_id;
-        let info = resize_info(RESIZE.id, &input).map_err(|error| not_sent(*error))?;
-        if !input.max_price.is_finite() || input.max_price < 0.0 {
-            return Err(not_sent(invalid_input(
-                "compute.ResizeServer: MaxPrice must be finite and non-negative",
-            )));
-        }
-        let mut evidence = Evidence::new();
-        let body = json!(info);
-        let mut server = self
-            .action_current(
-                ctx,
-                &RESIZE,
-                id,
-                Some(&json!([body, input.max_price])),
-                &mut evidence,
-            )
-            .await?;
-        if evidence.text_reflects(&server.flavor.flavor_id) {
-            return Err(not_sent(invalid_preflight(&evidence)));
-        }
-        if server.flavor.flavor_id == input.flavor_id {
-            return Err(not_sent(
-                invalid_input(&format!(
+        crate::wire::product::exit::finish!(async {
+            const ADVICE: &str = "call GetServer to check its status";
+            let id = &input.server_id;
+            let info = resize_info(RESIZE.id, &input).map_err(|error| not_sent(*error))?;
+            if !input.max_price.is_finite() || input.max_price < 0.0 {
+                return Err(not_sent(invalid_input(
+                    "compute.ResizeServer: MaxPrice must be finite and non-negative",
+                )));
+            }
+            let mut evidence = Evidence::for_write();
+            let body = json!(info);
+            let mut server = self
+                .action_current(
+                    ctx,
+                    &RESIZE,
+                    id,
+                    Some(&json!([body, input.max_price])),
+                    &mut evidence,
+                )
+                .await?;
+            if evidence.id_reflects(&server.flavor.flavor_id) {
+                return Err(not_sent(invalid_preflight(&evidence)));
+            }
+            if server.flavor.flavor_id == input.flavor_id {
+                return Err(not_sent(evidence.screen_error(invalid_input(&format!(
                     "{}: server {id} already has flavor {}",
                     RESIZE.id, input.flavor_id
-                ))
-                .screen_api(&|text| evidence.text_reflects(text)),
-            ));
-        }
-        require_status(&RESIZE, id, &server, &["ACTIVE", "STOPPED"], &evidence)
-            .map_err(|error| not_sent(*error))?;
-        let quote = self
-            .server_quote(ctx, "server", "resize", info, false, &mut evidence)
-            .await
-            .map_err(|error| not_sent(*error))?;
-        let quoted_adjustment = quote.optimum_price;
-        check_price(RESIZE.id, quoted_adjustment, input.max_price, &evidence)
-            .map_err(|error| not_sent(*error))?;
-        let output = |server, evidence: &Evidence| {
-            safe_server(server, evidence)
-                .filter(|_| {
-                    !evidence.reflected_in(&json!(quoted_adjustment))
-                        && !evidence.reflects_fixed_two(quoted_adjustment)
-                })
-                .map(|server| ResizeServerOutput {
-                    server,
-                    quoted_adjustment,
-                })
-        };
-        if let Err(error) = self
-            .send_mutation(ctx, &RESIZE, &[id], Some(&body), false, &mut evidence)
-            .await
-        {
-            return Err(ambiguous(
-                error,
+                )))));
+            }
+            require_status(&RESIZE, id, &server, &["ACTIVE", "STOPPED"], &evidence)
+                .map_err(|error| not_sent(*error))?;
+            let quote = self
+                .server_quote(ctx, "server", "resize", info, false, &mut evidence)
+                .await
+                .map_err(|error| not_sent(*error))?;
+            let quoted_adjustment = quote.optimum_price;
+            check_price(RESIZE.id, quoted_adjustment, input.max_price, &mut evidence)
+                .map_err(|error| not_sent(*error))?;
+            let output = |server, evidence: &Evidence| {
+                safe_server(server, evidence)
+                    .filter(|_| {
+                        !evidence.output_reflects(&json!(quoted_adjustment))
+                            && !evidence.reflects_fixed_two(quoted_adjustment)
+                    })
+                    .map(|server| ResizeServerOutput {
+                        server,
+                        quoted_adjustment,
+                    })
+            };
+            if let Err(error) = self
+                .send_mutation(ctx, &RESIZE, &[id], Some(&body), false, &mut evidence)
+                .await
+            {
+                return Err(ambiguous(
+                    error,
+                    &RESIZE,
+                    ADVICE,
+                    output(server, &evidence),
+                    &evidence,
+                ));
+            }
+            let result = if input.no_wait {
+                Ok(())
+            } else {
+                self.settle_server(
+                    ctx,
+                    id,
+                    Settlement::Resized(&input.flavor_id),
+                    &mut server,
+                    &mut evidence,
+                )
+                .await
+            };
+            finish(
                 &RESIZE,
-                ADVICE,
+                result,
                 output(server, &evidence),
+                ADVICE,
                 &evidence,
-            ));
-        }
-        let result = if input.no_wait {
-            Ok(())
-        } else {
-            self.settle_server(
-                ctx,
-                id,
-                Settlement::Resized(&input.flavor_id),
-                &mut server,
-                &mut evidence,
             )
-            .await
-        };
-        finish(
-            &RESIZE,
-            result,
-            output(server, &evidence),
-            ADVICE,
-            &evidence,
-        )
+        })
     }
 
     async fn action_current<O>(
@@ -385,13 +415,12 @@ impl Client {
         self.guard_write(ctx, &json!([id, body]), evidence)
             .map_err(|error| not_sent(*error))?;
         let server = self
-            .server_detail_checked::<()>(ctx, id, evidence, true)
+            .server_guard::<()>(ctx, id, evidence)
             .await
             .map_err(|error| not_sent(error.into_parts().0))?;
-        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
-            return Err(not_sent(invalid_preflight(evidence)));
-        }
-        Ok(server)
+        server
+            .into_checked(evidence)
+            .map_err(|error| not_sent(*error))
     }
 
     async fn toggle<O>(
@@ -405,7 +434,7 @@ impl Client {
     ) -> Result<O, Failure<O>> {
         const ADVICE: &str = "run this operation again to check";
         let (source, target) = states;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let mut server = self
             .action_current(ctx, mutation, id, None, &mut evidence)
             .await?;
@@ -413,7 +442,7 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
         let output = |server, changed, evidence: &Evidence| {
             safe_server(server, evidence)
-                .filter(|_| !evidence.reflected_in(&json!(changed)))
+                .filter(|_| !evidence.output_reflects(&json!(changed)))
                 .map(|server| projection(server, changed))
         };
         if server.status.eq_ignore_ascii_case(target) {
@@ -461,7 +490,7 @@ fn require_status(
     allowed: &[&str],
     evidence: &Evidence,
 ) -> Result<(), Box<Error>> {
-    if evidence.reflected_in(&json!([server.uuid, server.status])) {
+    if evidence.output_reflects(&json!([server.uuid, server.status])) {
         return Err(Box::new(invalid_preflight(evidence)));
     }
     if allowed

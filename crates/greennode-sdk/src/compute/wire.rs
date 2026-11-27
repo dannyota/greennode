@@ -7,12 +7,12 @@ use serde_json::value::RawValue;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
     response, retry,
 };
-use crate::wire::strict_json::{self, field_matches};
+use crate::wire::strict_json::{self, FieldNames, field_matches};
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, error::SafeText};
 
 use super::{Client, failure};
@@ -23,6 +23,8 @@ pub(super) enum ReadStyle {
     Server,
     Console,
 }
+
+pub(super) struct GuardRead<'a>(pub(super) &'a Read);
 
 pub(super) struct Read {
     pub(super) id: &'static str,
@@ -120,18 +122,21 @@ pub(super) fn api(
     message: &str,
     evidence: &Evidence,
 ) -> Error {
-    Error::from_api(ApiError::without_fallback(
+    evidence.screen_error(Error::from_api(ApiError::without_fallback(
         op,
         status,
         SafeText::new(code, &[]),
         SafeText::new(message, &[]),
         false,
-    ))
-    .screen_api(&|text| evidence.text_reflects(text))
+    )))
 }
 
 #[derive(Default)]
-pub(super) struct Envelope(BTreeMap<String, Box<RawValue>>);
+pub(super) struct Envelope {
+    fields: BTreeMap<String, Box<RawValue>>,
+    original: Bytes,
+    names: FieldNames,
+}
 
 #[expect(
     clippy::result_large_err,
@@ -139,13 +144,7 @@ pub(super) struct Envelope(BTreeMap<String, Box<RawValue>>);
 )]
 impl Envelope {
     pub(super) fn reflects(&self, evidence: &Evidence) -> bool {
-        self.0.iter().any(|(key, raw)| {
-            evidence.text_reflects(key)
-                || operation::reflects_json(raw.get().as_bytes(), evidence.credentials(), true)
-                    .unwrap_or(true)
-                || serde_json::from_str::<serde_json::Value>(raw.get())
-                    .map_or(true, |value| evidence.reflected_in(&value))
-        })
+        !self.original.is_empty() && !evidence.go_peer_body_screen(&self.original).is_clean()
     }
 
     pub(super) fn field<T: WireField, O>(
@@ -156,15 +155,27 @@ impl Envelope {
     ) -> Result<T, Failure<O>> {
         let invalid = || failure(read.invalid(evidence));
         if self
-            .0
+            .fields
             .keys()
             .any(|key| key != name && field_matches(name, key))
         {
-            return Err(invalid());
+            return Err(if matches!(self.names, FieldNames::Canonical) {
+                failure(evidence.screen_error(operation::unsafe_guard_response(read.id)))
+            } else {
+                invalid()
+            });
         }
-        let Some(raw) = self.0.get(name) else {
+        let Some(raw) = self.fields.get(name) else {
             return Ok(T::default());
         };
+        if self
+            .names
+            .has_case_variant(raw.get().as_bytes(), &T::SCHEMA)
+        {
+            return Err(failure(
+                evidence.screen_error(operation::unsafe_guard_response(read.id)),
+            ));
+        }
         serde_json::from_str::<Field<T>>(raw.get())
             .map(|field| field.0)
             .map_err(|_| invalid())
@@ -188,6 +199,31 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
     ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, read, ids, query, evidence, false)
+            .await
+    }
+
+    pub(super) async fn read_guard<O>(
+        &self,
+        ctx: &RequestContext,
+        guard: GuardRead<'_>,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+    ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, guard.0, ids, query, evidence, true)
+            .await
+    }
+
+    async fn read_with_policy<O>(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        guard: bool,
+    ) -> Result<Envelope, Failure<O>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -207,7 +243,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| failure(error.screen_api(&|text| evidence.text_reflects(text))))?;
+            .map_err(|error| failure(evidence.screen_error(*error)))?;
         if std::iter::once(project.as_str())
             .chain(ids.iter().copied())
             .any(|input| evidence.text_reflects(input))
@@ -237,14 +273,21 @@ impl Client {
             keep_status: protected,
             overflow_overrides_status: protected,
             sensitive: protected,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
             retry_config: retry::Config::default(),
+        };
+        let guarded;
+        let operation = if guard {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
         };
         let result = operation::execute_raw(
             runtime,
             base,
-            &operation,
+            operation,
             &Options::DEFAULT,
             &path,
             query,
@@ -258,7 +301,7 @@ impl Client {
             let status = error
                 .api_error()
                 .and_then(ApiError::status)
-                .or_else(|| error.detail::<StatusCode>().map(|status| status.as_u16()));
+                .or_else(|| error.http_status().map(|status| status.as_u16()));
             if error.is_body_too_large() {
                 return failure(match read.style {
                     ReadStyle::Console => api(
@@ -274,14 +317,15 @@ impl Client {
                         "InvalidResponse",
                         "invalid server response; body withheld",
                         evidence,
-                    ),
-                    ReadStyle::Plain => error.screen_api(&|text| evidence.text_reflects(text)),
+                    )
+                    .with_cause(error),
+                    ReadStyle::Plain => evidence.screen_error(error),
                 });
             }
             if read.style == ReadStyle::Console && status.is_some() {
                 return failure(console_status(read, status, evidence));
             }
-            failure(error.screen_api(&|text| evidence.text_reflects(text)))
+            failure(evidence.screen_error(error))
         })?;
         if read.style == ReadStyle::Console && response.status != StatusCode::OK {
             return Err(failure(console_status(
@@ -298,7 +342,7 @@ impl Client {
             (true, protected, operation.retry),
             evidence.credentials(),
         )
-        .map_err(|error| failure(error.screen_api(&|text| evidence.text_reflects(text))))?;
+        .map_err(|error| failure(evidence.screen_error(*error)))?;
         if body.is_empty() && !protected {
             return Ok(Envelope::default());
         }
@@ -315,7 +359,15 @@ impl Client {
             .map_err(|_| failure(read.invalid(evidence)))?;
         let fields = serde_json::from_str::<Option<_>>(raw.get())
             .map_err(|_| failure(read.invalid(evidence)))?;
-        Ok(Envelope(fields.unwrap_or_default()))
+        Ok(Envelope {
+            fields: fields.unwrap_or_default(),
+            original: body,
+            names: if guard {
+                FieldNames::Canonical
+            } else {
+                evidence.field_names()
+            },
+        })
     }
 }
 
@@ -331,12 +383,11 @@ fn console_status(read: &Read, status: Option<u16>, evidence: &Evidence) -> Erro
         Some(400..=499) => "ClientError",
         _ => "RequestFailed",
     };
-    Error::from_api(ApiError::without_fallback(
+    evidence.screen_error(Error::from_api(ApiError::without_fallback(
         read.id,
         status,
         SafeText::new(code, &[]),
         SafeText::new("console log request failed; body withheld", &[]),
         status.is_some_and(|status| matches!(status, 429 | 502..=504)),
-    ))
-    .screen_api(&|text| evidence.text_reflects(text))
+    )))
 }

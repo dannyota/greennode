@@ -45,7 +45,7 @@ impl CreateUserInput {
 }
 
 /// Safe user metadata and any generated password available for private delivery.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateUserOutput {
     /// Confirmed user details or safe partial metadata.
     #[serde(rename = "User")]
@@ -63,6 +63,16 @@ pub struct CreateUserOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(custom_debug CreateUserOutput { user, created_id, candidate_id; password_marker, password, evidence });
+crate::error::debug_record!(CreateUserOutput {
+    user,
+    password_marker,
+    created_id,
+    candidate_id,
+    password,
+    evidence
+});
 
 impl CreateUserOutput {
     /// Borrows the locally generated password, if present.
@@ -100,8 +110,10 @@ id_input!(
 );
 
 /// An acknowledged user deletion.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteUserOutput {}
+
+crate::wire::product::output::public_fields!(DeleteUserOutput {});
 
 /// Resets a user's password using a supplied or generated password.
 #[derive(Clone)]
@@ -126,7 +138,7 @@ impl ResetUserPasswordInput {
 }
 
 /// An accepted reset, with a locally generated password when applicable.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct ResetUserPasswordOutput {
     #[serde(rename = "Password", skip_serializing_if = "Option::is_none")]
     password_marker: Option<&'static str>,
@@ -135,6 +147,8 @@ pub struct ResetUserPasswordOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(ResetUserPasswordOutput { ; password_marker, password, evidence });
 
 impl ResetUserPasswordOutput {
     /// Borrows the locally generated password, if present.
@@ -218,109 +232,113 @@ impl Client {
         ctx: &RequestContext,
         input: CreateUserInput,
     ) -> Result<CreateUserOutput, Failure<CreateUserOutput>> {
-        if input.username.is_empty() {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE} requires Username"
-            ))));
-        }
-        if input.username.len() > 4096 {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE}: Username must be valid UTF-8 and at most 4096 bytes"
-            ))));
-        }
-        if !valid_username(&input.username) {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE}: Username must not contain whitespace or controls"
-            ))));
-        }
-        let length = validate_password(CREATE, input.password.as_ref(), input.password_length)?;
-        let (password, generated) = self.prepare_password(ctx, input.password, length)?;
-        let username = input.username;
-        let mut evidence =
-            self.write_evidence(ctx, CREATE, &[], &[&username, password.expose_secret()])?;
-        if evidence_with_password_reflects(&evidence, &password, &username) {
-            return Err(guard_failed(invalid_input(
-                "IAM request operand withheld".into(),
-            )));
-        }
-        let op = user_write(
-            CREATE,
-            Method::POST,
-            USERS,
-            Retry::Once,
-            &[StatusCode::CREATED],
-        );
-        let sent = self
-            .write_user_password::<CreateAck, _>(
-                ctx,
-                &op,
-                &[],
-                (Some(&username), &password),
-                &mut evidence,
-            )
-            .await;
-        let ack = match sent {
-            Ok(ack) => ack,
-            Err(failure) if definite_refusal(&failure) => return Err(failure),
-            Err(failure) => {
+        crate::wire::product::exit::finish!(async {
+            if input.username.is_empty() {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE} requires Username"
+                ))));
+            }
+            if input.username.len() > 4096 {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE}: Username must be valid UTF-8 and at most 4096 bytes"
+                ))));
+            }
+            if !valid_username(&input.username) {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE}: Username must not contain whitespace or controls"
+                ))));
+            }
+            let length = validate_password(CREATE, input.password.as_ref(), input.password_length)?;
+            let (password, generated) = self.prepare_password(ctx, input.password, length)?;
+            let username = input.username;
+            let mut evidence =
+                self.write_evidence(ctx, CREATE, &[], &[&username, password.expose_secret()])?;
+            if evidence_with_password_reflects(&evidence, &password, &username) {
+                return Err(guard_failed(invalid_input(
+                    "IAM request operand withheld".into(),
+                )));
+            }
+            let op = user_write(
+                CREATE,
+                Method::POST,
+                USERS,
+                Retry::Once,
+                &[StatusCode::CREATED],
+            );
+            let sent = self
+                .write_user_password::<CreateAck, _>(
+                    ctx,
+                    &op,
+                    &[],
+                    (Some(&username), &password),
+                    &mut evidence,
+                )
+                .await;
+            let ack = match sent {
+                Ok(ack) => ack,
+                Err(failure) if definite_refusal(&failure) => return Err(failure),
+                Err(failure) => {
+                    return Err(create_failed(
+                        Some(failure.into_parts().0),
+                        WriteError::UserCreateUncertain,
+                        fallback_user(&username, "", "", &evidence),
+                        generated.then_some(password),
+                        &evidence,
+                    ));
+                }
+            };
+            let id = match ack {
+                CreateAck::Empty => String::new(),
+                CreateAck::Object(id) => id,
+            };
+            if id.is_empty() {
+                let (candidate, cause) = match self
+                    .lookup_created_user(ctx, &username, &mut evidence)
+                    .await
+                {
+                    Ok(candidate) => (candidate.unwrap_or_default(), None),
+                    Err(failure) => (String::new(), Some(failure.into_parts().0)),
+                };
                 return Err(create_failed(
-                    Some(failure.into_parts().0),
+                    cause,
+                    WriteError::UserCreateUncertain,
+                    fallback_user(&username, "", &candidate, &evidence),
+                    generated.then_some(password),
+                    &evidence,
+                ));
+            }
+            if !safe_user_id(&id, &evidence) {
+                return Err(create_failed(
+                    None,
                     WriteError::UserCreateUncertain,
                     fallback_user(&username, "", "", &evidence),
                     generated.then_some(password),
                     &evidence,
                 ));
             }
-        };
-        let id = match ack {
-            CreateAck::Empty => String::new(),
-            CreateAck::Object(id) => id,
-        };
-        if id.is_empty() {
-            let (candidate, cause) = match self
-                .lookup_created_user(ctx, &username, &mut evidence)
+            match self
+                .confirm_created_user::<CreateUserOutput>(ctx, &id, &username, &mut evidence)
                 .await
             {
-                Ok(candidate) => (candidate.unwrap_or_default(), None),
-                Err(failure) => (String::new(), Some(failure.into_parts().0)),
-            };
-            return Err(create_failed(
-                cause,
-                WriteError::UserCreateUncertain,
-                fallback_user(&username, "", &candidate, &evidence),
-                generated.then_some(password),
-                &evidence,
-            ));
-        }
-        if !safe_user_id(&id, &evidence) {
-            return Err(create_failed(
-                None,
-                WriteError::UserCreateUncertain,
-                fallback_user(&username, "", "", &evidence),
-                generated.then_some(password),
-                &evidence,
-            ));
-        }
-        match self
-            .confirm_created_user::<CreateUserOutput>(ctx, &id, &username, &mut evidence)
-            .await
-        {
-            Ok(user) => Ok(CreateUserOutput {
-                user,
-                created_id: id,
-                candidate_id: String::new(),
-                password_marker: "[redacted]",
-                password: generated.then_some(password),
-                evidence,
-            }),
-            Err(failure) => Err(create_failed(
-                Some(failure.into_parts().0),
-                WriteError::CreateUnconfirmed,
-                fallback_user(&username, &id, "", &evidence),
-                generated.then_some(password),
-                &evidence,
-            )),
-        }
+                Ok(user) => Ok(CreateUserOutput {
+                    user,
+                    created_id: id,
+                    candidate_id: String::new(),
+                    password_marker: "[redacted]",
+                    password: generated
+                        .then_some(password)
+                        .filter(crate::wire::product::exit::private_safe),
+                    evidence,
+                }),
+                Err(failure) => Err(create_failed(
+                    Some(failure.into_parts().0),
+                    WriteError::CreateUnconfirmed,
+                    fallback_user(&username, &id, "", &evidence),
+                    generated.then_some(password),
+                    &evidence,
+                )),
+            }
+        })
     }
 
     /// Deletes an IAM user after verifying the target and ruling out self-deletion.
@@ -329,20 +347,22 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteUserInput,
     ) -> Result<DeleteUserOutput, Failure<DeleteUserOutput>> {
-        let id = input.user_id.as_str();
-        let mut evidence = self.write_evidence(ctx, DELETE, &[("UserID", id)], &[])?;
-        self.guard_user(ctx, DELETE, id, false, &mut evidence)
-            .await?;
-        let op = user_write(
-            DELETE,
-            Method::DELETE,
-            USER,
-            Retry::Repeatable,
-            &[StatusCode::NO_CONTENT],
-        );
-        self.write::<Value, _>(ctx, Api::Accounts, &op, &[id], None, &mut evidence)
-            .await?;
-        Ok(DeleteUserOutput {})
+        crate::wire::product::exit::finish!(async {
+            let id = input.user_id.as_str();
+            let mut evidence = self.write_evidence(ctx, DELETE, &[("UserID", id)], &[])?;
+            self.guard_user(ctx, DELETE, id, false, &mut evidence)
+                .await?;
+            let op = user_write(
+                DELETE,
+                Method::DELETE,
+                USER,
+                Retry::Repeatable,
+                &[StatusCode::NO_CONTENT],
+            );
+            self.write::<Value, _>(ctx, Api::Accounts, &op, &[id], None, &mut evidence)
+                .await?;
+            Ok(DeleteUserOutput {})
+        })
     }
 
     /// Checks target protection, then sends one reset without a confirmation request.
@@ -351,48 +371,52 @@ impl Client {
         ctx: &RequestContext,
         input: ResetUserPasswordInput,
     ) -> Result<ResetUserPasswordOutput, Failure<ResetUserPasswordOutput>> {
-        let id = input.user_id.as_str();
-        let length = validate_password(RESET, input.password.as_ref(), input.password_length)?;
-        let supplied = input.password.as_ref().map_or("", Secret::expose_secret);
-        let mut evidence = self.write_evidence(ctx, RESET, &[("UserID", id)], &[supplied])?;
-        if let Some(password) = &input.password {
-            evidence.add_operation_password(password);
-        }
-        self.guard_user(ctx, RESET, id, true, &mut evidence).await?;
-        let (password, generated) = self.prepare_password(ctx, input.password, length)?;
-        let op = user_write(
-            RESET,
-            Method::POST,
-            "accounts-api/v1/iam-users/{}/reset-password",
-            Retry::Once,
-            &[StatusCode::NO_CONTENT],
-        );
-        match self
-            .write_user_password::<Value, _>(ctx, &op, &[id], (None, &password), &mut evidence)
-            .await
-        {
-            Ok(_) => Ok(ResetUserPasswordOutput {
-                password_marker: generated.then_some("[redacted]"),
-                password: generated.then_some(password),
-                evidence,
-            }),
-            Err(failure) if definite_refusal(&failure) => Err(failure),
-            Err(failure) => {
-                let partial = evidence
-                    .can_retain_partial()
-                    .then(|| ResetUserPasswordOutput {
-                        password_marker: None,
-                        password: None,
-                        evidence: evidence.without_operation_passwords(),
-                    });
-                let failure = if accepted(&failure) {
-                    settle(failure, partial, RESET, &evidence)
-                } else {
-                    uncertain_write(failure, RESET, partial, &evidence)
-                };
-                Err(retain_password(failure, generated.then_some(password)))
+        crate::wire::product::exit::finish!(async {
+            let id = input.user_id.as_str();
+            let length = validate_password(RESET, input.password.as_ref(), input.password_length)?;
+            let supplied = input.password.as_ref().map_or("", Secret::expose_secret);
+            let mut evidence = self.write_evidence(ctx, RESET, &[("UserID", id)], &[supplied])?;
+            if let Some(password) = &input.password {
+                evidence.add_operation_password(password);
             }
-        }
+            self.guard_user(ctx, RESET, id, true, &mut evidence).await?;
+            let (password, generated) = self.prepare_password(ctx, input.password, length)?;
+            let op = user_write(
+                RESET,
+                Method::POST,
+                "accounts-api/v1/iam-users/{}/reset-password",
+                Retry::Once,
+                &[StatusCode::NO_CONTENT],
+            );
+            match self
+                .write_user_password::<Value, _>(ctx, &op, &[id], (None, &password), &mut evidence)
+                .await
+            {
+                Ok(_) => Ok(ResetUserPasswordOutput {
+                    password_marker: generated.then_some("[redacted]"),
+                    password: generated
+                        .then_some(password)
+                        .filter(crate::wire::product::exit::private_safe),
+                    evidence,
+                }),
+                Err(failure) if definite_refusal(&failure) => Err(failure),
+                Err(failure) => {
+                    let partial = evidence
+                        .can_retain_partial()
+                        .then(|| ResetUserPasswordOutput {
+                            password_marker: None,
+                            password: None,
+                            evidence: evidence.without_operation_passwords(),
+                        });
+                    let failure = if accepted(&failure) {
+                        settle(failure, partial, RESET, &evidence)
+                    } else {
+                        uncertain_write(failure, RESET, partial, &evidence)
+                    };
+                    Err(retain_password(failure, generated.then_some(password)))
+                }
+            }
+        })
     }
 
     async fn confirm_created_user<O>(
@@ -420,7 +444,7 @@ impl Client {
     ) -> Result<Option<String>, Failure<()>> {
         let op = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation(CREATE, USERS, LIST_CAP, false)
         };
         let page: Page<User> = self
@@ -634,7 +658,7 @@ fn create_failed(
 }
 
 fn retain_password<T>(failure: Failure<T>, password: Option<Secret>) -> Failure<T> {
-    match password {
+    match password.filter(crate::wire::product::exit::private_safe) {
         Some(password) => failure.with_private_delivery(password),
         None => failure,
     }

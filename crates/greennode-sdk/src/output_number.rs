@@ -125,15 +125,27 @@ pub(crate) fn reflects(
     credentials: &crate::wire::product::sender::SentCredentials,
     include_sdk_json: bool,
 ) -> bool {
+    if credentials.values().is_empty() {
+        return !value.is_finite();
+    }
+    any_spelling(value, include_sdk_json, |text| {
+        crate::wire::product::response::reflects_bytes(text.as_bytes(), credentials)
+    })
+}
+
+pub(crate) fn any_spelling(
+    value: f64,
+    include_sdk_json: bool,
+    reflects: impl Fn(&str) -> bool,
+) -> bool {
     if !value.is_finite() {
         return true;
     }
     let Ok(shortest) = serde_json::to_string(&value) else {
         return true;
     };
-    (include_sdk_json && credentials.reflects(shortest.as_bytes()))
+    (include_sdk_json && reflects(&shortest))
         || [Style::Json, Style::Fixed].into_iter().any(|style| {
-            format(&shortest, json_scientific(value), style)
-                .is_none_or(|text| credentials.reflects(text.as_bytes()))
+            format(&shortest, json_scientific(value), style).is_none_or(|text| reflects(&text))
         })
 }

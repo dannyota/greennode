@@ -156,7 +156,7 @@ model! {
 }
 
 /// A server-group placement policy.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ServerGroupPolicy {
     /// Display name.
     #[serde(rename = "Name")]
@@ -178,8 +178,17 @@ pub struct ServerGroupPolicy {
     pub descriptions: BTreeMap<String, String>,
 }
 
+crate::wire::product::output::public_fields!(ServerGroupPolicy {
+    name,
+    uuid,
+    status,
+    description,
+    description_vi,
+    descriptions
+});
+
 /// Server inventory page selection.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListServersInput {
     /// One-based page number. Nonpositive values use the default.
     pub page: i64,
@@ -187,12 +196,16 @@ pub struct ListServersInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListServersInput { page, size });
+
 /// Selects the server to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetServerInput {
     /// Resource identifier.
     pub server_id: String,
 }
+
+crate::error::debug_record!(GetServerInput { server_id });
 
 impl GetServerInput {
     /// Creates an input from the required identifier.
@@ -204,11 +217,13 @@ impl GetServerInput {
 }
 
 /// Selects the server whose console log is requested.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetServerConsoleLogInput {
     /// Resource identifier.
     pub server_id: String,
 }
+
+crate::error::debug_record!(GetServerConsoleLogInput { server_id });
 
 impl GetServerConsoleLogInput {
     /// Creates an input from the required identifier.
@@ -220,7 +235,7 @@ impl GetServerConsoleLogInput {
 }
 
 /// SSH key inventory filters and page selection.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListSshKeysInput {
     /// Optional exact name filter.
     pub name: String,
@@ -230,12 +245,16 @@ pub struct ListSshKeysInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListSshKeysInput { name, page, size });
+
 /// Selects the SSH key to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetSshKeyInput {
     /// Resource identifier.
     pub ssh_key_id: String,
 }
+
+crate::error::debug_record!(GetSshKeyInput { ssh_key_id });
 
 impl GetSshKeyInput {
     /// Creates an input from the required identifier.
@@ -247,7 +266,7 @@ impl GetSshKeyInput {
 }
 
 /// Server group inventory filters and page selection.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListServerGroupsInput {
     /// Optional exact name filter.
     pub name: String,
@@ -257,12 +276,20 @@ pub struct ListServerGroupsInput {
     pub limit: i64,
 }
 
+crate::error::debug_record!(ListServerGroupsInput {
+    name,
+    offset,
+    limit
+});
+
 /// Selects the server group to read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetServerGroupInput {
     /// Resource identifier.
     pub server_group_id: String,
 }
+
+crate::error::debug_record!(GetServerGroupInput { server_group_id });
 
 impl GetServerGroupInput {
     /// Creates an input from the required identifier.
@@ -274,30 +301,40 @@ impl GetServerGroupInput {
 }
 
 /// Lists attached security groups across the project.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListServerSecurityGroupsInput {}
 
+crate::error::debug_record!(ListServerSecurityGroupsInput {});
+
 /// Lists server group membership across the project.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListServerGroupMembersInput {}
 
+crate::error::debug_record!(ListServerGroupMembersInput {});
+
 /// Lists the placement policies in the selected project.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListServerGroupPoliciesInput {}
 
+crate::error::debug_record!(ListServerGroupPoliciesInput {});
+
 /// Filters the regional operating system image catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListOsImagesInput {
     /// Optional network zone identifier.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListOsImagesInput { zone_id });
+
 /// Lists the GPU images in the selected project.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListGpuImagesInput {}
 
+crate::error::debug_record!(ListGpuImagesInput {});
+
 /// User image inventory page selection.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListUserImagesInput {
     /// One-based page number. Nonpositive values use the default.
     pub page: i64,
@@ -305,15 +342,19 @@ pub struct ListUserImagesInput {
     pub size: i64,
 }
 
+crate::error::debug_record!(ListUserImagesInput { page, size });
+
 /// Filters the regional flavor categories by network zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListFlavorZonesInput {
     /// Optional network zone identifier.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListFlavorZonesInput { zone_id });
+
 /// Selects exactly one flavor zone or network zone and optionally filters by name.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListFlavorsInput {
     /// Flavor zone identifier.
     pub flavor_zone_id: String,
@@ -323,46 +364,60 @@ pub struct ListFlavorsInput {
     pub name: String,
 }
 
+crate::error::debug_record!(ListFlavorsInput {
+    flavor_zone_id,
+    zone_id,
+    name
+});
+
 /// Result of the list servers operation.
 pub type ListServersOutput = PagedList<Server>;
 
 /// Result of the get server operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerOutput {
     /// The resource returned by the service.
     #[serde(rename = "Server")]
     pub server: Server,
 }
 
+crate::wire::product::output::public_fields!(GetServerOutput { server });
+
 /// Result of the get server console log operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerConsoleLogOutput {
     /// Console output. Ordinary formatting redacts it.
     #[serde(rename = "Log")]
     pub log: Secret,
 }
 
+crate::wire::product::output::public_fields!(GetServerConsoleLogOutput { log });
+
 /// Result of the list ssh keys operation.
 pub type ListSshKeysOutput = PagedList<SshKey>;
 
 /// Result of the get ssh key operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetSshKeyOutput {
     /// The resource returned by the service.
     #[serde(rename = "SSHKey")]
     pub ssh_key: SshKey,
 }
 
+crate::wire::product::output::public_fields!(GetSshKeyOutput { ssh_key });
+
 /// Result of the list server groups operation.
 pub type ListServerGroupsOutput = PagedList<ServerGroup>;
 
 /// Result of the get server group operation.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct GetServerGroupOutput {
     /// The resource returned by the service.
     #[serde(rename = "ServerGroup")]
     pub server_group: ServerGroup,
 }
+
+crate::wire::product::output::public_fields!(GetServerGroupOutput { server_group });
 
 /// Result of the list server security groups operation.
 pub type ListServerSecurityGroupsOutput = List<ServerSecurityGroup>;

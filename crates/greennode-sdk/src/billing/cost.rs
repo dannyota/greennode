@@ -23,7 +23,7 @@ const RESOURCES: &str = "billing.ListCostResources";
 const BALANCES: &str = "billing.GetBalances";
 
 /// Date range and optional filters for the cost overview.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetCostOverviewInput {
     /// First day of the range in YYYY-MM-DD form.
     pub start_date: String,
@@ -43,6 +43,17 @@ pub struct GetCostOverviewInput {
     pub interval: String,
 }
 
+crate::error::debug_record!(GetCostOverviewInput {
+    start_date,
+    end_date,
+    product,
+    resource_type,
+    resource_id,
+    query,
+    group_by,
+    interval
+});
+
 impl GetCostOverviewInput {
     /// Sets the two required date fields with default grouping and interval.
     pub fn new(start_date: impl Into<String>, end_date: impl Into<String>) -> Self {
@@ -60,7 +71,7 @@ impl GetCostOverviewInput {
 }
 
 /// Headline costs and series returned for a date range.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCostOverviewOutput {
     /// Current and prior costs, forecast, and breakdown.
@@ -81,8 +92,18 @@ pub struct GetCostOverviewOutput {
     pub group_by: String,
 }
 
+crate::wire::product::output::public_fields!(GetCostOverviewOutput {
+    summary,
+    series,
+    grouped_series,
+    interval,
+    start_date,
+    end_date,
+    group_by
+});
+
 /// Date range, filters, ordering, and pagination for resource costs.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListCostResourcesInput {
     /// First day of the range in YYYY-MM-DD form.
     pub start_date: String,
@@ -106,6 +127,19 @@ pub struct ListCostResourcesInput {
     pub order: String,
 }
 
+crate::error::debug_record!(ListCostResourcesInput {
+    start_date,
+    end_date,
+    product,
+    resource_type,
+    resource_id,
+    query,
+    page,
+    size,
+    sort,
+    order
+});
+
 impl ListCostResourcesInput {
     /// Sets the two required date fields and uses the first page by default.
     pub fn new(start_date: impl Into<String>, end_date: impl Into<String>) -> Self {
@@ -125,13 +159,15 @@ impl ListCostResourcesInput {
 }
 
 /// One page of resource costs and the range's overall summary.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ListCostResourcesOutput {
     /// Resource costs and pagination metadata returned by the API.
     pub resources: PagedList<CostResource>,
     /// Totals across the matching resources.
     pub summary: CostResourceSummary,
 }
+
+crate::wire::product::output::public_fields!(ListCostResourcesOutput { resources, summary });
 
 impl Serialize for ListCostResourcesOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -147,16 +183,20 @@ impl Serialize for ListCostResourcesOutput {
 }
 
 /// Selects balances for the authenticated account.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetBalancesInput {}
 
+crate::error::debug_record!(GetBalancesInput {});
+
 /// Cash and pay-on-credit balances for the authenticated account.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetBalancesOutput {
     /// Balance amounts by kind.
     #[serde(rename = "Balances")]
     pub balances: Balances,
 }
+
+crate::wire::product::output::public_fields!(GetBalancesOutput { balances });
 
 #[expect(
     clippy::result_large_err,
@@ -169,48 +209,52 @@ impl Client {
         ctx: &RequestContext,
         input: GetCostOverviewInput,
     ) -> Result<GetCostOverviewOutput, Failure<GetCostOverviewOutput>> {
-        let mut query = cost_query(
-            &input.start_date,
-            &input.end_date,
-            [
-                ("product", &input.product),
-                ("resourceType", &input.resource_type),
-                ("resourceId", &input.resource_id),
-                ("q", &input.query),
-            ],
-        )?;
-        query.extend([
-            ("groupBy", fallback(&input.group_by, "product")),
-            ("interval", fallback(&input.interval, "daily")),
-        ]);
-        let data: OverviewData = self
-            .read(
-                ctx,
-                &read_operation(OVERVIEW, "gateway/api/v2/cost-explorer/overview"),
-                &[],
-                &query,
-            )
-            .await?;
-        let mut series = data
-            .series
-            .as_ref()
-            .filter(|items| items.is_empty())
-            .map(|_| Vec::new());
-        let mut grouped_series = None;
-        for item in data.series.into_iter().flatten() {
-            match item {
-                SeriesItem::Flat(point) => series.get_or_insert_with(Vec::new).push(point),
-                SeriesItem::Group(group) => grouped_series.get_or_insert_with(Vec::new).push(group),
+        crate::wire::product::exit::finish!(async {
+            let mut query = cost_query(
+                &input.start_date,
+                &input.end_date,
+                [
+                    ("product", &input.product),
+                    ("resourceType", &input.resource_type),
+                    ("resourceId", &input.resource_id),
+                    ("q", &input.query),
+                ],
+            )?;
+            query.extend([
+                ("groupBy", fallback(&input.group_by, "product")),
+                ("interval", fallback(&input.interval, "daily")),
+            ]);
+            let data: OverviewData = self
+                .read(
+                    ctx,
+                    &read_operation(OVERVIEW, "gateway/api/v2/cost-explorer/overview"),
+                    &[],
+                    &query,
+                )
+                .await?;
+            let mut series = data
+                .series
+                .as_ref()
+                .filter(|items| items.is_empty())
+                .map(|_| Vec::new());
+            let mut grouped_series = None;
+            for item in data.series.into_iter().flatten() {
+                match item {
+                    SeriesItem::Flat(point) => series.get_or_insert_with(Vec::new).push(point),
+                    SeriesItem::Group(group) => {
+                        grouped_series.get_or_insert_with(Vec::new).push(group)
+                    }
+                }
             }
-        }
-        Ok(GetCostOverviewOutput {
-            summary: data.summary,
-            series,
-            grouped_series,
-            interval: data.interval,
-            start_date: data.start_date,
-            end_date: data.end_date,
-            group_by: data.group_by,
+            Ok(GetCostOverviewOutput {
+                summary: data.summary,
+                series,
+                grouped_series,
+                interval: data.interval,
+                start_date: data.start_date,
+                end_date: data.end_date,
+                group_by: data.group_by,
+            })
         })
     }
 
@@ -220,55 +264,57 @@ impl Client {
         ctx: &RequestContext,
         input: ListCostResourcesInput,
     ) -> Result<ListCostResourcesOutput, Failure<ListCostResourcesOutput>> {
-        let mut query = cost_query(
-            &input.start_date,
-            &input.end_date,
-            [
-                ("product", &input.product),
-                ("resourceType", &input.resource_type),
-                ("resourceId", &input.resource_id),
-                ("q", &input.query),
-                ("sort", &input.sort),
-                ("order", &input.order),
-            ],
-        )?;
-        let page = (input.page.max(1) - 1).to_string();
-        let size = if (1..=MAX_RESOURCE_SIZE).contains(&input.size) {
-            input.size
-        } else {
-            MAX_RESOURCE_SIZE
-        }
-        .to_string();
-        query.extend([("page", page.as_str()), ("size", size.as_str())]);
+        crate::wire::product::exit::finish!(async {
+            let mut query = cost_query(
+                &input.start_date,
+                &input.end_date,
+                [
+                    ("product", &input.product),
+                    ("resourceType", &input.resource_type),
+                    ("resourceId", &input.resource_id),
+                    ("q", &input.query),
+                    ("sort", &input.sort),
+                    ("order", &input.order),
+                ],
+            )?;
+            let page = (input.page.max(1) - 1).to_string();
+            let size = if (1..=MAX_RESOURCE_SIZE).contains(&input.size) {
+                input.size
+            } else {
+                MAX_RESOURCE_SIZE
+            }
+            .to_string();
+            query.extend([("page", page.as_str()), ("size", size.as_str())]);
 
-        let operation = read_operation(RESOURCES, "gateway/api/v2/cost-explorer/resources");
-        let data: ResourcesData = self.read(ctx, &operation, &[], &query).await?;
-        let page = data
-            .pagination
-            .page
-            .checked_add(1)
-            .filter(|page| *page > 0)
-            .ok_or_else(|| {
-                read_failure(
-                    Error::from_api(ApiError::without_fallback(
-                        RESOURCES,
-                        Some(StatusCode::OK.as_u16()),
-                        SafeText::new("InvalidResponse", &[]),
-                        SafeText::new("invalid cost resource page; body withheld", &[]),
-                        false,
-                    ))
-                    .with_outer_detail(StatusCode::OK),
-                )
-            })?;
-        Ok(ListCostResourcesOutput {
-            resources: PagedList {
-                items: data.items,
-                page,
-                page_size: data.pagination.size,
-                total_page: data.pagination.total_pages,
-                total_item: data.pagination.total,
-            },
-            summary: data.summary,
+            let operation = read_operation(RESOURCES, "gateway/api/v2/cost-explorer/resources");
+            let data: ResourcesData = self.read(ctx, &operation, &[], &query).await?;
+            let page = data
+                .pagination
+                .page
+                .checked_add(1)
+                .filter(|page| *page > 0)
+                .ok_or_else(|| {
+                    read_failure(
+                        Error::from_api(ApiError::without_fallback(
+                            RESOURCES,
+                            Some(StatusCode::OK.as_u16()),
+                            SafeText::new("InvalidResponse", &[]),
+                            SafeText::new("invalid cost resource page; body withheld", &[]),
+                            false,
+                        ))
+                        .with_http_status(StatusCode::OK),
+                    )
+                })?;
+            Ok(ListCostResourcesOutput {
+                resources: PagedList {
+                    items: data.items,
+                    page,
+                    page_size: data.pagination.size,
+                    total_page: data.pagination.total_pages,
+                    total_item: data.pagination.total,
+                },
+                summary: data.summary,
+            })
         })
     }
 
@@ -278,45 +324,47 @@ impl Client {
         ctx: &RequestContext,
         _: GetBalancesInput,
     ) -> Result<GetBalancesOutput, Failure<GetBalancesOutput>> {
-        let operation = read_operation(BALANCES, "navbar/balances/v1");
-        let session = &self.session;
-        let base = session
-            .endpoints()
-            .billing
-            .as_ref()
-            .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let mut jitter = || session.retry_jitter();
-        let runtime = session
-            .runtime(ctx, &mut jitter)
-            .map_err(|error| read_failure(*error))?;
-        let (_, BalancesResponse(balances)) = operation::execute(
-            runtime,
-            base,
-            &operation,
-            &[],
-            &[],
-            session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map_err(|error| {
-            let (error, _, dispatch) = error.into_parts();
-            let error = match error.detail::<StatusCode>().copied() {
-                Some(status)
-                    if status.is_success()
-                        && error.class() == ErrorClass::Api
-                        && error
-                            .api_error()
-                            .is_none_or(|api| api.code() != "InvalidResponse") =>
-                {
-                    invalid_response(&operation, status, error.is_body_too_large())
-                        .with_cause(error)
-                }
-                _ => error,
-            };
-            Failure::new(error, None, dispatch)
-        })?;
-        Ok(GetBalancesOutput { balances })
+        crate::wire::product::exit::finish!(async {
+            let operation = read_operation(BALANCES, "navbar/balances/v1");
+            let session = &self.session;
+            let base = session
+                .endpoints()
+                .billing
+                .as_ref()
+                .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let mut jitter = || session.retry_jitter();
+            let runtime = session
+                .runtime(ctx, &mut jitter)
+                .map_err(|error| read_failure(*error))?;
+            let (_, BalancesResponse(balances)) = operation::execute(
+                runtime,
+                base,
+                &operation,
+                &[],
+                &[],
+                session.bearer_source(),
+                bytes::Bytes::new(),
+            )
+            .await
+            .map_err(|error| {
+                let (error, _, dispatch) = error.into_parts();
+                let error = match error.http_status() {
+                    Some(status)
+                        if status.is_success()
+                            && error.class() == ErrorClass::Api
+                            && error
+                                .api_error()
+                                .is_none_or(|api| api.code() != "InvalidResponse") =>
+                    {
+                        invalid_response(&operation, status, error.is_body_too_large())
+                            .with_cause(error)
+                    }
+                    _ => error,
+                };
+                Failure::new(error, None, dispatch)
+            })?;
+            Ok(GetBalancesOutput { balances })
+        })
     }
 }
 
@@ -372,7 +420,7 @@ fn read_failure<O>(error: Error) -> Failure<O> {
 }
 
 /// One entry in the cost breakdown.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CostBreakdown {
     /// Group key reported by the API.
@@ -382,6 +430,8 @@ pub struct CostBreakdown {
     /// Share of the total cost as a percentage.
     pub percent: f64,
 }
+
+crate::wire::product::output::public_fields!(CostBreakdown { key, cost, percent });
 
 impl<'de> Deserialize<'de> for CostBreakdown {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -414,7 +464,7 @@ impl<'de> Deserialize<'de> for CostBreakdown {
 }
 
 /// Headline cost totals for the selected dates.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSummary {
     /// Total cost in VND for the requested period.
@@ -436,8 +486,17 @@ pub struct CostSummary {
     pub breakdown: Vec<CostBreakdown>,
 }
 
+crate::wire::product::output::public_fields!(CostSummary {
+    current_cost,
+    last_period_cost,
+    change_percent,
+    forecast_cost,
+    active_count,
+    breakdown
+});
+
 /// A legacy date and cost point.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeries {
     /// Date as reported by the API.
@@ -446,8 +505,10 @@ pub struct CostSeries {
     pub cost: f64,
 }
 
+crate::wire::product::output::public_fields!(CostSeries { date, cost });
+
 /// A group in the cost overview.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeriesGroup {
     /// Group key reported by the API.
@@ -459,8 +520,10 @@ pub struct CostSeriesGroup {
     pub points: Vec<CostSeriesPoint>,
 }
 
+crate::wire::product::output::public_fields!(CostSeriesGroup { key, color, points });
+
 /// One bucket in a grouped cost series.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostSeriesPoint {
     /// Unparsed API bucket label.
@@ -471,8 +534,10 @@ pub struct CostSeriesPoint {
     pub cost: f64,
 }
 
+crate::wire::product::output::public_fields!(CostSeriesPoint { date, cost });
+
 /// Cost of a resource over the requested range.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostResource {
     /// Resource identifier.
@@ -506,8 +571,18 @@ pub struct CostResource {
     pub start_date: String,
 }
 
+crate::wire::product::output::public_fields!(CostResource {
+    resource_id,
+    resource_name,
+    resource_type,
+    product,
+    cost,
+    daily_average,
+    start_date
+});
+
 /// Aggregate costs across matching resources.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct CostResourceSummary {
     /// Total cost in VND for all matching resources.
@@ -518,8 +593,14 @@ pub struct CostResourceSummary {
     pub avg_per_resource: f64,
 }
 
+crate::wire::product::output::public_fields!(CostResourceSummary {
+    total_all,
+    active_count,
+    avg_per_resource
+});
+
 /// Cash and pay-on-credit balances. A missing balance kind is reported as `None`.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Balances {
     /// Cash balance.
@@ -538,6 +619,14 @@ pub struct Balances {
     #[serde(rename(serialize = "POCHolding"), deserialize_with = "decode_money")]
     pub poc_holding: Option<f64>,
 }
+
+crate::wire::product::output::public_fields!(Balances {
+    cash,
+    poc,
+    cash_available,
+    cash_holding,
+    poc_holding
+});
 
 fn serialize_series<S: Serializer, T: Serialize>(
     series: &Option<Vec<T>>,

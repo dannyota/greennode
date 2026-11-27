@@ -35,17 +35,21 @@ pub struct Client {
 }
 
 /// Selects the engine version catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseEngineVersionsInput;
+
+crate::error::debug_record!(ListDatabaseEngineVersionsInput unit);
 /// Engine versions available to the account.
 pub type ListDatabaseEngineVersionsOutput = List<EngineVersion>;
 /// Selects the zone catalog.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseZonesInput;
+
+crate::error::debug_record!(ListDatabaseZonesInput unit);
 /// Database zones available to the account.
 pub type ListDatabaseZonesOutput = List<Zone>;
 /// Selects flavors for an engine and zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseFlavorsInput {
     /// Datastore engine type.
     pub engine: String,
@@ -54,16 +58,24 @@ pub struct ListDatabaseFlavorsInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseFlavorsInput {
+    engine,
+    engine_version,
+    zone_id
+});
 /// Flavors available for the selected engine and zone.
 pub type ListDatabaseFlavorsOutput = List<Flavor>;
 /// Selects storage types for a zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseStorageTypesInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseStorageTypesInput { zone_id });
 /// Storage types and the project reported by the service.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseStorageTypesOutput {
     /// Project ID returned by the service.
     #[serde(rename = "ProjectID")]
@@ -72,24 +84,33 @@ pub struct ListDatabaseStorageTypesOutput {
     #[serde(rename = "Items")]
     pub items: Vec<StorageType>,
 }
+
+crate::wire::product::output::public_fields!(ListDatabaseStorageTypesOutput { project_id, items });
 /// Selects networks for a zone.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseNetworksInput {
     /// Database zone ID.
     pub zone_id: String,
 }
+
+crate::error::debug_record!(ListDatabaseNetworksInput { zone_id });
 /// Networks available in the selected zone.
 pub type ListDatabaseNetworksOutput = List<Network>;
 /// Selects one page of database instances.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListDatabaseInstancesInput {
     /// One-based page number; zero selects one.
     pub page_number: i32,
     /// Page size; zero selects 100.
     pub page_size: i32,
 }
+
+crate::error::debug_record!(ListDatabaseInstancesInput {
+    page_number,
+    page_size
+});
 /// One page of database instances and its metadata.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListDatabaseInstancesOutput {
     /// Project ID returned by the service.
     #[serde(rename = "ProjectID")]
@@ -102,20 +123,30 @@ pub struct ListDatabaseInstancesOutput {
     pub page: Page,
 }
 
+crate::wire::product::output::public_fields!(ListDatabaseInstancesOutput {
+    project_id,
+    items,
+    page
+});
+
 /// Selects one relational instance by ID.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetDatabaseInstanceInput {
     /// Exact instance ID, using ASCII letters, digits, hyphens, or underscores.
     pub id: String,
 }
 
+crate::error::debug_record!(GetDatabaseInstanceInput { id });
+
 /// The requested relational database instance.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetDatabaseInstanceOutput {
     /// Instance details returned by the service.
     #[serde(rename = "Instance")]
     pub instance: Instance,
 }
+
+crate::wire::product::output::public_fields!(GetDatabaseInstanceOutput { instance });
 
 #[expect(
     clippy::result_large_err,
@@ -135,7 +166,9 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseEngineVersionsInput,
     ) -> Result<ListDatabaseEngineVersionsOutput, Failure<ListDatabaseEngineVersionsOutput>> {
-        self.engine_versions(ctx, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.engine_versions(ctx, &mut Evidence::new()).await
+        })
     }
 
     async fn engine_versions(
@@ -164,7 +197,7 @@ impl Client {
         ctx: &RequestContext,
         _: ListDatabaseZonesInput,
     ) -> Result<ListDatabaseZonesOutput, Failure<ListDatabaseZonesOutput>> {
-        self.zones(ctx, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async { self.zones(ctx, &mut Evidence::new()).await })
     }
 
     async fn zones(
@@ -193,7 +226,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseFlavorsInput,
     ) -> Result<ListDatabaseFlavorsOutput, Failure<ListDatabaseFlavorsOutput>> {
-        self.flavors(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.flavors(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn flavors(
@@ -232,7 +267,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseStorageTypesInput,
     ) -> Result<ListDatabaseStorageTypesOutput, Failure<ListDatabaseStorageTypesOutput>> {
-        self.storage_types(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.storage_types(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn storage_types(
@@ -267,7 +304,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseNetworksInput,
     ) -> Result<ListDatabaseNetworksOutput, Failure<ListDatabaseNetworksOutput>> {
-        self.networks(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.networks(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn networks(
@@ -300,7 +339,9 @@ impl Client {
         ctx: &RequestContext,
         input: ListDatabaseInstancesInput,
     ) -> Result<ListDatabaseInstancesOutput, Failure<ListDatabaseInstancesOutput>> {
-        self.instances(ctx, input, &mut Evidence::new()).await
+        crate::wire::product::exit::finish!(async {
+            self.instances(ctx, input, &mut Evidence::new()).await
+        })
     }
 
     async fn instances(
@@ -343,10 +384,12 @@ impl Client {
         ctx: &RequestContext,
         input: GetDatabaseInstanceInput,
     ) -> Result<GetDatabaseInstanceOutput, Failure<GetDatabaseInstanceOutput>> {
-        let instance = self
-            .get_instance(ctx, &input.id, &mut Evidence::new())
-            .await?;
-        Ok(GetDatabaseInstanceOutput { instance })
+        crate::wire::product::exit::finish!(async {
+            let instance = self
+                .get_instance(ctx, &input.id, &mut Evidence::new())
+                .await?;
+            Ok(GetDatabaseInstanceOutput { instance })
+        })
     }
 
     async fn get_instance<O>(
@@ -440,7 +483,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

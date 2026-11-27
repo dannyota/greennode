@@ -143,6 +143,60 @@ async fn update_partial_redacts_the_cdn_key_and_user_identifier() {
 }
 
 #[tokio::test]
+async fn cdn_classifies_only_bounded_sanitized_message_text() {
+    let long = format!("{} is not allow to update or delete", "x".repeat(520));
+    for message in [
+        long.as_str(),
+        "internal@example.test is not allow to update or delete",
+    ] {
+        let body = json!({"success":false,"code":400,"message":message});
+        let server = Server::start(vec![reply(&body.to_string())]);
+        let failure = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/img/a.webp".into()]),
+            )
+            .await
+            .unwrap_err();
+        assert_ne!(
+            failure.error().detail::<ErrorDetail>(),
+            Some(&ErrorDetail::ResourceBusy)
+        );
+    }
+}
+
+#[tokio::test]
+async fn reflective_cdn_envelope_cannot_choose_special_error_identity() {
+    for (code, message, detail) in [
+        (
+            400,
+            "ordinary response is not allow to update or delete",
+            Some(ErrorDetail::ResourceBusy),
+        ),
+        (400, "Not found cdn ordinary response", None),
+        (
+            202,
+            "Last CDN flush cache time ordinary response",
+            Some(ErrorDetail::PurgeCooldown),
+        ),
+    ] {
+        let body = json!({"success":false,"code":code,"message":format!("{message} {CDN_KEY}")});
+        let server = Server::start(vec![reply(&body.to_string())]);
+        let failure = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/img/a.webp".into()]),
+            )
+            .await
+            .unwrap_err();
+        assert!(!failure.error().has_identity(ErrorClass::NotFound));
+        if let Some(detail) = detail {
+            assert_ne!(failure.error().detail::<ErrorDetail>(), Some(&detail));
+        }
+    }
+}
+
+#[tokio::test]
 async fn purge_paths_sends_exact_paths_once_and_classifies_cooldown() {
     let (ctx, _) = RequestContext::new();
     let server = Server::start(vec![reply(include_str!(
@@ -200,7 +254,7 @@ async fn toggle_after_a_cancelled_send_is_unconfirmed_and_keeps_dispatch_evidenc
 }
 
 #[tokio::test]
-async fn settlement_returns_the_latest_safe_read_on_unexpected_status() {
+async fn settlement_refuses_a_reflected_reply_and_retains_the_last_safe_read() {
     let unexpected =
         r#"{"success":true,"data":{"cdnId":"cdn-1","status":42,"domainName":"TOY-CDN-KEY"}}"#;
     let server = Server::start(vec![reply(ACTIVE), reply(TOGGLED), reply(unexpected)]);
@@ -211,14 +265,12 @@ async fn settlement_returns_the_latest_safe_read_on_unexpected_status() {
         .update_web_accelerator(&ctx, input)
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<ErrorDetail>(),
-        Some(&ErrorDetail::UnexpectedStatus)
-    );
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.error().detail::<ErrorDetail>(), None);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
-    assert_eq!(partial["WebAccelerator"]["Status"], 42);
-    assert!(partial["WebAccelerator"]["DomainName"] == "<redacted>");
+    assert_eq!(partial["WebAccelerator"]["Status"], 1);
+    assert!(!partial.to_string().to_ascii_lowercase().contains(CDN_KEY));
     assert_eq!(server.requests(), 3);
 }
 
@@ -461,4 +513,116 @@ async fn purge_rejects_triply_percent_encoded_management_bearer() {
     let failure = result.unwrap_err();
     assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+}
+
+#[tokio::test]
+async fn cdn_settlement_exit_refuses_a_reflected_redaction_marker() {
+    let latest = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"domainName":"redacted"}}"#;
+    let server = Server::start(vec![reply(DISABLED), reply(TOGGLED), reply(latest)]);
+    let result = client(&server, Some("redacted"))
+        .enable_web_accelerator(
+            &RequestContext::new().0,
+            EnableWebAcceleratorInput::new("cdn-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
+async fn cdn_settlement_exit_refuses_reflection_created_by_reserializing_rules() {
+    let latest = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"childrenRule":{"left" : "safe","other":"left%22%3A%22"}}}"#;
+    let server = Server::start(vec![reply(DISABLED), reply(TOGGLED), reply(latest)]);
+    let result = client(&server, Some(r#"left":""#))
+        .enable_web_accelerator(
+            &RequestContext::new().0,
+            EnableWebAcceleratorInput::new("cdn-1"),
+        )
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+}
+
+#[tokio::test]
+async fn purge_accepts_only_clean_success_envelopes() {
+    for (note, allowed) in [
+        ("ordinary-note", true),
+        (CDN_KEY, false),
+        ("%252541", false),
+    ] {
+        let envelope = json!({"success":true,"note":note}).to_string();
+        let server = Server::start(vec![reply(&envelope)]);
+        let result = client(&server, Some(CDN_KEY))
+            .purge_paths(
+                &RequestContext::new().0,
+                PurgePathsInput::new("cdn.example.test", vec!["/page".into()]),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        if let Err(failure) = result {
+            assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        }
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn toggle_confirmation_never_retries_a_guard_refusal_with_an_observed_status() {
+    let server = Server::start(vec![
+        reply(DISABLED),
+        reply(TOGGLED),
+        reply("{"),
+        reply(ACTIVE),
+    ]);
+    let mut input = EnableWebAcceleratorInput::new("cdn-1");
+    input.no_wait = true;
+    let result = client(&server, Some(CDN_KEY))
+        .enable_web_accelerator(&RequestContext::new().0, input)
+        .await;
+    let Err(failure) = result else {
+        panic!("confirmation retried the guard refusal");
+    };
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::StatusUnconfirmed)
+    );
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn toggle_never_confirms_after_a_refused_write_acknowledgement() {
+    for success in [json!(true), json!("invalid")] {
+        let body = json!({"success":success,"note":CDN_KEY}).to_string();
+        for enable in [true, false] {
+            let server = Server::start(vec![
+                reply(if enable { DISABLED } else { ACTIVE }),
+                reply(&body),
+                reply(if enable { ACTIVE } else { DISABLED }),
+            ]);
+            let cdn = client(&server, Some(CDN_KEY));
+            let ctx = RequestContext::new().0;
+            let result = if enable {
+                let mut input = EnableWebAcceleratorInput::new("cdn-1");
+                input.no_wait = true;
+                cdn.enable_web_accelerator(&ctx, input)
+                    .await
+                    .map(|output| output.changed)
+                    .map_err(|failure| (failure.write_dispatch(), failure.partial().is_some()))
+            } else {
+                let mut input = DisableWebAcceleratorInput::new("cdn-1");
+                input.no_wait = true;
+                cdn.disable_web_accelerator(&ctx, input)
+                    .await
+                    .map(|output| output.changed)
+                    .map_err(|failure| (failure.write_dispatch(), failure.partial().is_some()))
+            };
+            assert_eq!(result, Err((WriteDispatch::MayHaveBeenSent, false)));
+            assert_eq!(server.requests(), 2);
+        }
+    }
 }

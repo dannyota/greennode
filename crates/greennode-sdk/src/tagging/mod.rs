@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
 /// Tagging-specific failure details.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ErrorDetail {
     /// The key belongs to a system tag.
     SystemTag,
@@ -26,18 +26,12 @@ pub enum ErrorDetail {
     NotSettled,
 }
 
-/// Full refusal text for a system tag key, without the generic length cap.
-pub struct SystemTagText(pub(crate) String);
+crate::error::debug_record!(ErrorDetail; SystemTag, NotSettled);
 
-impl SystemTagText {
-    /// Returns the refusal text.
-    pub fn message(&self) -> &str {
-        &self.0
-    }
-}
+pub use crate::error::SystemTagText;
 
 /// One resource tag, including whether it is managed by the platform.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "PascalCase", deserialize = "camelCase"))]
 pub struct Tag {
     /// Tag key.
@@ -50,12 +44,21 @@ pub struct Tag {
     pub created_at: String,
 }
 
+crate::wire::product::output::public_fields!(Tag {
+    key,
+    value,
+    system_tag,
+    created_at
+});
+
 /// Identifies the resource whose tags should be read.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListResourceTagsInput {
     /// Resource identifier.
     pub resource_id: String,
 }
+
+crate::error::debug_record!(ListResourceTagsInput { resource_id });
 impl ListResourceTagsInput {
     /// Stores the resource identifier.
     pub fn new(resource_id: impl Into<String>) -> Self {
@@ -69,7 +72,7 @@ impl ListResourceTagsInput {
 pub type ListResourceTagsOutput = List<Tag>;
 
 /// Identifies a resource and user tag to set.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TagResourceInput {
     /// Resource identifier.
     pub resource_id: String,
@@ -81,8 +84,15 @@ pub struct TagResourceInput {
     pub value: String,
 }
 
+crate::error::debug_record!(TagResourceInput {
+    resource_id,
+    resource_type,
+    key,
+    value
+});
+
 /// Identifies a resource and user tag to remove.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UntagResourceInput {
     /// Resource identifier.
     pub resource_id: String,
@@ -92,8 +102,14 @@ pub struct UntagResourceInput {
     pub key: String,
 }
 
+crate::error::debug_record!(UntagResourceInput {
+    resource_id,
+    resource_type,
+    key
+});
+
 /// The last observed tags and the value before a replacement.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct WriteResourceTagsOutput {
     /// All observed tags, including system tags.
@@ -103,6 +119,12 @@ pub struct WriteResourceTagsOutput {
     /// Whether a replacement was needed.
     pub changed: bool,
 }
+
+crate::wire::product::output::public_fields!(WriteResourceTagsOutput {
+    tags,
+    previous,
+    changed
+});
 
 /// Shares the configuration's session for tag operations.
 #[derive(Clone)]
@@ -190,12 +212,12 @@ impl Output for Snapshot {
         for tag in &mut tags {
             if response
                 .credentials
-                .reflects(tag.system_tag.to_string().as_bytes())
+                .text_reflects(if tag.system_tag { "true" } else { "false" })
             {
                 return Err(invalid());
             }
             for value in [&mut tag.key, &mut tag.value, &mut tag.created_at] {
-                if response.credentials.reflects(value.as_bytes()) {
+                if response.credentials.text_reflects(value) {
                     *value = "<redacted>".to_owned();
                 }
             }
@@ -221,63 +243,65 @@ impl Client {
         ctx: &RequestContext,
         input: ListResourceTagsInput,
     ) -> Result<ListResourceTagsOutput, Failure<ListResourceTagsOutput>> {
-        let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
-        if input.resource_id.is_empty()
-            || !input
-                .resource_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        {
-            return Err(failure(Error::new(ErrorClass::InvalidInput)));
-        }
-        let project = self
-            .session
-            .require_project_id(ctx)
+        crate::wire::product::exit::finish!(async {
+            let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
+            if input.resource_id.is_empty()
+                || !input
+                    .resource_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            {
+                return Err(failure(Error::new(ErrorClass::InvalidInput)));
+            }
+            let project = self
+                .session
+                .require_project_id(ctx)
+                .await
+                .map_err(|error| failure(*error))?;
+            let base = self
+                .session
+                .endpoints()
+                .vserver
+                .as_ref()
+                .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
+            let mut jitter = || self.session.retry_jitter();
+            let runtime = self
+                .session
+                .runtime(ctx, &mut jitter)
+                .map_err(|error| failure(*error))?;
+            let op = Operation {
+                id: "tagging.ListResourceTags",
+                template: "v2/{}/tag/resource/{}",
+                method: Method::GET,
+                class: Classification::Read,
+                retry: Retry::Repeatable,
+                success: &[StatusCode::OK],
+                cap: 4 << 20,
+                allow_recovery: true,
+                allow_empty: false,
+                no_output: false,
+                keep_status: false,
+                overflow_overrides_status: true,
+                sensitive: false,
+                reflection: crate::wire::product::operation::Reflection::Redact,
+                no_redirect: false,
+                retry_config: retry::Config::default(),
+            };
+            let (_, snapshot) = operation::execute::<Snapshot>(
+                runtime,
+                base,
+                &op,
+                &[&project, &input.resource_id],
+                &[],
+                self.session.bearer_source(),
+                bytes::Bytes::new(),
+            )
             .await
-            .map_err(|error| failure(*error))?;
-        let base = self
-            .session
-            .endpoints()
-            .vserver
-            .as_ref()
-            .ok_or_else(|| failure(Error::new(ErrorClass::InvalidConfig)))?;
-        let mut jitter = || self.session.retry_jitter();
-        let runtime = self
-            .session
-            .runtime(ctx, &mut jitter)
-            .map_err(|error| failure(*error))?;
-        let op = Operation {
-            id: "tagging.ListResourceTags",
-            template: "v2/{}/tag/resource/{}",
-            method: Method::GET,
-            class: Classification::Read,
-            retry: Retry::Repeatable,
-            success: &[StatusCode::OK],
-            cap: 4 << 20,
-            allow_recovery: true,
-            allow_empty: false,
-            no_output: false,
-            keep_status: false,
-            overflow_overrides_status: true,
-            sensitive: false,
-            reject_reflected_credentials: false,
-            no_redirect: false,
-            retry_config: retry::Config::default(),
-        };
-        let (_, snapshot) = operation::execute::<Snapshot>(
-            runtime,
-            base,
-            &op,
-            &[&project, &input.resource_id],
-            &[],
-            self.session.bearer_source(),
-            bytes::Bytes::new(),
-        )
-        .await
-        .map_err(|error| {
-            let (error, _, dispatch) = error.into_parts();
-            Failure::new(error, None, dispatch)
-        })?;
-        Ok(List { items: snapshot.0 })
+            .map_err(|error| {
+                let (error, _, dispatch) = error.into_parts();
+                Failure::new(error, None, dispatch)
+            })?;
+            Ok(List { items: snapshot.0 })
+        })
     }
 }

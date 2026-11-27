@@ -8,7 +8,7 @@ mod catalog;
 mod run;
 
 /// Filters and limits for flavor price discovery.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListFlavorPricesInput {
     /// Selects one returned zone; empty selects all zones in the configured region.
     pub zone_id: String,
@@ -34,8 +34,22 @@ pub struct ListFlavorPricesInput {
     pub allow_partial: bool,
 }
 
+crate::error::debug_record!(ListFlavorPricesInput {
+    zone_id,
+    root_disk_type_id,
+    family,
+    platform,
+    name,
+    min_ram,
+    max_ram,
+    include_non_public,
+    available_only,
+    max_requests,
+    allow_partial
+});
+
 /// Flavor price rows and discovery metadata.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct ListFlavorPricesOutput {
     /// Items.
     #[serde(rename = "Items")]
@@ -45,8 +59,10 @@ pub struct ListFlavorPricesOutput {
     pub metadata: DiscoveryMetadata,
 }
 
+crate::wire::product::output::public_fields!(ListFlavorPricesOutput { items, metadata });
+
 /// One catalog flavor and the price of its reference instance.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct FlavorPrice {
     /// Flavor.
     #[serde(rename = "Flavor")]
@@ -92,8 +108,25 @@ pub struct FlavorPrice {
     pub price: DiscoveryPrice,
 }
 
+crate::wire::product::output::public_fields!(FlavorPrice {
+    flavor,
+    zone_id,
+    zone_name,
+    family,
+    family_name,
+    platform,
+    visibility,
+    ram_unit,
+    zone_enabled,
+    ram_gib,
+    price_per_gib,
+    price_per_ram_unit,
+    reference,
+    price
+});
+
 /// The image and root disk chosen for an instance quote.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct FlavorPriceReference {
     /// Image id.
     #[serde(rename = "ImageID")]
@@ -111,3 +144,11 @@ pub struct FlavorPriceReference {
     #[serde(rename = "RootDiskSizeGB")]
     pub root_disk_size_gb: i64,
 }
+
+crate::wire::product::output::public_fields!(FlavorPriceReference {
+    image_id,
+    image_type,
+    image_version,
+    root_disk_type_id,
+    root_disk_size_gb
+});

@@ -10,7 +10,7 @@ use super::wire::{invalid_input, screen_input, validate_ids};
 use super::{Client, failure};
 
 /// Parameters for pricing a new regional load balancer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateLoadBalancerInput {
     /// Display name, which does not affect the quote.
     pub name: String,
@@ -30,8 +30,19 @@ pub struct CreateLoadBalancerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateLoadBalancerInput {
+    name,
+    package_id,
+    r#type,
+    scheme,
+    subnet_id,
+    zone_id,
+    max_price,
+    no_wait
+});
+
 /// Parameters for pricing a new package for an existing regional load balancer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeLoadBalancerInput {
     /// ID of the load balancer to price.
     pub load_balancer_id: String,
@@ -42,6 +53,13 @@ pub struct ResizeLoadBalancerInput {
     /// Settlement option used when ordering. A quote ignores this field.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeLoadBalancerInput {
+    load_balancer_id,
+    package_id,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,
@@ -54,33 +72,35 @@ impl Client {
         ctx: &RequestContext,
         input: CreateLoadBalancerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "loadbalancer.QuoteCreateLoadBalancer";
-        let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
-        screen_input(&evidence, [&*input.package_id, &input.zone_id]).map_err(failure)?;
-        if input.package_id.is_empty() {
-            return Err(failure(invalid_input(&format!("{OP} requires PackageID"))));
-        }
-        if input.zone_id.is_empty() {
-            return Err(failure(invalid_input(&format!("{OP} requires ZoneID"))));
-        }
-        if !matches!(input.scheme.as_str(), "" | "Internet" | "Internal") {
-            return Err(failure(invalid_input(&format!(
-                "{OP}: Scheme must be \"Internet\" or \"Internal\""
-            ))));
-        }
-        let ids = [
-            ("PackageID", input.package_id.as_str()),
-            ("SubnetID", input.subnet_id.as_str()),
-        ];
-        let ids = if input.subnet_id.is_empty() {
-            &ids[..1]
-        } else {
-            &ids
-        };
-        validate_ids(OP, ids, PathIds::Strict).map_err(failure)?;
-        let details = create_quote_info(&input);
-        self.request_quote(ctx, &mut evidence, "create", details)
-            .await
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "loadbalancer.QuoteCreateLoadBalancer";
+            let mut evidence = self.quote_evidence(ctx, Evidence::new()).map_err(failure)?;
+            screen_input(&evidence, [&*input.package_id, &input.zone_id]).map_err(failure)?;
+            if input.package_id.is_empty() {
+                return Err(failure(invalid_input(&format!("{OP} requires PackageID"))));
+            }
+            if input.zone_id.is_empty() {
+                return Err(failure(invalid_input(&format!("{OP} requires ZoneID"))));
+            }
+            if !matches!(input.scheme.as_str(), "" | "Internet" | "Internal") {
+                return Err(failure(invalid_input(&format!(
+                    "{OP}: Scheme must be \"Internet\" or \"Internal\""
+                ))));
+            }
+            let ids = [
+                ("PackageID", input.package_id.as_str()),
+                ("SubnetID", input.subnet_id.as_str()),
+            ];
+            let ids = if input.subnet_id.is_empty() {
+                &ids[..1]
+            } else {
+                &ids
+            };
+            validate_ids(OP, ids, PathIds::Strict).map_err(failure)?;
+            let details = create_quote_info(&input);
+            self.request_quote(ctx, &mut evidence, "create", details)
+                .await
+        })
     }
 
     /// Quotes the new package for a load balancer without resizing it.
@@ -89,27 +109,37 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeLoadBalancerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        const OP: &str = "loadbalancer.QuoteResizeLoadBalancer";
-        let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
-        screen_input(&evidence, [&*input.load_balancer_id, &input.package_id]).map_err(failure)?;
-        validate_ids(
-            OP,
-            &[
-                ("LoadBalancerID", &input.load_balancer_id),
-                ("PackageID", &input.package_id),
-            ],
-            PathIds::Strict,
-        )
-        .map_err(failure)?;
-        let details = resize_quote_info(&input);
-        self.request_quote(ctx, &mut evidence, "resize", details)
-            .await
+        crate::wire::product::exit::finish!(async {
+            const OP: &str = "loadbalancer.QuoteResizeLoadBalancer";
+            let mut evidence = self.quote_evidence(ctx, Evidence::new()).map_err(failure)?;
+            screen_input(&evidence, [&*input.load_balancer_id, &input.package_id])
+                .map_err(failure)?;
+            validate_ids(
+                OP,
+                &[
+                    ("LoadBalancerID", &input.load_balancer_id),
+                    ("PackageID", &input.package_id),
+                ],
+                PathIds::Strict,
+            )
+            .map_err(failure)?;
+            let details = resize_quote_info(&input);
+            self.request_quote(ctx, &mut evidence, "resize", details)
+                .await
+        })
     }
 
-    pub(super) fn quote_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
+    pub(super) fn order_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
+        self.quote_evidence(ctx, Evidence::for_write())
+    }
+
+    pub(super) fn quote_evidence(
+        &self,
+        ctx: &RequestContext,
+        mut evidence: Evidence,
+    ) -> Result<Evidence, Box<Error>> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self.session.runtime(ctx, &mut jitter)?;
-        let mut evidence = Evidence::new();
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }
@@ -134,14 +164,7 @@ impl Client {
                 evidence,
             )
             .await
-            .map_err(|result| {
-                failure(Box::new(
-                    result
-                        .into_parts()
-                        .0
-                        .screen_api(&|text| evidence.text_reflects(text)),
-                ))
-            })
+            .map_err(|result| failure(Box::new(evidence.screen_error(result.into_parts().0))))
     }
 }
 

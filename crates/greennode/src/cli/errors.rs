@@ -168,7 +168,7 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
                         .map(|detail| detail.message())
                 })
         })
-        .unwrap_or("request failed");
+        .unwrap_or_else(|| error.diagnostic_fallback());
     let (status, operation) = match name {
         Some(name) => (
             name.include_api_status.then_some(status).flatten(),

@@ -16,12 +16,56 @@ pub(crate) struct ShapeField<'a> {
     pub(crate) name: &'a str,
     pub(crate) shape: Shape<'a>,
 }
+#[derive(Clone, Copy, Default)]
+pub(crate) enum FieldNames {
+    #[default]
+    Compatible,
+    Canonical,
+}
+
+impl FieldNames {
+    pub(crate) fn for_guard(guarded: bool) -> Self {
+        if guarded {
+            Self::Canonical
+        } else {
+            Self::Compatible
+        }
+    }
+
+    pub(crate) fn validate(
+        self,
+        body: &[u8],
+        shape: &Shape<'_>,
+        limit: usize,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Compatible => validate_shape(body, shape, limit),
+            Self::Canonical => validate_canonical_shape(body, shape, limit),
+        }
+    }
+
+    pub(crate) fn has_case_variant(self, body: &[u8], shape: &Shape<'_>) -> bool {
+        matches!(self, Self::Canonical)
+            && !matches!(shape, Shape::Any)
+            && serde_json::from_slice::<&RawValue>(body)
+                .is_ok_and(|raw| shape_value(raw, shape, FieldShape::CanonicalNames).is_err())
+    }
+
+    pub(crate) fn check(self, expected: &str, received: &str) -> Result<(), Error> {
+        if matches!(self, Self::Canonical) && expected != received {
+            return Err(Error);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FieldShape {
     Folded,
     Exact,
     DuplicatesOnly,
     Canonical,
+    CanonicalNames,
 }
 
 pub(crate) fn validate_shape(body: &[u8], shape: &Shape<'_>, limit: usize) -> Result<(), Error> {
@@ -59,12 +103,13 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>, mode: FieldShape) -> Result<()
     if raw.get() == "null" {
         return Ok(());
     }
-    if matches!(mode, FieldShape::DuplicatesOnly)
-        && !matches!(
-            (shape, raw.get().as_bytes().first()),
-            (Shape::Object(_), Some(b'{')) | (Shape::Array(_), Some(b'['))
-        )
-    {
+    if matches!(
+        mode,
+        FieldShape::DuplicatesOnly | FieldShape::CanonicalNames
+    ) && !matches!(
+        (shape, raw.get().as_bytes().first()),
+        (Shape::Object(_), Some(b'{')) | (Shape::Array(_), Some(b'['))
+    ) {
         return Ok(());
     }
     match shape {
@@ -83,11 +128,13 @@ fn shape_value(raw: &RawValue, shape: &Shape<'_>, mode: FieldShape) -> Result<()
                             .position(|field| field_matches(field.name, &name))
                     });
                 if let Some(index) = index {
-                    if !assigned.insert(index) {
+                    if !assigned.insert(index) && !matches!(mode, FieldShape::CanonicalNames) {
                         return Err(Error);
                     }
                     if let Some(field) = fields.get(index) {
-                        if matches!(mode, FieldShape::Canonical) && field.name != name {
+                        if matches!(mode, FieldShape::Canonical | FieldShape::CanonicalNames)
+                            && field.name != name
+                        {
                             return Err(Error);
                         }
                         let child_mode = if matches!(mode, FieldShape::Exact) && field.name != name

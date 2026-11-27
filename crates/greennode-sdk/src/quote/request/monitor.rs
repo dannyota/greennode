@@ -1,6 +1,5 @@
 use std::{future::Future, pin::Pin};
 
-use http::StatusCode;
 use serde_json::value::RawValue;
 
 use super::{Request, response_body};
@@ -38,8 +37,7 @@ impl BearerSource for ScopedBearer<'_> {
             }
             evidence.add_secret(&token.token.access_token);
             if self.identifiers.iter().any(|id| evidence.id_reflects(id)) {
-                return Err(credential_conflict(self.operation)
-                    .screen_api(&|text| evidence.text_reflects(text)));
+                return Err(evidence.screen_error(credential_conflict(self.operation)));
             }
             Ok(token)
         })
@@ -121,7 +119,7 @@ pub(super) async fn exchange(
     }
     if identifiers.iter().any(|id| evidence.id_reflects(id)) {
         return Err(Box::new(
-            credential_conflict(operation.id).screen_api(&|text| evidence.text_reflects(text)),
+            evidence.screen_error(credential_conflict(operation.id)),
         ));
     }
     let source = ScopedBearer {
@@ -160,8 +158,8 @@ fn failure_error(
 ) -> Error {
     let api = failure.api_error();
     let status = failure
-        .detail::<StatusCode>()
-        .map(StatusCode::as_u16)
+        .http_status()
+        .map(|status| status.as_u16())
         .or_else(|| api.and_then(ApiError::status));
     let result = if failure.is_body_too_large() {
         error(
@@ -180,7 +178,7 @@ fn failure_error(
     } else if (!no_redirect || status.is_some_and(|status| !(300..400).contains(&status)))
         && status.is_some()
         && api.is_some()
-        && failure.detail::<StatusCode>().is_some()
+        && failure.http_status().is_some()
     {
         error(
             op,
@@ -203,7 +201,7 @@ fn failure_error(
     } else {
         failure
     };
-    result.screen_api(&|text| evidence.text_reflects(text))
+    evidence.screen_error(result)
 }
 
 fn invalid(op: &'static str) -> Error {

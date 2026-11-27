@@ -2,7 +2,9 @@ use super::reads::{Users, complete_absence, valid_id};
 use super::*;
 use crate::Secret;
 use crate::error::SafeText;
-use crate::wire::product::response::reflects_credential_forms;
+use crate::wire::product::{
+    options::AttemptCheck, response::reflects_credential_forms, sender::SentCredentials,
+};
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
@@ -13,13 +15,18 @@ const FIND: &str = "containerregistry.listUsersExactMatch";
 const MAX_USER_LIST_PAGES: i64 = 100;
 
 /// Selects a repository and the service-defined actions to grant on it.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UserPermission {
     /// Repository identifier using ASCII letters, digits, and hyphens.
     pub repository_id: String,
     /// Exact action names from the service's permission list.
     pub actions: Vec<String>,
 }
+
+crate::error::debug_record!(UserPermission {
+    repository_id,
+    actions
+});
 
 impl UserPermission {
     /// Sets the repository and its requested actions.
@@ -32,7 +39,7 @@ impl UserPermission {
 }
 
 /// Creates a registry user with permissions for at least one repository.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateUserInput {
     /// Name that must be absent from the exact-name search.
     pub name: String,
@@ -43,6 +50,13 @@ pub struct CreateUserInput {
     /// Repository permissions to grant.
     pub permissions: Vec<UserPermission>,
 }
+
+crate::error::debug_record!(CreateUserInput {
+    name,
+    description,
+    duration_days,
+    permissions
+});
 
 impl CreateUserInput {
     /// Sets the name and permissions without a description or expiry.
@@ -57,7 +71,7 @@ impl CreateUserInput {
 }
 
 /// A registry user create result carrying the issued one-time secret.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateUserOutput {
     /// Empty when the service response cannot prove ownership of a user identity.
     #[serde(rename = "User")]
@@ -67,6 +81,8 @@ pub struct CreateUserOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(CreateUserOutput { user; secret_key, evidence });
 
 impl CreateUserOutput {
     /// Borrows the one-time secret for storage in a private destination.
@@ -94,11 +110,13 @@ pub fn issued_user_secret(failure: &Failure<CreateUserOutput>) -> Option<&Secret
 }
 
 /// Identifies a registry user by UUID for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteUserInput {
     /// Registry user UUID, distinct from the account's `UserID` field.
     pub user_id: String,
 }
+
+crate::error::debug_record!(DeleteUserInput { user_id });
 
 impl DeleteUserInput {
     /// Selects the registry user UUID.
@@ -108,8 +126,10 @@ impl DeleteUserInput {
 }
 
 /// An acknowledged user deletion with no resource fields.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DeleteUserOutput {}
+
+crate::wire::product::output::public_fields!(DeleteUserOutput {});
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,95 +159,112 @@ impl Client {
         ctx: &RequestContext,
         input: CreateUserInput,
     ) -> Result<CreateUserOutput, Failure<CreateUserOutput>> {
-        validate_create(&input)?;
-        let mut evidence = Evidence::new();
-        let permissions: Permissions = self
-            .request::<_, ()>(
-                ctx,
-                &private_read(CREATE, "v1/user/permissions"),
-                &[],
-                &[],
-                Bytes::new(),
-                &mut evidence,
-            )
-            .await
-            .map_err(before_write)?;
-        let body = create_body(&input, &permissions.0, &evidence)?;
-        let found = self.find_user_name(ctx, &input.name, &mut evidence).await.map_err(|failure| {
-            let (error, _, _) = failure.into_parts();
-            let Some(api) = error.api_error() else {
-                return not_sent(error);
+        crate::wire::product::exit::finish!(async {
+            validate_create(&input)?;
+            let mut evidence = Evidence::for_write();
+            let permissions: Permissions = self
+                .request::<_, ()>(
+                    ctx,
+                    &private_read(CREATE, "v1/user/permissions"),
+                    &[],
+                    &[],
+                    Bytes::new(),
+                    &mut evidence,
+                )
+                .await
+                .map_err(before_write)?;
+            let (body, ids) = create_body(&input, &permissions.0, &evidence)?;
+            let found = self.find_user_name(ctx, &input.name, &mut evidence).await.map_err(|failure| {
+                let (error, _, _) = failure.into_parts();
+                let Some(api) = error.api_error() else {
+                    return not_sent(error);
+                };
+                let message = format!("containerregistry.CreateUser: could not prove the requested user name is absent: {}", api.message());
+                not_sent(registry_error(api.operation(), api.status(), api.code(), &message).with_cause(error))
+            })?;
+            if found {
+                return Err(invalid_input(
+                    "containerregistry.CreateUser: requested name already exists; check list-users --name",
+                ));
+            }
+            let check_ids = |credentials: &SentCredentials| {
+                ids.iter()
+                    .any(|id| credentials.id_reflects(id))
+                    .then(|| Box::new(Error::new(ErrorClass::InvalidInput)))
             };
-            let message = format!("containerregistry.CreateUser: could not prove the requested user name is absent: {}", api.message());
-            not_sent(registry_error(api.operation(), api.status(), api.code(), &message).with_cause(error))
-        })?;
-        if found {
-            return Err(invalid_input(
-                "containerregistry.CreateUser: requested name already exists; check list-users --name",
-            ));
-        }
-        let issued: IssuedSecret = self.request(
-            ctx, &Operation { allow_empty: true, sensitive: true, ..write_operation(
-                CREATE, Method::POST, "v1/user", &[StatusCode::OK],
-            ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
-        ).await.map_err(|failure| create_failure(failure, concat!(
-            "containerregistry.CreateUser: create may have already reached the server; ",
-            "check list-users --name and reconcile ownership before any cleanup",
-        )))?;
-        let secret_key = Secret::new(issued.secret_key);
-        if secret_key.expose_secret().is_empty() {
-            return Err(Failure::new(
-                registry_error(
-                    CREATE,
-                    Some(200),
-                    "",
-                    "create response had no secret key; a user may exist, check list-users --name and reconcile ownership before cleanup",
+            let options = Options {
+                attempt_check: Some(AttemptCheck(&check_ids)),
+                ..Options::DEFAULT
+            };
+            let issued: IssuedSecret = self.request_with_options(
+                ctx, &Operation { allow_empty: true, sensitive: true, reflection: crate::wire::product::operation::Reflection::PrivateDelivery, ..write_operation(
+                    CREATE, Method::POST, "v1/user", &[StatusCode::OK],
+                ) }, &[], &[], (Bytes::from(body.to_string()), options), &mut evidence,
+            ).await.map_err(|failure| create_failure(failure, concat!(
+                "containerregistry.CreateUser: create may have already reached the server; ",
+                "check list-users --name and reconcile ownership before any cleanup",
+            )))?;
+            let secret_key = Secret::new(issued.secret_key);
+            if secret_key.expose_secret().is_empty()
+                || evidence.text_reflects(secret_key.expose_secret())
+            {
+                return Err(Failure::new(
+                    registry_error(
+                        CREATE,
+                        Some(200),
+                        "",
+                        "create response had no secret key; a user may exist, check list-users --name and reconcile ownership before cleanup",
+                    ),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            evidence.add_secret(&secret_key);
+            let trimmed_key = secret_key.expose_secret().trim();
+            if !trimmed_key.is_empty() && trimmed_key.len() != secret_key.expose_secret().len() {
+                evidence.add_secret(&Secret::new(trimmed_key));
+            }
+            let lookup = self.find_user_name(ctx, &input.name, &mut evidence).await;
+            let (message, cause) = match lookup {
+                Ok(_) => (
+                    "containerregistry: created user not found: containerregistry.CreateUser: a name match cannot prove creation ownership; reconcile with list-users before any cleanup",
+                    None,
                 ),
-                None,
-                WriteDispatch::MayHaveBeenSent,
-            ));
-        }
-        evidence.add_secret(&secret_key);
-        let trimmed_key = secret_key.expose_secret().trim();
-        if !trimmed_key.is_empty() && trimmed_key.len() != secret_key.expose_secret().len() {
-            evidence.add_secret(&Secret::new(trimmed_key));
-        }
-        let lookup = self.find_user_name(ctx, &input.name, &mut evidence).await;
-        let (message, cause) = match lookup {
-            Ok(_) => (
-                "containerregistry: created user not found: containerregistry.CreateUser: a name match cannot prove creation ownership; reconcile with list-users before any cleanup",
-                None,
-            ),
-            Err(failure) => (
-                "containerregistry: created user not found: containerregistry.CreateUser: candidate lookup failed; reconcile with list-users before any cleanup",
-                Some(failure.into_parts().0),
-            ),
-        };
-        let error = registry_error("", None, "", message).with_detail(ErrorDetail::UserNotFound);
-        let error = match cause {
-            Some(cause) => error.with_cause(cause),
-            None => error,
-        };
-        let (error, partial, dispatch) = evidence
-            .with_partial(
-                failure::<()>(error),
-                Value::Null,
-                WriteDispatch::MayHaveBeenSent,
-            )
-            .into_parts();
-        if partial.is_some() {
-            Err(Failure::new(
-                error,
-                Some(CreateUserOutput {
-                    user: User::default(),
-                    secret_key,
-                    evidence,
-                }),
-                dispatch,
-            ))
-        } else {
-            Err(Failure::new(error, None, dispatch).with_private_delivery(secret_key))
-        }
+                Err(failure) => (
+                    "containerregistry: created user not found: containerregistry.CreateUser: candidate lookup failed; reconcile with list-users before any cleanup",
+                    Some(failure.into_parts().0),
+                ),
+            };
+            let error =
+                registry_error("", None, "", message).with_detail(ErrorDetail::UserNotFound);
+            let error = match cause {
+                Some(cause) => error.with_cause(cause),
+                None => error,
+            };
+            let (error, partial, dispatch) = evidence
+                .with_partial(
+                    failure::<()>(error),
+                    Value::Null,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+                .into_parts();
+            if !crate::wire::product::exit::private_safe(&secret_key) {
+                return Err(Failure::new(error, None, dispatch));
+            }
+            if partial.is_some() {
+                Err(Failure::new(
+                    error,
+                    Some(CreateUserOutput {
+                        user: User::default(),
+                        secret_key,
+                        evidence,
+                    }),
+                    dispatch,
+                ))
+            } else {
+                Err(Failure::new(error, None, dispatch).with_private_delivery(secret_key))
+            }
+        })
     }
 
     /// Deletes a user once. Confirms absence after an ambiguous server error.
@@ -236,66 +273,72 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteUserInput,
     ) -> Result<DeleteUserOutput, Failure<DeleteUserOutput>> {
-        let id = &input.user_id;
-        if !valid_id(id) {
-            return Err(invalid_input(
-                "containerregistry.DeleteUser requires a valid UserID",
-            ));
-        }
-        let mut evidence = Evidence::new();
-        let result = self
-            .request(
-                ctx,
-                &Operation {
-                    allow_empty: true,
-                    no_output: true,
-                    reject_reflected_credentials: false,
-                    ..write_operation(DELETE, Method::DELETE, "v1/user/{}", &[StatusCode::OK])
-                },
-                &[id],
-                &[],
-                Bytes::new(),
-                &mut evidence,
-            )
-            .await;
-        match result {
-            Err(original) if is_server_error(original.error()) => {
-                let result: Result<Users, Failure<()>> = self
-                    .request(
-                        ctx,
-                        &Operation {
-                            cap: 4 << 20,
-                            ..read_operation(
-                                "containerregistry.userFoundAfterServerError",
-                                "v1/user",
-                            )
-                        },
-                        &[],
-                        &[("name", ""), ("size", "10000")],
-                        Bytes::new(),
-                        &mut evidence,
-                    )
-                    .await;
-                if let Some(list) = result.ok().and_then(Users::into_page)
-                    && complete_absence(&list.items, list.total_page, list.total_item, id, |item| {
-                        &item.id
-                    })
-                {
-                    return Err(Failure::new(
-                        Error::new(ErrorClass::NotFound).with_cause(registry_error(
-                            "",
-                            None,
-                            "",
-                            "containerregistry.DeleteUser: user not found",
-                        )),
-                        None,
-                        original.write_dispatch(),
-                    ));
-                }
-                Err(redact_failure(original, &evidence))
+        crate::wire::product::exit::finish!(async {
+            let id = &input.user_id;
+            if !valid_id(id) {
+                return Err(invalid_input(
+                    "containerregistry.DeleteUser requires a valid UserID",
+                ));
             }
-            other => other,
-        }
+            let mut evidence = Evidence::for_write();
+            let result = self
+                .request(
+                    ctx,
+                    &Operation {
+                        allow_empty: true,
+                        no_output: true,
+                        reflection: crate::wire::product::operation::Reflection::Redact,
+                        ..write_operation(DELETE, Method::DELETE, "v1/user/{}", &[StatusCode::OK])
+                    },
+                    &[id],
+                    &[],
+                    Bytes::new(),
+                    &mut evidence,
+                )
+                .await;
+            match result {
+                Err(original) if is_server_error(original.error()) => {
+                    let result: Result<Users, Failure<()>> = self
+                        .request(
+                            ctx,
+                            &Operation {
+                                cap: 4 << 20,
+                                ..read_operation(
+                                    "containerregistry.userFoundAfterServerError",
+                                    "v1/user",
+                                )
+                            },
+                            &[],
+                            &[("name", ""), ("size", "10000")],
+                            Bytes::new(),
+                            &mut evidence,
+                        )
+                        .await;
+                    if let Some(list) = result.ok().and_then(Users::into_page)
+                        && complete_absence(
+                            &list.items,
+                            list.total_page,
+                            list.total_item,
+                            id,
+                            |item| &item.id,
+                        )
+                    {
+                        return Err(Failure::new(
+                            Error::new(ErrorClass::NotFound).with_cause(registry_error(
+                                "",
+                                None,
+                                "",
+                                "containerregistry.DeleteUser: user not found",
+                            )),
+                            None,
+                            original.write_dispatch(),
+                        ));
+                    }
+                    Err(redact_failure(original, &evidence))
+                }
+                other => other,
+            }
+        })
     }
 
     async fn find_user_name(
@@ -406,16 +449,17 @@ fn validate_create(input: &CreateUserInput) -> Result<(), Failure<CreateUserOutp
     clippy::result_large_err,
     reason = "Validation returns the operation's Failure"
 )]
-fn create_body(
-    input: &CreateUserInput,
-    permissions: &[Permission],
+fn create_body<'a>(
+    input: &'a CreateUserInput,
+    permissions: &'a [Permission],
     evidence: &Evidence,
-) -> Result<Value, Failure<CreateUserOutput>> {
+) -> Result<(Value, Vec<&'a str>), Failure<CreateUserOutput>> {
     let policies: BTreeMap<_, _> = permissions
         .iter()
         .map(|policy| (&policy.action, &policy.id))
         .collect();
     let mut requests = Vec::new();
+    let mut identifiers = Vec::new();
     for (i, permission) in input.permissions.iter().enumerate() {
         let ids: Option<Vec<_>> = permission
             .actions
@@ -437,6 +481,8 @@ fn create_body(
                 invalid_input(message.as_str())
             }
         })?;
+        identifiers.push(permission.repository_id.as_str());
+        identifiers.extend(ids.iter().map(|id| id.as_str()));
         requests.push(json!({"repoId": permission.repository_id, "policyIdList": ids}));
     }
     let mut body = json!({"name": input.name, "permissionRequestList": requests});
@@ -446,5 +492,5 @@ fn create_body(
     if let Some(days) = input.duration_days {
         body["duration"] = json!(days);
     }
-    Ok(body)
+    Ok((body, identifiers))
 }

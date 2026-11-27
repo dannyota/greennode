@@ -19,7 +19,7 @@ const PERIODS: &[&str] = &[
 ];
 
 /// CDN analytics scope and time range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Range {
     /// Generated CDN domains.
     pub cdn_domains: Vec<String>,
@@ -30,6 +30,13 @@ pub struct Range {
     /// Last calendar date in `YYYY-MM-DD` format.
     pub to: String,
 }
+
+crate::error::debug_record!(Range {
+    cdn_domains,
+    period,
+    from,
+    to
+});
 
 impl Range {
     /// Creates a range for the selected CDN domains.
@@ -70,7 +77,7 @@ impl Range {
 }
 
 /// Input for a dated CDN traffic report.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct GetTrafficReportInput {
     /// Generated CDN domains.
     pub cdn_domains: Vec<String>,
@@ -79,6 +86,12 @@ pub struct GetTrafficReportInput {
     /// Last calendar date in `YYYY-MM-DD` format.
     pub to: String,
 }
+
+crate::error::debug_record!(GetTrafficReportInput {
+    cdn_domains,
+    from,
+    to
+});
 
 impl GetTrafficReportInput {
     /// Selects the domains and calendar dates for the report.
@@ -92,7 +105,7 @@ impl GetTrafficReportInput {
 }
 
 /// One sample in a CDN traffic or request rate series.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CacheSample {
     /// The UTC timestamp for the sample.
@@ -103,8 +116,14 @@ pub struct CacheSample {
     pub uncached: Field<f64>,
 }
 
+crate::wire::product::output::public_fields!(CacheSample {
+    time,
+    cached,
+    uncached
+});
+
 /// One sample in a traffic report.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Sample {
     /// The UTC timestamp for the sample.
@@ -113,8 +132,10 @@ pub struct Sample {
     pub value: Field<f64>,
 }
 
+crate::wire::product::output::public_fields!(Sample { time, value });
+
 /// Traffic samples for a CDN domain and traffic group.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct DomainTraffic {
     /// The customer domain.
@@ -129,6 +150,14 @@ pub struct DomainTraffic {
     /// The samples in ascending timestamp order.
     pub points: Vec<Sample>,
 }
+
+crate::wire::product::output::public_fields!(DomainTraffic {
+    domain_name,
+    cdn_domain,
+    traffic_type,
+    group_type,
+    points
+});
 
 /// The traffic report grouped by CDN domain and traffic type.
 pub type GetTrafficReportOutput = List<DomainTraffic>;
@@ -161,12 +190,14 @@ struct ReportWire {
 pub type GetTrafficInput = Range;
 
 /// Output from `get_traffic`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetTrafficOutput {
     /// Samples in ascending timestamp order.
     pub points: Vec<CacheSample>,
 }
+
+crate::wire::product::output::public_fields!(GetTrafficOutput { points });
 
 impl Client {
     /// Reads the CDN traffic series.
@@ -175,8 +206,10 @@ impl Client {
         ctx: &RequestContext,
         input: GetTrafficInput,
     ) -> Result<GetTrafficOutput, Failure<GetTrafficOutput>> {
-        let points = self.series(ctx, &TRAFFIC, input).await.map_err(convert)?;
-        Ok(GetTrafficOutput { points })
+        crate::wire::product::exit::finish!(async {
+            let points = self.series(ctx, &TRAFFIC, input).await.map_err(convert)?;
+            Ok(GetTrafficOutput { points })
+        })
     }
 }
 
@@ -184,12 +217,14 @@ impl Client {
 pub type GetRequestRateInput = Range;
 
 /// Output from `get_request_rate`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetRequestRateOutput {
     /// Samples in ascending timestamp order.
     pub points: Vec<CacheSample>,
 }
+
+crate::wire::product::output::public_fields!(GetRequestRateOutput { points });
 
 impl Client {
     /// Reads the CDN request rate series.
@@ -198,11 +233,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetRequestRateInput,
     ) -> Result<GetRequestRateOutput, Failure<GetRequestRateOutput>> {
-        let points = self
-            .series(ctx, &REQUEST_RATE, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetRequestRateOutput { points })
+        crate::wire::product::exit::finish!(async {
+            let points = self
+                .series(ctx, &REQUEST_RATE, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetRequestRateOutput { points })
+        })
     }
 }
 
@@ -210,12 +247,14 @@ impl Client {
 pub type GetCacheStatusInput = Range;
 
 /// Output from `get_cache_status`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetCacheStatusOutput {
     /// Counts keyed by the server’s category.
     pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
+
+crate::wire::product::output::public_fields!(GetCacheStatusOutput { counts });
 
 impl Client {
     /// Reads request counts by cache status.
@@ -224,11 +263,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetCacheStatusInput,
     ) -> Result<GetCacheStatusOutput, Failure<GetCacheStatusOutput>> {
-        let counts = self
-            .counts(ctx, &CACHE_STATUS, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetCacheStatusOutput { counts })
+        crate::wire::product::exit::finish!(async {
+            let counts = self
+                .counts(ctx, &CACHE_STATUS, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetCacheStatusOutput { counts })
+        })
     }
 }
 
@@ -236,12 +277,14 @@ impl Client {
 pub type GetHttpCodesInput = Range;
 
 /// Output from `get_http_codes`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetHttpCodesOutput {
     /// Counts keyed by the server’s category.
     pub counts: Option<BTreeMap<String, Field<f64>>>,
 }
+
+crate::wire::product::output::public_fields!(GetHttpCodesOutput { counts });
 
 impl Client {
     /// Reads request counts by HTTP code.
@@ -250,11 +293,13 @@ impl Client {
         ctx: &RequestContext,
         input: GetHttpCodesInput,
     ) -> Result<GetHttpCodesOutput, Failure<GetHttpCodesOutput>> {
-        let counts = self
-            .counts(ctx, &HTTP_CODES, input)
-            .await
-            .map_err(convert)?;
-        Ok(GetHttpCodesOutput { counts })
+        crate::wire::product::exit::finish!(async {
+            let counts = self
+                .counts(ctx, &HTTP_CODES, input)
+                .await
+                .map_err(convert)?;
+            Ok(GetHttpCodesOutput { counts })
+        })
     }
 }
 
@@ -265,56 +310,58 @@ impl Client {
         ctx: &RequestContext,
         input: GetTrafficReportInput,
     ) -> Result<GetTrafficReportOutput, Failure<GetTrafficReportOutput>> {
-        let range = Range {
-            cdn_domains: input.cdn_domains,
-            from: input.from,
-            to: input.to,
-            period: String::new(),
-        };
-        let body = range.body().ok_or_else(invalid)?;
-        let answer = self
-            .call(ctx, &REPORT, &[], body.to_string().into())
-            .await
-            .map_err(convert)?;
-        if empty_data(answer.data.as_deref()) {
-            return Ok(List { items: Vec::new() });
-        }
-        let malformed = || read_failure(REPORT.unexpected(200));
-        let text = answer.data.as_deref().ok_or_else(malformed)?.get();
-        let rows: Vec<ReportWire> = serde_json::from_str(text).map_err(|_| malformed())?;
-        let evidence = &answer.evidence;
-        let mut items = Vec::with_capacity(rows.len());
-        for mut row in rows {
-            let series = sorted(row.data).ok_or_else(malformed)?;
-            let points = series
-                .into_iter()
-                .map(|(time, value)| {
-                    let mut point = Sample {
-                        time: Field::Value(time),
-                        value: Field::Value(value),
-                    };
-                    point.time.redact(evidence);
-                    point.value.redact(evidence);
-                    point
-                })
-                .collect();
-            for value in [
-                &mut row.domain_name,
-                &mut row.cdn_domain,
-                &mut row.traffic_type,
-                &mut row.group_type,
-            ] {
-                redact_text(value, evidence);
+        crate::wire::product::exit::finish!(async {
+            let range = Range {
+                cdn_domains: input.cdn_domains,
+                from: input.from,
+                to: input.to,
+                period: String::new(),
+            };
+            let body = range.body().ok_or_else(invalid)?;
+            let answer = self
+                .call(ctx, &REPORT, &[], body.to_string().into())
+                .await
+                .map_err(convert)?;
+            if empty_data(answer.data.as_deref()) {
+                return Ok(List { items: Vec::new() });
             }
-            items.push(DomainTraffic {
-                domain_name: row.domain_name,
-                cdn_domain: row.cdn_domain,
-                traffic_type: row.traffic_type,
-                group_type: row.group_type,
-                points,
-            });
-        }
-        Ok(List { items })
+            let malformed = || read_failure(REPORT.unexpected(200));
+            let text = answer.data.as_deref().ok_or_else(malformed)?.get();
+            let rows: Vec<ReportWire> = serde_json::from_str(text).map_err(|_| malformed())?;
+            let evidence = &answer.evidence;
+            let mut items = Vec::with_capacity(rows.len());
+            for mut row in rows {
+                let series = sorted(row.data).ok_or_else(malformed)?;
+                let points = series
+                    .into_iter()
+                    .map(|(time, value)| {
+                        let mut point = Sample {
+                            time: Field::Value(time),
+                            value: Field::Value(value),
+                        };
+                        point.time.redact(evidence);
+                        point.value.redact(evidence);
+                        point
+                    })
+                    .collect();
+                for value in [
+                    &mut row.domain_name,
+                    &mut row.cdn_domain,
+                    &mut row.traffic_type,
+                    &mut row.group_type,
+                ] {
+                    redact_text(value, evidence);
+                }
+                items.push(DomainTraffic {
+                    domain_name: row.domain_name,
+                    cdn_domain: row.cdn_domain,
+                    traffic_type: row.traffic_type,
+                    group_type: row.group_type,
+                    points,
+                });
+            }
+            Ok(List { items })
+        })
     }
 
     async fn series(

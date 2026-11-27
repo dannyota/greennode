@@ -28,13 +28,15 @@ const ACCOUNTS: &str = "accounts-api/v1/service-accounts";
 const ACCOUNT: &str = "accounts-api/v1/service-accounts/{}";
 
 /// Names the new service account and its optional description.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateServiceAccountInput {
     /// Name of the new service account.
     pub name: String,
     /// Description sent with the create request.
     pub description: String,
 }
+
+crate::error::debug_record!(CreateServiceAccountInput { name, description });
 
 impl CreateServiceAccountInput {
     /// Sets the required name and leaves the description empty.
@@ -47,7 +49,7 @@ impl CreateServiceAccountInput {
 }
 
 /// Service-account creation result. A failure partial contains only safe metadata.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateServiceAccountOutput {
     /// Confirmed service account or safe identity retained from create.
     #[serde(rename = "ServiceAccount")]
@@ -59,6 +61,8 @@ pub struct CreateServiceAccountOutput {
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(CreateServiceAccountOutput { service_account; cleanup_id, client_secret, evidence });
 
 impl CreateServiceAccountOutput {
     /// Borrows the issued secret for private delivery after successful creation.
@@ -123,7 +127,7 @@ pub fn redact_failed_service_account_create<'a>(
 }
 
 /// Updates only the supplied fields of an existing service account.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateServiceAccountInput {
     /// Service-account resource ID.
     pub service_account_id: String,
@@ -132,6 +136,12 @@ pub struct UpdateServiceAccountInput {
     /// Replacement access-token lifetime in seconds.
     pub access_token_life_span: Option<i64>,
 }
+
+crate::error::debug_record!(UpdateServiceAccountInput {
+    service_account_id,
+    description,
+    access_token_life_span
+});
 
 impl UpdateServiceAccountInput {
     /// Sets the required identifier without changing any optional fields.
@@ -145,20 +155,27 @@ impl UpdateServiceAccountInput {
 }
 
 /// Service-account metadata after the update.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UpdateServiceAccountOutput {
     /// Confirmed account, or its safe identity after an unconfirmed write.
     #[serde(rename = "ServiceAccount")]
     pub service_account: ServiceAccount,
 }
 
+crate::wire::product::output::public_fields!(UpdateServiceAccountOutput { service_account });
+
 /// Identifies the service account to delete.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteServiceAccountInput {
     /// Service-account resource ID.
     pub service_account_id: String,
     cleanup: Option<SentCredentials>,
 }
+
+crate::error::debug_record!(DeleteServiceAccountInput {
+    service_account_id,
+    cleanup
+});
 
 impl DeleteServiceAccountInput {
     /// Sets the required service account identifier.
@@ -171,8 +188,10 @@ impl DeleteServiceAccountInput {
 }
 
 /// Acknowledges deletion without resource fields.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct DeleteServiceAccountOutput {}
+
+crate::wire::product::output::public_fields!(DeleteServiceAccountOutput {});
 
 id_input!(
     /// Identifies the account whose secret will be rotated.
@@ -182,13 +201,15 @@ id_input!(
 );
 
 /// The one-time secret produced by a successful rotation.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct ResetServiceAccountSecretOutput {
     #[serde(rename = "ClientSecret")]
     client_secret: Secret,
     #[serde(skip)]
     evidence: Evidence,
 }
+
+crate::wire::product::output::public_fields!(ResetServiceAccountSecretOutput { ; client_secret, evidence });
 
 impl ResetServiceAccountSecretOutput {
     /// Borrows the issued secret for private delivery.
@@ -270,68 +291,72 @@ impl Client {
         ctx: &RequestContext,
         input: CreateServiceAccountInput,
     ) -> Result<CreateServiceAccountOutput, Failure<CreateServiceAccountOutput>> {
-        if input.name.is_empty() {
-            return Err(guard_failed(invalid_input(format!(
-                "{CREATE} requires Name"
-            ))));
-        }
-        let mut evidence =
-            self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
-        let op = Operation {
-            cap: OBJECT_CAP,
-            allow_empty: false,
-            ..secret_operation(CREATE, ACCOUNTS, &[StatusCode::CREATED])
-        };
-        let IssuedAccount { id, secret } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
-            .map_err(|failed| uncertain(failed, &evidence, "iam.CreateServiceAccount: create may have already reached the server; check with list-service-accounts and match exactly; a service account found that way has lost its client secret and should have its secret reset"))?;
-        if let Some(secret) = &secret {
-            record_issued(&mut evidence, secret);
-        }
-        let confirmation = if usable_account_id(&id, &evidence) {
-            self.confirm_account::<CreateServiceAccountOutput>(ctx, &id, &mut evidence)
-                .await
-                .ok()
-        } else {
-            None
-        };
-        let confirmed = confirmation.is_some();
-        let account = confirmation.unwrap_or_else(|| safe_account_id(&id, &evidence));
-        let cleanup_id = usable_account_id(&account.id, &evidence).then(|| account.id.clone());
-        if secret.is_none() || !confirmed {
-            let (detail, message) = match (confirmed, secret.is_some()) {
-                (true, false) => (
-                    WriteError::NoSecret,
-                    "iam.CreateServiceAccount: iam: no client secret returned: create response had no client secret; run reset-service-account-secret to get one",
-                ),
-                (false, false) => (
-                    WriteError::CreateUnconfirmed,
-                    "iam.CreateServiceAccount: iam: created but not confirmed by a read; the response held no client secret; reconcile with list-service-accounts",
-                ),
-                _ => (
-                    WriteError::CreateUnconfirmed,
-                    "iam.CreateServiceAccount: iam: created but not confirmed by a read",
-                ),
+        crate::wire::product::exit::finish!(async {
+            if input.name.is_empty() {
+                return Err(guard_failed(invalid_input(format!(
+                    "{CREATE} requires Name"
+                ))));
+            }
+            let mut evidence =
+                self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
+            let op = Operation {
+                cap: OBJECT_CAP,
+                allow_empty: false,
+                ..secret_operation(CREATE, ACCOUNTS, &[StatusCode::CREATED])
             };
-            let error = outcome(detail, message, &evidence);
-            let partial = evidence
-                .can_retain_partial()
-                .then_some(CreateServiceAccountOutput {
-                    service_account: account,
-                    cleanup_id,
-                    client_secret: None,
-                    evidence: evidence.transport_only(),
+            let IssuedAccount { id, secret } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
+                .map_err(|failed| uncertain(failed, &evidence, "iam.CreateServiceAccount: create may have already reached the server; check with list-service-accounts and match exactly; a service account found that way has lost its client secret and should have its secret reset"))?;
+            let secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret()));
+            if let Some(secret) = &secret {
+                record_issued(&mut evidence, secret);
+            }
+            let confirmation = if usable_account_id(&id, &evidence) {
+                self.confirm_account::<CreateServiceAccountOutput>(ctx, &id, &mut evidence)
+                    .await
+                    .ok()
+            } else {
+                None
+            };
+            let secret = secret.filter(crate::wire::product::exit::private_safe);
+            let confirmed = confirmation.is_some();
+            let account = confirmation.unwrap_or_else(|| safe_account_id(&id, &evidence));
+            let cleanup_id = usable_account_id(&account.id, &evidence).then(|| account.id.clone());
+            if secret.is_none() || !confirmed {
+                let (detail, message) = match (confirmed, secret.is_some()) {
+                    (true, false) => (
+                        WriteError::NoSecret,
+                        "iam.CreateServiceAccount: iam: no client secret returned: create response had no client secret; run reset-service-account-secret to get one",
+                    ),
+                    (false, false) => (
+                        WriteError::CreateUnconfirmed,
+                        "iam.CreateServiceAccount: iam: created but not confirmed by a read; the response held no client secret; reconcile with list-service-accounts",
+                    ),
+                    _ => (
+                        WriteError::CreateUnconfirmed,
+                        "iam.CreateServiceAccount: iam: created but not confirmed by a read",
+                    ),
+                };
+                let error = outcome(detail, message, &evidence);
+                let partial = evidence
+                    .can_retain_partial()
+                    .then_some(CreateServiceAccountOutput {
+                        service_account: account,
+                        cleanup_id,
+                        client_secret: None,
+                        evidence: evidence.transport_only(),
+                    });
+                let failed = Failure::new(error, partial, WriteDispatch::MayHaveBeenSent);
+                return Err(match secret {
+                    Some(secret) => failed.with_private_delivery(secret),
+                    None => failed,
                 });
-            let failed = Failure::new(error, partial, WriteDispatch::MayHaveBeenSent);
-            return Err(match secret {
-                Some(secret) => failed.with_private_delivery(secret),
-                None => failed,
-            });
-        }
-        Ok(CreateServiceAccountOutput {
-            service_account: account,
-            cleanup_id,
-            client_secret: secret,
-            evidence,
+            }
+            Ok(CreateServiceAccountOutput {
+                service_account: account,
+                cleanup_id,
+                client_secret: secret,
+                evidence,
+            })
         })
     }
 
@@ -341,63 +366,66 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateServiceAccountInput,
     ) -> Result<UpdateServiceAccountOutput, Failure<UpdateServiceAccountOutput>> {
-        let id = input.service_account_id.as_str();
-        let mut body = Map::new();
-        if let Some(description) = input.description {
-            body.insert("description".into(), Value::from(description));
-        }
-        if let Some(life_span) = input.access_token_life_span {
-            body.insert("accessTokenLifeSpan".into(), Value::from(life_span));
-        }
-        let body = Value::Object(body);
-        let mut evidence = self.write_evidence(ctx, UPDATE, &[("ServiceAccountID", id)], &[])?;
-        if evidence.reflected_in(&body) {
-            return Err(guard_failed(invalid_input(
-                "IAM request operand withheld".into(),
-            )));
-        }
-        self.guard_service_account(ctx, UPDATE, id, &mut evidence)
-            .await?;
-        let op = Operation {
-            no_output: true,
-            keep_status: true,
-            sensitive: true,
-            ..write_operation(
-                UPDATE,
-                Method::PATCH,
-                ACCOUNT,
-                Retry::Repeatable,
-                &[StatusCode::OK],
-            )
-        };
-        if let Err(failed) = self
-            .write::<Value, _>(ctx, Api::Accounts, &op, &[id], Some(body), &mut evidence)
-            .await
-        {
-            if failed.write_dispatch() == WriteDispatch::MayHaveBeenSent
-                && failed.error().detail::<StatusCode>() == Some(&StatusCode::OK)
-            {
-                return Err(settle_update(
-                    failed,
-                    id,
-                    "accepted update response failed",
-                    &evidence,
-                ));
+        crate::wire::product::exit::finish!(async {
+            let id = input.service_account_id.as_str();
+            let mut body = Map::new();
+            if let Some(description) = input.description {
+                body.insert("description".into(), Value::from(description));
             }
-            return Err(failed);
-        }
-        let service_account =
-            self.confirm_account(ctx, id, &mut evidence)
+            if let Some(life_span) = input.access_token_life_span {
+                body.insert("accessTokenLifeSpan".into(), Value::from(life_span));
+            }
+            let body = Value::Object(body);
+            let mut evidence =
+                self.write_evidence(ctx, UPDATE, &[("ServiceAccountID", id)], &[])?;
+            if evidence.output_reflects(&body) {
+                return Err(guard_failed(invalid_input(
+                    "IAM request operand withheld".into(),
+                )));
+            }
+            self.guard_service_account(ctx, UPDATE, id, &mut evidence)
+                .await?;
+            let op = Operation {
+                no_output: true,
+                keep_status: true,
+                sensitive: true,
+                ..write_operation(
+                    UPDATE,
+                    Method::PATCH,
+                    ACCOUNT,
+                    Retry::Repeatable,
+                    &[StatusCode::OK],
+                )
+            };
+            if let Err(failed) = self
+                .write::<Value, _>(ctx, Api::Accounts, &op, &[id], Some(body), &mut evidence)
                 .await
-                .map_err(|failed| {
-                    settle_update(
+            {
+                if failed.write_dispatch() == WriteDispatch::MayHaveBeenSent
+                    && failed.error().http_status() == Some(StatusCode::OK)
+                {
+                    return Err(settle_update(
                         failed,
                         id,
-                        "service account update was accepted but confirmation failed",
+                        "accepted update response failed",
                         &evidence,
-                    )
-                })?;
-        Ok(UpdateServiceAccountOutput { service_account })
+                    ));
+                }
+                return Err(failed);
+            }
+            let service_account =
+                self.confirm_account(ctx, id, &mut evidence)
+                    .await
+                    .map_err(|failed| {
+                        settle_update(
+                            failed,
+                            id,
+                            "service account update was accepted but confirmation failed",
+                            &evidence,
+                        )
+                    })?;
+            Ok(UpdateServiceAccountOutput { service_account })
+        })
     }
 
     /// Deletes the account only after proving it is not protected.
@@ -406,37 +434,40 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteServiceAccountInput,
     ) -> Result<DeleteServiceAccountOutput, Failure<DeleteServiceAccountOutput>> {
-        let id = input.service_account_id.as_str();
-        let now = || self.session.clock().monotonic_now();
-        let cleanup_context = input
-            .cleanup
-            .as_ref()
-            .map(|_| ctx.child_with_deadline(now() + Duration::from_secs(10)));
-        let ctx = cleanup_context.as_ref().unwrap_or(ctx);
-        let mut evidence = self.write_evidence(ctx, DELETE, &[("ServiceAccountID", id)], &[])?;
-        if let Some(cleanup) = &input.cleanup {
-            evidence.absorb(cleanup);
-        }
-        if evidence.id_reflects(id) {
-            return Err(guard_failed(invalid_input(
-                "IAM request operand withheld".into(),
-            )));
-        }
-        self.guard_service_account(ctx, DELETE, id, &mut evidence)
-            .await?;
-        let op = Operation {
-            sensitive: true,
-            ..write_operation(
-                DELETE,
-                Method::DELETE,
-                ACCOUNT,
-                Retry::Repeatable,
-                &[StatusCode::NO_CONTENT],
-            )
-        };
-        self.write::<Value, _>(ctx, Api::Accounts, &op, &[id], None, &mut evidence)
-            .await?;
-        Ok(DeleteServiceAccountOutput {})
+        crate::wire::product::exit::finish!(async {
+            let id = input.service_account_id.as_str();
+            let now = || self.session.clock().monotonic_now();
+            let cleanup_context = input
+                .cleanup
+                .as_ref()
+                .map(|_| ctx.child_with_deadline(now() + Duration::from_secs(10)));
+            let ctx = cleanup_context.as_ref().unwrap_or(ctx);
+            let mut evidence =
+                self.write_evidence(ctx, DELETE, &[("ServiceAccountID", id)], &[])?;
+            if let Some(cleanup) = &input.cleanup {
+                evidence.absorb(cleanup);
+            }
+            if evidence.id_reflects(id) {
+                return Err(guard_failed(invalid_input(
+                    "IAM request operand withheld".into(),
+                )));
+            }
+            self.guard_service_account(ctx, DELETE, id, &mut evidence)
+                .await?;
+            let op = Operation {
+                sensitive: true,
+                ..write_operation(
+                    DELETE,
+                    Method::DELETE,
+                    ACCOUNT,
+                    Retry::Repeatable,
+                    &[StatusCode::NO_CONTENT],
+                )
+            };
+            self.write::<Value, _>(ctx, Api::Accounts, &op, &[id], None, &mut evidence)
+                .await?;
+            Ok(DeleteServiceAccountOutput {})
+        })
     }
 
     /// Rotates the secret once after checking caller and target protection.
@@ -445,26 +476,35 @@ impl Client {
         ctx: &RequestContext,
         input: ResetServiceAccountSecretInput,
     ) -> Result<ResetServiceAccountSecretOutput, Failure<ResetServiceAccountSecretOutput>> {
-        let id = input.service_account_id.as_str();
-        let mut evidence = self.write_evidence(ctx, RESET, &[("ServiceAccountID", id)], &[])?;
-        self.guard_service_account(ctx, RESET, id, &mut evidence)
-            .await?;
-        let op = secret_operation(
-            RESET,
-            "accounts-api/v1/service-accounts/{}/reset-secret",
-            &[StatusCode::OK],
-        );
-        let IssuedSecret(secret) = self.write(ctx, Api::Accounts, &op, &[id], None, &mut evidence).await
-            .map_err(|failed| uncertain(failed, &evidence, "iam.ResetServiceAccountSecret: reset may have reached the server; no read shows whether the secret changed, so treat the previous secret as revoked"))?;
-        let client_secret = secret.ok_or_else(|| Failure::new(
-            outcome(WriteError::NoSecret, &format!("service account {} secret was probably rotated by this call but not returned; no file was written; run reset-service-account-secret again to get a usable value", safe_text(&evidence, id)), &evidence),
-            None,
-            WriteDispatch::MayHaveBeenSent,
-        ))?;
-        record_issued(&mut evidence, &client_secret);
-        Ok(ResetServiceAccountSecretOutput {
-            client_secret,
-            evidence,
+        crate::wire::product::exit::finish!(async {
+            let id = input.service_account_id.as_str();
+            let mut evidence = self.write_evidence(ctx, RESET, &[("ServiceAccountID", id)], &[])?;
+            self.guard_service_account(ctx, RESET, id, &mut evidence)
+                .await?;
+            let op = secret_operation(
+                RESET,
+                "accounts-api/v1/service-accounts/{}/reset-secret",
+                &[StatusCode::OK],
+            );
+            let IssuedSecret(secret) = self.write(ctx, Api::Accounts, &op, &[id], None, &mut evidence).await
+                .map_err(|failed| uncertain(failed, &evidence, "iam.ResetServiceAccountSecret: reset may have reached the server; no read shows whether the secret changed, so treat the previous secret as revoked"))?;
+            let client_secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret())).ok_or_else(|| Failure::new(
+                outcome(WriteError::NoSecret, &format!("service account {} secret was probably rotated by this call but not returned; no file was written; run reset-service-account-secret again to get a usable value", safe_text(&evidence, id)), &evidence),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            ))?;
+            if !crate::wire::product::exit::private_safe(&client_secret) {
+                return Err(Failure::new(
+                    outcome(WriteError::NoSecret, "IAM response withheld", &evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
+            record_issued(&mut evidence, &client_secret);
+            Ok(ResetServiceAccountSecretOutput {
+                client_secret,
+                evidence,
+            })
         })
     }
 
@@ -476,7 +516,7 @@ impl Client {
     ) -> Result<ServiceAccount, Failure<O>> {
         let op = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation("iam.GetServiceAccount", ACCOUNT, OBJECT_CAP, false)
         };
         let account: ServiceAccount = self
@@ -512,6 +552,7 @@ fn secret_operation(
     Operation {
         sensitive: true,
         keep_status: true,
+        reflection: crate::wire::product::operation::Reflection::PrivateDelivery,
         ..write_operation(id, Method::POST, template, Retry::Once, success)
     }
 }

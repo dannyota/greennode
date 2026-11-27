@@ -18,7 +18,7 @@ use crate::wire::product::{
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
 
 /// IAM-specific write outcome, available through [`Error::detail`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum WriteError {
     /// The target could be the current caller.
@@ -41,6 +41,8 @@ pub enum WriteError {
     ResourceInUse,
 }
 
+crate::error::debug_record!(WriteError; SelfChange, PrivilegedChange, CreateUnconfirmed, NoSecret, OriginNotIam, UserCreateUncertain, UserWriteUncertain, ManagedPolicy, ResourceInUse);
+
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 impl Client {
     pub(super) fn write_evidence<O>(
@@ -56,7 +58,7 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|e| not_sent(*e))?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }
@@ -79,7 +81,7 @@ impl Client {
     ) -> Result<T, Failure<O>> {
         let body = match body {
             Some(body) => {
-                if evidence.reflected_in(&body) {
+                if evidence.output_reflects(&body) {
                     return Err(withheld_operand());
                 }
                 serde_json::to_vec(&body)
@@ -199,7 +201,7 @@ impl Client {
         if let Some(caller) = slot.as_ref() {
             check_cached_caller(caller, evidence)?;
             keep_caller_check(caller, evidence);
-            return self.classified(caller.clone(), op);
+            return self.classified(caller.clone(), op, evidence);
         }
         let fetched: super::GetCallerIdentityOutput = self
             .fetch::<_, O>(
@@ -235,7 +237,7 @@ impl Client {
                 None,
             ));
         }
-        let fetched = self.classified(fetched, op)?;
+        let fetched = self.classified(fetched, op, evidence)?;
         keep_caller_check(&fetched, evidence);
         *slot = Some(fetched.clone());
         drop(slot);
@@ -266,16 +268,18 @@ impl Client {
         &self,
         caller: super::GetCallerIdentityOutput,
         op: &str,
+        evidence: &Evidence,
     ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
         if !matches!(
             caller.user_type.as_str(),
             "iam-user" | "user-sa" | "service-sa"
         ) {
-            return Err(guard_refusal(
+            return Err(proved_refusal(
+                evidence,
+                ProofRefusal::Privileged,
                 &format!(
                     "iam: refused: target is protected: {op}: the caller's user type is not recognized"
                 ),
-                Some(WriteError::PrivilegedChange),
             ));
         }
         Ok(caller)
@@ -315,6 +319,35 @@ pub(super) fn withheld_operand<O>() -> Failure<O> {
             .into_parts()
             .0,
     )
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ProofRefusal {
+    Privileged,
+    InUse,
+}
+
+pub(super) fn decided_refusal<O>(
+    _: crate::wire::product::guard::Decision<'_>,
+    reason: ProofRefusal,
+    message: &str,
+) -> Failure<O> {
+    let detail = match reason {
+        ProofRefusal::Privileged => WriteError::PrivilegedChange,
+        ProofRefusal::InUse => WriteError::ResourceInUse,
+    };
+    guard_refusal(message, Some(detail))
+}
+
+pub(super) fn proved_refusal<O>(
+    evidence: &Evidence,
+    reason: ProofRefusal,
+    message: &str,
+) -> Failure<O> {
+    crate::wire::product::guard::decide(evidence, |decision| {
+        decided_refusal(decision, reason, message)
+    })
+    .unwrap_or_else(|error| not_sent(*error))
 }
 
 pub(super) fn guard_refusal<O>(message: &str, detail: Option<WriteError>) -> Failure<O> {
@@ -415,7 +448,7 @@ fn caller_reflected(caller: &super::GetCallerIdentityOutput, evidence: &Evidence
         || [&caller.user_type, &caller.username]
             .into_iter()
             .any(|v| evidence.text_reflects(v))
-        || evidence.reflected_in(&Value::from(caller.account_id))
+        || evidence.output_reflects(&Value::from(caller.account_id))
 }
 
 fn unsafe_cached_error(op: &str) -> Error {
@@ -444,7 +477,7 @@ pub(super) fn keep_actions_check(names: &[String], evidence: &mut Evidence) {
         let mut probe = Evidence::new();
         probe.absorb(credentials);
         serde_json::to_value(&names)
-            .map_or(true, |value| probe.reflected_in(&value))
+            .map_or(true, |value| probe.output_reflects(&value))
             .then(|| Box::new(unsafe_cached_error("iam.ListActions")))
     }));
 }
@@ -465,7 +498,7 @@ pub(super) fn check_cached_actions<O>(
     names: &[String],
     evidence: &Evidence,
 ) -> Result<(), Failure<O>> {
-    if serde_json::to_value(names).is_ok_and(|value| !evidence.reflected_in(&value)) {
+    if serde_json::to_value(names).is_ok_and(|value| !evidence.output_reflects(&value)) {
         Ok(())
     } else {
         Err(unsafe_cached("iam.ListActions"))

@@ -12,7 +12,7 @@ use super::wire::{api, invalid_input};
 use super::{Client, failure};
 
 /// Server configuration for both an order and its quote.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreateServerInput {
     /// Name of the server.
     pub name: String,
@@ -60,8 +60,33 @@ pub struct CreateServerInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreateServerInput {
+    name,
+    zone_id,
+    flavor_id,
+    image_id,
+    vpc_id,
+    subnet_id,
+    security_group_ids,
+    ssh_key_id,
+    root_disk_size,
+    root_disk_type_id,
+    root_disk_encryption_type_id,
+    data_disk_size,
+    data_disk_type_id,
+    data_disk_name,
+    data_disk_encryption_type_id,
+    server_group_id,
+    user_data,
+    auto_renew,
+    attach_floating_ip,
+    allow_open_login,
+    max_price,
+    no_wait
+});
+
 /// Flavor change for both a resize and its quote.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ResizeServerInput {
     /// Server being resized.
     pub server_id: String,
@@ -72,6 +97,13 @@ pub struct ResizeServerInput {
     /// Skip confirmation after resizing.
     pub no_wait: bool,
 }
+
+crate::error::debug_record!(ResizeServerInput {
+    server_id,
+    flavor_id,
+    max_price,
+    no_wait
+});
 
 #[expect(
     clippy::result_large_err,
@@ -84,13 +116,15 @@ impl Client {
         ctx: &RequestContext,
         input: CreateServerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let info =
-            server_info("compute.QuoteCreateServer", &input).map_err(|error| failure(*error))?;
-        let mut evidence = Evidence::new();
-        add_user_data(&input, &mut evidence);
-        self.create_quote(ctx, &input, info, &mut evidence)
-            .await
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let info = server_info("compute.QuoteCreateServer", &input)
+                .map_err(|error| failure(*error))?;
+            let mut evidence = Evidence::new();
+            add_user_data(&input, &mut evidence);
+            self.create_quote(ctx, &input, info, &mut evidence)
+                .await
+                .map_err(|error| failure(*error))
+        })
     }
 
     /// Quotes a flavor change, which may return a credit.
@@ -99,11 +133,13 @@ impl Client {
         ctx: &RequestContext,
         input: ResizeServerInput,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        let info =
-            resize_info("compute.QuoteResizeServer", &input).map_err(|error| failure(*error))?;
-        self.server_quote(ctx, "server", "resize", info, false, &mut Evidence::new())
-            .await
-            .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            let info = resize_info("compute.QuoteResizeServer", &input)
+                .map_err(|error| failure(*error))?;
+            self.server_quote(ctx, "server", "resize", info, false, &mut Evidence::new())
+                .await
+                .map_err(|error| failure(*error))
+        })
     }
 }
 
@@ -155,7 +191,7 @@ impl Client {
             combine_quote(&mut server, ip);
             validate_component(&server, evidence)?;
         }
-        if serde_json::to_value(&server).map_or(true, |value| evidence.reflected_in(&value)) {
+        if serde_json::to_value(&server).map_or(true, |value| evidence.output_reflects(&value)) {
             return Err(component_error());
         }
         Ok(server)

@@ -38,7 +38,7 @@ const MAX_BYTES: usize = 32 << 20;
 const TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Selects wallet transactions in an inclusive range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListTransactionsInput {
     /// Required start date in YYYY-MM-DD form, in fixed UTC+07:00.
     pub start_date: String,
@@ -51,6 +51,14 @@ pub struct ListTransactionsInput {
     /// Reads the full range from page 1. A page above 1 is invalid with this option.
     pub all: bool,
 }
+
+crate::error::debug_record!(ListTransactionsInput {
+    start_date,
+    end_date,
+    page,
+    size,
+    all
+});
 
 impl ListTransactionsInput {
     /// Sets the required start date and selects the first page through today.
@@ -69,7 +77,7 @@ impl ListTransactionsInput {
 pub type ListTransactionsOutput = PagedList<Transaction>;
 
 /// Selects payments in an inclusive range.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ListPaymentsInput {
     /// Required start date in YYYY-MM-DD form, in fixed UTC+07:00.
     pub start_date: String,
@@ -82,6 +90,14 @@ pub struct ListPaymentsInput {
     /// Reads the full range from page 1. A page above 1 is invalid with this option.
     pub all: bool,
 }
+
+crate::error::debug_record!(ListPaymentsInput {
+    start_date,
+    end_date,
+    page,
+    size,
+    all
+});
 
 impl ListPaymentsInput {
     /// Sets the required start date and selects the first page through today.
@@ -110,13 +126,15 @@ impl Client {
         ctx: &RequestContext,
         input: ListTransactionsInput,
     ) -> Result<ListTransactionsOutput, Failure<ListTransactionsOutput>> {
-        self.list_history::<Transaction>(
-            ctx,
-            &history_operation("billing.ListTransactions", "gateway/api/v1/transactions"),
-            input,
-        )
-        .await
-        .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            self.list_history::<Transaction>(
+                ctx,
+                &history_operation("billing.ListTransactions", "gateway/api/v1/transactions"),
+                input,
+            )
+            .await
+            .map_err(|error| failure(*error))
+        })
     }
 
     /// Reads payment history independently of wallet transactions.
@@ -125,19 +143,21 @@ impl Client {
         ctx: &RequestContext,
         input: ListPaymentsInput,
     ) -> Result<ListPaymentsOutput, Failure<ListPaymentsOutput>> {
-        self.list_history::<Payment>(
-            ctx,
-            &history_operation("billing.ListPayments", "gateway/api/v1/payments"),
-            ListTransactionsInput {
-                start_date: input.start_date,
-                end_date: input.end_date,
-                page: input.page,
-                size: input.size,
-                all: input.all,
-            },
-        )
-        .await
-        .map_err(|error| failure(*error))
+        crate::wire::product::exit::finish!(async {
+            self.list_history::<Payment>(
+                ctx,
+                &history_operation("billing.ListPayments", "gateway/api/v1/payments"),
+                ListTransactionsInput {
+                    start_date: input.start_date,
+                    end_date: input.end_date,
+                    page: input.page,
+                    size: input.size,
+                    all: input.all,
+                },
+            )
+            .await
+            .map_err(|error| failure(*error))
+        })
     }
 
     async fn list_history<W: HistoryRow>(
@@ -340,7 +360,7 @@ fn history_operation(id: &'static str, route: &'static str) -> Operation {
     Operation {
         sensitive: true,
         no_redirect: true,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         ..read_operation(id, route)
     }
 }

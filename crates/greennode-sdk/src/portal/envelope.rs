@@ -70,7 +70,10 @@ fn decode_value(raw: &RawValue) -> serde_json::Result<Value> {
 
 impl Output for Envelope {
     const SCHEMA: Shape<'static> = Shape::Object(&[]);
-    const CHECK_RENDERED_NUMBERS: bool = true;
+
+    fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
+        Box::new(invalid_response(operation, response))
+    }
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK
@@ -79,16 +82,25 @@ impl Output for Envelope {
         {
             return operation::decode_response(operation, response);
         }
-        operation::decode_response(operation, response).map_err(|_| {
-            Box::new(Error::from_api(ApiError::without_fallback(
-                operation.id,
-                Some(response.status.as_u16()),
-                SafeText::new("InvalidResponse", &[]),
-                SafeText::new("invalid portal response; body withheld", &[]),
-                false,
-            )))
-        })
+        let output: Self = operation::decode_response(operation, response)
+            .map_err(|_| Box::new(invalid_response(operation, response)))?;
+        let evidence =
+            crate::wire::product::evidence::Evidence::from_credentials(&response.credentials);
+        if evidence.serialized_output_reflects(&output.0.fields) {
+            return Err(Box::new(invalid_response(operation, response)));
+        }
+        Ok(output)
     }
+}
+
+pub(super) fn invalid_response(operation: &Operation, response: &Response) -> Error {
+    Error::from_api(ApiError::without_fallback(
+        operation.id,
+        Some(response.status.as_u16()),
+        SafeText::new("InvalidResponse", &[]),
+        SafeText::new("invalid portal response; body withheld", &[]),
+        false,
+    ))
 }
 
 pub(super) fn withheld(operation: &Operation, error: Error) -> Error {
@@ -102,8 +114,8 @@ pub(super) fn withheld(operation: &Operation, error: Error) -> Error {
         None
     } else {
         error
-            .detail::<StatusCode>()
-            .map(StatusCode::as_u16)
+            .http_status()
+            .map(|status| status.as_u16())
             .or_else(|| api.and_then(ApiError::status))
     };
     let retryable = api.is_some_and(ApiError::retryable);

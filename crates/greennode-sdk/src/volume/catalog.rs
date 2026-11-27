@@ -1,3 +1,4 @@
+use crate::wire::strict_json::FieldNames;
 use serde::Serialize;
 
 use crate::wire::product::evidence::Evidence;
@@ -37,17 +38,19 @@ const ENCRYPTION: Read = Read::vserver(
 );
 
 /// Optional filter for volume-type zones by network zone ID.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumeTypeZonesInput {
     /// Network zone used by the provider's `zoneId` filter.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(ListVolumeTypeZonesInput { zone_id });
+
 /// Volume-type zones in the project.
 pub type ListVolumeTypeZonesOutput = List<VolumeTypeZone>;
 
 /// Selects the catalog and an optional exact IOPS filter.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct ListVolumeTypesInput {
     /// Volume-type zone to read. Mutually exclusive with `zone_id`.
     pub volume_type_zone_id: String,
@@ -57,37 +60,51 @@ pub struct ListVolumeTypesInput {
     pub iops: i64,
 }
 
+crate::error::debug_record!(ListVolumeTypesInput {
+    volume_type_zone_id,
+    zone_id,
+    iops
+});
+
 /// Available volume types.
 pub type ListVolumeTypesOutput = List<VolumeType>;
 
 /// Identifies a volume type to read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetVolumeTypeInput {
     /// Volume type identifier.
     pub volume_type_id: String,
 }
 
+crate::error::debug_record!(GetVolumeTypeInput { volume_type_id });
+
 /// The requested volume type.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct GetVolumeTypeOutput {
     /// Type returned by the volume catalog.
     #[serde(rename = "VolumeType")]
     pub volume_type: VolumeType,
 }
 
+crate::wire::product::output::public_fields!(GetVolumeTypeOutput { volume_type });
+
 /// Selects the network zone for a default volume type read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct GetDefaultVolumeTypeInput {
     /// Network zone identifier.
     pub zone_id: String,
 }
 
+crate::error::debug_record!(GetDefaultVolumeTypeInput { zone_id });
+
 /// The default volume type and its zone identifiers.
 pub type GetDefaultVolumeTypeOutput = GetVolumeTypeOutput;
 
 /// Input for the encryption catalog, which takes no filters.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListEncryptionTypesInput;
+
+crate::error::debug_record!(ListEncryptionTypesInput unit);
 
 /// Encryption types offered by the project.
 pub type ListEncryptionTypesOutput = List<EncryptionType>;
@@ -103,10 +120,12 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumeTypeZonesInput,
     ) -> Result<ListVolumeTypeZonesOutput, Failure<ListVolumeTypeZonesOutput>> {
-        output(
-            self.type_zones(ctx, &input.zone_id, &mut Evidence::new())
-                .await,
-        )
+        crate::wire::product::exit::finish!(async {
+            output(
+                self.type_zones(ctx, &input.zone_id, &mut Evidence::new())
+                    .await,
+            )
+        })
     }
 
     async fn type_zones(
@@ -122,9 +141,9 @@ impl Client {
         } else {
             &zone[..]
         };
-        self.read(ctx, ZONES, &[&project], query, evidence, |raw| {
+        self.read(ctx, ZONES, &[&project], query, evidence, |raw, names| {
             Ok(List {
-                items: Object::parse(raw)?.value("volumeTypeZones")?,
+                items: Object::parse(raw, names)?.value("volumeTypeZones")?,
             })
         })
         .await
@@ -136,7 +155,7 @@ impl Client {
         ctx: &RequestContext,
         input: ListVolumeTypesInput,
     ) -> Result<ListVolumeTypesOutput, Failure<ListVolumeTypesOutput>> {
-        output(self.types(ctx, &input).await)
+        crate::wire::product::exit::finish!(async { output(self.types(ctx, &input).await) })
     }
 
     async fn types(
@@ -178,8 +197,8 @@ impl Client {
                 (TYPES_IN_ZONE, &path[..])
             };
             let rows: Vec<VolumeType> = self
-                .read(ctx, read, path, &[], &mut evidence, |raw| {
-                    Object::parse(raw)?.value("volumeTypes")
+                .read(ctx, read, path, &[], &mut evidence, |raw, names| {
+                    Object::parse(raw, names)?.value("volumeTypes")
                 })
                 .await?;
             for mut row in rows
@@ -204,32 +223,34 @@ impl Client {
         ctx: &RequestContext,
         input: GetVolumeTypeInput,
     ) -> Result<GetVolumeTypeOutput, Failure<GetVolumeTypeOutput>> {
-        output(
-            async {
-                path_id(TYPE.id, "VolumeTypeID", &input.volume_type_id)?;
-                let mut evidence = Evidence::new();
-                let project = self.project(ctx, &mut evidence).await?;
-                let rows: Vec<VolumeType> = self
-                    .read_value(
-                        ctx,
-                        TYPE,
-                        &[&project, &input.volume_type_id],
-                        &[],
-                        &mut evidence,
-                        |raw| Object::parse(raw)?.value("volumeTypes"),
-                    )
-                    .await?;
-                let mut volume_type = rows.into_iter().next().ok_or_else(|| {
-                    Box::new(Error::new(ErrorClass::NotFound).with_detail(format!(
-                        "vngcloud: not found: volume type {}",
-                        input.volume_type_id
-                    )))
-                })?;
-                volume_type.redact(&evidence);
-                screen(&evidence, GetVolumeTypeOutput { volume_type }, TYPE.id)
-            }
-            .await,
-        )
+        crate::wire::product::exit::finish!(async {
+            output(
+                async {
+                    path_id(TYPE.id, "VolumeTypeID", &input.volume_type_id)?;
+                    let mut evidence = Evidence::new();
+                    let project = self.project(ctx, &mut evidence).await?;
+                    let rows: Vec<VolumeType> = self
+                        .read_value(
+                            ctx,
+                            TYPE,
+                            &[&project, &input.volume_type_id],
+                            &[],
+                            &mut evidence,
+                            |raw, names| Object::parse(raw, names)?.value("volumeTypes"),
+                        )
+                        .await?;
+                    let mut volume_type = rows.into_iter().next().ok_or_else(|| {
+                        Box::new(Error::new(ErrorClass::NotFound).with_detail(format!(
+                            "vngcloud: not found: volume type {}",
+                            input.volume_type_id
+                        )))
+                    })?;
+                    volume_type.redact(&evidence);
+                    screen(&evidence, GetVolumeTypeOutput { volume_type }, TYPE.id)
+                }
+                .await,
+            )
+        })
     }
 
     /// Reads the default volume type for the specified network zone.
@@ -238,26 +259,28 @@ impl Client {
         ctx: &RequestContext,
         input: GetDefaultVolumeTypeInput,
     ) -> Result<GetDefaultVolumeTypeOutput, Failure<GetDefaultVolumeTypeOutput>> {
-        output(async {
-            if !super::inventory::response_id(&input.zone_id) {
-                return Err(invalid("vngcloud: invalid input: volume.GetDefaultVolumeType requires ZoneID to match ^[A-Za-z0-9_-]+$"));
-            }
-            let mut evidence = Evidence::new();
-            let project = self.project(ctx, &mut evidence).await?;
-            let mut result: GetVolumeTypeOutput = self.read_value(ctx, DEFAULT_TYPE, &[&project], &[("zoneId", &input.zone_id)], &mut evidence, |raw| {
-                let fields = Object::parse(raw)?;
-                let id: String = fields.value("volumeTypeId")?;
-                let zone: String = fields.value("volumeTypeZoneId")?;
-                Ok(GetVolumeTypeOutput { volume_type: VolumeType {
-                    id: id.clone(), volume_type_id: id, zone_id: zone.clone(), volume_type_zone_id: zone, ..VolumeType::default()
-                }})
-            }).await?;
-            if result.volume_type.id.is_empty() {
-                return Err(Box::new(Error::new(ErrorClass::NotFound).with_detail("vngcloud: not found: default volume type")));
-            }
-            result.volume_type.redact(&evidence);
-            screen(&evidence, result, DEFAULT_TYPE.id)
-        }.await)
+        crate::wire::product::exit::finish!(async {
+            output(async {
+                if !super::inventory::response_id(&input.zone_id) {
+                    return Err(invalid("vngcloud: invalid input: volume.GetDefaultVolumeType requires ZoneID to match ^[A-Za-z0-9_-]+$"));
+                }
+                let mut evidence = Evidence::new();
+                let project = self.project(ctx, &mut evidence).await?;
+                let mut result: GetVolumeTypeOutput = self.read_value(ctx, DEFAULT_TYPE, &[&project], &[("zoneId", &input.zone_id)], &mut evidence, |raw, names| {
+                    let fields = Object::parse(raw, names)?;
+                    let id: String = fields.value("volumeTypeId")?;
+                    let zone: String = fields.value("volumeTypeZoneId")?;
+                    Ok(GetVolumeTypeOutput { volume_type: VolumeType {
+                        id: id.clone(), volume_type_id: id, zone_id: zone.clone(), volume_type_zone_id: zone, ..VolumeType::default()
+                    }})
+                }).await?;
+                if result.volume_type.id.is_empty() {
+                    return Err(Box::new(Error::new(ErrorClass::NotFound).with_detail("vngcloud: not found: default volume type")));
+                }
+                result.volume_type.redact(&evidence);
+                screen(&evidence, result, DEFAULT_TYPE.id)
+            }.await)
+        })
     }
 
     /// Reads encryption types and normalizes IDs to their request values.
@@ -266,30 +289,42 @@ impl Client {
         ctx: &RequestContext,
         _input: ListEncryptionTypesInput,
     ) -> Result<ListEncryptionTypesOutput, Failure<ListEncryptionTypesOutput>> {
-        output(
-            async {
-                let mut evidence = Evidence::new();
-                let project = self.project(ctx, &mut evidence).await?;
-                self.read(ctx, ENCRYPTION, &[&project], &[], &mut evidence, |raw| {
-                    let array = if raw.get().starts_with('{') {
-                        let object = Object::parse(raw)?;
-                        object
-                            .entry("encryptionTypes")?
-                            .or(object.entry("data")?)
-                            .or(object.entry("items")?)
-                            .filter(|value| value.get() != "null")
-                    } else if raw.get() == "null" {
-                        None
-                    } else {
-                        Some(raw)
-                    };
-                    let items = array.map_or_else(|| Ok(Vec::new()), encryption_types)?;
-                    Ok(List { items })
-                })
-                .await
-            }
-            .await,
-        )
+        crate::wire::product::exit::finish!(async {
+            output(
+                async {
+                    let mut evidence = Evidence::new();
+                    let project = self.project(ctx, &mut evidence).await?;
+                    self.read(
+                        ctx,
+                        ENCRYPTION,
+                        &[&project],
+                        &[],
+                        &mut evidence,
+                        |raw, names| {
+                            let array = if raw.get().starts_with('{') {
+                                let object = Object::parse(raw, names)?;
+                                object
+                                    .entry("encryptionTypes")?
+                                    .or(object.entry("data")?)
+                                    .or(object.entry("items")?)
+                                    .filter(|value| value.get() != "null")
+                            } else if raw.get() == "null" {
+                                None
+                            } else {
+                                Some(raw)
+                            };
+                            let items = array.map_or_else(
+                                || Ok(Vec::new()),
+                                |raw| encryption_types(raw, names),
+                            )?;
+                            Ok(List { items })
+                        },
+                    )
+                    .await
+                }
+                .await,
+            )
+        })
     }
 }
 
@@ -302,8 +337,9 @@ fn output_screen(
 
 fn encryption_types(
     raw: &serde_json::value::RawValue,
+    names: FieldNames,
 ) -> super::wire::ShapeResult<Vec<EncryptionType>> {
-    if let Ok(mut rows) = Vec::<EncryptionType>::from_wire(raw) {
+    if let Ok(mut rows) = Vec::<EncryptionType>::from_wire(raw, names) {
         for row in &mut rows {
             row.id = nonempty([&row.key, &row.id, &row.value, &row.display_key, &row.name]);
             row.name = nonempty([&row.name, &row.display_key, &row.id]);
@@ -311,7 +347,7 @@ fn encryption_types(
         }
         return Ok(rows);
     }
-    Vec::<String>::from_wire(raw).map(|items| {
+    Vec::<String>::from_wire(raw, names).map(|items| {
         items
             .into_iter()
             .map(|value| EncryptionType {

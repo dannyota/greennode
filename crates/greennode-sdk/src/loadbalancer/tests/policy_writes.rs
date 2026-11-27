@@ -36,7 +36,7 @@ async fn policy_update_refuses_to_resend_incomplete_read_rules() {
 }
 
 #[tokio::test]
-async fn policy_update_projects_reflected_position_without_leaking_the_number() {
+async fn policy_update_refuses_a_preflight_with_a_reflected_position() {
     let server = Server::start(vec![
         response("200 OK", PARENT),
         response(
@@ -46,16 +46,13 @@ async fn policy_update_projects_reflected_position_without_leaking_the_number() 
         response("202 Accepted", ""),
     ]);
     let (ctx, _) = RequestContext::new();
-    let output = client(&server, "42")
+    let failure = client(&server, "42")
         .update_policy(&ctx, update())
         .await
-        .unwrap();
-    assert_eq!(output.policy.position, 0);
-    assert_eq!(
-        serde_json::to_value(output).unwrap()["Policy"]["Position"],
-        "<redacted>"
-    );
-    assert_eq!(server.requests(), 3);
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
 }
 
 #[tokio::test]

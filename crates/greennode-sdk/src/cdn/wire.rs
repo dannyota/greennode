@@ -7,10 +7,10 @@ use super::{Client, ErrorDetail};
 use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{Operation, RouteAuth, execute_raw},
+    operation::{GuardOperation, Operation, RouteAuth, execute_raw},
     options::Options,
     redirect::{Classification, Retry},
-    response::{classify, sanitize_error_text},
+    response::{classify, decision_text, sanitize_error_text},
     retry,
 };
 use crate::wire::strict_json::{Shape, ShapeField, validate_shape};
@@ -96,7 +96,8 @@ impl Call {
         self.id.strip_prefix("cdn.").unwrap_or(self.id)
     }
 
-    fn refused(&self, status: u16, envelope: &Envelope, evidence: &Evidence) -> Error {
+    fn refused(&self, status: u16, envelope: GuardEnvelope<'_>, evidence: &Evidence) -> Error {
+        let GuardEnvelope(envelope) = envelope;
         if let Some(not_found) = self.not_found
             && empty_data(envelope.data.as_deref())
         {
@@ -112,6 +113,10 @@ impl Call {
         let parsed = envelope.code.as_deref().and_then(parse_code);
         let effective = parsed
             .as_deref()
+            .filter(|code| {
+                decision_text(code, evidence.credentials())
+                    .is_some_and(|safe| safe.as_str() == *code)
+            })
             .and_then(|code| code.parse::<u16>().ok())
             .unwrap_or_default();
         let code = if envelope.code.is_some() && parsed.is_none() {
@@ -122,15 +127,17 @@ impl Call {
                 .unwrap_or_else(|| "EnvelopeError".to_owned())
         };
         let message = envelope.message.as_deref().unwrap_or_default();
-        let (code, class, detail) = if message.contains("is not allow to update or delete") {
+        let decision = decision_text(message, evidence.credentials());
+        let decision = decision.as_ref().map_or("", |text| text.as_str());
+        let (code, class, detail) = if decision.contains("is not allow to update or delete") {
             (
                 code.as_str(),
                 ErrorClass::Api,
                 Some(ErrorDetail::ResourceBusy),
             )
-        } else if message.starts_with("Not found cdn") {
+        } else if decision.starts_with("Not found cdn") {
             ("NotFound", ErrorClass::NotFound, None)
-        } else if effective == 202 && message.starts_with("Last CDN flush cache time") {
+        } else if effective == 202 && decision.starts_with("Last CDN flush cache time") {
             (
                 code.as_str(),
                 ErrorClass::Api,
@@ -185,6 +192,19 @@ struct Envelope {
     data: Option<Box<RawValue>>,
 }
 
+struct GuardEnvelope<'a>(&'a Envelope);
+
+impl<'a> GuardEnvelope<'a> {
+    fn checked(
+        envelope: &'a Envelope,
+        reflection: crate::wire::product::response::Screen,
+    ) -> Option<Self> {
+        reflection.is_clean().then_some(Self(envelope))
+    }
+}
+
+pub(super) struct GuardCall(pub(super) Call);
+
 const ENVELOPE: Shape<'static> = Shape::Object(&[
     ShapeField {
         name: "success",
@@ -232,6 +252,30 @@ impl Client {
         body: Bytes,
         evidence: &mut Evidence,
     ) -> Result<Option<Box<RawValue>>, Failure<()>> {
+        self.call_with_policy(ctx, call, path, body, evidence, false)
+            .await
+    }
+
+    pub(super) async fn call_guard(
+        &self,
+        ctx: &RequestContext,
+        guard: &GuardCall,
+        path: &[&str],
+        evidence: &mut Evidence,
+    ) -> Result<Option<Box<RawValue>>, Failure<()>> {
+        self.call_with_policy(ctx, &guard.0, path, Bytes::new(), evidence, true)
+            .await
+    }
+
+    async fn call_with_policy(
+        &self,
+        ctx: &RequestContext,
+        call: &Call,
+        path: &[&str],
+        body: Bytes,
+        evidence: &mut Evidence,
+        guard: bool,
+    ) -> Result<Option<Box<RawValue>>, Failure<()>> {
         let mut operation = operation(
             call.id,
             call.route,
@@ -244,7 +288,14 @@ impl Client {
         }
         operation.retry = call.retry;
         let sent_failure = |error| Failure::new(error, None, call.dispatch(true));
-        let reply = raw(self, ctx, &operation, path, body, evidence, false)
+        let guarded;
+        let operation = if guard {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
+        };
+        let reply = raw(self, ctx, operation, path, body, evidence, false)
             .await
             .map_err(|failure| {
                 let dispatch = match failure.write_dispatch() {
@@ -252,9 +303,15 @@ impl Client {
                     dispatch => dispatch,
                 };
                 let (error, _, _) = failure.into_parts();
+                if error
+                    .detail::<crate::wire::product::operation::RefusedGuard>()
+                    .is_some()
+                {
+                    return Failure::new(error, None, dispatch);
+                }
                 let status = error
-                    .detail::<StatusCode>()
-                    .map(StatusCode::as_u16)
+                    .http_status()
+                    .map(|status| status.as_u16())
                     .or_else(|| error.api_error().and_then(ApiError::status));
                 let error = match status {
                     Some(status) if let Some(message) = key_message(status) => {
@@ -300,12 +357,36 @@ impl Client {
             };
             return Err(sent_failure(error));
         }
-        validate_shape(&reply.body, &ENVELOPE, RESPONSE_CAP)
+        let screen = if call.write {
+            let screen = evidence.transport_only().go_peer_body_screen(&reply.body);
+            screen.clean().ok_or_else(|| {
+                sent_failure(crate::wire::product::operation::unsafe_guard_response(
+                    call.id,
+                ))
+            })?;
+            screen
+        } else {
+            reply.reflection
+        };
+        let names = if guard {
+            crate::wire::strict_json::FieldNames::Canonical
+        } else {
+            evidence.field_names()
+        };
+        if names.has_case_variant(&reply.body, &ENVELOPE) {
+            return Err(sent_failure(
+                crate::wire::product::operation::unsafe_guard_response(call.id),
+            ));
+        }
+        names
+            .validate(&reply.body, &ENVELOPE, RESPONSE_CAP)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         let envelope: Envelope = serde_json::from_slice(&reply.body)
             .map_err(|_| sent_failure(call.unexpected(status)))?;
         if !envelope.success {
-            return Err(sent_failure(call.refused(status, &envelope, evidence)));
+            let checked = GuardEnvelope::checked(&envelope, screen)
+                .ok_or_else(|| sent_failure(call.unexpected(status)))?;
+            return Err(sent_failure(call.refused(status, checked, evidence)));
         }
         Ok(envelope.data)
     }
@@ -332,7 +413,7 @@ pub(super) fn operation(
         no_output: false,
         keep_status: true,
         overflow_overrides_status: false,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }

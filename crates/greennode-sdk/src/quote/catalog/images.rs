@@ -3,7 +3,7 @@ use crate::{Error, quote::request::invalid, wire::product::options::PathIds};
 use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Image {
     pub(crate) id: String,

@@ -9,8 +9,10 @@ use crate::wire::product::options::PathIds;
 use crate::{Error, Failure, RequestContext};
 
 /// Input for reading the synthetic quota catalogs.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct ListSyntheticPackagesInput;
+
+crate::error::debug_record!(ListSyntheticPackagesInput unit);
 
 output! {
     /// Synthetic quota catalogs and billing settings.
@@ -125,83 +127,85 @@ impl Client {
         ctx: &RequestContext,
         _: ListSyntheticPackagesInput,
     ) -> Result<ListSyntheticPackagesOutput, Failure<ListSyntheticPackagesOutput>> {
-        let mut reader = Reader::new(self, ctx, "monitor.ListSyntheticPackages");
-        let mut classes = read_classes(&mut reader).await.map_err(failure)?;
-        let raw = reader.get(V1_PACKAGES, &[]).await.map_err(failure)?;
-        let mut packages = reader.decode(v1_packages(&raw)).map_err(failure)?;
-        let settings = read_settings(&mut reader).await.map_err(failure)?;
-        read_class_packages(&mut reader, &mut classes)
-            .await
-            .map_err(failure)?;
-        if class_ids(&classes)
-            .chain(packages.iter().map(|package| package.id.as_str()))
-            .any(|id| reader.evidence.id_reflects(id))
-        {
-            return Err(failure(reader.invalid()));
-        }
-        let offers = offers(&classes);
-        let periods = settings.periods(true);
-        let free_options: Vec<Vec<_>> = classes
-            .iter()
-            .map(|class| {
-                class
-                    .options
-                    .iter()
-                    .map(|option| {
-                        offers
-                            .get(option.output.package_id.as_str())
-                            .is_some_and(|offer| {
-                                offer.free(
-                                    &class.id,
-                                    get(option.output.location).unwrap_or_default(),
-                                    None,
-                                )
-                            })
-                    })
-                    .collect()
-            })
-            .collect();
-        for package in &mut packages {
-            if let Some(ResponseField::Value(price)) = package.price {
-                package.month_periods = settings.periods(price == 0.0);
+        crate::wire::product::exit::finish!(async {
+            let mut reader = Reader::new(self, ctx, "monitor.ListSyntheticPackages");
+            let mut classes = read_classes(&mut reader).await.map_err(failure)?;
+            let raw = reader.get(V1_PACKAGES, &[]).await.map_err(failure)?;
+            let mut packages = reader.decode(v1_packages(&raw)).map_err(failure)?;
+            let settings = read_settings(&mut reader).await.map_err(failure)?;
+            read_class_packages(&mut reader, &mut classes)
+                .await
+                .map_err(failure)?;
+            if class_ids(&classes)
+                .chain(packages.iter().map(|package| package.id.as_str()))
+                .any(|id| reader.evidence.id_reflects(id))
+            {
+                return Err(failure(reader.invalid()));
             }
-        }
-        packages.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
-        let items = classes
-            .into_iter()
-            .zip(free_options)
-            .map(|(class, eligible)| SyntheticQuotaClass {
-                id: class.id,
-                name: class.name,
-                status: class.status,
-                description: class.description,
-                priority: ResponseField::Value(class.priority),
-                packages: class.packages,
-                options: class
-                    .options
-                    .into_iter()
-                    .zip(eligible)
-                    .map(|(option, free)| {
-                        let mut output = option.output;
-                        if free {
-                            output.month_periods.clone_from(&periods);
-                        }
-                        output
-                    })
-                    .collect(),
-            })
-            .collect();
-        let mut output = ListSyntheticPackagesOutput {
-            items,
-            packages,
-            month_periods: settings.periods(false),
-            max_month_period_for_free_quota: ResponseField::Value(settings.maximum),
-            payment_method: settings.payment_method,
-        };
-        if !output.screen(&reader.evidence) {
-            return Err(failure(reader.invalid()));
-        }
-        Ok(output)
+            let offers = offers(&classes);
+            let periods = settings.periods(true);
+            let free_options: Vec<Vec<_>> = classes
+                .iter()
+                .map(|class| {
+                    class
+                        .options
+                        .iter()
+                        .map(|option| {
+                            offers
+                                .get(option.output.package_id.as_str())
+                                .is_some_and(|offer| {
+                                    offer.free(
+                                        &class.id,
+                                        get(option.output.location).unwrap_or_default(),
+                                        None,
+                                    )
+                                })
+                        })
+                        .collect()
+                })
+                .collect();
+            for package in &mut packages {
+                if let Some(ResponseField::Value(price)) = package.price {
+                    package.month_periods = settings.periods(price == 0.0);
+                }
+            }
+            packages.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
+            let items = classes
+                .into_iter()
+                .zip(free_options)
+                .map(|(class, eligible)| SyntheticQuotaClass {
+                    id: class.id,
+                    name: class.name,
+                    status: class.status,
+                    description: class.description,
+                    priority: ResponseField::Value(class.priority),
+                    packages: class.packages,
+                    options: class
+                        .options
+                        .into_iter()
+                        .zip(eligible)
+                        .map(|(option, free)| {
+                            let mut output = option.output;
+                            if free {
+                                output.month_periods.clone_from(&periods);
+                            }
+                            output
+                        })
+                        .collect(),
+                })
+                .collect();
+            let mut output = ListSyntheticPackagesOutput {
+                items,
+                packages,
+                month_periods: settings.periods(false),
+                max_month_period_for_free_quota: ResponseField::Value(settings.maximum),
+                payment_method: settings.payment_method,
+            };
+            if !output.screen(&reader.evidence) {
+                return Err(failure(reader.invalid()));
+            }
+            Ok(output)
+        })
     }
 }
 

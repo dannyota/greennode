@@ -2,8 +2,10 @@ use std::fmt;
 use std::time::Duration;
 
 /// A static identifier for an SDK operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct OperationId(&'static str);
+
+crate::error::debug_record!(OperationId(0));
 
 impl OperationId {
     #[allow(dead_code)]
@@ -23,8 +25,10 @@ impl fmt::Display for OperationId {
 }
 
 /// A static route pattern without concrete resource identifiers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RouteTemplate(&'static str);
+
+crate::error::debug_record!(RouteTemplate(0));
 
 impl RouteTemplate {
     #[allow(dead_code)]
@@ -44,7 +48,7 @@ impl fmt::Display for RouteTemplate {
 }
 
 /// HTTP methods represented in diagnostic events.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HttpMethod {
     /// HTTP GET.
     Get,
@@ -62,8 +66,10 @@ pub enum HttpMethod {
     Options,
 }
 
+crate::error::debug_record!(HttpMethod; Get, Post, Put, Patch, Delete, Head, Options);
+
 /// Structured diagnostics without request or response bodies.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum DebugEvent {
     /// A product request attempt completed.
     ProductAttempt {
@@ -103,8 +109,68 @@ pub enum DebugEvent {
     },
 }
 
+crate::error::debug_record!(DebugEvent [
+    ProductAttempt { operation, method, route_template, status, elapsed },
+    ResponseCapture { operation, method, status },
+    LoginStarted {},
+    LoginFinished { ok },
+    ExchangeStarted {},
+    ExchangeFinished { ok }
+]);
+
 /// Receives diagnostic events synchronously.
 pub trait DebugEventSink: Send + Sync {
     /// Receives one event.
     fn emit(&self, event: &DebugEvent);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_expose_only_typed_operation_and_route() {
+        const OPERATION: OperationId = OperationId::new("volume.list");
+        const ROUTE: RouteTemplate = RouteTemplate::new("/volumes/{id}");
+        let event = DebugEvent::ProductAttempt {
+            operation: OPERATION,
+            method: HttpMethod::Get,
+            route_template: Some(ROUTE),
+            status: Some(200),
+            elapsed: Duration::ZERO,
+        };
+        assert_eq!(format!("{event:x?}"), format!("{event:?}"));
+        assert_eq!(format!("{event:06x?}"), format!("{event:?}"));
+        match event {
+            DebugEvent::ProductAttempt {
+                operation,
+                method,
+                route_template,
+                status,
+                elapsed,
+            } => {
+                assert_eq!(operation.to_string(), "volume.list");
+                assert_eq!(method, HttpMethod::Get);
+                assert_eq!(
+                    route_template.map(|route| route.to_string()).as_deref(),
+                    Some("/volumes/{id}")
+                );
+                assert_eq!(status, Some(200));
+                assert_eq!(elapsed, Duration::ZERO);
+            }
+            DebugEvent::ResponseCapture {
+                operation,
+                method,
+                status,
+            } => {
+                let _ = (operation, method, status);
+                panic!("unexpected event");
+            }
+            DebugEvent::LoginStarted | DebugEvent::ExchangeStarted => panic!("unexpected event"),
+            DebugEvent::LoginFinished { ok } | DebugEvent::ExchangeFinished { ok } => {
+                let _ = ok;
+                panic!("unexpected event");
+            }
+        }
+    }
 }

@@ -12,11 +12,15 @@ fn listener_input(no_wait: bool) -> DeleteListenerInput {
 }
 
 #[tokio::test]
-async fn pool_delete_ignores_lone_case_variants_and_refuses_collisions() {
+async fn pool_delete_rejects_lone_case_variants_and_collisions() {
     for (listeners, allowed) in [
         (
-            r#"{"data":[{"uuid":"listener_1","DefaultPoolId":"ignored"}]}"#,
+            r#"{"data":[{"uuid":"listener_1","defaultPoolId":"other"}]}"#,
             true,
+        ),
+        (
+            r#"{"data":[{"uuid":"listener_1","DefaultPoolId":"ignored"}]}"#,
+            false,
         ),
         (
             r#"{"data":[{"uuid":"listener_1","defaultPoolId":"other","DefaultPoolId":"ignored"}]}"#,
@@ -64,12 +68,7 @@ async fn pool_delete_ignores_lone_case_variants_and_refuses_collisions() {
 
 #[tokio::test]
 async fn a_busy_refusal_rereads_then_resends_the_delete_only_once() {
-    let busy = || {
-        response(
-            "409 Conflict",
-            r#"{"message":"listener is not ready: toy%2Dsecret"}"#,
-        )
-    };
+    let busy = || response("409 Conflict", r#"{"message":"listener is not ready"}"#);
     let server = Server::start(vec![
         lb_status("CREATED"),
         response("200 OK", LISTENER_READY),
@@ -278,7 +277,7 @@ async fn conflict_arrays_require_go_error_fields_and_accept_detail_text() {
 }
 
 #[tokio::test]
-async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
+async fn reflected_listener_id_cannot_classify_the_pool_as_in_use() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"{"data":[{"uuid":"toy-secret","defaultPoolId":"pool-1"}]}"#,
@@ -288,23 +287,13 @@ async fn reflected_listener_id_does_not_turn_pool_in_use_into_invalid_input() {
         .delete_pool(&ctx, pool_input(true))
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<WriteError>(),
-        Some(&WriteError::ResourceInUse)
-    );
-    assert!(!failure.error().has_class(ErrorClass::InvalidInput));
-    let message = failure
-        .error()
-        .detail::<crate::RecoveryAdvice>()
-        .unwrap()
-        .message();
-    assert!(!message.contains(CANARY));
-    assert!(message.contains("<redacted>"));
+    assert_eq!(failure.error().detail::<WriteError>(), None);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]
-async fn pool_delete_classifies_in_use_on_the_readiness_retry() {
+async fn pool_delete_classifies_only_screened_messages_on_the_readiness_retry() {
     let server = Server::start(
         pool_preflight()
             .into_iter()
@@ -323,17 +312,10 @@ async fn pool_delete_classifies_in_use_on_the_readiness_retry() {
         .delete_pool(&ctx, pool_input(true))
         .await
         .unwrap_err();
-    assert_eq!(
-        failure.error().detail::<WriteError>(),
-        Some(&WriteError::ResourceInUse)
-    );
-    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+    assert_eq!(failure.error().detail::<WriteError>(), None);
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    let message = failure
-        .error()
-        .detail::<crate::RecoveryAdvice>()
-        .unwrap()
-        .message();
+    let message = failure.error().api_error().unwrap().message();
     assert!(!message.contains(CANARY));
     assert!(!message.contains("toy%2Dsecret"));
     assert_eq!(server.requests(), 6);
@@ -391,4 +373,25 @@ async fn busy_delete_validates_the_full_child_before_resending() {
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn child_delete_does_not_retry_for_busy_text_that_reflects_a_bearer() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response(
+            "409 Conflict",
+            r#"{"message":"listener is not ready: toy%2Dsecret"}"#,
+        ),
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("204 No Content", ""),
+    ]);
+    let result = client(&server, CANARY)
+        .delete_listener(&RequestContext::new().0, listener_input(true))
+        .await;
+    assert_eq!(server.requests(), 3);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
 }

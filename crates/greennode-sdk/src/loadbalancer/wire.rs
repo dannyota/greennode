@@ -8,7 +8,7 @@ use crate::error::SafeText;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, GuardOperation, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
     response, retry,
@@ -19,7 +19,7 @@ use crate::{ApiError, Error, ErrorClass, PagedList, RequestContext};
 use super::Client;
 
 /// Failure decoding or screening a successful regional response.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The body was not valid JSON.
@@ -30,12 +30,16 @@ pub enum DecodeError {
     ReflectedCredential,
 }
 
+crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape, ReflectedCredential);
+
+#[derive(Debug)]
 pub(super) struct CompleteNotFound;
 
+#[derive(Debug)]
 pub(super) struct PoolInUseRefusal(pub(super) SafeText);
 
 pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<PoolInUseRefusal> {
-    response::inspect_error_message(body, |message| {
+    response::inspect_error_message(body, evidence.credentials(), |message| {
         let phrase = b"is used in listener";
         message
             .as_bytes()
@@ -51,6 +55,8 @@ pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<Po
     .flatten()
 }
 
+pub(super) struct GuardRead<'a>(pub(super) &'a Read);
+
 pub(super) struct Read {
     pub(super) id: &'static str,
     pub(super) route: &'static str,
@@ -62,15 +68,24 @@ impl Read {
         Box::new(self.api("", &message, evidence).with_detail(detail))
     }
 
+    pub(super) fn invalid_guard(&self, evidence: &Evidence) -> Box<Error> {
+        Box::new(
+            evidence
+                .screen_error(crate::wire::product::operation::unsafe_guard_response(
+                    self.id,
+                ))
+                .with_outer_detail(DecodeError::InvalidShape),
+        )
+    }
+
     pub(super) fn api(&self, code: &str, message: &str, evidence: &Evidence) -> Error {
-        Error::from_api(ApiError::without_fallback(
+        evidence.screen_error(Error::from_api(ApiError::without_fallback(
             self.id,
             None,
             SafeText::new(code, &[]),
             SafeText::new(message, &[]),
             false,
-        ))
-        .screen_api(&|value| evidence.text_reflects(value))
+        )))
     }
 
     pub(super) fn decode<T: WireField>(
@@ -86,6 +101,12 @@ impl Read {
         text: &str,
         evidence: &Evidence,
     ) -> Result<T, Box<Error>> {
+        if evidence
+            .field_names()
+            .has_case_variant(text.as_bytes(), &T::SCHEMA)
+        {
+            return Err(self.invalid_guard(evidence));
+        }
         serde_json::from_str::<Field<T>>(text)
             .map(|row| row.0)
             .map_err(|_| self.decode_error(evidence, DecodeError::InvalidShape))
@@ -171,17 +192,7 @@ impl Envelope<'_> {
         evidence: &Evidence,
         name: &str,
     ) -> Result<&str, Box<Error>> {
-        if self
-            .0
-            .keys()
-            .filter(|key| field_matches(name, key))
-            .take(2)
-            .count()
-            > 1
-        {
-            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
-        }
-        Ok(self.0.get(name).map_or("null", |raw| raw.get()))
+        self.field_raw(read, evidence, name, evidence.field_names())
     }
 
     pub(super) fn canonical_raw(
@@ -190,14 +201,25 @@ impl Envelope<'_> {
         evidence: &Evidence,
         name: &str,
     ) -> Result<&str, Box<Error>> {
-        if self
-            .0
-            .keys()
-            .filter(|key| field_matches(name, key))
-            .nth(1)
-            .is_some()
-        {
-            return Err(read.decode_error(evidence, DecodeError::InvalidShape));
+        self.field_raw(read, evidence, name, strict_json::FieldNames::Canonical)
+    }
+
+    fn field_raw(
+        &self,
+        read: &Read,
+        evidence: &Evidence,
+        name: &str,
+        names: strict_json::FieldNames,
+    ) -> Result<&str, Box<Error>> {
+        let invalid = || read.decode_error(evidence, DecodeError::InvalidShape);
+        let mut matched = self.0.keys().filter(|key| field_matches(name, key));
+        if let Some(key) = matched.next() {
+            names
+                .check(name, key)
+                .map_err(|_| read.invalid_guard(evidence))?;
+            if matched.next().is_some() {
+                return Err(invalid());
+            }
         }
         Ok(self.0.get(name).map_or("null", |raw| raw.get()))
     }
@@ -257,7 +279,19 @@ impl Client {
         Ok(Document { text, evidence })
     }
 
-    pub(super) async fn read_text(
+    pub(super) async fn read_guard_text(
+        &self,
+        ctx: &RequestContext,
+        guard: GuardRead<'_>,
+        ids: &[(&str, &str)],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+    ) -> Result<String, Box<Error>> {
+        self.read_text(ctx, guard.0, ids, query, evidence, true)
+            .await
+    }
+
+    async fn read_text(
         &self,
         ctx: &RequestContext,
         read: &Read,
@@ -277,7 +311,7 @@ impl Client {
         let project = session
             .require_project_id_with_evidence(ctx, evidence)
             .await
-            .map_err(|error| Box::new(error.screen_api(&|text| evidence.text_reflects(text))))?;
+            .map_err(|error| Box::new(evidence.screen_error(*error)))?;
         let path: Vec<_> = std::iter::once(project.as_str())
             .chain(ids.iter().map(|(_, value)| *value))
             .collect();
@@ -306,14 +340,21 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: require_complete,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: require_complete,
             retry_config: retry::Config::default(),
+        };
+        let guarded;
+        let operation = if require_complete {
+            guarded = GuardOperation::new(operation);
+            &*guarded
+        } else {
+            &operation
         };
         let result = operation::execute_raw(
             runtime,
             base,
-            &operation,
+            operation,
             &Options::DEFAULT,
             &path,
             query,
@@ -322,8 +363,7 @@ impl Client {
             evidence,
         )
         .await;
-        let screen =
-            |error: Error| Box::new(error.screen_api(&|text| evidence.text_reflects(text)));
+        let screen = |error: Error| Box::new(evidence.screen_error(error));
         let received = result.map_err(|error| screen(error.into_parts().0))?;
         let status = received.status;
         let in_use = (require_complete && !operation.success.contains(&status))

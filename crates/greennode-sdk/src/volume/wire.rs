@@ -10,7 +10,7 @@ use crate::wire::product::{
     response,
     sender::Response,
 };
-use crate::wire::strict_json::{self, Shape};
+use crate::wire::strict_json::{self, FieldNames, Shape};
 use crate::{Error, ErrorClass, Failure, WriteDispatch};
 
 pub(super) const CAP: usize = 8 << 20;
@@ -107,14 +107,16 @@ fn normalize(bytes: &[u8]) -> String {
 
 pub(super) type ShapeResult<T> = Result<T, ()>;
 
-pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>);
+pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>, FieldNames);
 
 impl<'a> Object<'a> {
-    pub(super) fn parse(raw: &'a RawValue) -> ShapeResult<Self> {
+    pub(super) fn parse(raw: &'a RawValue, names: FieldNames) -> ShapeResult<Self> {
         if raw.get() == "null" {
-            return Ok(Self(BTreeMap::new()));
+            return Ok(Self(BTreeMap::new(), names));
         }
-        serde_json::from_str(raw.get()).map(Self).map_err(|_| ())
+        serde_json::from_str(raw.get())
+            .map(|fields| Self(fields, names))
+            .map_err(|_| ())
     }
 
     pub(super) fn get(&self, name: &str) -> ShapeResult<Option<&'a RawValue>> {
@@ -127,11 +129,14 @@ impl<'a> Object<'a> {
             .0
             .iter()
             .filter(|(key, _)| strict_json::field_matches(name, key));
-        let value = fields.next().map(|(_, value)| *value);
+        let Some((key, value)) = fields.next() else {
+            return Ok(None);
+        };
+        self.1.check(name, key).map_err(|_| ())?;
         if fields.next().is_some() {
             return Err(());
         }
-        Ok(value)
+        Ok(Some(*value))
     }
 
     pub(super) fn value<T: FromWire + Default>(&self, name: &str) -> ShapeResult<T> {
@@ -139,7 +144,9 @@ impl<'a> Object<'a> {
     }
 
     pub(super) fn optional<T: FromWire>(&self, name: &str) -> ShapeResult<Option<T>> {
-        self.get(name)?.map(T::from_wire).transpose()
+        self.get(name)?
+            .map(|raw| T::from_wire(raw, self.1))
+            .transpose()
     }
 
     pub(super) fn require<T: FromWire>(&self, name: &str) -> ShapeResult<T> {
@@ -201,7 +208,7 @@ fn integral(raw: &RawValue) -> ShapeResult<i64> {
 }
 
 pub(super) trait FromWire: Sized {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self>;
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self>;
 }
 
 pub(super) fn parse<T: DeserializeOwned>(raw: &RawValue) -> ShapeResult<T> {
@@ -211,7 +218,7 @@ pub(super) fn parse<T: DeserializeOwned>(raw: &RawValue) -> ShapeResult<T> {
 macro_rules! scalar {
     ($($ty:ty),+) => {$(
         impl FromWire for $ty {
-            fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+            fn from_wire(raw: &RawValue, _: FieldNames) -> ShapeResult<Self> {
                 parse(raw)
             }
         }
@@ -220,25 +227,25 @@ macro_rules! scalar {
 scalar!(String, bool, i64, u64);
 
 impl<T: FromWire + Default> FromWire for Vec<T> {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
         let items: Vec<Option<&RawValue>> = serde_json::from_str(raw.get()).map_err(|_| ())?;
         items
             .into_iter()
-            .map(|item| item.map_or_else(|| Ok(T::default()), T::from_wire))
+            .map(|item| item.map_or_else(|| Ok(T::default()), |raw| T::from_wire(raw, names)))
             .collect()
     }
 }
 
 impl FromWire for Value {
-    fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
+    fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
         match raw.get().as_bytes().first() {
-            Some(b'{') => Object::parse(raw)?
+            Some(b'{') => Object::parse(raw, names)?
                 .0
                 .into_iter()
-                .map(|(key, value)| Ok((key, Self::from_wire(value)?)))
+                .map(|(key, value)| Ok((key, Self::from_wire(value, names)?)))
                 .collect::<ShapeResult<_>>()
                 .map(Value::Object),
-            Some(b'[') => Vec::<Self>::from_wire(raw).map(Value::Array),
+            Some(b'[') => Vec::<Self>::from_wire(raw, names).map(Value::Array),
             Some(b'0'..=b'9' | b'-') => {
                 let amount = raw.get().parse::<f64>().map_err(|_| ())?;
                 Number::from_f64(amount).map(Value::Number).ok_or(())
@@ -250,15 +257,20 @@ impl FromWire for Value {
 
 pub(super) fn decode<T>(
     document: &Document,
-    decode: impl FnOnce(&RawValue) -> ShapeResult<T>,
+    names: FieldNames,
+    decode: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
 ) -> ShapeResult<T> {
     let raw = document.0.as_deref().ok_or(())?;
     strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| ())?;
-    decode(raw)
+    decode(raw, names)
 }
 
 pub(super) trait Redact {
     fn redact(&mut self, evidence: &Evidence);
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        self.redact(evidence);
+    }
 }
 
 impl Redact for String {
@@ -266,6 +278,10 @@ impl Redact for String {
         if evidence.text_reflects(self) {
             *self = "<redacted>".into();
         }
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        crate::wire::product::evidence::redact_identifier(self, evidence.credentials());
     }
 }
 
@@ -275,12 +291,24 @@ impl<T: Redact> Redact for Option<T> {
             value.redact(evidence);
         }
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        if let Some(value) = self {
+            value.redact_identifier(evidence);
+        }
+    }
 }
 
 impl<T: Redact> Redact for Vec<T> {
     fn redact(&mut self, evidence: &Evidence) {
         for value in self {
             value.redact(evidence);
+        }
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        for value in self {
+            value.redact_identifier(evidence);
         }
     }
 }
@@ -296,35 +324,7 @@ scalar_redaction!(bool, i64, u64);
 
 impl Redact for Value {
     fn redact(&mut self, evidence: &Evidence) {
-        match self {
-            Value::String(value) => value.redact(evidence),
-            Value::Array(items) => items.redact(evidence),
-            Value::Object(map) => map.retain(|key, item| {
-                if evidence.text_reflects(key) {
-                    return false;
-                }
-                item.redact(evidence);
-                true
-            }),
-            value if reflects(evidence, value) => *value = Value::String("<redacted>".into()),
-            _ => {}
-        }
-    }
-}
-
-pub(super) fn reflects(evidence: &Evidence, value: &Value) -> bool {
-    match value {
-        Value::String(text) => evidence.text_reflects(text),
-        Value::Array(items) => items.iter().any(|item| reflects(evidence, item)),
-        Value::Object(map) => map
-            .iter()
-            .any(|(key, item)| evidence.text_reflects(key) || reflects(evidence, item)),
-        Value::Bool(true) => evidence.text_reflects("true"),
-        Value::Bool(false) => evidence.text_reflects("false"),
-        Value::Null => evidence.text_reflects("null"),
-        Value::Number(number) => {
-            evidence.text_reflects(number.as_str()) || evidence.reflected_in(value)
-        }
+        evidence.redact(self);
     }
 }
 
@@ -333,7 +333,7 @@ pub(super) fn screen<T: serde::Serialize>(
     value: T,
     op: &'static str,
 ) -> Result<T, Box<Error>> {
-    if serde_json::to_value(&value).map_or(true, |value| reflects(evidence, &value)) {
+    if evidence.serialized_output_reflects(&value) {
         let message = if matches!(
             op,
             "volume.ListSnapshotBackends" | "volume.ListSnapshotPolicies"

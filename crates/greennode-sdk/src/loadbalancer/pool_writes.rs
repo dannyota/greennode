@@ -4,11 +4,9 @@ use serde::{Serialize, Serializer, ser::SerializeStruct};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
-use super::child_writes::{
-    BOUND, ChildTarget, ChildWriter, INTERVAL, WriteResult, encode_body, lb_busy, not_sent,
-};
+use super::child_writes::{BOUND, ChildTarget, ChildWriter, WriteResult, encode_body, not_sent};
 use super::pool_output::PoolProjection;
-use super::wire::{CompleteNotFound, DecodeError, Read, invalid_input, screen_input};
+use super::wire::{DecodeError, Read, invalid_input, screen_input};
 use super::{Client, HealthMonitor, Pool, guard};
 use guard::shape;
 
@@ -28,7 +26,7 @@ const GET_MONITOR: Read = Read {
 };
 
 /// Creates a pool and its health monitor.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct CreatePoolInput {
     /// Parent load balancer identifier.
     pub load_balancer_id: String,
@@ -66,18 +64,41 @@ pub struct CreatePoolInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(CreatePoolInput {
+    load_balancer_id,
+    name,
+    protocol,
+    health_check_protocol,
+    algorithm,
+    stickiness,
+    tls_encryption,
+    health_check_path,
+    health_check_method,
+    health_check_http_version,
+    health_check_domain_name,
+    health_check_success_code,
+    healthy_threshold,
+    unhealthy_threshold,
+    health_check_interval,
+    health_check_timeout,
+    no_wait
+});
+
 /// Holds the pool returned by the create or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CreatePoolOutput {
     /// The observed or submitted pool.
     pub pool: Pool,
     projection: Option<PoolProjection>,
 }
 
+crate::wire::product::output::public_fields!(CreatePoolOutput { pool; projection });
+
 impl Serialize for CreatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("CreatePoolOutput", 1)?;
         if let Some(projection) = &self.projection {
+            crate::wire::product::identifier::check_retained::<_, S::Error>(&self.pool)?;
             output.serialize_field("Pool", projection)?;
         } else {
             output.serialize_field("Pool", &self.pool)?;
@@ -87,7 +108,7 @@ impl Serialize for CreatePoolOutput {
 }
 
 /// Changes a pool or its health monitor while preserving fields left unset.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct UpdatePoolInput {
     /// Parent load balancer identifier.
     #[serde(skip)]
@@ -136,18 +157,39 @@ pub struct UpdatePoolInput {
     pub no_wait: bool,
 }
 
+crate::error::debug_record!(UpdatePoolInput {
+    load_balancer_id,
+    pool_id,
+    algorithm,
+    stickiness,
+    tls_encryption,
+    health_check_path,
+    health_check_method,
+    health_check_http_version,
+    health_check_domain_name,
+    health_check_success_code,
+    healthy_threshold,
+    unhealthy_threshold,
+    health_check_interval,
+    health_check_timeout,
+    no_wait
+});
+
 /// Holds the pool returned by the update or its confirmation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct UpdatePoolOutput {
     /// The observed or submitted pool.
     pub pool: Pool,
     projection: Option<PoolProjection>,
 }
 
+crate::wire::product::output::public_fields!(UpdatePoolOutput { pool; projection });
+
 impl Serialize for UpdatePoolOutput {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut output = serializer.serialize_struct("UpdatePoolOutput", 1)?;
         if let Some(projection) = &self.projection {
+            crate::wire::product::identifier::check_retained::<_, S::Error>(&self.pool)?;
             output.serialize_field("Pool", projection)?;
         } else {
             output.serialize_field("Pool", &self.pool)?;
@@ -259,134 +301,136 @@ impl Client {
         ctx: &RequestContext,
         input: CreatePoolInput,
     ) -> WriteResult<CreatePoolOutput> {
-        let CreatePoolInput {
-            load_balancer_id,
-            name,
-            protocol,
-            health_check_protocol,
-            mut algorithm,
-            stickiness,
-            tls_encryption,
-            health_check_path,
-            health_check_method,
-            health_check_http_version,
-            health_check_domain_name,
-            health_check_success_code,
-            healthy_threshold,
-            unhealthy_threshold,
-            health_check_interval,
-            health_check_timeout,
-            no_wait,
-        } = input;
-        let ids = [("LoadBalancerID", load_balancer_id.as_str())];
-        let mut write =
-            ChildWriter::new(self, ctx, CREATE, &load_balancer_id, &ids).map_err(not_sent)?;
-        required(
-            CREATE,
-            [
-                ("Name", name.as_str()),
-                ("Protocol", &protocol),
-                ("HealthCheckProtocol", &health_check_protocol),
-            ],
-        )
-        .map_err(not_sent)?;
-        screen_input(
-            &write.evidence,
-            [
-                name.as_str(),
-                &protocol,
-                &health_check_protocol,
-                &health_check_path,
-                &health_check_method,
-                &health_check_http_version,
-                &health_check_domain_name,
-                &health_check_success_code,
-            ],
-        )
-        .map_err(not_sent)?;
-        check_http_fields(
-            CREATE,
-            &health_check_protocol,
-            [
-                &health_check_path,
-                &health_check_method,
-                &health_check_http_version,
-                &health_check_domain_name,
-                &health_check_success_code,
-            ],
-        )
-        .map_err(not_sent)?;
-        default_string(&mut algorithm, "ROUND_ROBIN");
-        let mut health_monitor = MonitorBody {
-            health_check_protocol: health_check_protocol.clone(),
-            healthy_threshold: default_int(healthy_threshold, 3),
-            unhealthy_threshold: default_int(unhealthy_threshold, 3),
-            interval: default_int(health_check_interval, 30),
-            timeout: default_int(health_check_timeout, 5),
-            health_check_path,
-            health_check_method,
-            http_version: health_check_http_version,
-            domain_name: health_check_domain_name,
-            success_code: health_check_success_code,
-        };
-        health_monitor.resolve_http(&health_check_protocol);
-        let body = PoolBody {
-            pool_name: name.clone(),
-            pool_protocol: protocol.clone(),
-            algorithm,
-            stickiness: protocol_bool(&protocol, stickiness, false),
-            tls_encryption: protocol_bool(&protocol, tls_encryption, false),
-            health_monitor,
-        };
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        let _lock = self
-            .lock_load_balancer(ctx, &load_balancer_id)
-            .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        let ready = write.ready(ctx, None).await.map_err(not_sent)?;
-        screen_input(&write.evidence, [protocol.as_str()]).map_err(not_sent)?;
-        if ready.lb_type == "Layer 7" && protocol != "HTTP" {
-            return Err(not_sent(invalid_input(&format!(
-                "{CREATE}: a Layer 7 load balancer accepts only HTTP pools, got {protocol:?}"
-            ))));
-        }
-        let target = ChildTarget {
-            read: &LIST_POOLS,
-            ids: &ids,
-            ..pool_target("", &ids)
-        };
-        let (status, response) = write
-            .send(ctx, Method::POST, &target, bytes, None)
-            .await
-            .map_err(|failure| write.create_failure(failure, "list-pools"))?;
-        let uuid = write.acknowledged_id(status, &response, "list-pools", no_wait)?;
-        let fallback = body.submit(
-            Pool {
-                uuid: uuid.clone(),
+        crate::wire::product::exit::finish!(async {
+            let CreatePoolInput {
+                load_balancer_id,
                 name,
                 protocol,
-                ..Pool::default()
-            },
-            HealthMonitor {
                 health_check_protocol,
-                ..HealthMonitor::default()
-            },
-        );
-        let ids = [
-            ("LoadBalancerID", load_balancer_id.as_str()),
-            ("PoolID", uuid.as_str()),
-        ];
-        let target = pool_target(&uuid, &ids);
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            no_wait,
-            true,
-            fallback,
-            |pool, projection| CreatePoolOutput { pool, projection },
-        )
-        .await
+                mut algorithm,
+                stickiness,
+                tls_encryption,
+                health_check_path,
+                health_check_method,
+                health_check_http_version,
+                health_check_domain_name,
+                health_check_success_code,
+                healthy_threshold,
+                unhealthy_threshold,
+                health_check_interval,
+                health_check_timeout,
+                no_wait,
+            } = input;
+            let ids = [("LoadBalancerID", load_balancer_id.as_str())];
+            let mut write =
+                ChildWriter::new(self, ctx, CREATE, &load_balancer_id, &ids).map_err(not_sent)?;
+            required(
+                CREATE,
+                [
+                    ("Name", name.as_str()),
+                    ("Protocol", &protocol),
+                    ("HealthCheckProtocol", &health_check_protocol),
+                ],
+            )
+            .map_err(not_sent)?;
+            screen_input(
+                &write.evidence,
+                [
+                    name.as_str(),
+                    &protocol,
+                    &health_check_protocol,
+                    &health_check_path,
+                    &health_check_method,
+                    &health_check_http_version,
+                    &health_check_domain_name,
+                    &health_check_success_code,
+                ],
+            )
+            .map_err(not_sent)?;
+            check_http_fields(
+                CREATE,
+                &health_check_protocol,
+                [
+                    &health_check_path,
+                    &health_check_method,
+                    &health_check_http_version,
+                    &health_check_domain_name,
+                    &health_check_success_code,
+                ],
+            )
+            .map_err(not_sent)?;
+            default_string(&mut algorithm, "ROUND_ROBIN");
+            let mut health_monitor = MonitorBody {
+                health_check_protocol: health_check_protocol.clone(),
+                healthy_threshold: default_int(healthy_threshold, 3),
+                unhealthy_threshold: default_int(unhealthy_threshold, 3),
+                interval: default_int(health_check_interval, 30),
+                timeout: default_int(health_check_timeout, 5),
+                health_check_path,
+                health_check_method,
+                http_version: health_check_http_version,
+                domain_name: health_check_domain_name,
+                success_code: health_check_success_code,
+            };
+            health_monitor.resolve_http(&health_check_protocol);
+            let body = PoolBody {
+                pool_name: name.clone(),
+                pool_protocol: protocol.clone(),
+                algorithm,
+                stickiness: protocol_bool(&protocol, stickiness, false),
+                tls_encryption: protocol_bool(&protocol, tls_encryption, false),
+                health_monitor,
+            };
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            let _lock = self
+                .lock_load_balancer(ctx, &load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            let ready = write.ready(ctx, None).await.map_err(not_sent)?;
+            screen_input(&write.evidence, [protocol.as_str()]).map_err(not_sent)?;
+            if ready.lb_type == "Layer 7" && protocol != "HTTP" {
+                return Err(not_sent(invalid_input(&format!(
+                    "{CREATE}: a Layer 7 load balancer accepts only HTTP pools, got {protocol:?}"
+                ))));
+            }
+            let target = ChildTarget {
+                read: &LIST_POOLS,
+                ids: &ids,
+                ..pool_target("", &ids)
+            };
+            let (status, response) = write
+                .send(ctx, Method::POST, &target, bytes, None)
+                .await
+                .map_err(|failure| write.create_failure(failure, "list-pools"))?;
+            let uuid = write.acknowledged_id(status, &response, "list-pools", no_wait)?;
+            let fallback = body.submit(
+                Pool {
+                    uuid: uuid.clone(),
+                    name,
+                    protocol,
+                    ..Pool::default()
+                },
+                HealthMonitor {
+                    health_check_protocol,
+                    ..HealthMonitor::default()
+                },
+            );
+            let ids = [
+                ("LoadBalancerID", load_balancer_id.as_str()),
+                ("PoolID", uuid.as_str()),
+            ];
+            let target = pool_target(&uuid, &ids);
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                no_wait,
+                true,
+                fallback,
+                |pool, projection| CreatePoolOutput { pool, projection },
+            )
+            .await
+        })
     }
 
     /// Updates a pool using its current settings for fields left unset.
@@ -395,66 +439,68 @@ impl Client {
         ctx: &RequestContext,
         input: UpdatePoolInput,
     ) -> WriteResult<UpdatePoolOutput> {
-        let ids = [
-            ("LoadBalancerID", input.load_balancer_id.as_str()),
-            ("PoolID", input.pool_id.as_str()),
-        ];
-        let mut write =
-            ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids).map_err(not_sent)?;
-        if encode_body(&input, &write.evidence)
-            .map_err(not_sent)?
-            .as_ref()
-            == b"{}"
-        {
-            return Err(not_sent(invalid_input(&format!(
-                "{UPDATE} requires at least one field to change"
-            ))));
-        }
-        let target = pool_target(&input.pool_id, &ids);
-        let _lock = self
-            .lock_load_balancer(ctx, &input.load_balancer_id)
-            .await
-            .map_err(|error| not_sent(Box::new(error)))?;
-        let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
-        let pool: Pool = GET_POOL
-            .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
+        crate::wire::product::exit::finish!(async {
+            let ids = [
+                ("LoadBalancerID", input.load_balancer_id.as_str()),
+                ("PoolID", input.pool_id.as_str()),
+            ];
+            let mut write = ChildWriter::new(self, ctx, UPDATE, &input.load_balancer_id, &ids)
+                .map_err(not_sent)?;
+            if encode_body(&input, &write.evidence)
+                .map_err(not_sent)?
+                .as_ref()
+                == b"{}"
+            {
+                return Err(not_sent(invalid_input(&format!(
+                    "{UPDATE} requires at least one field to change"
+                ))));
+            }
+            let target = pool_target(&input.pool_id, &ids);
+            let _lock = self
+                .lock_load_balancer(ctx, &input.load_balancer_id)
+                .await
+                .map_err(|error| not_sent(Box::new(error)))?;
+            let ready = write.ready(ctx, Some(&target)).await.map_err(not_sent)?;
+            let pool: Pool = GET_POOL
+                .parse(ready.child.as_deref().unwrap_or("null"), &write.evidence)
+                .map_err(not_sent)?;
+            let row = write
+                .read_data(ctx, &GET_MONITOR, &ids)
+                .await
+                .map_err(not_sent)?;
+            let monitor: HealthMonitor =
+                guard::parse(&GET_MONITOR, &row, &MONITOR, &write.evidence).map_err(not_sent)?;
+            if monitor.health_check_protocol.is_empty() {
+                return Err(not_sent(
+                    GET_MONITOR.decode_error(&write.evidence, DecodeError::InvalidShape),
+                ));
+            }
+            screen_input(
+                &write.evidence,
+                [pool.protocol.as_str(), &monitor.health_check_protocol],
+            )
             .map_err(not_sent)?;
-        let row = write
-            .read_data(ctx, &GET_MONITOR, &ids)
+            let body = merged(&input, &pool, &monitor).map_err(not_sent)?;
+            let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
+            write
+                .send(ctx, Method::PUT, &target, bytes, Some(&target))
+                .await?;
+            let fallback = if input.no_wait {
+                body.submit(pool, monitor)
+            } else {
+                pool
+            };
+            finish(
+                ctx,
+                &mut write,
+                &target,
+                input.no_wait,
+                false,
+                fallback,
+                |pool, projection| UpdatePoolOutput { pool, projection },
+            )
             .await
-            .map_err(not_sent)?;
-        let monitor: HealthMonitor =
-            guard::parse(&GET_MONITOR, &row, &MONITOR, &write.evidence).map_err(not_sent)?;
-        if monitor.health_check_protocol.is_empty() {
-            return Err(not_sent(
-                GET_MONITOR.decode_error(&write.evidence, DecodeError::InvalidShape),
-            ));
-        }
-        screen_input(
-            &write.evidence,
-            [pool.protocol.as_str(), &monitor.health_check_protocol],
-        )
-        .map_err(not_sent)?;
-        let body = merged(&input, &pool, &monitor).map_err(not_sent)?;
-        let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
-        write
-            .send(ctx, Method::PUT, &target, bytes, Some(&target))
-            .await?;
-        let fallback = if input.no_wait {
-            body.submit(pool, monitor)
-        } else {
-            pool
-        };
-        finish(
-            ctx,
-            &mut write,
-            &target,
-            input.no_wait,
-            false,
-            fallback,
-            |pool, projection| UpdatePoolOutput { pool, projection },
-        )
-        .await
+        })
     }
 }
 
@@ -625,42 +671,9 @@ pub(super) async fn settle_until(
     creating: bool,
     last: &mut Pool,
 ) -> Result<(), Box<Error>> {
-    let clock = write.client.session.clock();
-    loop {
-        wait.child_with_deadline(clock.monotonic_now() + INTERVAL)
-            .wait(clock)
-            .await;
-        write.confirm_time(ctx, wait, target)?;
-        let row = write.read_data(wait, &GET_POOL, target.ids).await;
-        write.confirm_time(ctx, wait, target)?;
-        let row = match row {
-            Ok(row) => row,
-            Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
-            Err(error) => return Err(write.unconfirmed(target, *error)),
-        };
-        let pool: Pool = guard::parse(&GET_POOL, &row, &POOL, &write.evidence)
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        if pool.uuid != target.id || pool.progress_status.is_empty() {
-            let error = GET_POOL.decode_error(&write.evidence, DecodeError::InvalidShape);
-            return Err(write.unconfirmed(target, *error));
-        }
-        screen_input(&write.evidence, [pool.uuid.as_str(), &pool.progress_status])
-            .map_err(|error| write.unconfirmed(target, *error))?;
-        *last = pool;
-        match last.progress_status.as_str() {
-            "ERROR" => return Err(write.failed(target.kind, target.id)),
-            "CREATED" => {
-                let parent = write.parent(wait).await;
-                write.confirm_time(ctx, wait, target)?;
-                let (status, _) = parent.map_err(|error| write.unconfirmed(target, *error))?;
-                if status == "ERROR" {
-                    return Err(write.failed("load balancer", write.lb_id));
-                }
-                if !lb_busy(&status) {
-                    return Ok(());
-                }
-            }
-            _ => {}
-        }
-    }
+    write
+        .settle_child(ctx, wait, target, creating, last, |row: &Pool| {
+            (&row.uuid, &row.progress_status)
+        })
+        .await
 }

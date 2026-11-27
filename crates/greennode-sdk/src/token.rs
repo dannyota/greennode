@@ -3,13 +3,18 @@ use time::{Duration, OffsetDateTime};
 use crate::Secret;
 
 /// Bearer credentials and their optional expiration.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Token {
     /// The bearer value; debug and serialized representations are redacted.
     pub access_token: Secret,
     /// Expiration instant, or `None` when unknown.
     pub expires_at: Option<OffsetDateTime>,
 }
+
+crate::error::debug_record!(Token {
+    access_token,
+    expires_at
+});
 
 impl Token {
     /// Constructs credentials without validating the value or expiry.

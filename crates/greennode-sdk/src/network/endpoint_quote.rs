@@ -16,7 +16,7 @@ pub(super) const OP: &str = "network.QuoteCreateEndpoint";
 const PRICE: Read = Read::new(OP, "vnetwork/billing/v1/{}/{}/price", Style::EndpointQuote);
 
 /// Selects a private Gateway endpoint and its placement to quote.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct QuoteCreateEndpointInput {
     /// Proposed endpoint name.
     pub name: String,
@@ -35,6 +35,17 @@ pub struct QuoteCreateEndpointInput {
     /// Optional creation limit. The quote validates the number and ignores its value.
     pub max_price: f64,
 }
+
+crate::error::debug_record!(QuoteCreateEndpointInput {
+    name,
+    vpc_id,
+    subnet_id,
+    availability_zone_id,
+    category_id,
+    service_id,
+    package_id,
+    max_price
+});
 
 impl QuoteCreateEndpointInput {
     /// Selects the endpoint name, VPC, and subnet with the default offer.
@@ -57,7 +68,7 @@ impl QuoteCreateEndpointInput {
 }
 
 /// Monthly private Gateway endpoint quote.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct QuoteCreateEndpointOutput {
     /// Quoted monthly amount.
     #[serde(rename = "MonthlyPrice")]
@@ -67,6 +78,11 @@ pub struct QuoteCreateEndpointOutput {
     pub currency: String,
 }
 
+crate::wire::product::output::public_fields!(QuoteCreateEndpointOutput {
+    monthly_price,
+    currency
+});
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     /// Quotes an eligible Gateway endpoint without placing an order.
@@ -75,23 +91,25 @@ impl Client {
         ctx: &RequestContext,
         input: QuoteCreateEndpointInput,
     ) -> Result<QuoteCreateEndpointOutput, Failure<QuoteCreateEndpointOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-        check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
-        let mut quote = EndpointQuote::new(self, ctx, &mut evidence)
-            .await
-            .map_err(failure)?;
-        let offer = quote
-            .offer(&input)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))?;
-        quote
-            .check_placement(&input, &offer)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))?;
-        quote
-            .endpoint_price(&input, &offer)
-            .await
-            .map_err(|error| failure(screen(error, quote.evidence)))
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
+            let mut quote = EndpointQuote::new(self, ctx, &mut evidence)
+                .await
+                .map_err(failure)?;
+            let offer = quote
+                .offer(&input)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))?;
+            quote
+                .check_placement(&input, &offer)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))?;
+            quote
+                .endpoint_price(&input, &offer)
+                .await
+                .map_err(|error| failure(screen(error, quote.evidence)))
+        })
     }
 }
 
@@ -108,7 +126,7 @@ impl EndpointQuote<'_> {
             "packageUuid": offer.package, "vpcUuid": input.vpc_id, "subnetUuid": input.subnet_id,
             "regionUuid": self.zone, "projectUuid": self.project, "enableAZ": true, "enableDnsName": false,
         }});
-        if self.evidence.reflected_in(&body) {
+        if self.evidence.output_reflects(&body) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
         let raw = request::exchange(
