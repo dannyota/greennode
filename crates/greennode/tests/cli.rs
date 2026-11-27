@@ -1,6 +1,14 @@
 use std::process::{Command, Output};
 
-fn greennode(args: &[&str]) -> Output {
+struct Home(std::path::PathBuf);
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn greennode<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Output {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let home = std::env::temp_dir().join(format!(
         "greennode-cli-{}-{}",
@@ -8,15 +16,14 @@ fn greennode(args: &[&str]) -> Output {
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&home).expect("create temporary home");
-    let output = Command::new(env!("CARGO_BIN_EXE_greennode"))
+    let home = Home(home);
+    Command::new(env!("CARGO_BIN_EXE_greennode"))
         .args(args)
         .env_clear()
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
+        .env("HOME", &home.0)
+        .env("USERPROFILE", &home.0)
         .output()
-        .expect("the greennode binary runs");
-    std::fs::remove_dir_all(home).expect("remove temporary home");
-    output
+        .expect("the greennode binary runs")
 }
 
 #[test]
@@ -130,7 +137,7 @@ fn version_help_includes_full_path_and_globals() {
 
 #[test]
 fn no_arguments_print_help() {
-    let output = greennode(&[]);
+    let output = greennode::<&str>(&[]);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Command-line access to GreenNode"));
     assert!(output.stderr.is_empty());
@@ -214,18 +221,14 @@ fn billing_missing_credentials_exits_three() {
 #[cfg(unix)]
 #[test]
 fn invalid_utf8_inline_json_exits_2_before_any_request() {
+    use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
-    let home = std::env::temp_dir().join(format!("greennode-cli-utf8-{}", std::process::id()));
-    std::fs::create_dir_all(&home).expect("create temporary home");
-    let output = Command::new(env!("CARGO_BIN_EXE_greennode"))
-        .args(["pricing", "estimate", "--cli-input-json"])
-        .arg(std::ffi::OsStr::from_bytes(b"{\"Servers\":\"a\xff\xfeb\"}"))
-        .env_clear()
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .output()
-        .expect("the greennode binary runs");
-    std::fs::remove_dir_all(home).expect("remove temporary home");
+    let output = greennode(&[
+        OsStr::new("pricing"),
+        OsStr::new("estimate"),
+        OsStr::new("--cli-input-json"),
+        OsStr::from_bytes(b"{\"Servers\":\"a\xff\xfeb\"}"),
+    ]);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let doc: serde_json::Value = serde_json::from_slice(&output.stderr).expect("one JSON error");

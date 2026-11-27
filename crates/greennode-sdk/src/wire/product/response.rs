@@ -314,12 +314,12 @@ fn matches_forms(
         let lower = Zeroizing::new(input.to_ascii_lowercase());
         for index in 0..state.hex_needles.len() {
             if !state.charge(lower.len().saturating_add(state.hex_needles[index].len()))
-                || encoded::contains_hex(&lower, &state.hex_needles[index])
+                || encoded::contains_hex(&lower, &state.hex_needles[index], state.strict_base64)
             {
                 return true;
             }
         }
-        if state.error_text && has_credential_marker(&String::from_utf8_lossy(input)) {
+        if state.error_text && marker::has_credential_marker_bytes(input) {
             return true;
         }
         if !needles.is_empty() {
@@ -1192,6 +1192,13 @@ mod tests {
             &credentials
         ));
         assert!(!reflects_credential_forms("client id", &credentials));
+    }
+
+    #[test]
+    fn identifier_checks_match_short_hex_anywhere() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("jkl")]);
+        assert!(reflects_identifier("prefix6A6b6Csuffix", &credentials));
+        assert!(!reflects_credential("prefix6A6b6Csuffix", &credentials));
     }
 
     #[test]

@@ -203,12 +203,12 @@ within the logical request for reflection checks, including across retries.
 
 Success bodies are checked against the operation's output schema before
 decoding: object or array shape at every node, duplicate keys, and keys that
-fold to the same field. A case variant is a key that equals a known field name
-under this fold (ASCII case, plus U+017F to `s` and U+212A to `k`, as Go folds).
-Unlike Go, which matches keys to fields case-insensitively, decoding is
-case-sensitive, so on output reads a lone case variant is ignored. Guard and
-safety reads, whose values decide whether a write is sent or a refusal is
-reported, refuse it, because ignoring it could hide a value Go would act on.
+fold to the same field. A case variant is a key that differs from a known field
+name but equals it under this fold (ASCII case, plus U+017F to `s` and U+212A to
+`k`, as Go folds). Unlike Go, which matches keys to fields case-insensitively,
+decoding is case-sensitive, so on output reads a lone case variant is ignored.
+Guard and safety reads, whose values decide whether a write is sent or a refusal
+is reported, refuse it, because ignoring it could hide a value Go would act on.
 Where Go itself refuses any lone case variant, as the network NAT family's
 field-name check does, refuse it too. A refused case variant is
 `InvalidResponse`.

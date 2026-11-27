@@ -78,11 +78,11 @@ impl EncodedNeedle {
     }
 }
 
-pub(super) fn contains_hex(input: &[u8], needle: &str) -> bool {
+pub(super) fn contains_hex(input: &[u8], needle: &str, strict: bool) -> bool {
     input.utf8_chunks().any(|chunk| {
         let text = chunk.valid();
         text.match_indices(needle).any(|(start, _)| {
-            if needle.len() >= STABLE_FLOOR {
+            if strict || needle.len() >= STABLE_FLOOR {
                 return true;
             }
             let left = start
