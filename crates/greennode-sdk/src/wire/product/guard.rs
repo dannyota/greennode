@@ -26,6 +26,31 @@ pub(crate) struct Guarded<T> {
 }
 
 impl<T> Guarded<T> {
+    pub(crate) async fn read_preflight<E>(
+        evidence: &mut Evidence,
+        read: impl AsyncFnOnce(&mut Evidence) -> Result<T, E>,
+        invalid: impl FnOnce(Box<Error>) -> E,
+    ) -> Result<Self, E> {
+        let checkpoint = evidence.guard_checkpoint();
+        let value = {
+            let mut scope = evidence.preflight_reads();
+            read(scope.evidence()).await?
+        };
+        Self::from_checkpoint(value, evidence, checkpoint).map_err(invalid)
+    }
+
+    pub(crate) fn acknowledgement(
+        value: T,
+        evidence: &mut Evidence,
+        id: &'static str,
+        body: &[u8],
+    ) -> Result<Self, Box<Error>> {
+        if !evidence.keep_guard(id, body) {
+            return Err(Box::new(unsafe_guard_response(id)));
+        }
+        Self::latest(value, evidence)
+    }
+
     pub(crate) fn latest(value: T, evidence: &Evidence) -> Result<Self, Box<Error>> {
         let proof = evidence
             .last_guard()
@@ -103,6 +128,155 @@ pub(crate) use guarded_poll;
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    #[test]
+    fn sdk_write_entry_points_use_guarded_preflight_evidence() {
+        use regex_lite::Regex;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let writes = Regex::new(concat!(
+            r"(?m)^([ \t]+)pub async fn (\$method|discard_after_delivery_failure|(?:",
+            "attach|create|delete|detach|disable|enable|import|purge|reboot|rename|reset|resize|start|stop|tag|untag|update",
+            r")_\w+)\(",
+        )).unwrap();
+        let owners = [
+            ("cdn/writes.rs", ".write_evidence(", "cdn/writes.rs"),
+            ("cdn/writes.rs", ".toggle(", "cdn/writes.rs"),
+            ("cdn/writes/update.rs", ".write_evidence(", "cdn/writes.rs"),
+            (
+                "compute/server_actions.rs",
+                ".toggle(",
+                "compute/server_actions.rs",
+            ),
+            (
+                "dns/writes/mod.rs",
+                "Workflow::start(",
+                "dns/writes/workflow.rs",
+            ),
+            (
+                "globalloadbalancer/child/create.rs",
+                ".start_child(",
+                "globalloadbalancer/write.rs",
+            ),
+            (
+                "globalloadbalancer/child/delete.rs",
+                ".start_child(",
+                "globalloadbalancer/write.rs",
+            ),
+            (
+                "globalloadbalancer/load_balancer_writes.rs",
+                ".start_write(",
+                "globalloadbalancer/write.rs",
+            ),
+            ("iam/attachments.rs", ".write_evidence(", "iam/writes.rs"),
+            ("iam/groups.rs", ".write_evidence(", "iam/writes.rs"),
+            ("iam/policy_writes.rs", ".write_evidence(", "iam/writes.rs"),
+            (
+                "iam/service_account_writes.rs",
+                ".write_evidence(",
+                "iam/writes.rs",
+            ),
+            ("iam/user_mfa.rs", ".change_user_mfa(", "iam/writes.rs"),
+            ("iam/user_writes.rs", ".write_evidence(", "iam/writes.rs"),
+            (
+                "loadbalancer/certificate_import.rs",
+                ".order_evidence(",
+                "loadbalancer/quotes.rs",
+            ),
+            (
+                "loadbalancer/child_deletes.rs",
+                ".delete_child(",
+                "loadbalancer/child_deletes.rs",
+            ),
+            (
+                "loadbalancer/listener_writes.rs",
+                "ChildWriter::new(",
+                "loadbalancer/child_writes.rs",
+            ),
+            (
+                "loadbalancer/member_writes.rs",
+                ".change_members(",
+                "loadbalancer/child_writes.rs",
+            ),
+            (
+                "loadbalancer/paid.rs",
+                ".order_evidence(",
+                "loadbalancer/quotes.rs",
+            ),
+            (
+                "loadbalancer/policy_writes.rs",
+                "ChildWriter::new(",
+                "loadbalancer/child_writes.rs",
+            ),
+            (
+                "loadbalancer/pool_writes.rs",
+                "ChildWriter::new(",
+                "loadbalancer/child_writes.rs",
+            ),
+            ("tagging/writes.rs", ".replace_tag(", "tagging/writes.rs"),
+            ("vks/create.rs", ".create_cluster_inner(", "vks/create.rs"),
+            ("vks/delete.rs", ".delete_cluster_inner(", "vks/delete.rs"),
+            (
+                "volume/attachment.rs",
+                ".change_attachment(",
+                "volume/attachment.rs",
+            ),
+        ];
+        let mut files = vec![root.clone()];
+        let mut checked = 0;
+        while let Some(path) = files.pop() {
+            if path.is_dir() {
+                files.extend(path.read_dir().unwrap().map(|entry| entry.unwrap().path()));
+                continue;
+            }
+            let relative = path.strip_prefix(&root).unwrap();
+            if path.extension().is_none_or(|ext| ext != "rs")
+                || relative.iter().any(|part| part == "tests")
+                || path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
+            {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for entry in writes.captures_iter(&text) {
+                let from = entry.get(0).unwrap().end();
+                let end = format!("\n{}}}", &entry[1]);
+                let body = text[from..].split_once(&end).unwrap().0;
+                if &entry[2] == "$method" && relative == Path::new("loadbalancer/mod.rs") {
+                    assert!(body.contains("let read = Read") && body.contains("self.read("));
+                    continue;
+                }
+                let preflight = body.contains("Evidence::for_write()")
+                    || owners.iter().any(|(entry, call, owner)| {
+                        relative == Path::new(entry)
+                            && body.contains(call)
+                            && std::fs::read_to_string(root.join(owner))
+                                .unwrap()
+                                .contains("Evidence::for_write()")
+                    });
+                let billing_without_reads = matches!(
+                    relative.to_str(),
+                    Some("billing/budget_writes.rs" | "billing/threshold_writes.rs")
+                ) && (body.contains(".write(")
+                    || body.contains(".write::<"))
+                    && ![".read(", ".get_", ".list_", "Evidence::new()"]
+                        .iter()
+                        .any(|call| body.contains(call));
+                let cleanup_without_reads = relative == Path::new("compute/ssh_keys.rs")
+                    && &entry[2] == "discard_after_delivery_failure"
+                    && body.contains(".delete_key(")
+                    && body.matches(".await").count() == 1;
+                assert!(
+                    preflight || billing_without_reads || cleanup_without_reads,
+                    "{} {}",
+                    relative.display(),
+                    &entry[2]
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 75);
+    }
 
     #[test]
     fn settlement_loops_use_shared_guarded_polling() {

@@ -11,6 +11,7 @@ pub(crate) enum Outcome<'a> {
     Status(u16, Option<&'a str>),
     Body,
 }
+#[derive(Clone)]
 pub(crate) struct Config {
     pub(crate) budget: usize,
     pub(crate) interval: Duration,

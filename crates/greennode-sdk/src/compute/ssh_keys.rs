@@ -161,7 +161,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             required(CREATE.id, &[("Name", !input.name.is_empty())])
                 .map_err(|error| not_sent(*error))?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let body = json!({"name": input.name});
             self.guard_write(ctx, &body, &mut evidence)
                 .map_err(|error| not_sent(*error))?;
@@ -243,7 +243,7 @@ impl Client {
                     "compute.ImportSSHKey: PublicKey looks like a private key, not a public one",
                 )));
             }
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let body = json!({"name": input.name, "pubKey": public_key});
             self.guard_write(ctx, &body, &mut evidence)
                 .map_err(|error| not_sent(*error))?;
@@ -284,7 +284,7 @@ impl Client {
         input: DeleteSshKeyInput,
     ) -> Result<DeleteSshKeyOutput, Failure<DeleteSshKeyOutput>> {
         crate::wire::product::exit::finish!(async {
-            self.delete_key(ctx, &input.ssh_key_id, &mut Evidence::new())
+            self.delete_key(ctx, &input.ssh_key_id, &mut Evidence::for_write())
                 .await
         })
     }

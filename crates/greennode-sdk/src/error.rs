@@ -118,7 +118,6 @@ impl SafeText {
 }
 
 /// Fixed diagnostic for a failure without a service response.
-#[derive()]
 pub enum Diagnostic {
     /// No project quota matched the requested name.
     QuotaNotFound,
@@ -136,7 +135,6 @@ impl Diagnostic {
 }
 
 /// Safe recovery guidance for a write failure.
-#[derive()]
 pub struct RecoveryAdvice(SafeText);
 
 crate::error::debug_record!(RecoveryAdvice(0));
@@ -153,7 +151,6 @@ impl RecoveryAdvice {
 }
 
 /// Full refusal text for a system tag key, without the generic length cap.
-#[derive()]
 pub struct SystemTagText(pub(crate) String);
 
 crate::error::debug_record!(SystemTagText(0));

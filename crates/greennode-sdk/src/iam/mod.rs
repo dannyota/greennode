@@ -173,7 +173,7 @@ fn screened_output<T: serde::Serialize>(output: T, evidence: &Evidence) -> Resul
 
 fn screen_error(mut error: Error, evidence: &Evidence) -> Error {
     let reflects_status = |status| evidence.output_reflects(&serde_json::Value::from(status));
-    error.remove_details::<StatusCode>(|status| reflects_status(status.as_u16()));
+    error.remove_details::<crate::HttpStatus>(|status| reflects_status(status.as_u16()));
     let Some(api) = error.api_error() else {
         return error;
     };

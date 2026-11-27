@@ -225,15 +225,16 @@ dispatch alone.
 `Error::class()` returns a non-exhaustive `ErrorClass`; `has_class` also tests
 retained, typed causes. Accessors expose optional `ApiError`, `LoginError`, and
 `ServiceAccountLoginError` data from the error or its causes, outermost first.
-`ApiError` holds a static operation ID, optional HTTP status, safe code and
-message, and the baseline's retryability hint. Login diagnostics hold a fixed
-reason and optional status; only IAM-user login has a captcha hint. A
-configuration file failure attaches a public `FileDiagnostic` with `slot()`
-(`FileSlot::Config` or `FileSlot::Credentials`), `source()` (the fixed
-value-free label), `reason()` (a fixed `&'static str`) and `line()`
-(`Option<u32>`); it never holds a path or value. Preserve status when the
-operation contract says it is observed. No raw HTTP, decode, filesystem, or
-caller-provider error is reachable through `source()` or debug.
+`ApiError` holds a static operation ID, optional HTTP status (`HttpStatus`, also
+`detail::<HttpStatus>()`, with `as_u16()`), safe code and message, and the
+baseline's retryability hint. Login diagnostics hold a fixed reason and optional
+status; only IAM-user login has a captcha hint. A configuration file failure
+attaches a public `FileDiagnostic` with `slot()` (`FileSlot::Config` or
+`FileSlot::Credentials`), `source()` (the fixed value-free label), `reason()` (a
+fixed `&'static str`) and `line()` (`Option<u32>`); it never holds a path or
+value. Preserve status when the operation contract says it is observed. No raw
+HTTP, decode, filesystem, or caller-provider error is reachable through
+`source()` or debug.
 
 | Baseline identity                                                    | Rust class or diagnostic                                                                                                                                                         |
 | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -259,8 +260,7 @@ API detail accessor, not string matching. Match the outer class first for
 workflow outcomes; checking a nested 404 alone does not classify an unconfirmed
 write as not found. `detail::<service::ErrorDetail>()` returns typed local
 reasons without adding a core variant for each service sentinel. Only SDK code
-attaches safe details. Map each service's Go sentinels when porting that
-service.
+attaches safe details, mapped from each service's Go sentinels.
 
 For example `volume.create_volume` may return an identified volume on
 `NotSettled`; keep it with `MayHaveBeenSent`. Preserve synthetic quota outcome

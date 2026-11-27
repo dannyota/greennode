@@ -64,7 +64,7 @@ impl<'a> Workflow<'a> {
             client,
             ctx,
             id,
-            evidence: Evidence::new(),
+            evidence: Evidence::for_write(),
             _guard: guard,
         })
     }

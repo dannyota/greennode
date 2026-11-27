@@ -229,7 +229,7 @@ impl Client {
     ) -> Result<RebootServerOutput, Failure<RebootServerOutput>> {
         crate::wire::product::exit::finish!(async {
             const ADVICE: &str = "read get-server and inspect the console before repeating reboot";
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let id = &input.server_id;
             let mut server = self
                 .action_current(ctx, &REBOOT, id, None, &mut evidence)
@@ -290,7 +290,7 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
             path_id(RENAME.id, "ServerID", id).map_err(|error| not_sent(*error))?;
             let body = json!({"newName": input.name});
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             self.guard_write(ctx, &json!([id, body]), &mut evidence)
                 .map_err(|error| not_sent(*error))?;
             let raw = self
@@ -329,7 +329,7 @@ impl Client {
                     "compute.ResizeServer: MaxPrice must be finite and non-negative",
                 )));
             }
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let body = json!(info);
             let mut server = self
                 .action_current(
@@ -434,7 +434,7 @@ impl Client {
     ) -> Result<O, Failure<O>> {
         const ADVICE: &str = "run this operation again to check";
         let (source, target) = states;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let mut server = self
             .action_current(ctx, mutation, id, None, &mut evidence)
             .await?;

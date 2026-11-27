@@ -253,6 +253,83 @@ fn delete_reads(backups: &[u8]) -> Vec<Response> {
 }
 
 #[tokio::test]
+async fn database_delete_rechecks_all_preflight_reads_with_the_write_bearer() {
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    struct Rotating(AtomicUsize);
+    impl crate::CredentialsProvider for Rotating {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, Error>> + Send + 'a>> {
+            let token = if self.0.fetch_add(1, Ordering::Relaxed) < 5 {
+                BEARER
+            } else {
+                "toy-delete-bearer"
+            };
+            Box::pin(ready(Ok(crate::Token::new(Secret::new(token), None))))
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+    for read in [None, Some(0), Some(1), Some(2), Some(3), Some(4)] {
+        let mut replies = delete_reads(br#"{"code":200,"data":[]}"#);
+        if let Some(read) = read {
+            let Response::Http { body, .. } = &replies[read] else {
+                unreachable!()
+            };
+            let mut decoded: serde_json::Value = serde_json::from_slice(body).unwrap();
+            decoded["note"] = "toy-delete-bearer".into();
+            replies[read] = response("200 OK", decoded.to_string().as_bytes());
+        }
+        replies.push(response("204 No Content", b""));
+        replies.push(response("404 Not Found", b"{}"));
+        let server = Server::start(replies);
+        let client = Client::new(
+            &Config::new(with_write_loopback(
+                Product::Database,
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_project_id("project-1".into())
+                    .with_credentials_provider(Arc::new(Rotating(0.into()))),
+                &server,
+            ))
+            .unwrap(),
+        );
+        let result = client
+            .delete_database_instance(
+                &RequestContext::new().0,
+                DeleteDatabaseInstanceInput::new("db-1"),
+            )
+            .await;
+        assert_eq!(
+            result
+                .map(|output| output.deleted)
+                .map_err(|error| error.write_dispatch()),
+            if read.is_some() {
+                Err(WriteDispatch::NotSent)
+            } else {
+                Ok(true)
+            },
+            "{read:?}"
+        );
+        assert_eq!(server.requests(), if read.is_some() { 5 } else { 7 });
+    }
+}
+
+#[tokio::test]
 async fn delete_proves_project_across_pages_and_checks_backups() {
     for backed_up in [false, true] {
         let mut responses = delete_reads(if backed_up {

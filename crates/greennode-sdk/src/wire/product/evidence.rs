@@ -253,11 +253,64 @@ pub(crate) struct Evidence {
     cached: Vec<CachedCheck>,
     guards: Vec<super::guard::Proof>,
     guard_bytes: usize,
+    preflight_reads: bool,
+    awaiting_write: bool,
+    unproved_read: bool,
+}
+
+pub(super) struct PreflightReads<'a> {
+    evidence: &'a mut Evidence,
+    previous: bool,
+}
+
+impl PreflightReads<'_> {
+    pub(super) fn evidence(&mut self) -> &mut Evidence {
+        self.evidence
+    }
+}
+
+impl Drop for PreflightReads<'_> {
+    fn drop(&mut self) {
+        self.evidence.preflight_reads = self.previous;
+    }
 }
 
 impl Evidence {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(super) fn preflight_reads(&mut self) -> PreflightReads<'_> {
+        let previous = std::mem::replace(&mut self.preflight_reads, true);
+        PreflightReads {
+            evidence: self,
+            previous,
+        }
+    }
+
+    pub(crate) fn for_write() -> Self {
+        Self {
+            awaiting_write: true,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn guards_preflight_reads(&self) -> bool {
+        self.preflight_reads || self.awaiting_write
+    }
+
+    pub(super) fn note_unproved_read(&mut self) {
+        self.unproved_read = true;
+    }
+
+    pub(super) fn has_unproved_read(&self) -> bool {
+        self.unproved_read
+    }
+
+    pub(super) fn note_dispatch(&mut self, dispatch: WriteDispatch) {
+        if dispatch == WriteDispatch::MayHaveBeenSent {
+            self.awaiting_write = false;
+        }
     }
 
     pub(crate) fn from_credentials(credentials: &SentCredentials) -> Self {

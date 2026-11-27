@@ -67,7 +67,7 @@ impl Client {
         Ok(Write {
             client: self,
             id,
-            evidence: Evidence::new(),
+            evidence: Evidence::for_write(),
         })
     }
 }

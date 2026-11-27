@@ -14,6 +14,7 @@ pub(crate) enum Reflection {
     PrivateDelivery,
 }
 
+#[derive(Clone)]
 pub(crate) struct Operation {
     pub(crate) id: &'static str,
     pub(crate) template: &'static str,
@@ -246,6 +247,16 @@ async fn send_route<T>(
     evidence: &mut Evidence,
     credential_error: impl Fn(&Operation, &sender::SentCredentials) -> Option<Box<crate::Error>> + Send,
 ) -> Result<sender::Response, crate::Failure<T>> {
+    let guard;
+    let operation = if evidence.guards_preflight_reads()
+        && matches!(operation.class, redirect::Classification::Read)
+        && operation.reflection != Reflection::Guard
+    {
+        guard = GuardOperation::new(operation.clone());
+        &*guard
+    } else {
+        operation
+    };
     if let Some(credentials) = runtime.configured_credentials {
         evidence.absorb(credentials);
     }
@@ -263,6 +274,14 @@ async fn send_route<T>(
     } else {
         crate::WriteDispatch::NotAWrite
     };
+    if dispatch == crate::WriteDispatch::NotSent && evidence.has_unproved_read() {
+        return Err(crate::Failure::new(
+            crate::Error::new(crate::ErrorClass::InvalidInput)
+                .with_cause(unsafe_guard_response(operation.id)),
+            None,
+            dispatch,
+        ));
+    }
     let invalid = || {
         crate::Failure::new(
             crate::Error::new(crate::ErrorClass::InvalidInput),
@@ -411,7 +430,7 @@ async fn send_route<T>(
             interval: operation.retry_config.interval,
         },
     };
-    let response = match sender::run(
+    let response = sender::run(
         runtime,
         &policy,
         auth,
@@ -423,10 +442,16 @@ async fn send_route<T>(
             identifier_query_keys: options.identifier_query_keys,
         },
     )
-    .await
+    .await;
+    if matches!(operation.class, redirect::Classification::Read)
+        && operation.reflection != Reflection::Guard
     {
+        evidence.note_unproved_read();
+    }
+    let response = match response {
         Ok(response) => response,
         Err(failure) => {
+            evidence.note_dispatch(failure.dispatch);
             evidence.absorb(&failure.credentials);
             if let Some(error) = credential_error(operation, &failure.credentials) {
                 return Err(crate::Failure::new(*error, None, failure.dispatch));
@@ -506,6 +531,9 @@ async fn send_route<T>(
             return Err(crate::Failure::new(error, None, failure.dispatch));
         }
     };
+    if dispatch == crate::WriteDispatch::NotSent {
+        evidence.note_dispatch(crate::WriteDispatch::MayHaveBeenSent);
+    }
     evidence.absorb(&response.credentials);
     if operation.reflection == Reflection::Guard
         && !evidence.keep_guard(operation.id, &response.body)
@@ -801,6 +829,44 @@ mod tests {
     }
 
     mod evidence;
+
+    #[tokio::test]
+    async fn a_write_cannot_reuse_evidence_from_an_unproved_read() {
+        for guarded in [true, false] {
+            let server = Server::start(vec![response("200 OK", b"{}"), response("200 OK", b"{}")]);
+            let mut ledger = if guarded {
+                Evidence::for_write()
+            } else {
+                Evidence::new()
+            };
+            let options = Options::default();
+            let read = declaration();
+            let write = Operation {
+                class: redirect::Classification::Write,
+                method: Method::POST,
+                ..declaration()
+            };
+            assert!(
+                evidence::call_evidence(&server, &read, &options, "one", "toy-first", &mut ledger)
+                    .await
+                    .is_ok()
+            );
+            let result =
+                evidence::call_evidence(&server, &write, &options, "one", "toy-next", &mut ledger)
+                    .await;
+            assert_eq!(
+                result
+                    .map(|_| ())
+                    .map_err(|failure| failure.write_dispatch()),
+                if guarded {
+                    Ok(())
+                } else {
+                    Err(crate::WriteDispatch::NotSent)
+                }
+            );
+            assert_eq!(server.requests(), if guarded { 2 } else { 1 });
+        }
+    }
 
     #[tokio::test]
     async fn bearer_matching_static_json_headers_sends() {

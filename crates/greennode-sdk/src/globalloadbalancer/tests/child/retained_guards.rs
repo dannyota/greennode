@@ -130,6 +130,43 @@ async fn glb_guard_refusal_does_not_invent_an_ok_status() {
 }
 
 #[tokio::test]
+async fn glb_pool_create_rechecks_acknowledgement_through_final_confirmation() {
+    for (at, bearer, reflects, requests) in [
+        (10, "pool-1", true, 7),
+        (15, "toy-ack-only", true, 12),
+        (15, "toy-clean-bearer", false, 12),
+    ] {
+        let mut fixture = child_fixture();
+        fixture["pool_accept"]["note"] = json!("toy-ack-only");
+        let mut replies = catalog(&fixture);
+        replies.extend([
+            empty(),
+            empty(),
+            accepted(&fixture["pool_accept"]),
+            ok(&fixture["parent"]),
+        ]);
+        replies.extend(chain(&fixture));
+        replies.push(empty());
+        let (client, glb, regional) =
+            servers_with_auth(replies, placement(&fixture), true, rotating_at(at, bearer));
+        let result = client
+            .create_pool(&RequestContext::new().0, pool_input())
+            .await;
+        if reflects {
+            let Err(failure) = result else {
+                panic!("reflected acknowledgement was accepted");
+            };
+            assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+            assert!(failure.partial().is_none());
+        } else {
+            assert_eq!(result.unwrap().pool.id, "pool-1");
+        }
+        assert_eq!(glb.requests(), requests);
+        assert_eq!(regional.requests(), 3);
+    }
+}
+
+#[tokio::test]
 async fn glb_final_catalog_read_rechecks_the_region() {
     let mut fixture = child_fixture();
     fixture["regions"][0]["note"] = json!("toy-final-bearer");

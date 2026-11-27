@@ -121,15 +121,20 @@ impl Client {
             let reply = run
                 .send(ctx, POOLS, Method::POST, &[glb], Some(&body), |_| None)
                 .await?;
-            let Some(accepted) = run
-                .acceptance(&reply, POOLS)
-                .filter(|r| r.glb == glb && PathIds::Strict.allows(&r.id))
-            else {
+            let Some(acceptance) = run.acceptance(&reply, POOLS, |row| {
+                row.glb == glb && PathIds::Strict.allows(&row.id)
+            }) else {
                 return Err(run.0.finish(
                     Settlement::Unknown("create response lacks a valid pool"),
                     None,
                 ));
             };
+            let accepted = acceptance.recheck(&run.0.evidence).map_err(|_| {
+                run.0.finish(
+                    Settlement::Unknown("create response lacks a valid pool"),
+                    None,
+                )
+            })?;
             let partial = |run: &Child<'_>, group: &str| {
                 CreatePoolOutput::new(
                     super::super::Pool {
@@ -164,7 +169,9 @@ impl Client {
                 if run.0.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
-                let confirmed = run.confirm_pool(&wait, &input, &accepted, &group.id).await;
+                let confirmed = run
+                    .confirm_pool(&wait, &input, &acceptance, &group.id)
+                    .await;
                 let Ok((parent_state, chain)) = confirmed else {
                     break Settlement::Unknown("create confirmation could not be proven");
                 };
@@ -206,7 +213,11 @@ impl Client {
                     State::Unknown => break Settlement::Unknown("create status unrecognized"),
                 }
             });
-            Err(run.0.finish(reason, Some(partial(&run, &group.id))))
+            let partial = acceptance
+                .recheck(&run.0.evidence)
+                .ok()
+                .map(|_| partial(&run, &group.id));
+            Err(run.0.finish(reason, partial))
         })
     }
 
@@ -311,7 +322,7 @@ impl Client {
             let reply = run
                 .send(ctx, LISTENERS, Method::POST, &[glb], Some(&body), |_| None)
                 .await?;
-            let Some(accepted) = run.acceptance(&reply, LISTENERS).filter(|row| {
+            let Some(acceptance) = run.acceptance(&reply, LISTENERS, |row| {
                 row.glb == glb && row.pool == pool && PathIds::Strict.allows(&row.id)
             }) else {
                 return Err(run.0.finish(
@@ -325,7 +336,7 @@ impl Client {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
                 let Ok(listener) = run
-                    .confirm_listener(&wait, &input, &accepted.id, &chain)
+                    .confirm_listener(&wait, &input, &acceptance, &chain)
                     .await
                 else {
                     break Settlement::Unknown("create confirmation could not be proven");
@@ -346,14 +357,16 @@ impl Client {
                     State::Unknown => break Settlement::Unknown("create status unrecognized"),
                 }
             });
-            let partial = CreateListenerOutput::new(
-                super::super::Listener {
-                    id: safe_id(&accepted.id, &run.0.evidence),
-                    ..Default::default()
-                },
-                &run.0.evidence,
-            );
-            Err(run.0.finish(reason, Some(partial)))
+            let partial = acceptance.recheck(&run.0.evidence).ok().map(|accepted| {
+                CreateListenerOutput::new(
+                    super::super::Listener {
+                        id: safe_id(&accepted.id, &run.0.evidence),
+                        ..Default::default()
+                    },
+                    &run.0.evidence,
+                )
+            });
+            Err(run.0.finish(reason, partial))
         })
     }
 }
@@ -363,7 +376,7 @@ impl Child<'_> {
         &mut self,
         ctx: &RequestContext,
         input: &CreatePoolInput,
-        accepted: &Acceptance,
+        acceptance: &Guarded<Acceptance>,
         group: &str,
     ) -> Result<(State, Chain), Box<Error>> {
         let glb = input.load_balancer_id.as_str();
@@ -371,10 +384,12 @@ impl Child<'_> {
             .read_guard::<Parent>(ctx, PARENT, &[glb], false)
             .await?;
         confirm_parent(glb, parent.recheck(&self.0.evidence)?)?;
+        let accepted = acceptance.recheck(&self.0.evidence)?;
         let chain = self
             .chain(ctx, glb, &accepted.id, Some(group), &input.name)
             .await?;
         let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;
+        acceptance.recheck(&self.0.evidence)?;
         self.pool_decision(glb, parent, chain, listeners)
     }
 
@@ -396,15 +411,18 @@ impl Child<'_> {
         &mut self,
         ctx: &RequestContext,
         input: &CreateListenerInput,
-        id: &str,
+        acceptance: &Guarded<Acceptance>,
         before: &Guarded<Chain>,
     ) -> Result<ListenerWire, Box<Error>> {
         let glb = input.load_balancer_id.as_str();
         let pool = input.pool_id.as_str();
+        let id = &acceptance.recheck(&self.0.evidence)?.id;
         let listener = self.read_guard(ctx, LISTENER, &[glb, id], false).await?;
+        acceptance.recheck(&self.0.evidence)?;
         let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;
         let group = &before.recheck(&self.0.evidence)?.group.id;
         let chain = self.chain(ctx, glb, pool, Some(group), "").await?;
+        acceptance.recheck(&self.0.evidence)?;
         self.listener_decision(input, id, before, listener, listeners, chain)
     }
 

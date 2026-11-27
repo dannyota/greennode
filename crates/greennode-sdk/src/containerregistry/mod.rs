@@ -410,7 +410,12 @@ impl Client {
         .map(|(_, response)| response.0)
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            let error = if operation.sensitive {
+            let error = if error.detail::<operation::RefusedGuard>().is_some()
+                && matches!(operation.class, Classification::Read)
+            {
+                registry_error("", None, "", "containerregistry: unsafe registry response")
+                    .with_cause(error)
+            } else if operation.sensitive {
                 withhold_registry_error(operation, error)
             } else {
                 error

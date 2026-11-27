@@ -87,12 +87,22 @@ async fn create_never_replays_or_confirms_an_ambiguous_identity() {
 }
 
 #[tokio::test]
-async fn settled_partials_screen_retained_fields_and_bad_input_sends_nothing() {
+async fn group_update_refuses_reflecting_preflight_and_preserves_safe_partial() {
     let (ctx, _) = RequestContext::new();
+    let reflected = Server::start(vec![response(
+        "200 OK",
+        br#"{"id":"group-1","name":"team","description":"toy%2Fbearer"}"#,
+    )]);
+    let refused = client(&reflected, "toy/bearer")
+        .update_group(&ctx, UpdateGroupInput::new("group-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(reflected.requests(), 1);
     let server = Server::start(vec![
         response(
             "200 OK",
-            br#"{"id":"group-1","name":"team","description":"toy%2Fbearer"}"#,
+            br#"{"id":"group-1","name":"team","description":"ordinary"}"#,
         ),
         response("204 No Content", b""),
         response("404 Not Found", b"{}"),
@@ -107,7 +117,7 @@ async fn settled_partials_screen_retained_fields_and_bad_input_sends_nothing() {
     assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
     let output = serde_json::to_value(partial.unwrap()).unwrap();
     assert_eq!(output["Group"]["ID"], "group-1");
-    assert_eq!(output["Group"]["Description"], "<redacted>");
+    assert_eq!(output["Group"]["Description"], "ordinary");
     let mut rejected = UpdateGroupInput::new("group-1");
     rejected.description = Some("toy%2Fbearer".into());
     let err = client.update_group(&ctx, rejected).await.unwrap_err();

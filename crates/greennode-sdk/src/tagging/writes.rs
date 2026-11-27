@@ -175,7 +175,7 @@ impl Client {
             known.absorb(self.session.configured_credentials());
             return Err(fail(system_tag_error(&known, op_id, None, key)));
         }
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let project = self
             .session
             .require_project_id_with_evidence(ctx, &mut evidence)

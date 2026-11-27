@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 #[derive(Default, serde::Deserialize)]
-struct Json(Value);
+pub(super) struct Json(Value);
 
 impl std::fmt::Debug for Json {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -224,7 +224,7 @@ impl sender::BearerSource for EvidenceSource {
 }
 
 #[allow(clippy::result_large_err)]
-async fn call_evidence(
+pub(super) async fn call_evidence(
     server: &Server,
     op: &Operation,
     options: &Options<'_>,

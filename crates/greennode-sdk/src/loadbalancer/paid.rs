@@ -91,7 +91,7 @@ impl Client {
         input: CreateLoadBalancerInput,
     ) -> Result<CreateLoadBalancerOutput, Failure<CreateLoadBalancerOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
+            let mut evidence = self.order_evidence(ctx).map_err(|error| not_sent(*error))?;
             let fields = [
                 ("Name", input.name.as_str()),
                 ("PackageID", &input.package_id),
@@ -230,7 +230,7 @@ impl Client {
         input: ResizeLoadBalancerInput,
     ) -> Result<ResizeLoadBalancerOutput, Failure<ResizeLoadBalancerOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = self.quote_evidence(ctx).map_err(|error| not_sent(*error))?;
+            let mut evidence = self.order_evidence(ctx).map_err(|error| not_sent(*error))?;
             let id = &input.load_balancer_id;
             let package = &input.package_id;
             screen_input(&evidence, [id.as_str(), package]).map_err(|error| not_sent(*error))?;

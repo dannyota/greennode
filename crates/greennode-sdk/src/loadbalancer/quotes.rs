@@ -74,7 +74,7 @@ impl Client {
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         crate::wire::product::exit::finish!(async {
             const OP: &str = "loadbalancer.QuoteCreateLoadBalancer";
-            let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
+            let mut evidence = self.quote_evidence(ctx, Evidence::new()).map_err(failure)?;
             screen_input(&evidence, [&*input.package_id, &input.zone_id]).map_err(failure)?;
             if input.package_id.is_empty() {
                 return Err(failure(invalid_input(&format!("{OP} requires PackageID"))));
@@ -111,7 +111,7 @@ impl Client {
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         crate::wire::product::exit::finish!(async {
             const OP: &str = "loadbalancer.QuoteResizeLoadBalancer";
-            let mut evidence = self.quote_evidence(ctx).map_err(failure)?;
+            let mut evidence = self.quote_evidence(ctx, Evidence::new()).map_err(failure)?;
             screen_input(&evidence, [&*input.load_balancer_id, &input.package_id])
                 .map_err(failure)?;
             validate_ids(
@@ -129,10 +129,17 @@ impl Client {
         })
     }
 
-    pub(super) fn quote_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
+    pub(super) fn order_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Box<Error>> {
+        self.quote_evidence(ctx, Evidence::for_write())
+    }
+
+    pub(super) fn quote_evidence(
+        &self,
+        ctx: &RequestContext,
+        mut evidence: Evidence,
+    ) -> Result<Evidence, Box<Error>> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self.session.runtime(ctx, &mut jitter)?;
-        let mut evidence = Evidence::new();
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }

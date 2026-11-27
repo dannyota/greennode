@@ -98,7 +98,7 @@ impl Client {
         input: CreateServerInput,
     ) -> Result<CreateServerOutput, Failure<CreateServerOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             required(
                 CREATE.id,
                 &[
@@ -200,7 +200,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             let id = &input.server_id;
             path_id(DELETE.id, "ServerID", id).map_err(|error| not_sent(*error))?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let body = json!({"deleteAllVolume": input.delete_volumes});
             self.guard_write(ctx, &json!([id, body]), &mut evidence)
                 .map_err(|error| not_sent(*error))?;

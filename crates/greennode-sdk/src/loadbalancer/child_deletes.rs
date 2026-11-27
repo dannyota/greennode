@@ -253,7 +253,7 @@ impl Client {
         child: Child<'_>,
         no_wait: bool,
     ) -> ChildFailure<O> {
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         validate_ids(child.operation, child.ids, PathIds::Strict)
             .map_err(|error| not_sent(*error))?;
         let mut jitter = || self.session.retry_jitter();

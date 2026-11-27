@@ -232,14 +232,21 @@ impl Child<'_> {
         }
     }
 
-    fn acceptance(&self, reply: &Response, template: &'static str) -> Option<model::Acceptance> {
-        let op = guard_operation(self.0.id, template);
-        let result = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
+    fn acceptance(
+        &mut self,
+        reply: &Response,
+        template: &'static str,
+        valid: impl FnOnce(&model::Acceptance) -> bool,
+    ) -> Option<Guarded<model::Acceptance>> {
         if reply.reflection != Some(false) {
-            None
-        } else {
-            Some(result)
+            return None;
         }
+        let op = guard_operation(self.0.id, template);
+        let value = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
+        if !valid(&value) {
+            return None;
+        }
+        Guarded::acknowledgement(value, &mut self.0.evidence, op.id, &reply.body).ok()
     }
 
     fn fail<O: Serialize>(&self, reason: &'static str, partial: O) -> Failure<O> {

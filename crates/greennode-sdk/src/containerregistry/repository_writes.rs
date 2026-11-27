@@ -1,6 +1,6 @@
 use super::reads::{RepositoryRead, valid_id};
 use super::*;
-use crate::wire::product::guard::guarded_poll;
+use crate::wire::product::guard::{Guarded, guarded_poll};
 use bytes::Bytes;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -187,7 +187,7 @@ impl Client {
                 ));
             }
             let body = json!({"repoName": input.name, "quotaLimit": input.quota_limit_gb, "isPublic": false});
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let RepositoryWrite(repo) = self.request(
                 ctx, &Operation { allow_empty: true, reflection: crate::wire::product::operation::Reflection::Redact, ..write_operation(
                     CREATE, Method::POST, "v1/repository", &[StatusCode::ACCEPTED],
@@ -243,11 +243,17 @@ impl Client {
                     "containerregistry.DeleteRepository requires a valid RepositoryID",
                 ));
             }
-            let mut evidence = Evidence::new();
-            let current = self
-                .get_repository_evidenced::<()>(ctx, id, &mut evidence)
-                .await
-                .map_err(before_write)?;
+            let mut evidence = Evidence::for_write();
+            let current = Guarded::read_preflight(
+                &mut evidence,
+                async |evidence| self.get_repository_evidenced::<()>(ctx, id, evidence).await,
+                |error| failure(*error),
+            )
+            .await
+            .map_err(before_write)?;
+            let current = current
+                .recheck(&evidence)
+                .map_err(|error| not_sent(*error))?;
             match (current.image_count_known, current.repository.image_count) {
                 (true, 0) => (),
                 (true, count) if count > 0 => return Err(not_sent(registry_error(

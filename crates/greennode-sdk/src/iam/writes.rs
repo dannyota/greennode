@@ -58,7 +58,7 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|e| not_sent(*e))?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         if let Some(configured) = runtime.configured_credentials {
             evidence.absorb(configured);
         }

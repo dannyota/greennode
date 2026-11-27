@@ -288,7 +288,7 @@ impl Client {
         }
         let body = serde_json::to_vec(&input.body())
             .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session

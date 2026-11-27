@@ -222,6 +222,40 @@ impl crate::CredentialsProvider for SequenceProvider {
 }
 
 #[tokio::test]
+async fn repository_delete_rechecks_the_zero_image_read_with_the_write_bearer() {
+    for (note, reflects) in [("ordinary-note", false), ("synthetic-bearer-1", true)] {
+        let body = serde_json::json!({"uuid":"repo-1","imageCount":0,"note":note}).to_string();
+        let server = Server::start(vec![
+            response("200 OK", &body),
+            response("202 Accepted", ""),
+        ]);
+        let client = client_with(
+            &server,
+            ConfigOptions::default()
+                .with_credentials_provider(Arc::new(SequenceProvider::default())),
+        );
+        let result = client
+            .delete_repository(
+                &RequestContext::new().0,
+                DeleteRepositoryInput {
+                    no_wait: true,
+                    ..DeleteRepositoryInput::new("repo-1")
+                },
+            )
+            .await;
+        assert_eq!(
+            result.map(|_| ()).map_err(|error| error.write_dispatch()),
+            if reflects {
+                Err(WriteDispatch::NotSent)
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(server.requests(), if reflects { 1 } else { 2 });
+    }
+}
+
+#[tokio::test]
 async fn user_preflight_rejects_reflection_of_bearer_from_permission_read() {
     let server = Server::start(vec![
         response("200 OK", r#"[{"uuid":"policy-1","action":"pull"}]"#),

@@ -5,6 +5,7 @@ use super::write::{
 use super::{Client, ListDatabaseInstancesInput, read_operation};
 use crate::wire::product::{
     evidence::Evidence,
+    guard::Guarded,
     operation::{self, Operation, Output},
     options::{Options, PathIds},
     sender::Response,
@@ -83,8 +84,15 @@ impl Client {
                 )));
             }
             self.write_provenance()?;
-            let mut evidence = Evidence::new();
-            self.delete_preflight(ctx, &id, &mut evidence).await?;
+            let mut evidence = Evidence::for_write();
+            Guarded::read_preflight(
+                &mut evidence,
+                async |evidence| self.delete_preflight(ctx, &id, evidence).await,
+                |error| not_sent(*error),
+            )
+            .await?
+            .into_checked(&evidence)
+            .map_err(|error| not_sent(*error))?;
             let body = json!({
                 "databaseInstances": [{"instancesId": id, "config": {"createFinalBackup": false, "deleteAllBackup": false}}],
                 "action": "delete", "resType": "dbaas",
@@ -219,7 +227,7 @@ impl Client {
         }
         let project = self
             .session
-            .require_project_id(ctx)
+            .require_project_id_with_evidence(ctx, evidence)
             .await
             .map_err(|error| not_sent(*error))?;
         if !instance.project_id.is_empty() && instance.project_id != project {

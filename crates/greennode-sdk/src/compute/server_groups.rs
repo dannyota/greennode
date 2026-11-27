@@ -136,7 +136,7 @@ impl Client {
             )
             .map_err(|error| not_sent(*error))?;
             path_id(CREATE.id, "PolicyID", &input.policy_id).map_err(|error| not_sent(*error))?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let body = json!({"name": input.name, "policyId": input.policy_id, "description": input.description});
             self.guard_write(ctx, &body, &mut evidence)
                 .map_err(|error| not_sent(*error))?;
@@ -212,7 +212,7 @@ impl Client {
                     "compute.UpdateServerGroup: Name must not be empty",
                 )));
             }
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             self.guard_write(
                 ctx,
                 &json!([id, input.name, input.description]),
@@ -288,7 +288,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             let id = &input.server_group_id;
             path_id(DELETE.id, "ServerGroupID", id).map_err(|error| not_sent(*error))?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             self.guard_write(ctx, &json!(id), &mut evidence)
                 .map_err(|error| not_sent(*error))?;
             let groups = self

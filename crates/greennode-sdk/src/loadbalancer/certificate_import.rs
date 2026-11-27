@@ -106,7 +106,7 @@ impl Client {
     ) -> Result<ImportCertificateOutput, Failure<ImportCertificateOutput>> {
         crate::wire::product::exit::finish!(async {
             let mut evidence = self
-                .quote_evidence(ctx)
+                .order_evidence(ctx)
                 .map_err(|error| super::write::not_sent(*error))?;
             let invalid =
                 |field: &str| super::write::not_sent(*invalid_input(&format!("{OP}: {field}")));

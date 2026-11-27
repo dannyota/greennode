@@ -161,7 +161,7 @@ impl Client {
     ) -> Result<CreateUserOutput, Failure<CreateUserOutput>> {
         crate::wire::product::exit::finish!(async {
             validate_create(&input)?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let permissions: Permissions = self
                 .request::<_, ()>(
                     ctx,
@@ -280,7 +280,7 @@ impl Client {
                     "containerregistry.DeleteUser requires a valid UserID",
                 ));
             }
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let result = self
                 .request(
                     ctx,

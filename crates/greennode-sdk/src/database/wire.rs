@@ -1,7 +1,7 @@
 use super::model::*;
 use crate::error::SafeText;
 use crate::wire::product::{
-    operation::{self, Operation, Output},
+    operation::{self, Operation, Output, RefusedGuard},
     sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField, field_matches};
@@ -88,6 +88,9 @@ impl<T: Data> Output for Envelope<T> {
 pub(super) struct CompletedNotFound;
 
 pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
+    if error.detail::<RefusedGuard>().is_some() {
+        return error;
+    }
     let Some(api) = error.api_error() else {
         return error;
     };

@@ -234,20 +234,27 @@ async fn ambiguous_create_id_never_polls_and_duplicate_name_never_quotes() {
 
 #[tokio::test]
 async fn resize_uses_same_type_in_quote_and_write_and_keeps_safe_partial() {
+    let (ctx, _) = RequestContext::new();
     let reflected = AVAILABLE.replace("toy-volume", "synthetic%2dvolume%2dbearer");
+    let refused = Server::start(vec![response(&reflected)]);
+    let failure = client(&refused, "hcm-3")
+        .resize_volume(&ctx, resize())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(refused.requests(), 1);
     let server = Server::start(vec![
-        response(&reflected),
+        response(AVAILABLE),
         response(QUOTE),
         reply("503 Service Unavailable", "{}"),
     ]);
-    let (ctx, _) = RequestContext::new();
     let failure = client(&server, "hcm-3")
         .resize_volume(&ctx, resize())
         .await
         .unwrap_err();
     assert_eq!(failure.error().class(), ErrorClass::NotSettled);
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    assert_eq!(failure.partial().unwrap().volume.name, "<redacted>");
+    assert_eq!(failure.partial().unwrap().volume.name, "toy-volume");
     assert_eq!(server.requests(), 3);
     let heads = server.heads();
     assert!(heads[1].starts_with(b"POST /portal/v1/price "));
@@ -403,6 +410,100 @@ fn changing_client(server: &Server, tokens: &'static [&'static str]) -> Client {
         .session()
         .set_test_product_root(server.root_der.clone());
     Client::new(&config)
+}
+
+#[tokio::test]
+async fn volume_write_attempt_rechecks_volume_and_detachment_proofs() {
+    let ctx = RequestContext::new().0;
+    let attached = r#"{"data":{"uuid":"volume-1","status":"IN-USE","serverId":"server-1","serverIdList":["server-1"]}}"#;
+    for (action, reflects) in [
+        ("delete", false),
+        ("delete", true),
+        ("attach", true),
+        ("detach", true),
+    ] {
+        let note = if reflects {
+            "toy-last-bearer"
+        } else {
+            "ordinary-note"
+        };
+        let mut volume: serde_json::Value = serde_json::from_str(if action == "detach" {
+            attached
+        } else {
+            AVAILABLE
+        })
+        .unwrap();
+        let mut server_detail =
+            serde_json::json!({"data":{"status":"STOPPED","bootVolumeId":"boot-1"}});
+        if action == "detach" {
+            server_detail["data"]["note"] = note.into();
+        } else {
+            volume["data"]["note"] = note.into();
+        }
+        let mut replies = vec![response(&volume.to_string())];
+        if action == "detach" {
+            replies.push(response(&server_detail.to_string()));
+        }
+        replies.push(reply(ACCEPTED, ""));
+        let server = Server::start(replies);
+        let tokens: &'static [&'static str] = if action == "detach" {
+            &["toy-read-bearer", "toy-server-bearer"]
+        } else {
+            &["toy-read-bearer"]
+        };
+        let client = changing_client(&server, tokens);
+        let result = match action {
+            "delete" => client
+                .delete_volume(
+                    &ctx,
+                    DeleteVolumeInput {
+                        volume_id: "volume-1".into(),
+                        no_wait: true,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_err(|error| error.write_dispatch()),
+            "attach" => client
+                .attach_volume(
+                    &ctx,
+                    AttachVolumeInput {
+                        volume_id: "volume-1".into(),
+                        server_id: "server-1".into(),
+                        no_wait: true,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_err(|error| error.write_dispatch()),
+            _ => client
+                .detach_volume(
+                    &ctx,
+                    DetachVolumeInput {
+                        volume_id: "volume-1".into(),
+                        server_id: "server-1".into(),
+                        no_wait: true,
+                        allow_running: false,
+                    },
+                )
+                .await
+                .map(|_| ())
+                .map_err(|error| error.write_dispatch()),
+        };
+        assert_eq!(
+            result,
+            if reflects {
+                Err(WriteDispatch::NotSent)
+            } else {
+                Ok(())
+            },
+            "{action}"
+        );
+        assert_eq!(
+            server.requests(),
+            1 + usize::from(action == "detach") + usize::from(!reflects)
+        );
+    }
 }
 
 #[tokio::test]

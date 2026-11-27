@@ -81,7 +81,7 @@ impl Client {
         if !valid_id(&input.cluster_id) {
             return Err(not_sent(Error::new(ErrorClass::InvalidInput).with_detail("greennode: invalid input: vks.DeleteCluster: ClusterID must be non-empty and contain only letters, digits, and hyphens")));
         }
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         self.cluster_state(ctx, &input.cluster_id, &mut evidence)
             .await
             .map_err(|error| not_sent(*error))?;

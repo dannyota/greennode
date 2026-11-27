@@ -85,7 +85,7 @@ impl Client {
         input: CreateVolumeInput,
     ) -> Result<CreateVolumeOutput, Failure<CreateVolumeOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             if input.name.is_empty() {
                 return Err(not_sent(invalid(
                     "vngcloud: invalid input: volume.CreateVolume requires Name",
@@ -173,7 +173,7 @@ impl Client {
         input: ResizeVolumeInput,
     ) -> Result<ResizeVolumeOutput, Failure<ResizeVolumeOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             path_id(RESIZE.id, "VolumeID", &input.volume_id).map_err(not_sent)?;
             if input.size == 0 {
                 return Err(not_sent(invalid(

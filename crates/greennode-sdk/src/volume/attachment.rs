@@ -1,3 +1,4 @@
+use crate::wire::product::guard::Guarded;
 use http::Method;
 use serde::Serialize;
 use serde_json::json;
@@ -192,7 +193,7 @@ impl Client {
             AttachmentMode::Attach => &ATTACH,
             AttachmentMode::Detach { .. } => &DETACH,
         };
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         path_id(mutation.id, "VolumeID", input.volume).map_err(not_sent)?;
         path_id(mutation.id, "ServerID", input.server).map_err(not_sent)?;
         let body = json!({});
@@ -203,16 +204,20 @@ impl Client {
             Some(&body),
         )
         .map_err(not_sent)?;
-        let mut volume = self
-            .volume(ctx, input.volume, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        screen_state(&evidence, &volume).map_err(not_sent)?;
+        let volume = Guarded::read_preflight(
+            &mut evidence,
+            async |evidence| self.volume(ctx, input.volume, evidence).await,
+            std::convert::identity,
+        )
+        .await
+        .map_err(not_sent)?;
+        let current = volume.recheck(&evidence).map_err(not_sent)?;
+        screen_state(&evidence, current).map_err(not_sent)?;
         let attach = matches!(input.mode, AttachmentMode::Attach);
-        if attached(&volume, input.server) == attach {
+        if attached(current, input.server) == attach {
             return finish(
                 AttachVolumeOutput {
-                    volume,
+                    volume: volume.into_checked(&evidence).map_err(not_sent)?,
                     changed: false,
                 },
                 Ok(()),
@@ -228,6 +233,7 @@ impl Client {
                 .await
                 .map_err(not_sent)?;
         }
+        let mut volume = volume.into_checked(&evidence).map_err(not_sent)?;
         self.send_write(
             ctx,
             mutation,
@@ -265,7 +271,7 @@ impl Client {
         ctx: &RequestContext,
         project: &str,
         input: &Attachment<'_>,
-        volume: &Volume,
+        volume: &Guarded<Volume>,
         allow_running: bool,
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
@@ -274,21 +280,29 @@ impl Client {
             "v2/{}/servers/{}",
             "invalid response shape; body withheld",
         );
-        let (status, boot): (String, String) = self
-            .read(ctx, read, &[project, input.server], &[], evidence, |raw| {
-                let envelope = Object::parse(raw)?;
-                envelope.get("data")?.map_or_else(
-                    || Ok((String::new(), String::new())),
-                    |data| {
-                        let row = Object::parse(data)?;
-                        Ok((row.value("status")?, row.value("bootVolumeId")?))
-                    },
-                )
-            })
-            .await?;
+        let server = Guarded::read_preflight(
+            evidence,
+            async |evidence| {
+                self.read(ctx, read, &[project, input.server], &[], evidence, |raw| {
+                    let envelope = Object::parse(raw)?;
+                    envelope.get("data")?.map_or_else(
+                        || Ok((String::new(), String::new())),
+                        |data| {
+                            let row = Object::parse(data)?;
+                            Ok((row.value("status")?, row.value("bootVolumeId")?))
+                        },
+                    )
+                })
+                .await
+            },
+            std::convert::identity,
+        )
+        .await?;
+        let (status, boot) = server.recheck(evidence)?;
+        let volume = volume.recheck(evidence)?;
         let server = safe_label(input.server, evidence);
         let id = safe_label(input.volume, evidence);
-        if !super::inventory::response_id(&boot) {
+        if !super::inventory::response_id(boot) {
             return Err(refusal(
                 WriteRefusal::BootVolume,
                 &format!(
@@ -296,7 +310,7 @@ impl Client {
                 ),
             ));
         }
-        if volume.bootable || volume.uuid == boot {
+        if volume.bootable || volume.uuid == *boot {
             return Err(refusal(
                 WriteRefusal::BootVolume,
                 &format!(
@@ -322,17 +336,21 @@ impl Client {
         input: DeleteVolumeInput,
     ) -> Result<DeleteVolumeOutput, Failure<DeleteVolumeOutput>> {
         crate::wire::product::exit::finish!(async {
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let id = &input.volume_id;
             path_id(DELETE.id, "VolumeID", id).map_err(not_sent)?;
             self.guard_inputs(ctx, &mut evidence, &[id], None)
                 .map_err(not_sent)?;
-            let (mut volume, attachment_known) = self
-                .volume_detail(ctx, id, &mut evidence)
-                .await
-                .map_err(not_sent)?;
-            screen_state(&evidence, &volume).map_err(not_sent)?;
-            if in_use(&volume)
+            let guarded = Guarded::read_preflight(
+                &mut evidence,
+                async |evidence| self.volume_detail(ctx, id, evidence).await,
+                std::convert::identity,
+            )
+            .await
+            .map_err(not_sent)?;
+            let (volume, attachment_known) = guarded.recheck(&evidence).map_err(not_sent)?;
+            screen_state(&evidence, volume).map_err(not_sent)?;
+            if in_use(volume)
                 || !volume.server_id.is_empty()
                 || volume
                     .server_id_list
@@ -348,11 +366,12 @@ impl Client {
                 )));
             }
             if !attachment_known
-                || (!available(&volume) && !volume.status.eq_ignore_ascii_case("ERROR"))
+                || (!available(volume) && !volume.status.eq_ignore_ascii_case("ERROR"))
             {
                 return Err(not_sent(shape(DELETE.id, DETAIL_SHAPE)));
             }
             let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
+            let (mut volume, _) = guarded.into_checked(&evidence).map_err(not_sent)?;
             self.send_write(ctx, &DELETE, &[&project, id], None, &mut evidence)
                 .await?;
             let result = if input.no_wait {

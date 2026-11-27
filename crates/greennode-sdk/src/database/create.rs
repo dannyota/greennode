@@ -6,6 +6,7 @@ use super::{
     Client, Instance, ListDatabaseFlavorsInput, ListDatabaseNetworksInput,
     ListDatabaseStorageTypesInput,
 };
+use crate::wire::product::guard::Guarded;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -121,9 +122,16 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             validate(&input).map_err(|error| not_sent(*error))?;
             self.write_provenance()?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             evidence.add_operation_password(&input.password);
-            let engine = self.plan_create(ctx, &input, &mut evidence).await?;
+            let engine = Guarded::read_preflight(
+                &mut evidence,
+                async |evidence| self.plan_create(ctx, &input, evidence).await,
+                |error| not_sent(*error),
+            )
+            .await?
+            .into_checked(&evidence)
+            .map_err(|error| not_sent(*error))?;
             let package = input.flavor_id.to_string();
             let body = create_body(&input, &engine, &package)
                 .map_err(|_| not_sent(Error::new(ErrorClass::InvalidInput)))?;

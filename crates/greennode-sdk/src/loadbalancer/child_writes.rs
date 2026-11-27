@@ -77,7 +77,7 @@ impl<'a> ChildWriter<'a> {
         validate_ids(operation, ids, PathIds::Strict)?;
         let mut jitter = || client.session.retry_jitter();
         let runtime = client.session.runtime(ctx, &mut jitter)?;
-        let mut evidence = Evidence::new();
+        let mut evidence = Evidence::for_write();
         if let Some(credentials) = runtime.configured_credentials {
             evidence.absorb(credentials);
         }

@@ -100,7 +100,7 @@ impl Client {
             let ids = [("LoadBalancerID", id)];
             validate_ids(DELETE_LB, &ids, PathIds::Strict).map_err(|error| not_sent(*error))?;
             let _lock = self.lock_load_balancer(ctx, id).await.map_err(not_sent)?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             let current = self
                 .load_balancer_progress(ctx, id, &mut evidence)
                 .await
@@ -223,7 +223,7 @@ impl Client {
             let id = input.certificate_id.as_str();
             validate_ids(DELETE_CERT, &[("CertificateID", id)], PathIds::Strict)
                 .map_err(|error| not_sent(*error))?;
-            let mut evidence = Evidence::new();
+            let mut evidence = Evidence::for_write();
             if let Err(error) = self.check_certificate(ctx, id, &mut evidence).await {
                 let error = if error.detail::<WriteError>().is_some() {
                     *error
