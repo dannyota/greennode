@@ -1,0 +1,38 @@
+{
+  "Alarm": {
+    "ID": "alarm-1",
+    "Name": "Read alarm",
+    "Description": "Match log records",
+    "Kind": "Log",
+    "Status": "ACTIVE",
+    "Severity": "WARNING",
+    "MetricMappingID": "",
+    "Log": {
+      "ID": "log-1",
+      "LogProjectID": "project-1",
+      "LogProjectName": "Project",
+      "QueryString": "level:error",
+      "Filter": {"condition":"error"},
+      "ThresholdType": "",
+      "Condition": "",
+      "ThresholdValue": 2.5,
+      "TimeFrame": 5,
+      "GroupByField": "3",
+      "AggField": "",
+      "AggType": "",
+      "InAlarm": [
+        "channel-1"
+      ],
+      "OK": [],
+      "Resend": {
+        "Enabled": true,
+        "Statuses": [
+          "OK",
+          "ALARM"
+        ],
+        "Period": 2,
+        "Times": 1
+      }
+    }
+  }
+}

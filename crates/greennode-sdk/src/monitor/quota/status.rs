@@ -536,7 +536,9 @@ pub(super) fn decode_quota(raw: &serde_json::value::RawValue) -> Option<DecodedQ
 
 pub(super) struct Detail {
     pub(super) class_id: String,
-    class_name: String,
+    pub(super) class_name: String,
+    pub(super) tier_name: String,
+    pub(super) limits: [Option<i64>; 6],
     pub(super) api: i64,
     pub(super) location: i64,
     pub(super) price: Option<f64>,
@@ -551,16 +553,26 @@ fn synthetic_detail(raw: &serde_json::value::RawValue, quota: &QuotaIds) -> Opti
     if !PathIds::Strict.allows(&class_id) {
         return None;
     }
-    token::<Option<String>>(o.required("tierName")?)?;
-    for channel in ["email", "sms", "slack", "webhook", "telegram", "teams"] {
+    let tier_name = token::<Option<String>>(o.required("tierName")?)?.unwrap_or_default();
+    let mut limits = [None; 6];
+    for (limit, channel) in limits
+        .iter_mut()
+        .zip(["email", "sms", "slack", "webhook", "telegram", "teams"])
+    {
         let value = o.required(channel)?;
-        if value.get() != "null" && integer(value)? < 0 {
-            return None;
+        if value.get() != "null" {
+            let value = integer(value)?;
+            if value < 0 {
+                return None;
+            }
+            *limit = Some(value);
         }
     }
     Some(Detail {
         class_id,
         class_name: o.text("className")?,
+        tier_name,
+        limits,
         api: o.integer("api")?,
         location: o.integer("location")?,
         price: o.price()?,
@@ -569,8 +581,9 @@ fn synthetic_detail(raw: &serde_json::value::RawValue, quota: &QuotaIds) -> Opti
 
 pub(super) struct NotificationPackage {
     pub(super) id: String,
-    name: String,
+    pub(super) name: String,
     pub(super) price: Option<f64>,
+    pub(super) amount: i64,
 }
 
 pub(super) fn notification_packages(
@@ -583,8 +596,8 @@ pub(super) fn notification_packages(
         if !PathIds::WithUnderscore.allows(&id) {
             return None;
         }
-        o.integer("amount")?;
         packages.push(NotificationPackage {
+            amount: o.integer("amount")?,
             id,
             name: o.text("name")?,
             price: o.price()?,

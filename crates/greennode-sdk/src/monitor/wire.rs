@@ -19,6 +19,7 @@ use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch}
 
 #[derive(Clone, Copy)]
 pub(super) enum Family {
+    Plain { strict: bool },
     Dashboard,
     CheckAlarm,
     Quota { no_redirect: bool },
@@ -37,13 +38,14 @@ impl Read {
     fn no_redirect(&self) -> bool {
         match self.family {
             Family::Dashboard => true,
-            Family::CheckAlarm => false,
+            Family::Plain { .. } | Family::CheckAlarm => false,
             Family::Quota { no_redirect } => no_redirect,
         }
     }
 
     pub(super) fn invalid(&self, evidence: &Evidence) -> Error {
         let message = match self.family {
+            Family::Plain { .. } => "response failed to decode; body withheld",
             Family::Dashboard => "vMonitor response withheld",
             Family::Quota { .. } => "quota response had invalid structure",
             Family::CheckAlarm => "check alarm response rejected; body withheld",
@@ -70,6 +72,9 @@ impl Read {
     }
 
     fn failure(&self, error: Error, evidence: &Evidence) -> Error {
+        if matches!(self.family, Family::Plain { .. }) {
+            return error.screen_api(&|text| evidence.text_reflects(text));
+        }
         let api = error.api_error();
         let status = error
             .detail::<StatusCode>()
@@ -96,6 +101,7 @@ impl Read {
 
     fn overflow(&self, status: Option<u16>, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
+            Family::Plain { .. } => ("", "transport: response body exceeds limit"),
             Family::Dashboard => ("", "vMonitor response withheld"),
             Family::Quota { .. } => ("ResponseTooLarge", "quota response exceeded size limit"),
             Family::CheckAlarm => (
@@ -109,6 +115,7 @@ impl Read {
 
     fn request_failed(&self, status: Option<u16>, retryable: bool, evidence: &Evidence) -> Error {
         let (code, message) = match self.family {
+            Family::Plain { .. } => ("", "response failed to decode; body withheld"),
             Family::Dashboard => ("", "vMonitor response withheld"),
             Family::CheckAlarm | Family::Quota { .. } => (
                 if status.is_some_and(|status| status >= 400) {
@@ -181,9 +188,9 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: true,
+            keep_status: !matches!(read.family, Family::Plain { .. }),
             overflow_overrides_status: false,
-            sensitive: true,
+            sensitive: !matches!(read.family, Family::Plain { .. }),
             reject_reflected_credentials: false,
             no_redirect: read.no_redirect(),
             retry_config: retry::Config::default(),
@@ -213,6 +220,18 @@ impl Client {
             Err(failure) => return Err(read.failure(failure.into_parts().0, evidence)),
         };
         if !operation.success.contains(&reply.status) {
+            if matches!(read.family, Family::Plain { .. }) {
+                return Err(*crate::wire::product::response::classify_full(
+                    read.id,
+                    reply.status,
+                    Bytes::from(reply.reply.body),
+                    operation.success,
+                    (true, false, operation.retry),
+                    evidence.credentials(),
+                )
+                .err()
+                .unwrap_or_else(|| Box::new(read.invalid(evidence))));
+            }
             let retryable = matches!(reply.status.as_u16(), 429 | 502 | 503 | 504);
             return Err(read.request_failed(Some(reply.status.as_u16()), retryable, evidence));
         }
@@ -231,8 +250,20 @@ impl Client {
                 evidence,
             ));
         }
-        let text = go_json(&reply.body);
+        let text =
+            if reply.body.is_empty() && matches!(read.family, Family::Plain { strict: false }) {
+                std::borrow::Cow::Borrowed("null")
+            } else {
+                go_json(&reply.body)
+            };
         let raw = serde_json::from_str(&text).map_err(|_| match read.family {
+            Family::Plain { .. } => read.error(
+                None,
+                "",
+                "response failed to decode; body withheld",
+                false,
+                evidence,
+            ),
             Family::Dashboard => read.invalid(evidence),
             Family::CheckAlarm | Family::Quota { .. } => {
                 read.request_failed(Some(reply.status.as_u16()), false, evidence)

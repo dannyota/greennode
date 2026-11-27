@@ -1,0 +1,49 @@
+[
+  {
+    "id": "chk-1",
+    "name": "Probe",
+    "type": "API",
+    "subtype": "HTTP",
+    "status": "ENABLED",
+    "config": {
+      "request": {
+        "url": "https://example.test/",
+        "method": "GET",
+        "headers": {
+          "X-Value": "one"
+        },
+        "query": {
+          "q": "value"
+        },
+        "body": "",
+        "timeout": 10.0,
+        "verified_ssl": true
+      },
+      "assertions": [
+        {
+          "type": "status_code",
+          "operator": "equals",
+          "target": "200"
+        }
+      ]
+    },
+    "options": {
+      "test_frequency": 5.0,
+      "tests": 1,
+      "failed_locations": 1
+    },
+    "locations": [
+      "loc-1"
+    ],
+    "notifications": {
+      "In-alarm": [
+        "channel-1"
+      ],
+      "Up": []
+    },
+    "created_at": "2000-01-01",
+    "updated_at": "2000-01-02",
+    "monitor_status": "OK",
+    "history_alarm": "alarm-1"
+  }
+]

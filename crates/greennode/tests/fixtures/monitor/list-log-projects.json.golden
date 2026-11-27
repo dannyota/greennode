@@ -1,0 +1,17 @@
+{
+  "Items": [
+    {
+      "ID": "project-1",
+      "ProjectName": "Project",
+      "ProjectDescription": "Logs",
+      "Status": "ACTIVE",
+      "BillingStatus": "ACTIVE",
+      "ProjectType": "BASIC",
+      "CreatedAt": "2000-01-01"
+    }
+  ],
+  "Page": 0,
+  "PageSize": 100,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

@@ -40,6 +40,61 @@ pub(super) fn notification_usage_view() -> OutputView {
     }
 }
 
+pub(super) fn synthetic_view() -> OutputView {
+    OutputView {
+        custom: Some(synthetic_unqueried),
+        ..notification_view()
+    }
+}
+
+pub(super) fn package_view() -> OutputView {
+    OutputView {
+        custom: Some(package_unqueried),
+        ..notification_usage_view()
+    }
+}
+
+fn synthetic_unqueried(
+    stdout: &mut dyn Write,
+    _: &mut dyn Write,
+    output: &render::Projected,
+    format: Format,
+    queried: bool,
+) -> Result<bool, render::Error> {
+    quota_cells(stdout, output, format, queried, notification_times_utc)
+}
+
+fn package_unqueried(
+    stdout: &mut dyn Write,
+    _: &mut dyn Write,
+    output: &render::Projected,
+    format: Format,
+    queried: bool,
+) -> Result<bool, render::Error> {
+    quota_cells(stdout, output, format, queried, |_| ())
+}
+
+fn quota_cells(
+    mut stdout: &mut dyn Write,
+    output: &render::Projected,
+    format: Format,
+    queried: bool,
+    prepare: fn(&mut Value),
+) -> Result<bool, render::Error> {
+    if queried || format == Format::Json {
+        return Ok(false);
+    }
+    let mut value = output.for_query()?;
+    prepare(&mut value);
+    unknown_cells(&mut value);
+    match format {
+        Format::Table => render::write_table(&mut stdout, &value)?,
+        Format::Text => render::write_text(&mut stdout, &value)?,
+        Format::Json => return Ok(false),
+    }
+    Ok(true)
+}
+
 fn notification_times_utc(value: &mut Value) {
     let Value::Object(fields) = value else { return };
     let Some(Value::Object(quota)) = fields.get_mut("Quota") else {

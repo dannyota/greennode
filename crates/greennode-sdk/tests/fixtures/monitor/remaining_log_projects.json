@@ -1,0 +1,17 @@
+{
+  "content": [
+    {
+      "id": "project-1",
+      "name": "Project",
+      "description": "Logs",
+      "status": "ACTIVE",
+      "billingStatus": "ACTIVE",
+      "projectType": "BASIC",
+      "createdAt": "2000-01-01"
+    }
+  ],
+  "currentPage": 0,
+  "pageSize": 100,
+  "totalElements": 1,
+  "totalPages": 1
+}

@@ -7,6 +7,9 @@ mod notification;
 #[path = "monitor/next_reads.rs"]
 mod next_reads;
 
+#[path = "monitor/remaining.rs"]
+mod remaining;
+
 #[path = "monitor/synthetic_quotes.rs"]
 mod synthetic_quotes;
 

@@ -220,3 +220,53 @@ func TestMonitorNextReadGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestMonitorRemainingGoldens(t *testing.T) {
+	type reply struct{ route, fixture string }
+	cases := []struct {
+		operation string
+		flags     []string
+		replies   []reply
+	}{
+		{"list-check-alarm-history", []string{"--check-id", "chk-1", "--start", "2000-01-01T07:00:00+07:00", "--end", "2000-01-05T00:00:00Z"}, []reply{{"/vmonitor-uptime-manager/v1/uptimes/chk-1", "check_alarm_snapshot"}, {"/vmonitor-api/api/v1/alarms/synthetic/metrics/mona/alarm-1", "check_alarm_definition"}, {"/vmonitor-api/api/v1/alarms/synthetic/metrics/mona/sub-1/histories", "remaining_history"}}},
+		{"get-alarm", []string{"--alarm-id", "alarm-1"}, []reply{{"/vmonitor-api/api/v1/alarms/alarm-1", "remaining_alarm"}}},
+		{"list-alarms", []string{"--kind", "Log"}, []reply{{"/vmonitor-api/api/v1/alarms/list", "remaining_alarms"}}},
+		{"get-channel", []string{"--channel-id", "channel-1"}, []reply{{"/notification-gateway/api/v1/notification/list/typeSearch", "remaining_channels"}}},
+		{"list-channels", []string{}, []reply{{"/notification-gateway/api/v1/notification/list/typeSearch", "remaining_channels"}}},
+		{"list-channel-types", []string{}, []reply{{"/notification-gateway/api/v1/type/list", "remaining_channel_types"}}},
+		{"get-check", []string{"--check-id", "chk-1"}, []reply{{"/vmonitor-uptime-manager/v1/uptimes/chk-1", "remaining_check"}}},
+		{"list-checks", []string{}, []reply{{"/vmonitor-uptime-manager/v1/uptimes", "remaining_checks"}}},
+		{"list-locations", []string{}, []reply{{"/vmonitor-uptime-manager/v1/locations", "remaining_locations"}}},
+		{"get-log-project", []string{"--log-project-id", "project-1"}, []reply{{"/log-api/v1/projects/project-1", "remaining_log_project"}}},
+		{"list-log-projects", []string{}, []reply{{"/log-api/v1/projects", "remaining_log_projects"}}},
+		{"list-log-project-classes", []string{}, []reply{{"/billing-api/v2/log/quota-class", "remaining_log_classes"}}},
+		{"quote-create-log-project", []string{"--name", "Logs"}, []reply{{"/billing-api/v2/log/quota-class", "remaining_log_classes"}, {"/billing-api/v2/log/prices/created-price", "remaining_log_quote"}}},
+		{"get-quota-usage", []string{}, []reply{{"/billing-api/v1/quotas/usages", "remaining_quota_usage"}}},
+		{"get-synthetic-quota", []string{}, []reply{{"/billing-api/v1/synthetic/quota", "quota_synthetic"}, {"/billing-api/v2/synthetic/quota-1/quota-detail", "quota_quota_detail"}}},
+		{"get-synthetic-quota-usage", []string{}, []reply{{"/billing-api/v1/synthetic/quota/usages", "remaining_synthetic_usage"}}},
+		{"list-notification-packages", []string{"--kind", "Email"}, []reply{{"/billing-api/v1/email/packages", "notification_quote_packages"}}},
+	}
+	for _, tc := range cases {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(tc.operation+"/"+format, func(t *testing.T) {
+				routes := map[string]func(http.ResponseWriter, *http.Request){}
+				for _, reply := range tc.replies {
+					body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), reply.fixture+".json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					routes[reply.route] = jsonHandler(http.StatusOK, string(body))
+				}
+				server := newSvcFixture(routes)
+				args := append([]string{"--profile", "agent", "--read-only", "--output", format, "monitor", tc.operation}, tc.flags...)
+				code, stdout, stderr := dashboardCLI(t, server.mux)(args...)
+				if code != 0 || stderr != "" || server.requestCount() != len(routes) {
+					t.Fatalf("Monitor read failed (exit %d, requests %d)", code, server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.operation+"."+format+".golden"), []byte(stdout), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
