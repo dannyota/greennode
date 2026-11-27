@@ -108,10 +108,11 @@ macro_rules! finish {
 
 pub(crate) use finish;
 
-pub(crate) async fn verify<T: Serialize + super::output::PublicOutput>(
+pub(crate) fn verify<T: Serialize + super::output::PublicOutput>(
     future: impl Future<Output = Result<T, Failure<T>>>,
-) -> Result<T, Box<Failure<T>>> {
-    scope(async {
+) -> impl Future<Output = Result<T, Box<Failure<T>>>> {
+    let future = Box::pin(future);
+    scope(async move {
         let result = future.await;
         let state = OBSERVED.with(|state| state.borrow().clone());
         if state.public.values().is_empty() {
@@ -139,7 +140,6 @@ pub(crate) async fn verify<T: Serialize + super::output::PublicOutput>(
             |text| evidence.text_reflects(text),
         )))
     })
-    .await
 }
 
 #[cfg(test)]

@@ -156,6 +156,36 @@ async fn quota_lookup_matches_names_case_insensitively() {
     assert_eq!(output.quota.fields["used"], 2);
 }
 
+#[test]
+fn quota_lookup_runs_on_a_small_stack() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"[{"resourceName":"cpu","used":2}]"#,
+    )]);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(move || {
+            runtime.block_on(async {
+                let output = client(&server)
+                    .get_quota(
+                        &RequestContext::new().0,
+                        GetQuotaInput { name: "CPU".into() },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(output.quota.fields["used"], 2);
+                assert_eq!(server.requests(), 1);
+            });
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn response(status: &str, body: &[u8]) -> Response {
     Response::Http {
         status: status.into(),
