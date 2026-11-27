@@ -154,7 +154,7 @@ impl<'a> ChildWriter<'a> {
         }
     }
 
-    fn ready_time(
+    pub(super) fn ready_time(
         &self,
         ctx: &RequestContext,
         wait: &RequestContext,

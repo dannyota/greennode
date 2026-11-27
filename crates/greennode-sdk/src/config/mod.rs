@@ -49,6 +49,8 @@ pub struct ConfigOptions {
     endpoint_overrides: EndpointOverrides,
     #[cfg(any(test, feature = "test-support"))]
     product_fixtures: Vec<crate::testing::ProductFixture>,
+    #[cfg(any(test, feature = "test-support"))]
+    clock: Option<std::sync::Arc<dyn crate::Clock>>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -60,6 +62,19 @@ struct ParseHooks {
 }
 
 impl ConfigOptions {
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn with_clock(mut self, clock: std::sync::Arc<dyn crate::Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    fn injected_clock(&self) -> Option<std::sync::Arc<dyn crate::Clock>> {
+        #[cfg(any(test, feature = "test-support"))]
+        return self.clock.clone();
+        #[cfg(not(any(test, feature = "test-support")))]
+        None
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn with_product_loopback(
         mut self,
@@ -257,6 +272,7 @@ impl Config {
             kind,
             cdn_key,
         };
+        let clock = options.injected_clock();
         let session = session::Session::new(
             selected,
             &region,
@@ -264,7 +280,7 @@ impl Config {
             options.project_id,
             options.token_cache,
             None,
-            (options.iam_details, options.endpoint_overrides),
+            (options.iam_details, options.endpoint_overrides, clock),
         )?;
         #[cfg(any(test, feature = "test-support"))]
         session

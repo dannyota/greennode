@@ -281,8 +281,10 @@ mod tests {
     fn depth_limit() {
         let body = format!("{}0{}", "[".repeat(129), "]".repeat(129));
         assert!(check(body.as_bytes(), &[]).is_err());
-        let body = format!("{}0{}", "[".repeat(20), "]".repeat(20));
-        assert!(check(body.as_bytes(), &[]).is_ok());
+        for levels in [20, 127, 128] {
+            let body = format!("{}0{}", "[".repeat(levels), "]".repeat(levels));
+            assert!(check(body.as_bytes(), &[]).is_ok(), "{levels}");
+        }
     }
 
     #[test]

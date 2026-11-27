@@ -243,3 +243,119 @@ async fn member_write_reports_the_redirect_status_and_message() {
     super::create_writes::assert_reported_redirect(&failure);
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn member_required_fields_all_precede_path_and_address_checks() {
+    let server = Server::start(vec![]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .add_pool_member(
+            &ctx,
+            AddPoolMemberInput {
+                address: "x".into(),
+                port: 0,
+                ..add()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "vngcloud: invalid input: loadbalancer.AddPoolMember requires Port"
+    );
+    let failure = client(&server, CANARY)
+        .add_pool_member(
+            &ctx,
+            AddPoolMemberInput {
+                pool_id: "bad id".into(),
+                port: 0,
+                ..add()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().message(),
+        "vngcloud: invalid input: loadbalancer.AddPoolMember requires Port"
+    );
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn member_pre_write_timeout_names_load_balancer_and_pool() {
+    let (arrived, started) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response("200 OK", POOL),
+        Response::StallBeforeHead(arrived),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, CANARY);
+    let (result, ()) = tokio::join!(client.add_pool_member(&ctx, add()), async {
+        started.await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(600)).await;
+    });
+    let failure = result.unwrap_err();
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::RecoveryAdvice>()
+            .unwrap()
+            .message(),
+        "loadbalancer: resource busy: loadbalancer.AddPoolMember: load balancer lb-1 or pool pool-1 is not ready within 10m0s; nothing sent"
+    );
+}
+
+#[tokio::test]
+async fn member_send_step_refuses_an_expired_pre_write_bound_with_the_pool_only_text() {
+    let clock = std::sync::Arc::new(crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH));
+    let server = Server::start(vec![]);
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("proj-1".into())
+            .with_static_token(Secret::new(CANARY))
+            .with_clock(clock.clone())
+            .with_endpoint_overrides(EndpointOverrides {
+                vlb: Some(format!("{}/regional/", server.origin)),
+                portal: Some(format!("{}/billing/", server.origin)),
+                ..EndpointOverrides::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let ids = [("LoadBalancerID", "lb-1"), ("PoolID", "pool-1")];
+    let mut write = crate::loadbalancer::child_writes::ChildWriter::new(
+        &client,
+        &ctx,
+        "loadbalancer.AddPoolMember",
+        "lb-1",
+        &ids,
+    )
+    .unwrap();
+    let pre = ctx.child_with_deadline(
+        crate::Clock::monotonic_now(clock.as_ref()) + crate::loadbalancer::child_writes::BOUND,
+    );
+    clock.advance(crate::loadbalancer::child_writes::BOUND);
+    let route = crate::loadbalancer::child_writes::ChildTarget {
+        read: &crate::loadbalancer::member_state::MEMBERS,
+        ..crate::loadbalancer::pool_writes::pool_target("pool-1", &ids)
+    };
+    let error = member_writes::send_replacement(&ctx, &pre, &mut write, &route, "{}".into())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.detail::<crate::RecoveryAdvice>().unwrap().message(),
+        "loadbalancer: resource busy: loadbalancer.AddPoolMember: pool is not ready; nothing sent"
+    );
+    assert_eq!(
+        error.detail::<WriteError>(),
+        Some(&WriteError::ResourceBusy)
+    );
+    assert_eq!(server.requests(), 0);
+}

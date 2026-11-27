@@ -1,3 +1,4 @@
+mod monitor;
 mod queries;
 
 use super::*;

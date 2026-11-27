@@ -7,8 +7,9 @@ use super::super::{
     Client,
     wire::{Family, Read},
 };
+use super::charge::{ValidBody, charged_len, go_secrets};
 use crate::wire::product::evidence::Evidence;
-use crate::wire::strict_json::{field_matches, validate};
+use crate::wire::strict_json::field_matches;
 use crate::{Error, RequestContext};
 
 const COMPOSITE_LIMIT: usize = 8 << 20;
@@ -96,7 +97,7 @@ impl<'a> Reader<'a> {
             ));
         }
         let (status, raw) = response?;
-        validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| {
+        let body = ValidBody::check(raw.get()).map_err(|()| {
             if status == http::StatusCode::NOT_FOUND {
                 read.error(
                     Some(404),
@@ -109,7 +110,8 @@ impl<'a> Reader<'a> {
                 self.invalid()
             }
         })?;
-        let length = sanitized_len(raw.get());
+        let secrets = go_secrets(&self.evidence, self.client.session.cdn_key());
+        let length = charged_len(&body, &secrets).map_err(|()| self.invalid())?;
         if length > COMPOSITE_LIMIT - self.retained {
             self.exhausted = true;
             return Err(read
@@ -133,32 +135,6 @@ impl<'a> Reader<'a> {
     pub(super) fn decode<T>(&self, decoded: Option<T>) -> Result<T, Error> {
         decoded.ok_or_else(|| self.invalid())
     }
-}
-
-fn sanitized_len(raw: &str) -> usize {
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut length = 0;
-    for ch in raw.chars() {
-        if in_string {
-            length += match ch {
-                '<' | '>' | '&' if !escaped => 6,
-                '\u{2028}' | '\u{2029}' if !escaped => 6,
-                _ => ch.len_utf8(),
-            };
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-        } else if !ch.is_ascii_whitespace() {
-            length += ch.len_utf8();
-            in_string = ch == '"';
-        }
-    }
-    length
 }
 
 pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>);

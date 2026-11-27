@@ -418,6 +418,7 @@ async fn run_inner(
     'attempt: loop {
         if let Some(token) = &bearer {
             reflection.record_product_credential(&token.token.access_token);
+            reflection.record_bearer(&token.token.access_token);
         }
         if let Some(credentials) = bearer
             .as_ref()

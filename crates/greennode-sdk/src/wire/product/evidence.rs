@@ -9,6 +9,7 @@ enum Source {
     Redaction,
     OperationPassword,
     Credential,
+    Bearer,
 }
 
 #[derive(Clone, Default)]
@@ -30,6 +31,19 @@ impl SentCredentials {
 
     pub(crate) fn record(&mut self, secret: &Secret) {
         self.record_from(secret, Source::Credential);
+    }
+
+    pub(crate) fn record_bearer(&mut self, secret: &Secret) {
+        self.record_from(secret, Source::Bearer);
+    }
+
+    pub(crate) fn bearers(&self) -> Vec<&Secret> {
+        self.values
+            .iter()
+            .zip(&self.sources)
+            .filter(|(_, source)| **source == Source::Bearer)
+            .map(|(value, _)| value)
+            .collect()
     }
 
     fn record_from(&mut self, secret: &Secret, source: Source) {
@@ -191,6 +205,11 @@ impl Evidence {
 
     pub(crate) fn add_secret(&mut self, secret: &Secret) {
         self.credentials.record(secret);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_bearer(&mut self, secret: &Secret) {
+        self.credentials.record_bearer(secret);
     }
 
     pub(crate) fn add_redaction(&mut self, value: &Secret) {
