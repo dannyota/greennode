@@ -11,7 +11,8 @@ pub struct Backend {
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Backend display name.
@@ -27,21 +28,24 @@ pub struct Policy {
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Storage backend identifier.
     #[serde(
         rename(serialize = "BackendID", deserialize = "backendId"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub backend_id: String,
     /// Project associated with the policy.
     #[serde(
         rename(serialize = "ProjectID", deserialize = "projectId"),
         default,
-        deserialize_with = "default_if_null"
+        deserialize_with = "default_if_null",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub project_id: String,
     /// Product covered by the policy.

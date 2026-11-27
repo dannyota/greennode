@@ -259,6 +259,10 @@ pub(super) fn decode<T>(
 
 pub(super) trait Redact {
     fn redact(&mut self, evidence: &Evidence);
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        self.redact(evidence);
+    }
 }
 
 impl Redact for String {
@@ -266,6 +270,10 @@ impl Redact for String {
         if evidence.text_reflects(self) {
             *self = "<redacted>".into();
         }
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        crate::wire::product::evidence::redact_identifier(self, evidence.credentials());
     }
 }
 
@@ -275,12 +283,24 @@ impl<T: Redact> Redact for Option<T> {
             value.redact(evidence);
         }
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        if let Some(value) = self {
+            value.redact_identifier(evidence);
+        }
+    }
 }
 
 impl<T: Redact> Redact for Vec<T> {
     fn redact(&mut self, evidence: &Evidence) {
         for value in self {
             value.redact(evidence);
+        }
+    }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) {
+        for value in self {
+            value.redact_identifier(evidence);
         }
     }
 }
@@ -305,7 +325,7 @@ pub(super) fn screen<T: serde::Serialize>(
     value: T,
     op: &'static str,
 ) -> Result<T, Box<Error>> {
-    if serde_json::to_value(&value).map_or(true, |value| evidence.output_reflects(&value)) {
+    if evidence.serialized_output_reflects(&value) {
         let message = if matches!(
             op,
             "volume.ListSnapshotBackends" | "volume.ListSnapshotPolicies"

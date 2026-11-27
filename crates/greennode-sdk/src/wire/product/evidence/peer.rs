@@ -6,7 +6,7 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, &|text, identifier, _| {
+    check_decoded(body, false, &|text, identifier, _| {
         matcher.reflects(text.as_bytes(), identifier)
     })
 }
@@ -16,9 +16,16 @@ pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option
     if matcher.literal(std::str::from_utf8(body).ok()?) {
         return Some(true);
     }
-    check_decoded(body, &|text, identifier, number| {
+    check_decoded(body, false, &|text, identifier, number| {
         matcher.reflects(text.as_bytes(), identifier)
             || (number && output_number_reflects(&matcher, text, identifier))
+    })
+}
+
+pub(super) fn output_identifier_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
+    check_decoded(body, true, &|text, identifier, number| {
+        matcher.reflects(text.as_bytes(), identifier)
+            || (number && output_number_reflects(matcher, text, identifier))
     })
 }
 
@@ -26,7 +33,8 @@ fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: boo
     let Ok(number) = text.parse::<f64>() else {
         return false;
     };
-    if text.parse::<i64>().is_err()
+    if !identifier
+        && text.parse::<i64>().is_err()
         && text.parse::<u64>().is_err()
         && serde_json::to_string(&number).is_ok_and(|canonical| canonical != text)
     {
@@ -37,11 +45,15 @@ fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: boo
     })
 }
 
-fn check_decoded<F: Fn(&str, bool, bool) -> bool>(body: &[u8], matches: &F) -> Option<bool> {
+fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
+    body: &[u8],
+    root_identifier: bool,
+    matches: &F,
+) -> Option<bool> {
     let raw: &RawValue = serde_json::from_slice(body).ok()?;
     Walker {
         matches,
-        identifier: false,
+        identifier: root_identifier,
         depth: 0,
     }
     .check(raw)

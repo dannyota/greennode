@@ -211,6 +211,19 @@ fn check_password_body(
     )
 }
 
+pub(super) fn identifier_projection_reflects(
+    matcher: &response::BodyMatcher<'_>,
+    body: &[u8],
+) -> Option<bool> {
+    peer::output_identifier_reflects(matcher, body)
+}
+
+pub(crate) fn redact_identifier(value: &mut String, credentials: &SentCredentials) {
+    if credentials.id_reflects(value) {
+        *value = REDACTED.to_owned();
+    }
+}
+
 const REDACTED: &str = "<redacted>";
 
 pub(crate) type CachedCheck =
@@ -294,9 +307,10 @@ impl Evidence {
         if self.credentials.values().is_empty() {
             return false;
         }
-        serde_json::to_vec(value).map_or(true, |body| {
-            peer::output_reflects(self, &body) != Some(false)
-        })
+        super::identifier::checking(&self.credentials, || serde_json::to_vec(value))
+            .map_or(true, |body| {
+                peer::output_reflects(self, &body) != Some(false)
+            })
     }
 
     pub(crate) fn output_reflects(&self, value: &Value) -> bool {

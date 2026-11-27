@@ -202,7 +202,7 @@ async fn aliased_listener_protocol_cannot_authorize_a_merge() {
 }
 
 #[tokio::test]
-async fn busy_resend_uses_the_original_complete_message() {
+async fn busy_resend_uses_only_the_bounded_message() {
     for (body, resends) in [
         (
             String::from(r#"{"message":"load balancer is updat\ting"}"#),
@@ -213,6 +213,10 @@ async fn busy_resend_uses_the_original_complete_message() {
                 r#"{{"message":"{} load balancer is updating"}}"#,
                 "a".repeat(550)
             ),
+            false,
+        ),
+        (
+            String::from(r#"{"message":"load balancer is updating"}"#),
             true,
         ),
     ] {

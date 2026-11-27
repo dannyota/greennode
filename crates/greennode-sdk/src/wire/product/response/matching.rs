@@ -44,6 +44,20 @@ impl<'a> BodyMatcher<'a> {
         }
     }
 
+    pub(in crate::wire::product) fn with_work(
+        credentials: &'a SentCredentials,
+        remaining: usize,
+    ) -> Self {
+        Self {
+            credentials,
+            remaining: std::cell::Cell::new(remaining),
+        }
+    }
+
+    pub(in crate::wire::product) fn remaining(&self) -> usize {
+        self.remaining.get()
+    }
+
     pub(in crate::wire::product) fn literal(&self, text: &str) -> bool {
         let Some(patterns) = self.credentials.patterns() else {
             return true;

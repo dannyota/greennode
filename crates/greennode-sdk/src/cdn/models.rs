@@ -156,7 +156,8 @@ pub struct Certificate {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "cdnSslcertificateId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// CommonName returned by the service.
@@ -244,7 +245,8 @@ pub struct ApiKey {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "apiKeyId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: Field<i64>,
     /// ExpiresAt returned by the service.
@@ -293,6 +295,7 @@ pub struct WebAcceleratorSummary {
     /// Web Accelerator identifier.
     #[serde(
         rename(serialize = "CDNID", deserialize = "cdnId"),
+        serialize_with = "crate::wire::product::identifier::serialize",
         deserialize_with = "flex_id"
     )]
     pub cdn_id: String,
@@ -348,7 +351,8 @@ pub struct Upstream {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "cdnUpstreamId"),
-        deserialize_with = "flex_id"
+        deserialize_with = "flex_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Priority returned by the service.
@@ -387,7 +391,8 @@ pub struct RuleAction {
     /// Resource identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "id"),
-        deserialize_with = "flex_id"
+        deserialize_with = "flex_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Name returned by the service.
@@ -426,6 +431,7 @@ pub struct WebAccelerator {
     /// Web Accelerator identifier.
     #[serde(
         rename(serialize = "CDNID", deserialize = "cdnId"),
+        serialize_with = "crate::wire::product::identifier::serialize",
         deserialize_with = "flex_id"
     )]
     pub cdn_id: String,
@@ -465,7 +471,8 @@ pub struct WebAccelerator {
     /// Identifier of the assigned certificate.
     #[serde(
         rename(serialize = "CertificateID", deserialize = "sslId"),
-        deserialize_with = "nullable"
+        deserialize_with = "nullable",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub certificate_id: String,
     /// Origin load-balancing policy.

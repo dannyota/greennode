@@ -60,7 +60,8 @@ pub struct User {
     /// User identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// User name.
@@ -93,7 +94,8 @@ pub struct User {
     /// Account identifier, accepted as a number or string.
     #[serde(
         rename(deserialize = "userId", serialize = "UserID"),
-        deserialize_with = "user_id"
+        deserialize_with = "user_id",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub user_id: String,
     /// Repository permissions.
@@ -110,7 +112,8 @@ pub struct RepositoryPermission {
     /// Repository identifier.
     #[serde(
         rename(deserialize = "repoId", serialize = "RepositoryID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub repository_id: String,
     /// Repository name.

@@ -76,9 +76,16 @@ macro_rules! record {
                 let mut output = serializer.serialize_struct(stringify!($name), [$($go),+].len())?;
                 $(
                     if self.masked.contains(&$go) {
+                        if crate::wire::product::identifier::declared($wire, $go) {
+                            crate::wire::product::identifier::check::<_, S::Error>(REDACTED)?;
+                        }
                         output.serialize_field($go, REDACTED)?;
                     } else {
-                        output.serialize_field($go, projected!(&self.$field $(, $projection)?))?;
+                        let value = projected!(&self.$field $(, $projection)?);
+                        if crate::wire::product::identifier::declared($wire, $go) {
+                            crate::wire::product::identifier::check::<_, S::Error>(value)?;
+                        }
+                        output.serialize_field($go, value)?;
                     }
                 )+
                 output.end()

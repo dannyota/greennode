@@ -57,16 +57,32 @@ pub(super) struct Login<'a> {
     pub(super) deadline: tokio::time::Instant,
 }
 
+#[cfg(test)]
 pub(super) struct Session {
     pub(super) verifier: Secret,
     pub(super) next: Next,
     pub(super) jar: super::CookieJar,
 }
 
+#[cfg(test)]
 pub(super) async fn signin(
     login: Login<'_>,
     pkce: (Secret, String),
 ) -> Result<Session, LoginError> {
+    let mut jar = super::CookieJar::new(login.origin.clone());
+    let (verifier, next) = signin_with_evidence(login, pkce, &mut jar).await?;
+    Ok(Session {
+        verifier,
+        next,
+        jar,
+    })
+}
+
+pub(super) async fn signin_with_evidence(
+    login: Login<'_>,
+    pkce: (Secret, String),
+    jar: &mut super::CookieJar,
+) -> Result<(Secret, Next), LoginError> {
     use crate::wire::send::{self, Encoding};
     use bytes::Bytes;
     use http::{Request, header};
@@ -96,7 +112,8 @@ pub(super) async fn signin(
         .append_pair("codeChallengeMethod", "S256")
         .append_pair("redirectUri", login.dashboard.as_str())
         .append_pair("rootEmail", login.root_email);
-    let mut jar = super::CookieJar::new(login.origin.clone());
+    jar.record_form(&Secret::new(login.root_email));
+    jar.record_form(&Secret::new(&pkce.1));
     let request = Request::get(target.as_str())
         .header(
             header::ACCEPT,
@@ -187,11 +204,7 @@ pub(super) async fn signin(
         .get(header::LOCATION)
         .and_then(|v| v.to_str().ok());
     let next = classify(login.origin, login.dashboard, reply.status, location)?;
-    Ok(Session {
-        verifier: pkce.0,
-        next,
-        jar,
-    })
+    Ok((pkce.0, next))
 }
 
 fn password_form(csrf: &Secret, root: &str, user: &str, password: &Secret) -> Secret {

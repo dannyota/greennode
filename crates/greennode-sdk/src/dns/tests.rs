@@ -196,3 +196,17 @@ async fn dns_exit_refuses_a_short_encoding_in_a_projected_id() {
     assert_eq!(server.requests(), 1);
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn hosted_zone_redacts_identifiers_in_the_associated_vpc_projection() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"hostedZoneId":"zone-1","assocVpcIds":["vpc-1","pre6A6B6Cpost"]}}"#,
+    )]);
+    let output = client(&server, "jkl")
+        .get_hosted_zone(&RequestContext::new().0, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(output.hosted_zone.associated_vpc_ids == ["vpc-1", "<redacted>"]);
+    assert_eq!(server.requests(), 1);
+}

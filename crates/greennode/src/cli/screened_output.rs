@@ -5,6 +5,8 @@ use std::{
 };
 
 const OUTPUT_CAP: usize = 64 << 20;
+const WRITE_SUCCEEDED: &[u8] =
+    b"{\"error\":{\"code\":\"RequestFailed\",\"message\":\"write succeeded; do not retry\"}}\n";
 const WITHHELD: &[u8] =
     b"{\"error\":{\"code\":\"OutputWithheld\",\"message\":\"Command output withheld. Check the operation outcome before retrying.\"}}\n";
 
@@ -62,8 +64,9 @@ pub(super) fn publish(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
     output: Stream<'_>,
-    diagnostics: Stream<'_>,
+    mut diagnostics: Stream<'_>,
     status: u8,
+    write: bool,
 ) -> u8 {
     if output.budget.exhausted.get()
         || diagnostics.budget.exhausted.get()
@@ -76,6 +79,17 @@ pub(super) fn publish(
         return 1;
     }
     let output = stdout.write_all(&output.bytes);
+    if output.is_err()
+        && write
+        && status == 0
+        && WRITE_SUCCEEDED.len() <= diagnostics.budget.remaining.get()
+    {
+        let original = diagnostics.bytes.len();
+        diagnostics.bytes.extend_from_slice(WRITE_SUCCEEDED);
+        if RequestContext::response_bytes_reflect(&diagnostics.bytes) {
+            diagnostics.bytes.truncate(original);
+        }
+    }
     let diagnostics = stderr.write_all(&diagnostics.bytes);
     if output.is_err() || diagnostics.is_err() {
         return 1;
@@ -97,7 +111,10 @@ mod tests {
         output.write_all(b"some output").unwrap();
         assert!(diagnostics.write_all(b"too much").is_err());
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-        assert_eq!(publish(&mut stdout, &mut stderr, output, diagnostics, 0), 1);
+        assert_eq!(
+            publish(&mut stdout, &mut stderr, output, diagnostics, 0, false),
+            1
+        );
         assert!(stdout.is_empty());
         assert_eq!(stderr, WITHHELD);
     }

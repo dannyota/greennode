@@ -26,7 +26,10 @@ const GET: Read = Read {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Dashboard {
     /// Dashboard identifier.
-    #[serde(rename(deserialize = "id", serialize = "ID"))]
+    #[serde(
+        rename(deserialize = "id", serialize = "ID"),
+        serialize_with = "crate::wire::product::identifier::serialize"
+    )]
     pub id: String,
     /// Display name.
     #[serde(

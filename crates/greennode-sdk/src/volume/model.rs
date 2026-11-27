@@ -15,10 +15,19 @@ macro_rules! row {
     ($(#[$doc:meta])* $name:ident { $($(#[$field_doc:meta])* $field:ident : $ty:ty = $key:literal, $wire:literal, $read:ident;)* }) => {
         $(#[$doc])*
         #[derive(Clone, Debug, Default, PartialEq, Serialize)]
+        #[serde(remote = "Self")]
         pub struct $name {
             $($(#[$field_doc])* #[serde(rename = $key)] pub $field: $ty,)*
         }
 
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if crate::wire::product::identifier::declared($wire, $key) {
+                    crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
+        }
         impl FromWire for $name {
             fn from_wire(raw: &RawValue) -> ShapeResult<Self> {
                 let fields = Object::parse(raw)?;
@@ -27,7 +36,11 @@ macro_rules! row {
         }
         impl Redact for $name {
             fn redact(&mut self, evidence: &Evidence) {
-                $(self.$field.redact(evidence);)*
+                $(if crate::wire::product::identifier::declared($wire, $key) {
+                    self.$field.redact_identifier(evidence);
+                } else {
+                    self.$field.redact(evidence);
+                })*
             }
         }
     };

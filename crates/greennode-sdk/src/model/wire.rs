@@ -300,10 +300,6 @@ fn go_utf8(bytes: &[u8]) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-pub(crate) fn typed_identifier_alias(key: &str) -> bool {
-    matches!(key, "DNSID" | "VPCID" | "VPCIDs")
-}
-
 macro_rules! model {
     ($(@ $ignore:literal;)? $(#[$model_meta:meta])* $vis:vis struct $model:ident {
         $($(#[$field_meta:meta])* $field:ident: $type:ty => $wire:literal, $go:literal;)*
@@ -312,6 +308,7 @@ macro_rules! model {
     })?) => {
         $(#[$model_meta])*
         #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+        #[serde(remote = "Self")]
         $vis struct $model {
             $(
                 $(#[$field_meta])*
@@ -323,6 +320,15 @@ macro_rules! model {
                 #[serde(rename = $derived_go)]
                 pub $derived: $derived_type,
             )?
+        }
+
+        impl serde::Serialize for $model {
+            fn serialize<S: serde::Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if $crate::wire::product::identifier::declared($wire, $go) {
+                    $crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
         }
 
         impl<'de> serde::Deserialize<'de> for $model {
@@ -374,13 +380,13 @@ macro_rules! model {
 
         impl $crate::model::wire::WireField for $model {
             fn redact(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
-                $((!$crate::model::wire::typed_identifier_alias($go)
+                $((!$crate::wire::product::identifier::declared($wire, $go)
                     || serde_json::to_value(&self.$field).is_ok_and(|value| !evidence.identifier_output_reflects(&value)))
                     && self.$field.redact(evidence) &&)* $(self.$derived.redact(evidence) &&)? true
             }
 
             fn identifiers_reflect(&self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
-                $( (($crate::wire::product::evidence::identifier_key($wire) || $crate::model::wire::typed_identifier_alias($go))
+                $( (($crate::wire::product::identifier::declared($wire, $go))
                     && serde_json::to_value(&self.$field).map_or(true, |value| evidence.identifier_output_reflects(&value)))
                     || self.$field.identifiers_reflect(evidence) ||)* false
             }

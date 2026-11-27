@@ -363,10 +363,9 @@ impl Client {
 
 impl CreateClusterOutput {
     fn redact(&mut self, evidence: &Evidence) {
-        for field in [&mut self.id, &mut self.status] {
-            if evidence.credentials().reflects(field.as_bytes()) {
-                *field = "<redacted>".to_owned();
-            }
+        crate::wire::product::evidence::redact_identifier(&mut self.id, evidence.credentials());
+        if evidence.text_reflects(&self.status) {
+            self.status = "<redacted>".to_owned();
         }
     }
 }
@@ -480,7 +479,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vks_no_wait_exit_refuses_a_short_encoding_in_the_cluster_id() {
+    async fn vks_no_wait_exit_redacts_a_short_encoding_in_the_cluster_id() {
         use crate::wire::test_server::{Response, Server};
         let body = br#"{"id":"pre6A6B6Cpost","status":"CREATING"}"#.to_vec();
         let server = Server::start(vec![Response::Http {
@@ -505,9 +504,22 @@ mod tests {
         let result =
             crate::wire::product::exit::finish!(client.create_cluster_inner(&ctx, order, &base));
         assert_eq!(server.requests(), 1);
-        let failure = result.unwrap_err();
-        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-        assert!(failure.partial().is_none());
+        let output = result.unwrap();
+        assert!(output.id == "<redacted>");
+        assert_eq!(output.status, "CREATING");
+    }
+
+    #[test]
+    fn vks_redacts_encoded_identifier_without_withholding_safe_status() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let mut output = CreateClusterOutput {
+            id: "pre6A6B6Cpost".into(),
+            status: "CREATING".into(),
+        };
+        output.redact(&evidence);
+        assert!(output.id == "<redacted>");
+        assert_eq!(output.status, "CREATING");
     }
 
     #[test]

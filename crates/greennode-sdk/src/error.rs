@@ -225,6 +225,18 @@ impl LoginError {
             captcha_suspected,
         }
     }
+    pub(crate) fn screen(&mut self, reflects: impl Fn(&str) -> bool) {
+        if reflects(self.reason) {
+            self.reason = "";
+        }
+        if self
+            .status
+            .is_some_and(|status| reflects(&status.to_string()))
+        {
+            self.status = None;
+        }
+    }
+
     /// Returns fixed text identifying the failed step.
     pub fn reason(&self) -> &'static str {
         self.reason
@@ -358,15 +370,7 @@ impl Error {
             }
         }
         if let Some(login) = &mut self.login {
-            if reflects(login.reason) {
-                login.reason = "";
-            }
-            if login
-                .status
-                .is_some_and(|status| reflects(&status.to_string()))
-            {
-                login.status = None;
-            }
+            login.screen(reflects);
         }
         if let Some(login) = &mut self.service_login {
             if reflects(login.reason) {

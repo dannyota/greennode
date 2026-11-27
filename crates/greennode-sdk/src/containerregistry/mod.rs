@@ -58,7 +58,8 @@ pub struct Repository {
     /// Repository identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Repository name.
@@ -106,7 +107,8 @@ pub struct Permission {
     /// Permission identifier.
     #[serde(
         rename(deserialize = "uuid", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Permitted action.

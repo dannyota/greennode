@@ -62,31 +62,40 @@ async fn run_with_rng(
     rng: &mut (dyn FnMut(&mut [u8]) -> Result<(), ()> + Send),
 ) -> Result<TimedToken, LoginError> {
     let pkce = super::pkce(rng).map_err(|_| LoginError::new("signin page", None, false))?;
-    let super::signin::Session {
-        verifier,
-        next,
-        mut jar,
-    } = super::signin::signin(login, pkce).await?;
-    let code = match next {
-        super::signin::Next::Code(code) => code,
-        super::signin::Next::TwoFactor(location) => {
-            super::totp::complete(&login, &mut jar, &location, source).await?
+    let mut jar = super::CookieJar::new(login.origin.clone());
+    let result = async {
+        let (verifier, next) = super::signin::signin_with_evidence(login, pkce, &mut jar).await?;
+        let code = match next {
+            super::signin::Next::Code(code) => code,
+            super::signin::Next::TwoFactor(location) => {
+                super::totp::complete(&login, &mut jar, &location, source).await?
+            }
+        };
+        jar.record_form(&code);
+        jar.record_form(&verifier);
+        super::token::exchange(super::token::Exchange {
+            client: login.client,
+            token_url,
+            dashboard: login.dashboard,
+            code: &code,
+            verifier: &verifier,
+            clock: login.clock,
+            deadline: login.deadline,
+        })
+        .await
+    }
+    .await;
+    crate::wire::product::exit::observe_signin(&jar.sent);
+    match result {
+        Ok(mut token) => {
+            token.credentials = jar.sent;
+            Ok(token)
         }
-    };
-    jar.sent.record(&code);
-    jar.sent.record(&verifier);
-    let mut token = super::token::exchange(super::token::Exchange {
-        client: login.client,
-        token_url,
-        dashboard: login.dashboard,
-        code: &code,
-        verifier: &verifier,
-        clock: login.clock,
-        deadline: login.deadline,
-    })
-    .await?;
-    token.credentials = jar.sent;
-    Ok(token)
+        Err(mut error) => {
+            error.screen(|text| jar.sent.text_reflects(text));
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

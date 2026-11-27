@@ -89,7 +89,11 @@ mod rfc3339 {
 )]
 pub struct VpcMapRegion {
     /// Associated VPC identifier.
-    #[serde(rename(serialize = "VPCID"), deserialize_with = "null_default")]
+    #[serde(
+        rename(serialize = "VPCID"),
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
+    )]
     pub vpc_id: String,
     /// Region of the associated VPC.
     #[serde(deserialize_with = "null_default")]
@@ -106,7 +110,8 @@ pub struct HostedZone {
     /// Hosted zone identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "hostedZoneId"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Zone domain name.
@@ -130,7 +135,8 @@ pub struct HostedZone {
     /// Associated VPC identifiers.
     #[serde(
         rename(serialize = "AssociatedVPCIDs", deserialize = "assocVpcIds"),
-        deserialize_with = "null_items"
+        deserialize_with = "null_items",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub associated_vpc_ids: Vec<String>,
     /// Associated VPC identifiers with their regions.
@@ -175,7 +181,8 @@ pub struct Record {
     /// Record identifier.
     #[serde(
         rename(serialize = "ID", deserialize = "recordId"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Record name.
@@ -250,11 +257,11 @@ impl Resource for HostedZone {
             &mut self.status,
             &mut self.description,
             &mut self.zone_type,
-        ]
-        .into_iter()
-        .chain(&mut self.associated_vpc_ids)
-        {
+        ] {
             redact_string(value, credentials);
+        }
+        for id in &mut self.associated_vpc_ids {
+            crate::wire::product::evidence::redact_identifier(id, credentials);
         }
         for association in &mut self.assoc_vpc_map_region {
             redact_id(&mut association.vpc_id, &|id| !credentials.id_reflects(id));

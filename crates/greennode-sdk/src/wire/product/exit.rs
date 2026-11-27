@@ -34,6 +34,16 @@ pub(super) fn record(public: &SentCredentials, transport: &SentCredentials, writ
     });
 }
 
+pub(crate) fn observe_signin(credentials: &SentCredentials) {
+    record(credentials, credentials, WriteDispatch::NotAWrite);
+}
+
+pub(crate) fn authenticate_error(error: Error, configured: &SentCredentials) -> Error {
+    let mut evidence = Evidence::from_credentials(configured);
+    let _ = OBSERVED.try_with(|state| evidence.absorb(&state.borrow().public));
+    evidence.screen_error(error)
+}
+
 pub(super) fn record_secret(secret: &crate::Secret) {
     let _ = OBSERVED.try_with(|state| state.borrow_mut().public.record(secret));
 }

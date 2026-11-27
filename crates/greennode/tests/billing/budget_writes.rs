@@ -511,3 +511,52 @@ fn authenticated_writer_refuses_a_reflected_post_request_debug_line() {
     assert!(stdout.is_empty());
     assert!(String::from_utf8_lossy(&stderr).contains("OutputWithheld"));
 }
+
+#[test]
+fn confirmed_write_prints_recovery_when_stdout_breaks() {
+    struct BrokenOutput;
+    impl std::io::Write for BrokenOutput {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let server = Server::start(vec![response("204 No Content", String::new())]);
+    let (context, _) = RequestContext::new();
+    let mut stderr = Vec::new();
+    let status = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_invocation(Invocation {
+            args: ["greennode"]
+                .into_iter()
+                .chain(DELETE.iter().copied())
+                .chain(["--yes"])
+                .map(OsString::from)
+                .collect(),
+            source: &WRITABLE,
+            config_options: with_billing_loopback(
+                ConfigOptions::default().with_static_token(Secret::new(BEARER)),
+                &server,
+            ),
+            stdin: &mut std::io::empty(),
+            stdout: &mut BrokenOutput,
+            stderr: &mut stderr,
+            stdin_terminal: false,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &SystemClock,
+            context: &context,
+        }));
+    assert_eq!(server.requests(), 1);
+    assert_eq!(status, ExitCode::FAILURE);
+    let diagnostic: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(diagnostic["error"]["code"], "RequestFailed");
+    assert_eq!(
+        diagnostic["error"]["message"],
+        "write succeeded; do not retry"
+    );
+}

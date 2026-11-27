@@ -123,7 +123,8 @@ pub(crate) fn error_message_matches(
         return false;
     }
     let (_, message) = decode(body, true);
-    decision_text(&Zeroizing::new(message), credentials).is_some_and(predicate)
+    decision_text(&Zeroizing::new(message), credentials)
+        .is_some_and(|text| predicate(text.as_str()))
 }
 
 pub(crate) fn inspect_error_message<T>(
@@ -132,7 +133,7 @@ pub(crate) fn inspect_error_message<T>(
     predicate: impl FnOnce(&str) -> T,
 ) -> Option<T> {
     full_error::inspect_error_message(body, |message| {
-        decision_text(message, credentials).map(predicate)
+        decision_text(message, credentials).map(|text| predicate(text.as_str()))
     })
     .flatten()
 }
@@ -152,8 +153,12 @@ pub(crate) fn sanitize_error_text(
     }
 }
 
-pub(crate) fn decision_text<'a>(text: &'a str, credentials: &SentCredentials) -> Option<&'a str> {
-    (!sanitize_error_text(text, credentials).as_str().is_empty()).then_some(text)
+pub(crate) fn decision_text(
+    text: &str,
+    credentials: &SentCredentials,
+) -> Option<crate::error::SafeText> {
+    let safe = sanitize_error_text(text, credentials);
+    (!safe.as_str().is_empty() && text.starts_with(safe.as_str())).then_some(safe)
 }
 
 fn contains_address_marker(text: &str) -> bool {
@@ -399,6 +404,16 @@ mod tests {
             credentials,
         )
         .unwrap_err()
+    }
+
+    #[test]
+    fn decision_text_is_sanitized_and_bounded() {
+        let raw = format!("{} is updating", "x".repeat(600));
+        let safe = decision_text(&raw, &SentCredentials::default()).unwrap();
+        let chosen = safe.as_str();
+        assert!(decision_text("is updat\ting", &SentCredentials::default()).is_none());
+        assert_eq!(chosen.len(), 512);
+        assert!(!chosen.contains("is updating"));
     }
 
     macro_rules! withheld_peer_text {

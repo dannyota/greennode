@@ -295,3 +295,20 @@ fn authenticated_writer_withholds_a_reflected_fallback_diagnostic() {
     assert!(stdout.is_empty());
     assert!(stderr.is_empty());
 }
+
+#[test]
+fn portal_checks_decimal_spelling_of_numeric_ids_before_query_projection() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"projectId":96.29e2}}"#,
+    )]);
+    let (exit, stdout, _) = invoke_with_bearer(
+        &server,
+        "get-user-info",
+        &["--query", "UserInfo.projectId"],
+        "b",
+    );
+    assert_eq!(server.requests(), 1);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+}

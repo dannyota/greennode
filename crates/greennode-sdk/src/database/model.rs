@@ -67,7 +67,8 @@ pub struct Zone {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// Name reported by the service.
@@ -106,7 +107,8 @@ pub struct Flavor {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: i32,
     /// Name reported by the service.
@@ -118,7 +120,8 @@ pub struct Flavor {
     /// FlavorID reported by the service.
     #[serde(
         rename(deserialize = "flavorId", serialize = "FlavorID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub flavor_id: String,
     /// VCPUs reported by the service.
@@ -142,7 +145,8 @@ pub struct Flavor {
     /// LocateZoneID reported by the service.
     #[serde(
         rename(deserialize = "locateZoneId", serialize = "LocateZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub locate_zone_id: String,
     /// MonthlyCost reported by the service.
@@ -208,7 +212,8 @@ pub struct Flavor {
     /// ZoneUUID reported by the service.
     #[serde(
         rename(deserialize = "zoneUUID", serialize = "ZoneUUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_uuid: String,
 }
@@ -243,7 +248,8 @@ pub struct StorageType {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: i32,
     /// Type reported by the service.
@@ -267,13 +273,15 @@ pub struct StorageType {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// VolumeTypeZoneID reported by the service.
     #[serde(
         rename(deserialize = "volumeTypeZoneId", serialize = "VolumeTypeZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub volume_type_zone_id: String,
     /// VolumeTypeSKU reported by the service.
@@ -303,13 +311,15 @@ pub struct Subnet {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// NetworkUUID reported by the service.
     #[serde(
         rename(deserialize = "networkUuid", serialize = "NetworkUUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub network_uuid: String,
     /// Name reported by the service.
@@ -327,7 +337,8 @@ pub struct Subnet {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
 }
@@ -349,7 +360,8 @@ pub struct Network {
     /// UUID reported by the service.
     #[serde(
         rename(deserialize = "uuid", serialize = "UUID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub uuid: String,
     /// DisplayName reported by the service.
@@ -367,7 +379,8 @@ pub struct Network {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// Subnets reported by the service.
@@ -395,7 +408,8 @@ pub struct Instance {
     /// ID reported by the service.
     #[serde(
         rename(deserialize = "id", serialize = "ID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub id: String,
     /// Name reported by the service.
@@ -425,19 +439,22 @@ pub struct Instance {
     /// ZoneID reported by the service.
     #[serde(
         rename(deserialize = "zoneId", serialize = "ZoneID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub zone_id: String,
     /// ProjectID reported by the service.
     #[serde(
         rename(deserialize = "projectId", serialize = "ProjectID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub project_id: String,
     /// SubnetID reported by the service.
     #[serde(
         rename(deserialize = "subnetId", serialize = "SubnetID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub subnet_id: String,
     /// VolumeType reported by the service.
@@ -455,7 +472,8 @@ pub struct Instance {
     /// QuotaPackageID reported by the service.
     #[serde(
         rename(deserialize = "quotaPackageId", serialize = "QuotaPackageID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub quota_package_id: String,
     /// PublicAccess reported by the service.
@@ -476,7 +494,8 @@ pub struct Instance {
     /// ReplicaSourceID reported by the service.
     #[serde(
         rename(deserialize = "replicaSourceId", serialize = "ReplicaSourceID"),
-        deserialize_with = "null_default"
+        deserialize_with = "null_default",
+        serialize_with = "crate::wire::product::identifier::serialize"
     )]
     pub replica_source_id: String,
     /// Replicas reported by the service.

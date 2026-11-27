@@ -230,3 +230,37 @@ model! {
         remote_gw02_ip: String => "remoteGw02Ip", "RemoteGW02IP";
     }
 }
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::*;
+    use crate::wire::product::evidence::Evidence;
+
+    #[test]
+    fn peering_identifier_uses_its_wire_role_at_the_typed_exit() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&crate::Secret::new("jkl"));
+        let output: Peering = serde_json::from_str(r#"{"fromVpcId":"pre6A6B6Cpost"}"#).unwrap();
+        assert!(evidence.serialized_output_reflects(&output));
+        assert!(
+            !evidence.serialized_output_reflects(&serde_json::json!({"FromVPCID":"pre6A6B6Cpost"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn peering_partial_uses_the_same_identifier_declaration() {
+        let result: Result<Peering, crate::Failure<Peering>> =
+            crate::wire::product::exit::finish!(async {
+                let mut evidence = Evidence::new();
+                evidence.add_secret(&crate::Secret::new("jkl"));
+                let partial: Peering =
+                    serde_json::from_str(r#"{"fromVpcId":"pre6A6B6Cpost"}"#).unwrap();
+                Err(crate::Failure::new(
+                    crate::Error::new(crate::ErrorClass::Api),
+                    Some(partial),
+                    crate::WriteDispatch::NotAWrite,
+                ))
+            });
+        assert!(result.unwrap_err().partial().is_none());
+    }
+}

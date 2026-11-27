@@ -12,7 +12,7 @@ macro_rules! model {
     }) => {
         $(#[$model_meta])*
         #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-        #[serde(default)]
+        #[serde(default, remote = "Self")]
         pub struct $model {
             $(
                 $(#[$field_meta])*
@@ -21,13 +21,28 @@ macro_rules! model {
             )*
         }
 
+        impl Serialize for $model {
+            fn serialize<S: serde::Serializer>(&self, output: S) -> Result<S::Ok, S::Error> {
+                $(if crate::wire::product::identifier::declared($wire, $go) {
+                    crate::wire::product::identifier::check::<_, S::Error>(&self.$field)?;
+                })*
+                Self::serialize(self, output)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $model {
+            fn deserialize<D: serde::Deserializer<'de>>(input: D) -> Result<Self, D::Error> {
+                Self::deserialize(input)
+            }
+        }
+
         impl WireField for $model {
             const SHAPE: Shape<'static> = Shape::Object(&[
                 $(ShapeField { name: $wire, shape: <$type as WireField>::SHAPE },)*
             ]);
 
             fn redact(&mut self, evidence: &Evidence) -> bool {
-                $((if crate::wire::product::evidence::identifier_key($wire) {
+                $((if crate::wire::product::identifier::declared($wire, $go) {
                     self.$field.redact_identifier(evidence)
                 } else {
                     self.$field.redact(evidence)

@@ -103,6 +103,10 @@ async fn run_registered(
         return ExitCode::from(exit);
     };
     greennode_sdk::RequestContext::with_response_screening(async {
+        let write = matches!(
+            operation.operation.kind,
+            op::Kind::Write | op::Kind::DestructiveWrite | op::Kind::WriteReplacement
+        );
         let budget = screened_output::Budget::new();
         let mut output = screened_output::Stream::new(&budget);
         let mut diagnostics = screened_output::Stream::new(&budget);
@@ -132,6 +136,7 @@ async fn run_registered(
             output,
             diagnostics,
             exit,
+            write,
         ))
     })
     .await
