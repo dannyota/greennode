@@ -236,11 +236,20 @@ async fn oversized_not_found_preserves_delete_status() {
         response("202 Accepted", ""),
         response("404 Not Found", body),
     ]);
-    let output = write_client(&server, TOKEN)
+    let result = write_client(&server, TOKEN)
         .delete_load_balancer(&ctx, DeleteLoadBalancerInput::new(GLB))
-        .await
-        .unwrap();
-    assert!(output.deleted);
+        .await;
+    let Err(failure) = result else {
+        panic!("oversized 404 confirmed GLB deletion");
+    };
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
+    );
+    assert!(!failure.partial().unwrap().deleted);
 }
 
 #[tokio::test]
@@ -335,4 +344,20 @@ async fn a_read_fixture_cannot_unlock_glb_writes() {
     assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(glb.requests(), 0);
     assert_eq!(database.requests(), 0);
+}
+
+#[tokio::test]
+async fn glb_guarded_detail_reports_lone_case_variant_as_invalid_response() {
+    let detail = DETAIL.replace("\"status\"", "\"STATUS\"");
+    let server = Server::start(vec![response("200 OK", detail)]);
+    let failure = write_client(&server, TOKEN)
+        .delete_load_balancer(&RequestContext::new().0, DeleteLoadBalancerInput::new(GLB))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        failure.error().api_error().map(crate::ApiError::code),
+        Some("InvalidResponse")
+    );
+    assert_eq!(server.requests(), 1);
 }

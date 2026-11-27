@@ -31,9 +31,9 @@ pub(super) struct Write<'a> {
     pub(super) evidence: Evidence,
 }
 
-#[derive(Clone, Copy)]
 pub(super) enum Settlement {
     Unknown(&'static str),
+    Unreadable(&'static str, Box<Error>),
     Failed,
 }
 
@@ -150,12 +150,18 @@ impl Write<'_> {
         reason: Settlement,
         partial: Option<O>,
     ) -> Failure<O> {
-        let (class, reason) = match reason {
+        let (class, reason, cause) = match reason {
             Settlement::Unknown(reason) => (
                 ErrorClass::NotSettled,
                 format!("vngcloud: write outcome not confirmed: {reason}"),
+                None,
             ),
-            Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed".into()),
+            Settlement::Unreadable(reason, error) => (
+                ErrorClass::NotSettled,
+                format!("vngcloud: write outcome not confirmed: {reason}"),
+                Some(error),
+            ),
+            Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed".into(), None),
         };
         let message = format!(
             "{}: inspect inventory and billing before another mutation: {reason}",
@@ -163,11 +169,12 @@ impl Write<'_> {
         );
         let partial =
             partial.filter(|output| self.evidence.can_retain_partial() && self.safe_output(output));
-        Failure::new(
-            local(class, "", &message),
-            partial,
-            WriteDispatch::MayHaveBeenSent,
-        )
+        let error = local(class, "", &message);
+        let error = match cause {
+            Some(cause) => error.with_cause(*cause),
+            None => error,
+        };
+        Failure::new(error, partial, WriteDispatch::MayHaveBeenSent)
     }
 
     pub(super) fn safe_output(&self, output: &impl Serialize) -> bool {
@@ -408,18 +415,16 @@ fn provider_message<'a>(
     let unsafe_text = |text: &str| {
         text.len() > 512 || UNSAFE.as_ref().is_none_or(|pattern| pattern.is_match(text))
     };
-    let unsafe_wire =
-        crate::wire::product::evidence::Evidence::from_credentials(&reply.credentials)
-            .peer_body_reflects(&reply.body)
-            .unwrap_or(false)
-            || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
-                |fields| {
-                    fields.iter().any(|(key, value)| {
-                        key.eq_ignore_ascii_case("message")
-                            && value.as_str().is_some_and(unsafe_text)
-                    })
-                },
-            );
+    let unsafe_wire = !Evidence::from_credentials(&reply.credentials)
+        .peer_body_screen(&reply.body)
+        .is_clean()
+        || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
+            |fields| {
+                fields.iter().any(|(key, value)| {
+                    key.eq_ignore_ascii_case("message") && value.as_str().is_some_and(unsafe_text)
+                })
+            },
+        );
     let mut input_evidence = Evidence::new();
     for value in input
         .and_then(Value::as_object)

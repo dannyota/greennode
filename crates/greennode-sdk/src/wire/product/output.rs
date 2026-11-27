@@ -1,19 +1,90 @@
 use super::{
     evidence::{Evidence, identifier_key},
-    response::BodyMatcher,
+    response::{BodyMatcher, Screen},
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::{cell::RefCell, collections::BTreeMap};
+use zeroize::Zeroizing;
 
 pub(crate) trait PublicOutput: std::fmt::Debug {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool;
 }
 
-pub(crate) struct FieldScan<'a>(BodyMatcher<'a>);
+enum Operand {
+    Text(Zeroizing<String>),
+    Identifier(Zeroizing<String>),
+}
+
+#[derive(Default)]
+pub(super) struct Operands {
+    fields: Vec<Operand>,
+    bytes: usize,
+}
+
+impl Operands {
+    pub(super) fn bytes(&self) -> usize {
+        self.bytes
+    }
+
+    pub(super) fn screen(&self, matcher: &BodyMatcher<'_>) -> Screen {
+        for field in &self.fields {
+            let result = match field {
+                Operand::Text(text) => matcher.scan(text.as_bytes(), false),
+                Operand::Identifier(id) => matcher.scan(id.as_bytes(), true),
+            };
+            if !result.is_clean() {
+                return result;
+            }
+        }
+        Screen::Clean
+    }
+
+    fn record(&mut self, text: &str, identifier: bool, limit: usize) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        let bytes = self
+            .bytes
+            .saturating_add(text.len())
+            .saturating_add(2 * std::mem::size_of::<Operand>());
+        if bytes > limit {
+            return true;
+        }
+        let text = Zeroizing::new(text.to_owned());
+        self.fields.push(if identifier {
+            Operand::Identifier(text)
+        } else {
+            Operand::Text(text)
+        });
+        self.bytes = bytes;
+        false
+    }
+}
+
+pub(crate) struct FieldScan<'a>(Scan<'a>);
+
+enum Scan<'a> {
+    Screen(BodyMatcher<'a>),
+    Record(RefCell<Operands>, usize),
+}
 
 impl<'a> FieldScan<'a> {
     pub(crate) fn new(evidence: &'a Evidence) -> Self {
-        Self(BodyMatcher::with_work(evidence.credentials(), 1 << 30))
+        Self(Scan::Screen(BodyMatcher::with_work(
+            evidence.credentials(),
+            1 << 30,
+        )))
+    }
+
+    pub(super) fn record(value: &impl PublicOutput, limit: usize) -> Option<Operands> {
+        let scan = Self(Scan::Record(RefCell::default(), limit));
+        if value.public_reflects(&scan, false) {
+            return None;
+        }
+        match scan.0 {
+            Scan::Record(operands, _) => Some(operands.into_inner()),
+            Scan::Screen(_) => None,
+        }
     }
 
     pub(crate) fn field<T: PublicOutput + ?Sized>(
@@ -30,7 +101,10 @@ impl<'a> FieldScan<'a> {
     }
 
     fn text(&self, text: &str, identifier: bool) -> bool {
-        self.0.reflects(text.as_bytes(), identifier)
+        match &self.0 {
+            Scan::Screen(matcher) => matcher.reflects(text.as_bytes(), identifier),
+            Scan::Record(operands, limit) => operands.borrow_mut().record(text, identifier, *limit),
+        }
     }
 }
 
@@ -153,10 +227,15 @@ impl<T: PublicOutput + ?Sized> PublicOutput for Box<T> {
 impl PublicOutput for serde_json::value::RawValue {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
         let body = self.get().as_bytes();
-        if identifier {
-            super::evidence::identifier_projection_reflects(&scan.0, body) != Some(false)
-        } else {
-            super::evidence::retained_projection_reflects(&scan.0, body) != Some(false)
+        match &scan.0 {
+            Scan::Screen(matcher) if identifier => {
+                !super::evidence::identifier_projection_reflects(matcher, body).is_clean()
+            }
+            Scan::Screen(matcher) => {
+                !super::evidence::retained_projection_reflects(matcher, body).is_clean()
+            }
+            Scan::Record(_, _) => serde_json::from_slice::<Value>(body)
+                .map_or(true, |value| value.public_reflects(scan, identifier)),
         }
     }
 }

@@ -171,8 +171,7 @@ impl Client {
             "tagging.UntagResource"
         };
         if key.starts_with("vng.") {
-            let mut known = Evidence::new();
-            known.absorb(self.session.configured_credentials());
+            let known = Evidence::from_credentials(self.session.configured_credentials());
             return Err(fail(system_tag_error(&known, op_id, None, key)));
         }
         let mut evidence = Evidence::for_write();

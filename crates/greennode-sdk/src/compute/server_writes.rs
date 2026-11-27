@@ -271,10 +271,21 @@ impl Client {
                             .volume
                             .get_volume_with_evidence(ctx, &volume_id, &mut evidence)
                             .await;
-                        if result.is_ok()
-                            || result.is_err_and(|error| !error.has_class(ErrorClass::NotFound))
-                        {
-                            kept.push(volume_id);
+                        match result {
+                            Ok(_) => kept.push(volume_id),
+                            Err(error) if error.has_class(ErrorClass::NotFound) => {}
+                            Err(error) => {
+                                return Err(Failure::new(
+                                    settlement_error(
+                                        DELETE.id,
+                                        *error,
+                                        "read the volume to confirm it was kept",
+                                        &evidence,
+                                    ),
+                                    delete_output(kept, false, &evidence),
+                                    WriteDispatch::MayHaveBeenSent,
+                                ));
+                            }
                         }
                     }
                     ids = kept;
@@ -444,7 +455,7 @@ fn create_id(body: &[u8], evidence: &Evidence) -> Result<String, Box<Error>> {
         let text = go_json(body);
         strict_json::validate_exact_shape(text.as_bytes(), &SHAPE, 8 << 20)
             .map_err(|_| invalid())?;
-        if evidence.go_peer_body_reflects(body).unwrap_or(true) {
+        if !evidence.go_peer_body_screen(body).is_clean() {
             return Err(invalid());
         }
         serde_json::from_str::<Option<Acknowledgement>>(&text)

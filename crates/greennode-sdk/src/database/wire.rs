@@ -41,7 +41,7 @@ impl<T: Data> Output for Envelope<T> {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {
             return operation::decode_response(operation, response).map_err(|error| {
-                if response.status == StatusCode::NOT_FOUND {
+                if response.status == StatusCode::NOT_FOUND && response.reflection.is_clean() {
                     Box::new(error.with_detail(CompletedNotFound))
                 } else {
                     error

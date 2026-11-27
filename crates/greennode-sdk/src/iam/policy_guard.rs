@@ -226,6 +226,19 @@ impl<'a> Guard<'a> {
         }
     }
 
+    pub(super) async fn membership_protection<O>(
+        &mut self,
+        user: &str,
+        group: &str,
+    ) -> Result<Protection, Failure<O>> {
+        let user = self.user(user).await?;
+        let group = self.group(group).await?;
+        self.evidence
+            .recheck_read_proofs()
+            .map_err(|error| super::writes::not_sent(*error))?;
+        Ok(user.max(group))
+    }
+
     pub(super) async fn group<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
         let group: GroupAttachments = self
             .client

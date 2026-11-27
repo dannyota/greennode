@@ -1,4 +1,5 @@
 pub(crate) use super::evidence::SentCredentials;
+use super::response::Screen;
 use super::{redirect, retry, unauthorized};
 use crate::wire::{
     connection::{OneSendClient, PooledClient},
@@ -162,7 +163,7 @@ fn attempt_headers(
 pub(crate) struct Response {
     pub(crate) reply: send::Reply,
     pub(crate) credentials: SentCredentials,
-    pub(crate) reflection: Option<bool>,
+    pub(crate) reflection: Screen,
 }
 impl std::ops::Deref for Response {
     type Target = send::Reply;
@@ -258,20 +259,6 @@ async fn acquire_bearer(
         credentials.mark_incomplete_signin();
     }
     result
-}
-
-fn system_time(time: time::OffsetDateTime) -> Option<std::time::SystemTime> {
-    let nanos = time.unix_timestamp_nanos();
-    let absolute = nanos.unsigned_abs();
-    let duration = std::time::Duration::new(
-        u64::try_from(absolute / 1_000_000_000).ok()?,
-        u32::try_from(absolute % 1_000_000_000).ok()?,
-    );
-    if nanos >= 0 {
-        std::time::SystemTime::UNIX_EPOCH.checked_add(duration)
-    } else {
-        std::time::SystemTime::UNIX_EPOCH.checked_sub(duration)
-    }
 }
 
 fn unauthorized_decision<'a>(
@@ -404,7 +391,7 @@ async fn run_inner(
     request: &Request,
     route_inputs: RouteInputs<'_>,
     evidence: &mut Evidence,
-) -> Result<(send::Reply, Option<bool>), Error> {
+) -> Result<(send::Reply, Screen), Error> {
     let sent = &mut evidence.sent;
     let reflection = &mut evidence.reflection;
     let Runtime {
@@ -558,15 +545,17 @@ async fn run_inner(
                 evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
             }
             let result = result?;
-            let body_reflection = result.as_ref().ok().and_then(|reply| {
+            let body_reflection = result.as_ref().map_or(Screen::Indeterminate, |reply| {
                 let mut evidence = super::evidence::Evidence::from_credentials(reflection);
                 evidence.absorb(sent);
                 if op.guard.is_some() {
                     evidence = evidence.transport_only();
                 }
-                evidence.go_peer_body_reflects(&reply.body)
+                evidence.go_peer_body_screen(&reply.body)
             });
-            let refused = op.guard.filter(|_| body_reflection == Some(true));
+            let refused = op
+                .guard
+                .filter(|_| result.is_ok() && !body_reflection.is_clean());
             let callback_refusal = if refused.is_none()
                 && let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
             {
@@ -607,10 +596,22 @@ async fn run_inner(
                 }
             }
             if let Some(id) = refused {
-                evidence.status = None;
-                return Err(Error::Provider(Box::new(
-                    super::operation::unsafe_guard_response(id),
-                )));
+                if body_reflection == Screen::Reflected {
+                    evidence.status = None;
+                }
+                let error = super::operation::unsafe_guard_response(id);
+                let error = if body_reflection == Screen::Indeterminate
+                    && let Ok(reply) = &result
+                    && serde_json::from_str::<&serde_json::value::RawValue>(
+                        &crate::model::wire::go_json(&reply.body),
+                    )
+                    .is_err()
+                {
+                    error.with_outer_detail(super::operation::MalformedGuard)
+                } else {
+                    error
+                };
+                return Err(Error::Provider(Box::new(error)));
             }
             if let Some(error) = callback_refusal {
                 return Err(Error::Provider(error));
@@ -677,7 +678,7 @@ async fn run_inner(
                 }
                 Err(error) => error.retry_outcome(),
             };
-            let now = system_time(clock.utc_now()).ok_or(Error::InvalidRequest)?;
+            let now = retry::system_time(clock.utc_now()).ok_or(Error::InvalidRequest)?;
             if let Some(delay) = outcome.and_then(|outcome| {
                 retry::decide(op.retry, attempt, &op.retry_config, outcome, now, jitter())
             }) {

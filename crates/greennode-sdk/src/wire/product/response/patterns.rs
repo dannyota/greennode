@@ -148,9 +148,8 @@ impl Patterns {
         decoded: bool,
         strict: bool,
         work: &mut usize,
-    ) -> bool {
+    ) -> Option<bool> {
         self.scan(input, decoded, false, strict, work)
-            .unwrap_or(true)
     }
 
     pub(super) fn forms(
@@ -159,9 +158,8 @@ impl Patterns {
         decoded: bool,
         strict: bool,
         work: &mut usize,
-    ) -> bool {
+    ) -> Option<bool> {
         self.scan(input, decoded, true, strict, work)
-            .unwrap_or(true)
     }
 
     fn scan(

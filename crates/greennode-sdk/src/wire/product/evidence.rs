@@ -1,7 +1,7 @@
 mod peer;
 
 use super::options::PasswordSlot;
-use super::response;
+use super::response::{self, Screen};
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
 use std::sync::{Arc, LazyLock, OnceLock};
@@ -225,14 +225,14 @@ fn check_password_body(
 pub(super) fn retained_projection_reflects(
     matcher: &response::BodyMatcher<'_>,
     body: &[u8],
-) -> Option<bool> {
+) -> Screen {
     peer::output_with_matcher(matcher, body)
 }
 
 pub(super) fn identifier_projection_reflects(
     matcher: &response::BodyMatcher<'_>,
     body: &[u8],
-) -> Option<bool> {
+) -> Screen {
     peer::output_identifier_reflects(matcher, body)
 }
 
@@ -244,6 +244,8 @@ pub(crate) fn redact_identifier(value: &mut String, credentials: &SentCredential
 
 const REDACTED: &str = "<redacted>";
 
+const GUARD_BYTES: usize = 64 << 20;
+
 pub(crate) type CachedCheck =
     std::sync::Arc<dyn Fn(&SentCredentials) -> Option<Box<crate::Error>> + Send + Sync>;
 
@@ -254,7 +256,7 @@ pub(crate) struct Evidence {
     guards: Vec<super::guard::Proof>,
     guard_bytes: usize,
     guard_scope: Option<Arc<std::sync::atomic::AtomicUsize>>,
-    awaiting_write: bool,
+    write_flow: bool,
     unproved_read: bool,
 }
 
@@ -279,13 +281,13 @@ impl Evidence {
 
     pub(crate) fn for_write() -> Self {
         Self {
-            awaiting_write: true,
+            write_flow: true,
             ..Self::default()
         }
     }
 
-    pub(super) fn guards_preflight_reads(&self) -> bool {
-        self.awaiting_write
+    pub(super) fn guards_reads(&self) -> bool {
+        self.write_flow
             || self
                 .guard_scope
                 .as_ref()
@@ -293,7 +295,7 @@ impl Evidence {
     }
 
     pub(crate) fn field_names(&self) -> crate::wire::strict_json::FieldNames {
-        crate::wire::strict_json::FieldNames::for_guard(self.guards_preflight_reads())
+        crate::wire::strict_json::FieldNames::for_guard(self.guards_reads())
     }
 
     pub(super) fn note_unproved_read(&mut self) {
@@ -302,12 +304,6 @@ impl Evidence {
 
     pub(super) fn has_unproved_read(&self) -> bool {
         self.unproved_read
-    }
-
-    pub(super) fn note_dispatch(&mut self, dispatch: WriteDispatch) {
-        if dispatch == WriteDispatch::MayHaveBeenSent {
-            self.awaiting_write = false;
-        }
     }
 
     pub(crate) fn from_credentials(credentials: &SentCredentials) -> Self {
@@ -361,7 +357,7 @@ impl Evidence {
         let Some(total) = self.guard_bytes.checked_add(body.len()) else {
             return false;
         };
-        if total > 64 << 20 || self.guards.len() == 512 {
+        if total > GUARD_BYTES || self.guards.len() == 512 {
             return false;
         }
         self.guard_bytes = total;
@@ -380,7 +376,7 @@ impl Evidence {
 
     pub(crate) fn discard_guards_after(&mut self, checkpoint: usize) {
         for proof in self.guards.drain(checkpoint..) {
-            self.guard_bytes -= proof.body_len();
+            self.guard_bytes -= proof.retained_bytes();
         }
     }
 
@@ -390,6 +386,24 @@ impl Evidence {
 
     pub(super) fn last_guard(&self) -> Option<super::guard::Proof> {
         self.guards.last().cloned()
+    }
+
+    pub(crate) fn keep_decoded_operands(
+        &mut self,
+        operation: &'static str,
+        value: &impl super::output::PublicOutput,
+    ) -> Result<(), Box<crate::Error>> {
+        let invalid = || Box::new(super::operation::unsafe_guard_response(operation));
+        let proof = self
+            .guards
+            .last_mut()
+            .filter(|proof| proof.belongs_to(operation))
+            .ok_or_else(invalid)?;
+        let fields = super::output::FieldScan::record(value, GUARD_BYTES - self.guard_bytes)
+            .ok_or_else(invalid)?;
+        self.guard_bytes += fields.bytes();
+        proof.keep_operands(fields);
+        Ok(())
     }
 
     pub(super) fn price_proof(
@@ -407,6 +421,13 @@ impl Evidence {
         let transport = credentials.transport_only();
         let matcher = response::BodyMatcher::with_work(&transport, 192 << 20);
         self.guards.iter().find_map(|proof| proof.check(&matcher))
+    }
+
+    pub(crate) fn recheck_read_proofs(&self) -> Result<(), Box<crate::Error>> {
+        let credentials = self.credentials();
+        self.recheck_guards(credentials)
+            .or_else(|| self.cached.iter().find_map(|check| check(credentials)))
+            .map_or(Ok(()), Err)
     }
 
     pub(crate) fn keep_cached_check(&mut self, check: CachedCheck) {
@@ -430,9 +451,7 @@ impl Evidence {
             return false;
         }
         super::identifier::checking(&self.credentials, || serde_json::to_vec(value))
-            .map_or(true, |body| {
-                peer::output_reflects(self, &body) != Some(false)
-            })
+            .map_or(true, |body| !peer::output_reflects(self, &body).is_clean())
     }
 
     pub(crate) fn output_reflects(&self, value: &Value) -> bool {
@@ -560,15 +579,15 @@ impl Evidence {
         response::reflects_bytes(body, &self.credentials)
     }
 
-    pub(crate) fn peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
+    pub(crate) fn peer_body_screen(&self, body: &[u8]) -> Screen {
         self.screen_peer_body(body, false)
     }
 
-    pub(crate) fn go_peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
+    pub(crate) fn go_peer_body_screen(&self, body: &[u8]) -> Screen {
         self.screen_peer_body(body, true)
     }
 
-    fn screen_peer_body(&self, body: &[u8], go_compatible: bool) -> Option<bool> {
+    fn screen_peer_body(&self, body: &[u8], go_compatible: bool) -> Screen {
         Self::screen_peer_with(
             &response::BodyMatcher::new(&self.credentials, body.len()),
             body,
@@ -580,18 +599,18 @@ impl Evidence {
         matcher: &response::BodyMatcher<'_>,
         body: &[u8],
         go_compatible: bool,
-    ) -> Option<bool> {
-        if matcher.reflects(body, false) {
-            return Some(true);
-        }
-        peer::decoded_reflects(matcher, body).or_else(|| {
-            if !go_compatible {
-                return None;
+    ) -> Screen {
+        matcher.scan(body, false).then(|| {
+            if body.iter().all(u8::is_ascii_whitespace) {
+                return Screen::Clean;
             }
-            let std::borrow::Cow::Owned(normalized) = crate::model::wire::go_json(body) else {
-                return None;
-            };
-            peer::decoded_reflects(matcher, normalized.as_bytes())
+            if go_compatible {
+                return peer::decoded_reflects(
+                    matcher,
+                    crate::model::wire::go_json(body).as_bytes(),
+                );
+            }
+            peer::decoded_reflects(matcher, body)
         })
     }
 
@@ -711,12 +730,12 @@ mod tests {
     fn clean_short_base64_field_does_not_reflect_a_byte() {
         let evidence = evidence(&["a"]);
         assert_eq!(
-            evidence.peer_body_reflects(br#"{"note":"QmFk"}"#),
-            Some(false)
+            evidence.peer_body_screen(br#"{"note":"QmFk"}"#),
+            Screen::Clean
         );
         assert_eq!(
-            evidence.peer_body_reflects(br#"{"note":"YQ=="}"#),
-            Some(true)
+            evidence.peer_body_screen(br#"{"note":"YQ=="}"#),
+            Screen::Reflected
         );
     }
 
@@ -724,12 +743,12 @@ mod tests {
     fn short_credential_does_not_reflect_inside_a_longer_base64_field() {
         for evidence in [evidence(&["a"]), evidence(&["a", "long-toy-secret"])] {
             assert_eq!(
-                evidence.peer_body_reflects(br#"{"note":"QmFkZ2Vy"}"#),
-                Some(false)
+                evidence.peer_body_screen(br#"{"note":"QmFkZ2Vy"}"#),
+                Screen::Clean
             );
             assert_eq!(
-                evidence.peer_body_reflects(br#"{"note":"YQ=="}"#),
-                Some(true)
+                evidence.peer_body_screen(br#"{"note":"YQ=="}"#),
+                Screen::Reflected
             );
         }
     }
@@ -740,9 +759,9 @@ mod tests {
         let field = format!("!{}", "a".repeat(255));
         let single = serde_json::to_vec(&[field.as_str()]).unwrap();
         let page = serde_json::to_vec(&vec![field; 1024]).unwrap();
-        assert_eq!(evidence.peer_body_reflects(&single), Some(false));
+        assert_eq!(evidence.peer_body_screen(&single), Screen::Clean);
         assert!(!evidence.peer_bytes_reflect(&page));
-        assert_eq!(evidence.peer_body_reflects(&page), Some(true));
+        assert_eq!(evidence.peer_body_screen(&page), Screen::Indeterminate);
     }
 
     #[test]
@@ -794,8 +813,8 @@ mod tests {
     fn numeric_ids_use_identifier_matching_in_peer_and_retained_values() {
         let evidence = evidence(&["a"]);
         assert_eq!(
-            evidence.peer_body_reflects(br#"{"projectId":9619}"#),
-            Some(true)
+            evidence.peer_body_screen(br#"{"projectId":9619}"#),
+            Screen::Reflected
         );
         assert!(evidence.output_reflects(&json!({"projectId": 9619})));
         assert!(!evidence.output_reflects(&json!({"count": 9619})));

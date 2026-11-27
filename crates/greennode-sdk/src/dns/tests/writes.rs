@@ -492,18 +492,26 @@ async fn strict_preflight_treats_an_empty_success_as_malformed_json() {
 }
 
 #[tokio::test]
-async fn a_delete_probe_preserves_404_when_the_error_body_exceeds_its_cap() {
+async fn oversized_delete_probe_retains_status_without_confirming_absence() {
     let server = Server::start(vec![
         response("200 OK", ZONE),
         response("204 No Content", ""),
         response("404 Not Found", &"x".repeat((256 << 10) + 1)),
     ]);
     let (ctx, _) = RequestContext::new();
-    client(&server, BEARER)
+    let failure = client(&server, BEARER)
         .delete_hosted_zone(&ctx, DeleteHostedZoneInput::new("zone-1"))
         .await
-        .unwrap();
+        .unwrap_err();
     assert_eq!(server.requests(), 3);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
+    );
 }
 
 #[tokio::test]

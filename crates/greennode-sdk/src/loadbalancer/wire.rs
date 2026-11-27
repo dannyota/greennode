@@ -74,7 +74,7 @@ impl Read {
                 .screen_error(crate::wire::product::operation::unsafe_guard_response(
                     self.id,
                 ))
-                .with_detail(DecodeError::InvalidShape),
+                .with_outer_detail(DecodeError::InvalidShape),
         )
     }
 

@@ -309,7 +309,9 @@ impl Client {
                         break Settlement::Unknown("delete detail ID mismatch");
                     }
                     Ok(_) => write.pause(&wait).await,
-                    Err(_) => break Settlement::Unknown("delete confirmation interrupted"),
+                    Err(error) => {
+                        break Settlement::Unreadable("delete confirmation interrupted", error);
+                    }
                 }
             });
             Err(write.finish(reason, Some(output(&write, false))))
@@ -393,7 +395,7 @@ impl Write<'_> {
                             StatusCode::NOT_FOUND,
                             self.evidence.credentials(),
                         )
-                        .with_detail(ConfirmedAbsence),
+                        .with_cause(error),
                     )
                 } else {
                     Box::new(error)
@@ -411,7 +413,7 @@ impl Write<'_> {
             ),
             status => {
                 let error = rejected_response(&operation, &reply, None, Some("response withheld"));
-                if status == StatusCode::NOT_FOUND {
+                if status == StatusCode::NOT_FOUND && reply.reflection.is_clean() {
                     Err(Box::new(error.with_detail(ConfirmedAbsence)))
                 } else {
                     Err(Box::new(error))
@@ -438,6 +440,14 @@ pub(super) fn decode_with<T: serde::de::DeserializeOwned + Default>(
     let body = go_json(bytes);
     let raw = serde_json::from_str::<Option<&serde_json::value::RawValue>>(&body)
         .map_err(|_| Box::new(response_error(operation, DecodeError::MalformedJson)))?;
+    if operation.reflection == crate::wire::product::operation::Reflection::Guard
+        && strict_json::FieldNames::Canonical.has_case_variant(body.as_bytes(), shape)
+    {
+        return Err(Box::new(
+            crate::wire::product::operation::unsafe_guard_response(operation.id)
+                .with_outer_detail(DecodeError::InvalidShape),
+        ));
+    }
     validate(body.as_bytes(), shape, operation.cap)
         .map_err(|_| Box::new(response_error(operation, DecodeError::InvalidShape)))?;
     raw.map(|raw| {

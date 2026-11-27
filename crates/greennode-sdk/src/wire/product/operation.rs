@@ -1,6 +1,6 @@
 use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
-use super::{redirect, retry, sender};
+use super::{redirect, response::Screen, retry, sender};
 use crate::wire::send;
 use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
@@ -38,6 +38,9 @@ pub(crate) use super::guard::GuardOperation;
 
 #[derive(Debug)]
 pub(crate) struct RefusedGuard;
+
+#[derive(Debug)]
+pub(crate) struct MalformedGuard;
 
 pub(crate) fn unsafe_guard_response(id: &'static str) -> crate::Error {
     crate::Error::from_api(crate::ApiError::without_fallback(
@@ -126,7 +129,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     }
     if operation.reflection == Reflection::Refuse
         && operation.success.contains(&status)
-        && response.reflection == Some(true)
+        && response.reflection == Screen::Reflected
     {
         let error = T::reflected_response(operation, &response);
         return Err(crate::Failure::new(
@@ -189,7 +192,7 @@ pub(crate) async fn execute_raw(
     .await?;
     if operation.reflection == Reflection::Refuse
         && operation.success.contains(&response.status)
-        && response.reflection == Some(true)
+        && response.reflection == Screen::Reflected
     {
         let dispatch = if matches!(operation.class, redirect::Classification::Write) {
             crate::WriteDispatch::MayHaveBeenSent
@@ -421,7 +424,6 @@ async fn send_route<T>(
     let response = match response {
         Ok(response) => response,
         Err(failure) => {
-            evidence.note_dispatch(failure.dispatch);
             evidence.absorb(&failure.credentials);
             if let Some(error) = credential_error(operation, &failure.credentials) {
                 return Err(crate::Failure::new(*error, None, failure.dispatch));
@@ -433,6 +435,7 @@ async fn send_route<T>(
             if let Some(status) = status
                 && (refused_redirect
                     || (overflow
+                        && operation.reflection != Reflection::Guard
                         && !operation.overflow_overrides_status
                         && (status.is_client_error() || status.is_server_error())))
             {
@@ -490,7 +493,14 @@ async fn send_route<T>(
                 _ if retryable => retryable_error(operation.id),
                 _ => api_error(
                     operation.id,
-                    if operation.keep_status { status } else { None },
+                    if operation.keep_status
+                        && !(operation.reflection == Reflection::Guard
+                            && status == Some(StatusCode::NOT_FOUND))
+                    {
+                        status
+                    } else {
+                        None
+                    },
                     class,
                 ),
             };
@@ -501,9 +511,6 @@ async fn send_route<T>(
             return Err(crate::Failure::new(error, None, failure.dispatch));
         }
     };
-    if dispatch == crate::WriteDispatch::NotSent {
-        evidence.note_dispatch(crate::WriteDispatch::MayHaveBeenSent);
-    }
     evidence.absorb(&response.credentials);
     if operation.reflection == Reflection::Guard
         && !evidence.keep_guard(operation.id, &response.body)
@@ -536,7 +543,7 @@ pub(crate) fn decode_response<T: Output>(
         &response.credentials,
     )?;
     if operation.reflection == crate::wire::product::operation::Reflection::Refuse
-        && response.reflection.is_none()
+        && response.reflection == Screen::Indeterminate
         && !(operation.allow_empty && body.is_empty())
         && !operation.no_output
     {
@@ -559,11 +566,11 @@ pub(crate) fn unsafe_json_response(
     }
     let mut evidence = Evidence::from_credentials(known);
     evidence.absorb(sent);
-    let reflected = evidence.peer_body_reflects(body);
+    let screen = evidence.peer_body_screen(body);
     if validate {
-        reflected != Some(false)
+        !screen.is_clean()
     } else {
-        reflected == Some(true)
+        screen == Screen::Reflected
     }
 }
 

@@ -410,21 +410,30 @@ impl Client {
         .map(|(_, response)| response.0)
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
-            let error = if error.detail::<operation::RefusedGuard>().is_some()
-                && matches!(operation.class, Classification::Read)
-            {
-                registry_error(
-                    "",
-                    None,
-                    "InvalidResponse",
-                    "containerregistry: unsafe registry response",
-                )
-                .with_cause(error)
-            } else if operation.sensitive {
-                withhold_registry_error(operation, error)
-            } else {
-                error
-            };
+            let error =
+                if error.detail::<operation::MalformedGuard>().is_some() && operation.sensitive {
+                    registry_error(
+                        operation.id,
+                        None,
+                        "",
+                        "invalid JSON response; body withheld",
+                    )
+                    .with_cause(error)
+                } else if error.detail::<operation::RefusedGuard>().is_some()
+                    && matches!(operation.class, Classification::Read)
+                {
+                    registry_error(
+                        "",
+                        None,
+                        "InvalidResponse",
+                        "containerregistry: unsafe registry response",
+                    )
+                    .with_cause(error)
+                } else if operation.sensitive {
+                    withhold_registry_error(operation, error)
+                } else {
+                    error
+                };
             Failure::new(error, None, dispatch)
         })
     }

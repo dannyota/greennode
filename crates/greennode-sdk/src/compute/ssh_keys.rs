@@ -414,7 +414,7 @@ fn decode_key(
     {
         return Err(invalid());
     }
-    if mutation.id == CREATE.id && evidence.go_peer_body_reflects(body) != Some(false) {
+    if mutation.id == CREATE.id && !evidence.go_peer_body_screen(body).is_clean() {
         return Err(invalid());
     }
     let envelope: Envelope<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;

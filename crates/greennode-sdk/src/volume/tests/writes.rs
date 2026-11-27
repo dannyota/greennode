@@ -726,4 +726,35 @@ mod guard_tests {
             assert_eq!(server.requests(), 1);
         }
     }
+    #[tokio::test]
+    async fn attachment_receipt_rechecks_server_id_list_with_identifier_rules() {
+        for (tokens, allowed) in [
+            (&["toy-volume-read", "jkl"][..], false),
+            (&["toy-volume-read", "mno"][..], true),
+        ] {
+            let detail = IN_USE
+                .replace("server-1", "pre6A6B6Cpost")
+                .replace("\"serverId\":\"pre6A6B6Cpost\"", "\"serverId\":null");
+            let server = Server::start(vec![response(&detail), reply(ACCEPTED, "")]);
+            let result = changing_client(&server, tokens)
+                .attach_volume(
+                    &RequestContext::new().0,
+                    AttachVolumeInput {
+                        volume_id: "volume-1".into(),
+                        server_id: "server-1".into(),
+                        no_wait: true,
+                    },
+                )
+                .await;
+            assert_eq!(
+                result.map(|_| ()).map_err(|error| error.write_dispatch()),
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(WriteDispatch::NotSent)
+                }
+            );
+            assert_eq!(server.requests(), if allowed { 2 } else { 1 });
+        }
+    }
 }

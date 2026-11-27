@@ -191,6 +191,9 @@ impl Client {
                 .with_detail(UnexpectedStatus),
             ));
         }
+        if matches!(evidence.field_names(), FieldNames::Canonical) {
+            evidence.keep_decoded_operands(VOLUME.id, &volume)?;
+        }
         Ok((volume, attachment_known))
     }
 

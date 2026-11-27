@@ -372,7 +372,7 @@ impl Client {
         };
         let text = go_json(&raw);
         let fields = Fields::decode(&text).map_err(|()| invalid())?;
-        if read.style == Style::Nat && evidence.go_peer_body_reflects(&raw) != Some(false) {
+        if read.style == Style::Nat && !evidence.go_peer_body_screen(&raw).is_clean() {
             return Err(invalid());
         }
         let rows: Vec<Fields<'_>> = fields.required("projects").map_err(|()| invalid())?;

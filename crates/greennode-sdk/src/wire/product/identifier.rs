@@ -1,4 +1,7 @@
-use super::{evidence::SentCredentials, response::BodyMatcher};
+use super::{
+    evidence::SentCredentials,
+    response::{BodyMatcher, Screen},
+};
 use serde::{Serialize, Serializer};
 use std::cell::RefCell;
 
@@ -32,9 +35,20 @@ pub(super) fn checking<T>(credentials: &SentCredentials, serialize: impl FnOnce(
     serialize()
 }
 
-pub(crate) fn declared(wire: &str, output: &str) -> bool {
+pub(super) fn declared_wire(wire: &str) -> bool {
     super::evidence::identifier_key(wire)
-        || matches!((wire, output), ("associatedNetworks", "VPCIDs"))
+        || matches!(
+            wire,
+            "serverIdList"
+                | "ServerIDList"
+                | "server_id_list"
+                | "policyIdList"
+                | "associatedNetworks"
+        )
+}
+
+pub(crate) fn declared(wire: &str, output: &str) -> bool {
+    declared_wire(wire) || declared_wire(output)
 }
 
 pub(crate) fn check<T: Serialize + ?Sized, E: serde::ser::Error>(value: &T) -> Result<(), E> {
@@ -49,7 +63,7 @@ pub(crate) fn check_retained<T: Serialize + ?Sized, E: serde::ser::Error>(
 
 fn check_with<T: Serialize + ?Sized, E: serde::ser::Error>(
     value: &T,
-    reflects: fn(&BodyMatcher<'_>, &[u8]) -> Option<bool>,
+    reflects: fn(&BodyMatcher<'_>, &[u8]) -> Screen,
 ) -> Result<(), E> {
     if !ACTIVE.with(|slot| slot.borrow().is_some()) {
         return Ok(());
@@ -62,7 +76,7 @@ fn check_with<T: Serialize + ?Sized, E: serde::ser::Error>(
         };
         let matcher = BodyMatcher::with_work(&state.credentials, state.remaining);
         match reflects(&matcher, &bytes) {
-            Some(false) => {
+            Screen::Clean => {
                 state.remaining = matcher.remaining();
                 false
             }

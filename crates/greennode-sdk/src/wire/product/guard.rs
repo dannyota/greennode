@@ -17,7 +17,7 @@ impl GuardOperation {
 
     pub(super) fn applies(operation: &Operation, evidence: &Evidence) -> bool {
         matches!(operation.class, redirect::Classification::Read)
-            && (operation.reflection == Reflection::Guard || evidence.guards_preflight_reads())
+            && (operation.reflection == Reflection::Guard || evidence.guards_reads())
     }
 
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -79,6 +79,7 @@ pub(super) struct Proof {
     id: &'static str,
     body: Bytes,
     price: Option<DecisionPrice>,
+    operands: Option<std::sync::Arc<super::output::Operands>>,
 }
 
 impl Proof {
@@ -87,11 +88,24 @@ impl Proof {
             id,
             body: Bytes::copy_from_slice(body),
             price: None,
+            operands: None,
         }
     }
 
-    pub(super) fn body_len(&self) -> usize {
+    pub(super) fn retained_bytes(&self) -> usize {
         self.body.len()
+            + self
+                .operands
+                .as_deref()
+                .map_or(0, super::output::Operands::bytes)
+    }
+
+    pub(super) fn belongs_to(&self, id: &str) -> bool {
+        self.id == id && self.operands.is_none()
+    }
+
+    pub(super) fn keep_operands(&mut self, operands: super::output::Operands) {
+        self.operands = Some(std::sync::Arc::new(operands));
     }
 
     pub(super) fn attach_price(&mut self, price: DecisionPrice) -> bool {
@@ -104,8 +118,12 @@ impl Proof {
 
     pub(super) fn check(&self, matcher: &BodyMatcher<'_>) -> Option<Box<Error>> {
         ((!self.body.is_empty()
-            && Evidence::screen_peer_with(matcher, &self.body, true) != Some(false))
-            || self.price.is_some_and(|price| price.reflects(matcher)))
+            && !Evidence::screen_peer_with(matcher, &self.body, true).is_clean())
+            || self.price.is_some_and(|price| price.reflects(matcher))
+            || self
+                .operands
+                .as_deref()
+                .is_some_and(|fields| !fields.screen(matcher).is_clean()))
         .then(|| {
             Box::new(
                 Error::new(ErrorClass::InvalidInput).with_cause(unsafe_guard_response(self.id)),
@@ -264,6 +282,9 @@ mod tests {
         body: &str,
         depth: usize,
     ) -> bool {
+        if body.contains("Evidence::new()") {
+            return false;
+        }
         if body.contains("Evidence::for_write()") {
             return true;
         }
@@ -354,6 +375,103 @@ mod tests {
             assert!(
                 definition(&source, decoder).is_some_and(|body| body.contains(policy)),
                 "{path} {decoder}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_role_survives_a_wire_name_without_identifier_metadata() {
+        use super::Evidence;
+        use crate::Secret;
+        use crate::wire::product::response::Screen;
+
+        #[derive(Debug)]
+        struct Operands {
+            destination_id: String,
+        }
+        impl super::super::output::PublicOutput for Operands {
+            fn public_reflects(
+                &self,
+                scan: &super::super::output::FieldScan<'_>,
+                identifier: bool,
+            ) -> bool {
+                scan.field(
+                    &self.destination_id,
+                    identifier,
+                    "destination_id",
+                    "DestinationID",
+                )
+            }
+        }
+        let body = br#"{"opaque":"pre6A6B6Cpost"}"#;
+        let value = Operands {
+            destination_id: "pre6A6B6Cpost".into(),
+        };
+        let mut evidence = Evidence::for_write();
+        assert!(evidence.keep_guard("test", body));
+        evidence.keep_decoded_operands("test", &value).unwrap();
+        let before = super::Guarded::latest((), &evidence).unwrap();
+        assert!(before.recheck(&evidence).is_ok());
+        evidence.add_bearer(&Secret::new("jkl"));
+        assert_eq!(evidence.peer_body_screen(body), Screen::Clean);
+        assert!(before.recheck(&evidence).is_err());
+        assert!(evidence.recheck_read_proofs().is_err());
+    }
+
+    #[test]
+    fn depth_and_budget_exhaustion_are_indeterminate() {
+        use super::{BodyMatcher, Evidence};
+        use crate::Secret;
+        use crate::wire::product::{evidence::SentCredentials, response::Screen};
+        let credentials = SentCredentials::for_test(vec![Secret::new("toy-guard")]);
+        let evidence = Evidence::from_credentials(&credentials);
+        let deep = format!("{}0{}", "[".repeat(129), "]".repeat(129));
+        assert_eq!(
+            evidence.peer_body_screen(deep.as_bytes()),
+            Screen::Indeterminate
+        );
+        assert_eq!(
+            evidence.peer_body_screen(br#"{"safe":true}"#),
+            Screen::Clean
+        );
+        assert_eq!(
+            evidence.peer_body_screen(br#"{"value":"toy-guard"}"#),
+            Screen::Reflected
+        );
+        let matcher = BodyMatcher::with_work(&credentials, 1);
+        assert_eq!(matcher.scan(b"public text", false), Screen::Indeterminate);
+    }
+
+    #[test]
+    fn mutation_confirmation_reads_reuse_guarded_write_evidence() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for (path, writer, reader) in [
+            (
+                "compute/server_writes.rs",
+                "delete_server",
+                ".get_volume_with_evidence(ctx, &volume_id, &mut evidence)",
+            ),
+            (
+                "compute/server_groups.rs",
+                "update_server_group",
+                ".group_detail::<()>(ctx, id, &mut evidence)",
+            ),
+            (
+                "iam/groups.rs",
+                "create_group",
+                ".fetch_group(ctx, &id, false, &mut evidence)",
+            ),
+            (
+                "iam/groups.rs",
+                "update_group",
+                ".fetch_group(ctx, id, false, &mut evidence)",
+            ),
+        ] {
+            let source = std::fs::read_to_string(root.join(path)).unwrap();
+            let body = definition(&source, writer).unwrap();
+            assert!(
+                body.contains(reader) && !body.contains("Evidence::new()"),
+                "{path} {writer}"
             );
         }
     }

@@ -393,13 +393,14 @@ async fn certificate_absence_requires_a_complete_inventory_after_a_failure() {
 
 #[tokio::test]
 async fn delete_preflight_refuses_ambiguous_target_or_missing_usage() {
-    for (body, certificate) in [
+    for (body, certificate, reads) in [
         (
             r#"{"data":{"uuid":"toy-secret","progressStatus":"CREATED"}}"#,
             false,
+            1,
         ),
-        (r#"{"uuid":"cert-1"}"#, true),
-        (r#"{"uuid":"cert-1","inUse":false,"InUse":false}"#, true),
+        (r#"{"uuid":"cert-1"}"#, true, 2),
+        (r#"{"uuid":"cert-1","inUse":false,"InUse":false}"#, true, 1),
     ] {
         let mut responses = vec![response("200 OK", body)];
         if certificate {
@@ -430,7 +431,7 @@ async fn delete_preflight_refuses_ambiguous_target_or_missing_usage() {
                 .write_dispatch()
         };
         assert_eq!(dispatch, WriteDispatch::NotSent);
-        assert_eq!(server.requests(), if certificate { 2 } else { 1 });
+        assert_eq!(server.requests(), reads);
         assert!(server.heads().iter().all(|head| head.starts_with(b"GET ")));
     }
 }
@@ -544,7 +545,7 @@ async fn certificate_rejection_uses_only_screened_message() {
 }
 
 #[tokio::test]
-async fn malformed_certificate_detail_reconciles_without_dispatching_delete() {
+async fn malformed_certificate_detail_stops_before_fallback() {
     let server = Server::start(vec![
         response("200 OK", "{"),
         response(
@@ -562,9 +563,14 @@ async fn malformed_certificate_detail_reconciles_without_dispatching_delete() {
         )
         .await
         .unwrap_err();
-    assert!(error.error().has_class(ErrorClass::NotFound));
+    assert!(
+        error
+            .error()
+            .detail::<crate::wire::product::operation::RefusedGuard>()
+            .is_some()
+    );
     assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
-    assert_eq!(server.requests(), 2);
+    assert_eq!(server.requests(), 1);
     assert!(server.heads().iter().all(|head| head.starts_with(b"GET ")));
 }
 
@@ -634,4 +640,40 @@ async fn delete_settlement_distinguishes_cancellation_poll_failure_and_bound() {
     assert!(cancelled.error().has_class(ErrorClass::Cancelled));
     assert_eq!(refused.error().api_error().unwrap().status(), Some(403));
     assert!(expired.error().has_class(ErrorClass::DeadlineExceeded));
+}
+
+#[cfg(test)]
+mod guard_regressions {
+    use super::*;
+
+    #[tokio::test]
+    async fn certificate_guard_refusal_stops_before_the_list_fallback() {
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                br#"{"uuid":"cert-1","inUse":false,"note":"toy-secret"}"#,
+            ),
+            response(
+                "200 OK",
+                br#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+            ),
+        ]);
+        let failure = client(&server, CANARY)
+            .delete_certificate(
+                &RequestContext::new().0,
+                DeleteCertificateInput {
+                    certificate_id: "cert-1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+        assert!(
+            failure
+                .error()
+                .detail::<crate::wire::product::operation::RefusedGuard>()
+                .is_some()
+        );
+        assert_eq!(server.requests(), 1);
+    }
 }

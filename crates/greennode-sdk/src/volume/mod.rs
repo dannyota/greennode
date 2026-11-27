@@ -179,7 +179,7 @@ impl Client {
         .map_err(|failure| Box::new(failure.into_parts().0))
     }
 
-    async fn read<T: Serialize>(
+    async fn read<T: Serialize + crate::wire::product::output::PublicOutput>(
         &self,
         ctx: &RequestContext,
         read: Read,
@@ -191,6 +191,9 @@ impl Client {
         let value = self
             .read_value(ctx, read, path, query, evidence, from_wire)
             .await?;
+        if matches!(evidence.field_names(), FieldNames::Canonical) {
+            evidence.keep_decoded_operands(read.id, &value)?;
+        }
         screen(evidence, value, read.id)
     }
 

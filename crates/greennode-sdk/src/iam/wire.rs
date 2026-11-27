@@ -358,9 +358,9 @@ impl<T: Wire> Output for Body<T> {
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
         if operation.reflection == crate::wire::product::operation::Reflection::Refuse
-            && Evidence::from_credentials(&response.credentials)
-                .go_peer_body_reflects(&response.body)
-                != Some(false)
+            && !Evidence::from_credentials(&response.credentials)
+                .go_peer_body_screen(&response.body)
+                .is_clean()
         {
             return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
                 crate::RecoveryAdvice::new(if operation.id == "iam.GetServiceAccount" {
@@ -505,6 +505,20 @@ pub(super) fn account_error(id: &'static str, error: Error) -> Error {
         .with_body_too_large();
     }
     error
+}
+
+pub(super) fn guarded_decode_error(operation: &Operation, error: Error) -> Error {
+    if error
+        .detail::<crate::wire::product::operation::MalformedGuard>()
+        .is_some()
+        && error
+            .http_status()
+            .is_some_and(|status| status.is_success())
+    {
+        decode_error(operation, super::DecodeError::MalformedJson).with_cause(error)
+    } else {
+        error
+    }
 }
 
 fn decode_error(operation: &Operation, detail: super::DecodeError) -> Error {

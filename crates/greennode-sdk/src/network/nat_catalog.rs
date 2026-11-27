@@ -468,7 +468,7 @@ fn check_null_elements(fields: &Fields<'_>, name: &str) -> Result<(), ()> {
 }
 
 pub(super) fn reflects(text: &str, evidence: &Evidence) -> bool {
-    evidence.peer_body_reflects(text.as_bytes()) != Some(false)
+    !evidence.peer_body_screen(text.as_bytes()).is_clean()
         || response::reflects_credential_forms(text, evidence.credentials())
 }
 

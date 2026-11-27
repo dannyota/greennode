@@ -173,25 +173,30 @@ async fn delete_does_not_confirm_truncated_not_found_response() {
 }
 
 #[tokio::test]
-async fn oversized_not_found_confirms_server_deletion() {
+async fn oversized_not_found_retains_status_without_confirming_server_deletion() {
     let server = TestServer::start(vec![
         response(r#"{"data":{"uuid":"server-1"}}"#),
         response("[]"),
         http("202 Accepted", ""),
         http("404 Not Found", &"x".repeat((8 << 20) + 1)),
     ]);
-    let (ctx, _) = RequestContext::new();
-    assert!(
-        client(&server)
-            .delete_server(
-                &ctx,
-                DeleteServerInput {
-                    server_id: "server-1".into(),
-                    ..Default::default()
-                }
-            )
-            .await
-            .is_ok()
+    let failure = client(&server)
+        .delete_server(
+            &RequestContext::new().0,
+            DeleteServerInput {
+                server_id: "server-1".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
     );
 }
 
@@ -221,6 +226,47 @@ async fn deletes_server_and_reports_attached_nonboot_volumes() {
     let bodies = server.bodies();
     let request: serde_json::Value = serde_json::from_slice(&bodies[2]).unwrap();
     assert_eq!(request, serde_json::json!({"deleteAllVolume":false}));
+}
+
+#[tokio::test]
+async fn delete_server_guards_each_kept_volume_confirmation() {
+    for (note, allowed) in [("ordinary-note", true), (CANARY, false)] {
+        let detail =
+            serde_json::json!({"data":{"uuid":"vol-data","status":"AVAILABLE","note":note}})
+                .to_string();
+        let server = TestServer::start(vec![
+            response(r#"{"data":{"uuid":"server-1","bootVolumeId":"vol-boot"}}"#),
+            response(r#"[{"uuid":"vol-boot"},{"uuid":"vol-data"}]"#),
+            http("202 Accepted", ""),
+            http("404 Not Found", "{}"),
+            response(&detail),
+        ]);
+        let result = client(&server)
+            .delete_server(
+                &RequestContext::new().0,
+                DeleteServerInput {
+                    server_id: "server-1".into(),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        match result {
+            Ok(result) => assert_eq!(result.kept_volume_ids, ["vol-data"]),
+            Err(failure) => {
+                assert_eq!(
+                    failure.write_dispatch(),
+                    crate::WriteDispatch::MayHaveBeenSent
+                );
+                assert!(
+                    failure
+                        .partial()
+                        .is_none_or(|result| result.kept_volume_ids.is_empty())
+                );
+            }
+        }
+        assert_eq!(server.heads().len(), 5);
+    }
 }
 
 #[tokio::test]

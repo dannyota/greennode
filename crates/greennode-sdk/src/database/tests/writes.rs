@@ -524,3 +524,32 @@ async fn database_early_refusal_rechecks_prior_proofs() {
         assert_eq!(server.requests(), 4);
     }
 }
+
+#[tokio::test]
+async fn database_indeterminate_404_retains_status_without_confirming_absence() {
+    let deep = format!("{}0{}", "[".repeat(129), "]".repeat(129));
+    let mut replies = delete_reads(br#"{"code":200,"data":[]}"#);
+    replies.extend([
+        response("204 No Content", b""),
+        response("404 Not Found", deep.as_bytes()),
+    ]);
+    let server = Server::start(replies);
+    let result = fixture(&server)
+        .delete_database_instance(
+            &RequestContext::new().0,
+            DeleteDatabaseInstanceInput::new("db-1"),
+        )
+        .await;
+    let Err(failure) = result else {
+        panic!("uncertain 404 confirmed database deletion");
+    };
+    assert_eq!(
+        failure
+            .error()
+            .detail::<crate::HttpStatus>()
+            .map(|status| status.as_u16()),
+        Some(404)
+    );
+    assert!(!failure.partial().unwrap().deleted);
+    assert_eq!(server.requests(), 7);
+}

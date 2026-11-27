@@ -356,8 +356,8 @@ impl Output for Inventory {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if !operation.success.contains(&response.status)
             && crate::wire::product::evidence::Evidence::from_credentials(&response.credentials)
-                .peer_body_reflects(&response.body)
-                .unwrap_or(false)
+                .peer_body_screen(&response.body)
+                == crate::wire::product::response::Screen::Reflected
         {
             return Err(invalid_response(response.status));
         }

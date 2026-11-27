@@ -321,3 +321,34 @@ async fn group_writes_screen_raw_preflight_keys_before_json_conversion() {
             .all(|head| head.starts_with(b"GET /v2/project-1/serverGroups"))
     );
 }
+
+#[tokio::test]
+async fn group_update_guards_the_read_after_dispatch() {
+    for (note, allowed) in [("ordinary-note", true), (CANARY, false)] {
+        let post = serde_json::json!({"data":{"uuid":"group-1","name":"new-group","note":note}})
+            .to_string();
+        let server = TestServer::start(vec![
+            response(r#"{"data":{"uuid":"group-1","name":"group"}}"#),
+            response(""),
+            response(&post),
+        ]);
+        let outcome = client(&server)
+            .update_server_group(
+                &RequestContext::new().0,
+                UpdateServerGroupInput {
+                    server_group_id: "group-1".into(),
+                    name: Some("new-group".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(outcome.is_ok(), allowed);
+        if let Err(failure) = outcome {
+            assert_eq!(
+                failure.write_dispatch(),
+                crate::WriteDispatch::MayHaveBeenSent
+            );
+        }
+        assert_eq!(server.heads().len(), 3);
+    }
+}

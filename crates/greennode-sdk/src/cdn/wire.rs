@@ -195,8 +195,11 @@ struct Envelope {
 struct GuardEnvelope<'a>(&'a Envelope);
 
 impl<'a> GuardEnvelope<'a> {
-    fn checked(envelope: &'a Envelope, reflection: Option<bool>) -> Option<Self> {
-        (reflection == Some(false)).then_some(Self(envelope))
+    fn checked(
+        envelope: &'a Envelope,
+        reflection: crate::wire::product::response::Screen,
+    ) -> Option<Self> {
+        reflection.is_clean().then_some(Self(envelope))
     }
 }
 

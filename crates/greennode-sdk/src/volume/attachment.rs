@@ -124,6 +124,33 @@ pub enum WriteRefusal {
 
 crate::error::debug_record!(WriteRefusal; VolumeInUse, BootVolume, ServerRunning);
 
+#[derive(Default, Serialize)]
+struct DetachServerState {
+    status: String,
+    boot_volume_id: String,
+}
+
+crate::error::debug_record!(DetachServerState {
+    status,
+    boot_volume_id
+});
+
+impl crate::wire::product::output::PublicOutput for DetachServerState {
+    fn public_reflects(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        scan.field(&self.status, identifier, "status", "status")
+            || scan.field(
+                &self.boot_volume_id,
+                identifier,
+                "bootVolumeId",
+                "boot_volume_id",
+            )
+    }
+}
+
 struct Attachment<'a> {
     volume: &'a str,
     server: &'a str,
@@ -292,10 +319,13 @@ impl Client {
                     |raw, names| {
                         let envelope = Object::parse(raw, names)?;
                         envelope.get("data")?.map_or_else(
-                            || Ok((String::new(), String::new())),
+                            || Ok(DetachServerState::default()),
                             |data| {
                                 let row = Object::parse(data, names)?;
-                                Ok((row.value("status")?, row.value("bootVolumeId")?))
+                                Ok(DetachServerState {
+                                    status: row.value("status")?,
+                                    boot_volume_id: row.value("bootVolumeId")?,
+                                })
                             },
                         )
                     },
@@ -305,7 +335,10 @@ impl Client {
             std::convert::identity,
         )
         .await?;
-        let (status, boot) = server.recheck(evidence)?;
+        let DetachServerState {
+            status,
+            boot_volume_id: boot,
+        } = server.recheck(evidence)?;
         let volume = volume.recheck(evidence)?;
         let server = safe_label(input.server, evidence);
         let id = safe_label(input.volume, evidence);

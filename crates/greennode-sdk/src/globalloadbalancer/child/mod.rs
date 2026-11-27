@@ -142,6 +142,12 @@ impl Child<'_> {
             .await
             .map_err(|failure| {
                 let error = failure.into_parts().0;
+                if error
+                    .detail::<crate::wire::product::operation::MalformedGuard>()
+                    .is_some()
+                {
+                    return Box::new(error.with_outer_detail(DecodeError::MalformedJson));
+                }
                 if error.detail::<RefusedGuard>().is_some() {
                     return Box::new(error);
                 }
@@ -183,7 +189,7 @@ impl Child<'_> {
                     .unwrap_or(DecodeError::InvalidShape),
             )
         })?;
-        if reply.reflection != Some(false) {
+        if !reply.reflection.is_clean() {
             return Err(self.invalid(DecodeError::ReflectedCredential));
         }
         Guarded::from_checkpoint(GuardReply::Present(result), &self.0.evidence, checkpoint)
@@ -238,7 +244,7 @@ impl Child<'_> {
         template: &'static str,
         valid: impl FnOnce(&model::Acceptance) -> bool,
     ) -> Option<Guarded<model::Acceptance>> {
-        if reply.reflection != Some(false) {
+        if !reply.reflection.is_clean() {
             return None;
         }
         let op = guard_operation(self.0.id, template);
@@ -464,7 +470,7 @@ fn decode_canonical<T: serde::de::DeserializeOwned + Default>(
 }
 
 fn internal_error(reply: &Response) -> bool {
-    if reply.status != StatusCode::INTERNAL_SERVER_ERROR || reply.reflection != Some(false) {
+    if reply.status != StatusCode::INTERNAL_SERVER_ERROR || !reply.reflection.is_clean() {
         return false;
     }
     let op = guard_operation("", "");

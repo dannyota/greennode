@@ -379,14 +379,19 @@ impl Client {
         error: Error,
         evidence: &mut Evidence,
     ) -> Error {
+        use crate::wire::product::operation::RefusedGuard;
         if error.detail::<CompleteNotFound>().is_some()
+            || error.detail::<RefusedGuard>().is_some()
             || error.has_class(ErrorClass::InvalidInput)
-            || !self
-                .certificate_absent(ctx, id, evidence)
-                .await
-                .unwrap_or(false)
         {
             return evidence.screen_error(error);
+        }
+        match self.certificate_absent(ctx, id, evidence).await {
+            Err(refusal) if refusal.detail::<RefusedGuard>().is_some() => {
+                return evidence.screen_error(*refusal);
+            }
+            Ok(true) => {}
+            _ => return evidence.screen_error(error),
         }
         let message = format!(
             "vngcloud: resource not found: {DELETE_CERT}: certificate {}",

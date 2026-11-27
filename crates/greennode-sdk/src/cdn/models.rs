@@ -118,7 +118,7 @@ pub(super) fn redact_id(text: &mut String, evidence: &Evidence) {
 
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
-    let raw_reflects = evidence.peer_body_reflects(text.get().as_bytes()) != Some(false);
+    let raw_reflects = !evidence.peer_body_screen(text.get().as_bytes()).is_clean();
     match serde_json::from_str::<Value>(text.get()) {
         Ok(mut value) if evidence.output_reflects(&value) => {
             *raw = evidence

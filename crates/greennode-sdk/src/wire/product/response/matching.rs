@@ -1,4 +1,4 @@
-use super::{SentCredentials, marker, patterns::Patterns};
+use super::{Screen, SentCredentials, marker, patterns::Patterns};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy)]
@@ -14,7 +14,7 @@ pub(super) fn matches_credential_forms(
     context: MatchContext,
 ) -> bool {
     let mut work = matching_work_limit(text.len(), matches!(context, MatchContext::ErrorText));
-    match_with_budget(text, credentials, context, &mut work)
+    !match_with_budget(text, credentials, context, &mut work).is_clean()
 }
 
 pub(in crate::wire::product) struct BodyMatcher<'a> {
@@ -82,8 +82,12 @@ impl<'a> BodyMatcher<'a> {
     }
 
     pub(in crate::wire::product) fn reflects(&self, bytes: &[u8], identifier: bool) -> bool {
+        !self.scan(bytes, identifier).is_clean()
+    }
+
+    pub(in crate::wire::product) fn scan(&self, bytes: &[u8], identifier: bool) -> Screen {
         if self.credentials.values().is_empty() {
-            return false;
+            return Screen::Clean;
         }
         let context = if identifier {
             MatchContext::Identifier
@@ -102,9 +106,9 @@ fn match_with_budget(
     credentials: &SentCredentials,
     context: MatchContext,
     work: &mut usize,
-) -> bool {
+) -> Screen {
     let Some(patterns) = credentials.patterns() else {
-        return true;
+        return Screen::Indeterminate;
     };
     let error_text = matches!(context, MatchContext::ErrorText);
     let mut state = MatchState {
@@ -148,12 +152,12 @@ impl MatchState<'_> {
     }
 }
 
-fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> bool {
+fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> Screen {
     let decoded_base64 = counts[3] != 0;
     let mut found = None;
     for index in 0..state.forms.len() {
         if !state.charge(input.len()) {
-            return true;
+            return Screen::Indeterminate;
         }
         if state.forms[index].0.as_slice() == input && state.forms[index].1 == decoded_base64 {
             found = Some(index);
@@ -164,19 +168,22 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> b
         index
     } else {
         if !state.charge(input.len()) {
-            return true;
+            return Screen::Indeterminate;
         }
         if state.error_text
             && (marker::has_credential_marker_bytes(input)
                 || (!state.patterns.is_empty() && std::str::from_utf8(input).is_err()))
         {
-            return true;
+            return Screen::Reflected;
         }
-        if state
-            .patterns
-            .forms(input, decoded_base64, state.strict_base64, &mut state.work)
-        {
-            return true;
+        let screen = Screen::from_match(state.patterns.forms(
+            input,
+            decoded_base64,
+            state.strict_base64,
+            &mut state.work,
+        ));
+        if !screen.is_clean() {
+            return screen;
         }
         state
             .forms
@@ -184,12 +191,12 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> b
         state.forms.len() - 1
     };
     if state.visited.contains(&(index, counts)) {
-        return false;
+        return Screen::Clean;
     }
     state.visited.push((index, counts));
     for step in 0..4 {
         if !state.charge(input.len()) {
-            return true;
+            return Screen::Indeterminate;
         }
         let next = match step {
             0 => Zeroizing::new(
@@ -211,16 +218,17 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> b
         };
         if next.as_slice() != input {
             if counts[step] == 2 {
-                if step == 3 {
-                    if state
+                return if step == 3 {
+                    match state
                         .patterns
                         .literal(&next, true, state.strict_base64, &mut state.work)
                     {
-                        return true;
+                        Some(true) => Screen::Reflected,
+                        _ => Screen::Indeterminate,
                     }
-                    continue;
-                }
-                return true;
+                } else {
+                    Screen::Indeterminate
+                };
             }
             let mut next_counts = counts;
             next_counts[step] += 1;
@@ -230,12 +238,12 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> b
             }
             let matched = matches_forms(&next, next_counts, state);
             state.error_text = error_text;
-            if matched {
-                return true;
+            if !matched.is_clean() {
+                return matched;
             }
         }
     }
-    false
+    Screen::Clean
 }
 
 fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {

@@ -297,7 +297,7 @@ impl Client {
         let raw = self.read(ctx, base, REGIONS, &[], evidence).await?;
         let invalid = || INVALID_REGIONS.invalid_as(evidence, "invalid regions envelope");
         let text = go_json(&raw);
-        if evidence.go_peer_body_reflects(&raw) != Some(false) {
+        if !evidence.go_peer_body_screen(&raw).is_clean() {
             return Err(invalid());
         }
         let data: &RawValue = nat_data(&text).map_err(|()| invalid())?;

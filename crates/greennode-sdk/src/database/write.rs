@@ -20,9 +20,9 @@ use std::{task::Poll, time::Duration};
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const POLL_BOUND: Duration = Duration::from_secs(30 * 60);
 
-#[derive(Clone, Copy)]
 pub(super) enum Settlement {
     NotSettled(&'static str),
+    ReadFailed(&'static str, Box<Error>),
     Failed,
 }
 
@@ -107,7 +107,13 @@ impl Client {
             let instance = match self.get_instance::<()>(&ctx, id, evidence).await {
                 Ok(instance) => Some(instance),
                 Err(failure) if failure.error().detail::<CompletedNotFound>().is_some() => None,
-                Err(_) => break,
+                Err(failure) => {
+                    let error = Box::new(failure.into_parts().0);
+                    return Err(match interrupted {
+                        Settlement::NotSettled(reason) => Settlement::ReadFailed(reason, error),
+                        other => other,
+                    });
+                }
             };
             if ctx.check(clock).is_some() {
                 break;
@@ -218,13 +224,18 @@ pub(super) fn unsettled<O>(
     evidence: &Evidence,
     partial: impl FnOnce(String) -> O,
 ) -> Failure<O> {
-    let (class, reason) = match settlement {
-        Settlement::NotSettled(reason) => (ErrorClass::NotSettled, reason),
-        Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed"),
+    let (class, reason, cause) = match settlement {
+        Settlement::NotSettled(reason) => (ErrorClass::NotSettled, reason, None),
+        Settlement::ReadFailed(reason, cause) => (ErrorClass::NotSettled, reason, Some(cause)),
+        Settlement::Failed => (ErrorClass::Failed, "vngcloud: write failed", None),
     };
     let message =
         format!("{operation}: inspect inventory and billing before another mutation: {reason}");
     let error = local_error(class, "", &message);
+    let error = match cause {
+        Some(cause) => error.with_cause(*cause),
+        None => error,
+    };
     let dispatch = WriteDispatch::MayHaveBeenSent;
     let Some(id) = id else {
         return Failure::new(error, None, dispatch);

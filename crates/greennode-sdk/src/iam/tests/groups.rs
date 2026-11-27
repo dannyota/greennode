@@ -191,6 +191,7 @@ fn confirmation_client(server: &Server, provider: Arc<ConfirmationProvider>) -> 
             .with_credentials_provider(provider)
             .with_endpoint_overrides(EndpointOverrides {
                 iam: Some(format!("{}/iam/", server.origin)),
+                dashboard: Some(format!("{}/dashboard/", server.origin)),
                 ..Default::default()
             }),
     )
@@ -389,5 +390,95 @@ async fn scoped_group_ids_are_screened_in_updates_and_partials() {
         assert!(output["UserIDs"] == json!(["<redacted>", "user-1"]));
         assert!(output["PolicyIDs"] == json!(["<redacted>", "policy-1"]));
         assert_eq!(server.requests(), 3);
+    }
+}
+
+#[tokio::test]
+async fn post_dispatch_group_reads_refuse_reflecting_outcomes() {
+    for create in [true, false] {
+        for (note, allowed) in [("ordinary-note", true), ("toy-bearer", false)] {
+            let after = json!({"id":"group-1","name":"team","note":note}).to_string();
+            let first = if create {
+                response("201 Created", br#"{"id":"group-1"}"#)
+            } else {
+                response("204 No Content", b"")
+            };
+            let server = Server::start(vec![first, response("200 OK", after.as_bytes())]);
+            let client = client(&server, "toy-bearer");
+            let ctx = RequestContext::new().0;
+            let outcome = if create {
+                client
+                    .create_group(&ctx, CreateGroupInput::new("team"))
+                    .await
+                    .map(|_| ())
+                    .map_err(|failure| failure.write_dispatch())
+            } else {
+                let mut input = UpdateGroupInput::new("group-1");
+                input.name = Some("team".into());
+                client
+                    .update_group(&ctx, input)
+                    .await
+                    .map(|_| ())
+                    .map_err(|failure| failure.write_dispatch())
+            };
+            assert_eq!(
+                outcome,
+                if allowed {
+                    Ok(())
+                } else {
+                    Err(WriteDispatch::MayHaveBeenSent)
+                }
+            );
+            assert_eq!(server.requests(), 2);
+        }
+    }
+}
+
+#[tokio::test]
+async fn membership_rechecks_user_proofs_before_a_privilege_refusal() {
+    for (note, reflects) in [("ordinary-note", false), ("late-group-bearer", true)] {
+        let membership =
+            json!({"data":[{"id":"pol-1"}],"totalItems":1,"totalPages":1,"note":note}).to_string();
+        let server = Server::start(vec![
+            response("200 OK", br#"{"userId":"usr-1","userType":"iam-user"}"#),
+            response("200 OK", br#"[{"action":"CreatePolicy","label":"Write","resources":[]}]"#),
+            response("200 OK", membership.as_bytes()),
+            response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:CreatePolicy"]}]}"#),
+            response("200 OK", br#"{"id":"group-1","mode":"iam","policies":[],"iamUsers":[]}"#),
+        ]);
+        let client = confirmation_client(
+            &server,
+            Arc::new(ConfirmationProvider {
+                attempts: AtomicUsize::new(0),
+                tokens: vec![
+                    "toy-caller",
+                    "toy-actions",
+                    "toy-user",
+                    "toy-policy",
+                    "late-group-bearer",
+                ],
+            }),
+        );
+        let failure = client
+            .add_user_to_group(
+                &RequestContext::new().0,
+                crate::iam::AddUserToGroupInput::new("group-1", "usr-2"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(server.requests(), 5);
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(
+            failure.error().detail::<crate::iam::WriteError>()
+                == Some(&crate::iam::WriteError::PrivilegedChange),
+            !reflects
+        );
+        assert_eq!(
+            failure
+                .error()
+                .detail::<crate::wire::product::operation::RefusedGuard>()
+                .is_some(),
+            reflects
+        );
     }
 }

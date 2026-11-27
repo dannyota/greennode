@@ -186,7 +186,7 @@ impl Client {
             evidence.credentials(),
         )
         .map_err(|error| screen(*error, evidence))?;
-        if protected && evidence.go_peer_body_reflects(&body) != Some(false) {
+        if protected && !evidence.go_peer_body_screen(&body).is_clean() {
             return Err(read.shape(evidence));
         }
         Ok(response.reply.body)

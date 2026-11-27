@@ -223,15 +223,8 @@ pub(super) fn attached(volume: &Volume, server: &str) -> bool {
 }
 
 pub(super) fn screen_state(evidence: &Evidence, volume: &Volume) -> Result<(), Box<Error>> {
-    if evidence.output_reflects(&serde_json::json!({
-        "uuid": volume.uuid,
-        "status": volume.status,
-        "size": volume.size,
-        "serverId": volume.server_id,
-        "serverIds": volume.server_id_list,
-        "bootable": volume.bootable,
-        "volumeTypeId": volume.volume_type_id,
-    })) {
+    use crate::wire::product::output::{FieldScan, PublicOutput};
+    if volume.public_reflects(&FieldScan::new(evidence), false) {
         return Err(Box::new(api(
             "volume.GetVolume",
             Some(200),

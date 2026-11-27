@@ -1,14 +1,20 @@
-use super::{identifier_key, response::BodyMatcher};
+use super::{
+    identifier_key,
+    response::{BodyMatcher, Screen},
+};
 use serde::Deserializer;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 use std::fmt;
 use zeroize::Zeroizing;
 
-pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, false, identifier_key, &|text, identifier, _| {
-        matcher.reflects(text.as_bytes(), identifier)
-    })
+pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
+    check_decoded(
+        body,
+        false,
+        super::super::identifier::declared_wire,
+        &|text, identifier, _| matcher.scan(text.as_bytes(), identifier),
+    )
 }
 
 pub(super) fn request_identifier_key(key: &str) -> bool {
@@ -16,59 +22,79 @@ pub(super) fn request_identifier_key(key: &str) -> bool {
 }
 
 pub(super) fn request_reflects(matcher: &BodyMatcher<'_>, body: &[u8], identifier: bool) -> bool {
-    check_decoded(
+    !check_decoded(
         body,
         identifier,
         request_identifier_key,
-        &|text, identifier, _| matcher.reflects(text.as_bytes(), identifier),
-    ) != Some(false)
+        &|text, identifier, _| matcher.scan(text.as_bytes(), identifier),
+    )
+    .is_clean()
 }
 
-pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Option<bool> {
+pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Screen {
     let matcher = BodyMatcher::for_output(evidence.credentials(), body.len());
     output_with_matcher(&matcher, body)
 }
 
-pub(super) fn output_with_matcher(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    if matcher.reflects(body, false) {
-        return Some(true);
-    }
-    check_decoded(body, false, identifier_key, &|text, identifier, number| {
-        matcher.reflects(text.as_bytes(), identifier)
-            || (number && output_number_reflects(matcher, text, identifier))
-    })
+pub(super) fn output_with_matcher(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
+    matcher
+        .scan(body, false)
+        .then(|| check_output(matcher, body, false))
 }
 
-pub(super) fn output_identifier_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
-    check_decoded(body, true, identifier_key, &|text, identifier, number| {
-        matcher.reflects(text.as_bytes(), identifier)
-            || (number && output_number_reflects(matcher, text, identifier))
-    })
+pub(super) fn output_identifier_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
+    check_output(matcher, body, true)
 }
 
-fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: bool) -> bool {
+fn check_output(matcher: &BodyMatcher<'_>, body: &[u8], identifiers: bool) -> Screen {
+    check_decoded(
+        body,
+        identifiers,
+        identifier_key,
+        &|text, identifier, number| {
+            matcher.scan(text.as_bytes(), identifier).then(|| {
+                if number {
+                    output_number_reflects(matcher, text, identifier)
+                } else {
+                    Screen::Clean
+                }
+            })
+        },
+    )
+}
+
+fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: bool) -> Screen {
     let Ok(number) = text.parse::<f64>() else {
-        return false;
+        return Screen::Clean;
     };
     if !identifier
         && text.parse::<i64>().is_err()
         && text.parse::<u64>().is_err()
         && serde_json::to_string(&number).is_ok_and(|canonical| canonical != text)
     {
-        return false;
+        return Screen::Clean;
     }
-    crate::output_number::any_spelling(number, false, |spelling| {
-        matcher.reflects(spelling.as_bytes(), identifier)
-    })
+    let screen = std::cell::Cell::new(Screen::Clean);
+    if crate::output_number::any_spelling(number, false, |spelling| {
+        let matched = matcher.scan(spelling.as_bytes(), identifier);
+        screen.set(matched);
+        !matched.is_clean()
+    }) && screen.get().is_clean()
+    {
+        return Screen::Indeterminate;
+    }
+    screen.get()
 }
 
-fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
+fn check_decoded<F: Fn(&str, bool, bool) -> Screen>(
     body: &[u8],
     root_identifier: bool,
     identifier_key: fn(&str) -> bool,
     matches: &F,
-) -> Option<bool> {
-    let raw: &RawValue = serde_json::from_slice(body).ok()?;
+) -> Screen {
+    let Ok(raw) = serde_json::from_slice::<&RawValue>(body) else {
+        return Screen::Indeterminate;
+    };
     Walker {
         matches,
         identifier_key,
@@ -76,7 +102,7 @@ fn check_decoded<F: Fn(&str, bool, bool) -> bool>(
         depth: 0,
     }
     .check(raw)
-    .ok()
+    .unwrap_or(Screen::Indeterminate)
 }
 
 struct Walker<'a, F> {
@@ -86,8 +112,8 @@ struct Walker<'a, F> {
     depth: usize,
 }
 
-impl<F: Fn(&str, bool, bool) -> bool> Walker<'_, F> {
-    fn check(self, value: &RawValue) -> Result<bool, serde_json::Error> {
+impl<F: Fn(&str, bool, bool) -> Screen> Walker<'_, F> {
+    fn check(self, value: &RawValue) -> Result<Screen, serde_json::Error> {
         let raw = value.get();
         let mut decoder = serde_json::Deserializer::from_str(raw);
         match raw.as_bytes().first() {
@@ -115,38 +141,37 @@ impl<F: Fn(&str, bool, bool) -> bool> Walker<'_, F> {
     }
 }
 
-impl<'de, F: Fn(&str, bool, bool) -> bool> Visitor<'de> for Walker<'_, F> {
-    type Value = bool;
+impl<'de, F: Fn(&str, bool, bool) -> Screen> Visitor<'de> for Walker<'_, F> {
+    type Value = Screen;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("a JSON object or array")
     }
 
-    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<bool, M::Error> {
-        let mut reflects = false;
+    fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Screen, M::Error> {
+        let mut screen = Screen::Clean;
         while let Some((key, raw)) = map.next_entry::<String, &RawValue>()? {
             let key = Zeroizing::new(key);
-            if !reflects {
-                reflects = (self.matches)(&key, self.identifier, false)
-                    || self
-                        .child(self.identifier || (self.identifier_key)(&key))
+            screen = screen
+                .then(|| (self.matches)(&key, self.identifier, false))
+                .then(|| {
+                    self.child(self.identifier || (self.identifier_key)(&key))
                         .check(raw)
-                        .map_err(serde::de::Error::custom)?;
-            }
+                        .unwrap_or(Screen::Indeterminate)
+                });
         }
-        Ok(reflects)
+        Ok(screen)
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<bool, A::Error> {
-        let mut reflects = false;
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Screen, A::Error> {
+        let mut screen = Screen::Clean;
         while let Some(raw) = seq.next_element::<&RawValue>()? {
-            if !reflects {
-                reflects = self
-                    .child(self.identifier)
+            screen = screen.then(|| {
+                self.child(self.identifier)
                     .check(raw)
-                    .map_err(serde::de::Error::custom)?;
-            }
+                    .unwrap_or(Screen::Indeterminate)
+            });
         }
-        Ok(reflects)
+        Ok(screen)
     }
 }

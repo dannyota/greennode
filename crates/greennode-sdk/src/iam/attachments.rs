@@ -209,9 +209,8 @@ async fn membership<O>(
     group_id: &str,
     user_id: &str,
 ) -> Result<(), Failure<O>> {
-    let user = guard.user(user_id).await?;
-    let group = guard.group(group_id).await?;
-    protection_error(op, user.max(group), "the user or the group is protected")
+    let protection = guard.membership_protection(user_id, group_id).await?;
+    protection_error(op, protection, "the user or the group is protected")
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]

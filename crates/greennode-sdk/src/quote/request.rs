@@ -103,7 +103,7 @@ impl Output for Document {
                 false,
             ))
         })?;
-        let peer_reflects = response.reflection.unwrap_or(true);
+        let peer_reflects = !response.reflection.is_clean();
         if strict_json::validate(&body, &[], op.cap).is_err() || peer_reflects {
             return Err(invalid(op.id, status));
         }
@@ -119,7 +119,7 @@ impl Output for VnetworkDocument {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
-        if response.reflection == Some(true) {
+        if response.reflection == crate::wire::product::response::Screen::Reflected {
             return Err(invalid(op.id, response.status.as_u16()));
         }
         let normalized = crate::model::wire::go_json(&response.body);

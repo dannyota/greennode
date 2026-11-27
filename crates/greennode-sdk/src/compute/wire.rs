@@ -144,7 +144,7 @@ pub(super) struct Envelope {
 )]
 impl Envelope {
     pub(super) fn reflects(&self, evidence: &Evidence) -> bool {
-        !self.original.is_empty() && evidence.go_peer_body_reflects(&self.original) != Some(false)
+        !self.original.is_empty() && !evidence.go_peer_body_screen(&self.original).is_clean()
     }
 
     pub(super) fn field<T: WireField, O>(
@@ -317,7 +317,8 @@ impl Client {
                         "InvalidResponse",
                         "invalid server response; body withheld",
                         evidence,
-                    ),
+                    )
+                    .with_cause(error),
                     ReadStyle::Plain => evidence.screen_error(error),
                 });
             }

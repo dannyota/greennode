@@ -212,8 +212,7 @@ impl Client {
                 return finish(initial, None, &mut evidence, output);
             }
             let body = encode(&merged)?;
-            if evidence.output_reflects(&projected)
-                || evidence.peer_body_reflects(&body).unwrap_or(true)
+            if evidence.output_reflects(&projected) || !evidence.peer_body_screen(&body).is_clean()
             {
                 return Err(invalid(
                     "the merged CDN detail contains a configured credential",

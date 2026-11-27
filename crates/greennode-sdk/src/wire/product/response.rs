@@ -1,3 +1,28 @@
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Screen {
+    Clean,
+    Reflected,
+    Indeterminate,
+}
+
+impl Screen {
+    pub(crate) fn is_clean(self) -> bool {
+        self == Self::Clean
+    }
+
+    pub(super) fn then(self, next: impl FnOnce() -> Self) -> Self {
+        if self.is_clean() { next() } else { self }
+    }
+
+    fn from_match(result: Option<bool>) -> Self {
+        match result {
+            Some(false) => Self::Clean,
+            Some(true) => Self::Reflected,
+            None => Self::Indeterminate,
+        }
+    }
+}
+
 mod automaton;
 mod encoded;
 mod full_error;
@@ -985,7 +1010,11 @@ mod tests {
                     )
                     .as_bytes(),
             );
-            assert!(!reflects_credential(&ordinary, &credentials));
+            let matcher = BodyMatcher::new(&credentials, ordinary.len());
+            assert_eq!(
+                matcher.scan(ordinary.as_bytes(), false),
+                Screen::Indeterminate
+            );
         }
         assert!(!reflects_credential("glb-1", &credentials));
     }
