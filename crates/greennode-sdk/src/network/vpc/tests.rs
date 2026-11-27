@@ -211,7 +211,7 @@ async fn inventory_separates_syntax_from_shape_and_screens_query_inputs() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn encoded_hex_credential_in_rendered_integer_is_rejected() {
     let server = Server::start(vec![reply("200 OK", r#"{"id":"vpc-1","mtu":-1500}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -224,7 +224,7 @@ async fn encoded_hex_credential_in_rendered_integer_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn lone_page_case_variant_is_ignored() {
     let server = Server::start(vec![reply("200 OK", r#"{"listData":[],"Page":1}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -237,7 +237,7 @@ async fn lone_page_case_variant_is_ignored() {
 }
 
 #[tokio::test]
-#[ignore]
+
 async fn lone_case_variant_is_ignored() {
     let server = Server::start(vec![reply("200 OK", r#"{"ID":"vpc-1"}"#)]);
     let (ctx, _) = RequestContext::new();
@@ -336,12 +336,21 @@ async fn rule_aggregate_limits_retained_output() {
         reply("200 OK", &second),
     ]);
     let (ctx, _) = RequestContext::new();
-    assert!(
-        client(&server)
-            .list_all_security_group_rules(&ctx, ListAllSecurityGroupRulesInput::default())
-            .await
-            .is_err()
+    let error = client(&server)
+        .list_all_security_group_rules(&ctx, ListAllSecurityGroupRulesInput::default())
+        .await
+        .unwrap_err();
+    let api = error.error().api_error().unwrap();
+    assert_eq!(
+        (api.code(), api.message(), api.status()),
+        (
+            "InvalidResponse",
+            "invalid or incomplete inventory; body withheld",
+            None
+        )
     );
+    assert!(!error.error().is_body_too_large());
+    assert_eq!(server.heads().len(), 3);
 }
 
 #[tokio::test]
@@ -529,4 +538,115 @@ async fn acl_detail_distinguishes_invalid_types_from_missing_guard_state() {
         );
     }
     assert_eq!(server.heads().len(), 2);
+}
+
+fn assert_withheld(error: &crate::Failure<impl Sized>, code: &str, message: &str) {
+    let api = error.error().api_error().unwrap();
+    assert_eq!(
+        (api.code(), api.message(), api.status()),
+        (code, message, None)
+    );
+}
+
+#[tokio::test]
+async fn inventory_page_echoing_a_credential_reports_the_protected_message() {
+    let body = r#"{"listData":[],"page":1,"pageSize":1,"totalPage":0,"totalItem":0,"extra":"toy-credential"}"#;
+    let server = Server::start(vec![reply("200 OK", body), reply("200 OK", body)]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let error = client
+        .list_security_groups(&ctx, ListSecurityGroupsInput::default())
+        .await
+        .unwrap_err();
+    assert_withheld(
+        &error,
+        "InvalidResponse",
+        "invalid floating IP response; body withheld",
+    );
+    let error = client
+        .list_network_acls(&ctx, ListNetworkAclsInput::default())
+        .await
+        .unwrap_err();
+    assert_withheld(
+        &error,
+        "InvalidResponse",
+        "invalid floating IP response; body withheld",
+    );
+}
+
+#[tokio::test]
+async fn acl_detail_with_non_object_top_level_reports_inventory_error() {
+    let server = Server::start(vec![reply("200 OK", "[]"), reply("200 OK", "\"text\"")]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    for _ in 0..2 {
+        let error = client
+            .get_network_acl(&ctx, GetNetworkAclInput::new("acl-1"))
+            .await
+            .unwrap_err();
+        assert_withheld(
+            &error,
+            "InvalidResponse",
+            "invalid or incomplete inventory; body withheld",
+        );
+    }
+}
+
+#[test]
+fn parse_acl_refuses_an_underscore_subnet_id() {
+    let body = |subnet: &str| {
+        format!(
+            r#"{{"data":{{"uuid":"acl-1","status":"ACTIVE","defaultAcl":false,"interfaceNetworkUuid":"vpc-1","subnetAssociationList":["{subnet}"],"aclPolicyRules":[]}}}}"#
+        )
+    };
+    assert!(
+        super::policy::parse_acl(&body("sub-1"), "acl-1")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        super::policy::parse_acl(&body("sub_1"), "acl-1")
+            .unwrap()
+            .is_none()
+    );
+}
+
+async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(10), future)
+        .await
+        .expect("the 30-second deadline did not end the read")
+}
+
+#[tokio::test]
+async fn single_protected_read_has_its_own_deadline() {
+    super::wire::READ_DEADLINE.with(|cell| cell.set(Some(std::time::Duration::from_millis(200))));
+    let (started, _hold) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![Response::StallBeforeHead(started)]);
+    let (ctx, _) = RequestContext::new();
+    let error =
+        within(client(&server).get_security_group(&ctx, GetSecurityGroupInput::new("sg-1")))
+            .await
+            .unwrap_err();
+    assert_eq!(error.error().class(), ErrorClass::DeadlineExceeded);
+}
+
+#[tokio::test]
+async fn rule_walk_has_one_deadline_across_its_reads() {
+    super::wire::WALK_DEADLINE.with(|cell| cell.set(Some(std::time::Duration::from_millis(200))));
+    let (started, _hold) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        reply(
+            "200 OK",
+            r#"{"listData":[{"id":"sg-1"}],"page":1,"pageSize":1,"totalPage":1,"totalItem":1}"#,
+        ),
+        Response::StallBeforeHead(started),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let error = within(
+        client(&server)
+            .list_all_security_group_rules(&ctx, ListAllSecurityGroupRulesInput::default()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.error().class(), ErrorClass::DeadlineExceeded);
 }

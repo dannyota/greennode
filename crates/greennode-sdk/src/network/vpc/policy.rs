@@ -163,7 +163,7 @@ impl Client {
         _: ListAllSecurityGroupRulesInput,
     ) -> Result<ListAllSecurityGroupRulesOutput, Failure<ListAllSecurityGroupRulesOutput>> {
         let ctx = ctx.child_with_deadline(
-            self.session.clock().monotonic_now() + std::time::Duration::from_secs(30),
+            self.session.clock().monotonic_now() + super::wire::walk_deadline(),
         );
         let mut reads = Reads::new(self, &ctx).map_err(failure)?;
         let groups = reads
@@ -208,8 +208,10 @@ async fn read_rules(
         .await
 }
 
-fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
-    let envelope = objects(raw)?;
+pub(super) fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
+    let Ok(envelope) = objects(raw) else {
+        return Ok(None);
+    };
     let Ok(acl): Result<NetworkAcl, ()> = field(&envelope, "data") else {
         return Ok(None);
     };

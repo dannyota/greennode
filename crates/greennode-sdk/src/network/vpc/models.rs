@@ -5,6 +5,7 @@ use crate::model::wire::model;
 use crate::{List, PagedList};
 
 model! {
+    @ true;
     /// A virtual private cloud.
     pub struct Vpc {
         /// Resource identifier.
@@ -43,6 +44,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A subnet within a VPC.
     pub struct Subnet {
         /// Resource identifier.
@@ -87,6 +89,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A subnet CIDR added to a primary subnet.
     pub struct SubnetSecondarySubnet {
         /// Resource identifier.
@@ -99,6 +102,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A regional DHCP options set and its VPC attachments.
     pub struct DhcpOptions {
         /// Resource identifier.
@@ -121,6 +125,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A network access control list.
     pub struct NetworkAcl {
         /// Resource identifier.
@@ -151,6 +156,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A rule in a network access control list.
     pub struct NetworkAclRule {
         /// Resource identifier.
@@ -173,6 +179,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A security group in the project.
     pub struct SecurityGroup {
         /// Provider identifier.
@@ -193,6 +200,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A rule and its parent security group.
     pub struct SecurityGroupRule {
         /// Provider identifier.

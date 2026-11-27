@@ -23,6 +23,32 @@ use super::super::Client;
 const CAP: usize = 8 << 20;
 const MAX_PAGES: i64 = 50;
 const MAX_ROWS: i64 = 500_000;
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static READ_DEADLINE: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+    pub(super) static WALK_DEADLINE: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn read_deadline() -> std::time::Duration {
+    #[cfg(test)]
+    if let Some(deadline) = READ_DEADLINE.with(std::cell::Cell::get) {
+        return deadline;
+    }
+    DEADLINE
+}
+
+pub(super) fn walk_deadline() -> std::time::Duration {
+    #[cfg(test)]
+    if let Some(deadline) = WALK_DEADLINE.with(std::cell::Cell::get) {
+        return deadline;
+    }
+    DEADLINE
+}
+
 const WITHHELD: &str = "security group response withheld";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,7 +184,7 @@ impl<'a> Reads<'a> {
             serde_json::Value::String(text) if identity => self.evidence.id_reflects(text),
             serde_json::Value::Number(number) => {
                 self.evidence.credentials().has_numeric_product_credential()
-                    || self.evidence.text_reflects(&number.to_string())
+                    || self.number_reflects(&number.to_string())
             }
             serde_json::Value::Array(items) => {
                 items.iter().any(|item| self.unsafe_output(item, identity))
@@ -171,6 +197,21 @@ impl<'a> Reads<'a> {
             }),
             _ => false,
         }
+    }
+
+    fn number_reflects(&self, text: &str) -> bool {
+        if self.evidence.text_reflects(text) {
+            return true;
+        }
+        let hex = data_encoding::HEXLOWER.encode(text.as_bytes());
+        self.evidence.credentials().values().iter().any(|secret| {
+            let value = secret.expose_secret().to_ascii_lowercase();
+            if value.len() < 8 {
+                value == hex
+            } else {
+                value.contains(&hex)
+            }
+        })
     }
 
     pub(super) fn protected_output<T: serde::Serialize>(
@@ -235,8 +276,17 @@ impl<'a> Reads<'a> {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
         let session = &self.client.session;
+        let scoped;
+        let ctx = if read.style == Style::Plain {
+            self.ctx
+        } else {
+            scoped = self
+                .ctx
+                .child_with_deadline(session.clock().monotonic_now() + read_deadline());
+            &scoped
+        };
         let project = session
-            .require_project_id_with_evidence(self.ctx, &mut self.evidence)
+            .require_project_id_with_evidence(ctx, &mut self.evidence)
             .await
             .map_err(|err| self.screen(*err))?;
         if self.evidence.id_reflects(&project) || reflects_inputs(&self.evidence) {
@@ -252,7 +302,7 @@ impl<'a> Reads<'a> {
             .ok_or_else(|| Error::new(ErrorClass::InvalidConfig))?;
         let mut jitter = || session.retry_jitter();
         let runtime = session
-            .runtime(self.ctx, &mut jitter)
+            .runtime(ctx, &mut jitter)
             .map_err(|err| self.screen(*err))?;
         let protected = read.style != Style::Plain;
         let operation = Operation {
@@ -348,7 +398,7 @@ impl<'a> Reads<'a> {
             })
         })?;
         if protected && self.evidence.text_reflects(&text) {
-            return Err(self.invalid(read));
+            return Err(self.screen(read.protected_invalid()));
         }
         Ok(text.into_owned())
     }
@@ -472,10 +522,8 @@ pub(super) fn field<T: WireField>(
     fields: &BTreeMap<String, &RawValue>,
     key: &str,
 ) -> Result<T, ()> {
-    if fields
-        .keys()
-        .any(|name| name != key && field_matches(name, key))
-    {
+    let mut matches = fields.keys().filter(|name| field_matches(name, key));
+    if matches.next().is_some() && matches.next().is_some() {
         return Err(());
     }
     fields
