@@ -6,6 +6,7 @@ fn identifier_query_uses_strict_credential_matching() {
     let inputs = RouteInputs {
         query: &[("alarm", "prefixYWJjsuffix")],
         identifier_query_keys: &["alarm"],
+        dispatch_record: None,
         ..Default::default()
     };
     assert!(inputs.reflects(&credentials));

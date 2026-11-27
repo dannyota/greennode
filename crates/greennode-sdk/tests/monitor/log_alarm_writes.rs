@@ -145,3 +145,35 @@ async fn a_failed_alarm_status_preserves_the_observed_result_and_dispatch() {
     assert_eq!(output.alarm.status, "ERROR");
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn log_alarm_preserves_the_validated_raw_filter_object() {
+    const FILTER: &str = r#"{"$serde_json::private::Number":"12"}"#;
+    let server = Server::start(vec![
+        response("200 OK", PAGE),
+        response("200 OK", PROJECT),
+        response("201 Created", "{}"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogAlarmInput::new("Read alarm", "project-1", 0.0);
+    input.query_string = "search".into();
+    input.filter = greennode_sdk::monitor::AlarmFilter(Some(
+        serde_json::value::RawValue::from_string(FILTER.into()).unwrap(),
+    ));
+    input.no_wait = true;
+    client(&server).create_log_alarm(&ctx, input).await.unwrap();
+    let body: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>> =
+        serde_json::from_slice(&server.bodies()[2]).unwrap();
+    assert!(body["filter"].get() == FILTER);
+}
+
+#[tokio::test]
+async fn raw_log_search_query_is_excluded_from_debug() {
+    let server = Server::start(vec![response("200 OK", ALARM)]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .get_alarm(&ctx, greennode_sdk::monitor::GetAlarmInput::new("alarm-1"))
+        .await
+        .unwrap();
+    assert!(!format!("{output:?}").contains("raw_log_search_query"));
+}

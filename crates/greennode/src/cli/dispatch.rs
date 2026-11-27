@@ -92,6 +92,9 @@ pub trait Adapter<I: ParsedInput> {
     ) -> Option<render::Projected> {
         None
     }
+    fn input_warning(&self, _input: &I) -> Option<&'static str> {
+        None
+    }
     fn before_send_warning(&self, _input: &I) -> Option<&'static str> {
         None
     }
@@ -143,7 +146,7 @@ pub(crate) fn project_result<T, P: serde::Serialize>(
     }
 }
 
-pub(super) fn local(stderr: &mut dyn Write, error: LocalError) -> u8 {
+pub(crate) fn local(stderr: &mut dyn Write, error: LocalError) -> u8 {
     errors::write_error(
         stderr,
         &errors::Envelope {
@@ -263,6 +266,9 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
     if let Err(error) = input.input_guards() {
         return refuse(input, adapter, error, stdout, stderr);
     }
+    if let Some(warning) = adapter.input_warning(input) {
+        let _ = writeln!(stderr, "{warning}");
+    }
     if input.is_write()
         && let Err(error) = input.check_read_only()
     {
@@ -355,10 +361,10 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
             );
         }
     };
+    log_write(stderr, "write started");
     if let Some(warning) = adapter.before_send_warning(input) {
         let _ = writeln!(stderr, "{warning}");
     }
-    log_write(stderr, "write started");
     let result = adapter.execute(ctx, &settings, input).await;
     log_write(stderr, "write finished");
     if let Some(finish) = adapter.finish_write() {

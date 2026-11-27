@@ -58,6 +58,23 @@ impl PathIds {
     }
 }
 
+#[derive(Default, Debug)]
+pub(crate) struct DispatchRecord(std::sync::Mutex<Option<super::evidence::SentCredentials>>);
+
+impl DispatchRecord {
+    pub(super) fn record(&self, credentials: &super::evidence::SentCredentials) {
+        if let Ok(mut record) = self.0.lock() {
+            record
+                .get_or_insert_with(Default::default)
+                .extend(credentials);
+        }
+    }
+
+    pub(crate) fn take(&self) -> Option<super::evidence::SentCredentials> {
+        self.0.lock().ok()?.take()
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
@@ -67,6 +84,7 @@ pub(crate) struct Options<'a> {
     pub(crate) password_slot: Option<PasswordSlot<'a>>,
     pub(crate) headers: &'a [(&'static str, &'a str)],
     pub(crate) report_redirect: bool,
+    pub(crate) dispatch_record: Option<&'a DispatchRecord>,
 }
 
 impl Options<'_> {
@@ -78,6 +96,7 @@ impl Options<'_> {
         password_slot: None,
         headers: &[],
         report_redirect: false,
+        dispatch_record: None,
     };
 
     pub(crate) fn apply_headers(&self, headers: &mut http::HeaderMap) -> Result<(), ()> {

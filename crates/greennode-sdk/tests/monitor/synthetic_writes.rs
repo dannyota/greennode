@@ -240,3 +240,99 @@ async fn recovery_refuses_a_zero_expiry() {
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 2);
 }
+
+#[tokio::test]
+async fn reflected_order_id_does_not_erase_pending_payment() {
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.push(response(
+        "200 OK",
+        r#"{"orderId":"toy-management","paymentUrl":"https://billing.example.test/pay"}"#,
+    ));
+    let server = Server::start(replies);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .renew_synthetic_quota(&ctx, RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z"))
+        .await
+        .unwrap_err();
+    let partial = failure.partial().unwrap();
+    assert!(partial.payment_pending);
+    assert_eq!(partial.order_id, "<redacted>");
+}
+
+#[tokio::test]
+async fn oversized_order_keeps_the_observed_status() {
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.push(response("200 OK", &"x".repeat((1 << 20) + 1)));
+    let server = Server::start(replies);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .renew_synthetic_quota(&ctx, RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z"))
+        .await
+        .unwrap_err();
+    let outcome = &failure.partial().unwrap().outcome;
+    assert_eq!(
+        failure.error().api_error().map(|api| api.code()),
+        Some("ResponseTooLarge")
+    );
+    assert_eq!(outcome.sent, "yes");
+    assert_eq!(
+        outcome.error.as_ref().unwrap().status,
+        greennode_sdk::monitor::ResponseField::Value(200)
+    );
+}
+
+#[tokio::test]
+async fn different_auto_renew_guard_reconciles_pending_order_before_refusing() {
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    let extended = ACTIVE.replace("2099-02-01", "2099-03-01");
+    replies.extend([
+        response("200 OK", ACK),
+        response("200 OK", &extended),
+        response("200 OK", DETAIL),
+    ]);
+    let server = Server::start(replies);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let mut renew = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    renew.no_wait = true;
+    client.renew_synthetic_quota(&ctx, renew).await.unwrap();
+    let mut auto_renew = greennode_sdk::monitor::SetSyntheticQuotaAutoRenewInput::new(true);
+    auto_renew.expected_quota_id = "quota-other".into();
+    let failure = client
+        .set_synthetic_quota_auto_renew(&ctx, auto_renew)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::QuotaChanged)
+    );
+    assert_eq!(server.requests(), 16);
+}
+
+#[tokio::test]
+async fn cross_operation_reconciliation_keeps_the_callers_operation() {
+    let mut replies = change_plan(ACTIVE, ACTIVE, SETTINGS);
+    replies.extend([
+        response("200 OK", ACK),
+        response("403 Forbidden", r#"{"message":"ignored"}"#),
+    ]);
+    let server = Server::start(replies);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    let mut renew = RenewSyntheticQuotaInput::new("2099-02-01T00:00:00Z");
+    renew.no_wait = true;
+    client.renew_synthetic_quota(&ctx, renew).await.unwrap();
+    let failure = client
+        .ensure_synthetic_quota(&ctx, EnsureSyntheticQuotaInput::default())
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .has_class(greennode_sdk::ErrorClass::NotSettled)
+    );
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.operation(), "monitor.EnsureSyntheticQuota");
+    assert_eq!(api.status(), Some(403));
+    assert_eq!(server.requests(), 15);
+}

@@ -367,7 +367,11 @@ impl Client {
                 mutation,
                 evidence,
             )? {
-                return Ok(names.result());
+                let found = names.result();
+                if let Some(alarm) = &found {
+                    check_alarm_output(alarm, mutation, evidence)?;
+                }
+                return Ok(found);
             }
         }
         Err(name_failure(mutation, evidence))

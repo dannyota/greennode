@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::inventory::{get_input, plain};
-use super::mutation::{Mutation, before_write, maybe_sent, not_sent};
+use super::mutation::{Mutation, SendGuard, before_write, maybe_sent, not_sent};
 use super::wire::{check_path_id, decode, input_error, requires_failure};
 use super::{
     Assertion, Check, CheckConfig, CheckNotifications, CheckOptions, CheckRequest, Client,
@@ -246,7 +246,17 @@ impl Client {
         let body = check_body(&check);
         accept_request(&CREATE, &check, &body, &evidence).map_err(not_sent)?;
         let reply = self
-            .mutate(ctx, &CREATE, &[], Some(&body), &mut evidence)
+            .mutate_guarded(
+                ctx,
+                &CREATE,
+                &[],
+                Some(&body),
+                &mut evidence,
+                SendGuard {
+                    privacy: Some(privacy.diagnostics()),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|error| privacy.screen_failure(error))?;
         let Field(check): Field<Check> = reply
@@ -317,7 +327,17 @@ impl Client {
         let body = check_body(&current);
         accept_request(&UPDATE, &current, &body, &evidence).map_err(not_sent)?;
         let reply = self
-            .mutate(ctx, &UPDATE, &[&id], Some(&body), &mut evidence)
+            .mutate_guarded(
+                ctx,
+                &UPDATE,
+                &[&id],
+                Some(&body),
+                &mut evidence,
+                SendGuard {
+                    privacy: Some(privacy.diagnostics()),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|error| privacy.screen_failure(error))?;
         let Field(mut check): Field<Check> = reply

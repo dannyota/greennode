@@ -208,21 +208,7 @@ model! { @ true; struct TypesWire {items:Vec<ChannelType> =>"lstData","Items";} 
 impl<'de> Deserialize<'de> for Channel {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let wire = ChannelWire::deserialize(d)?;
-        let header = go_json(wire.header.as_bytes());
-        let headers = if validate(header.as_bytes(), &[], header.len()).is_ok() {
-            serde_json::from_str::<Option<Vec<HeaderWire>>>(&header)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|header| ChannelHeader {
-                    key: header.key,
-                    value: header.value,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let headers = decoded_headers(&wire.header);
         Ok(Self {
             id: wire.id,
             name: wire.name,
@@ -235,6 +221,24 @@ impl<'de> Deserialize<'de> for Channel {
             masked_address: String::new(),
             raw_header: wire.header,
         })
+    }
+}
+
+pub(super) fn decoded_headers(raw: &str) -> Vec<ChannelHeader> {
+    let header = go_json(raw.as_bytes());
+    if validate(header.as_bytes(), &[], header.len()).is_ok() {
+        serde_json::from_str::<Option<Vec<HeaderWire>>>(&header)
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|header| ChannelHeader {
+                key: header.key,
+                value: header.value,
+            })
+            .collect()
+    } else {
+        Vec::new()
     }
 }
 

@@ -1,9 +1,8 @@
 use crate::cli::dispatch::{self, OutputView};
-use crate::cli::input::{InputDescriptor, InputError, InputField, JsonChecks, Requirement};
+use crate::cli::input::{InputDescriptor, InputField, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation};
 use greennode_sdk::monitor as sdk;
 use serde::Deserialize;
-use serde_json::value::RawValue;
 
 #[derive(Default)]
 struct Input {
@@ -144,11 +143,7 @@ macro_rules! channels {
             },
             set_flag: Some(|input, matches| {
                 let values = matches.get_many::<String>($flag.name).ok_or(())?;
-                let mut ids = Vec::new();
-                for value in values {
-                    ids.extend(super::check_writes::split_string_slice_arg(value)?);
-                }
-                input.$member = Some(ids);
+                input.$member = Some(values.cloned().collect());
                 Ok(())
             }),
         }
@@ -166,7 +161,7 @@ const THRESHOLD_INPUT: InputField<Input> = slot!(
 );
 
 #[derive(Default, Deserialize)]
-#[serde(default, rename_all = "PascalCase")]
+#[serde(default, rename_all = "PascalCase", deny_unknown_fields)]
 struct Resend {
     enabled: bool,
     statuses: Vec<String>,
@@ -181,7 +176,8 @@ const RESEND_INPUT: InputField<Input> = InputField {
     set_flag: None,
     requirement: Requirement::Optional,
     set_json: |input, value| {
-        let resend: Resend = serde_json::from_value(value).map_err(|_| ())?;
+        let resend: Resend =
+            super::decode_nested(value, &["Enabled", "Statuses", "Period", "Times"])?;
         input.resend = Some(sdk::LogAlarmResend {
             enabled: sdk::ResponseField::Value(resend.enabled),
             statuses: resend.statuses,
@@ -199,6 +195,9 @@ const FILTER_INPUT: InputField<Input> = InputField {
     set_flag: None,
     requirement: Requirement::Optional,
     set_json: |input, value| {
+        if !value.is_object() {
+            return Err(());
+        }
         input.filter = Some(sdk::AlarmFilter(Some(
             serde_json::value::to_raw_value(&value).map_err(|_| ())?,
         )));
@@ -240,32 +239,6 @@ const UPDATE_INPUT: InputDescriptor<Input> = descriptor(&flags_input!(
 ));
 const DELETE_INPUT: InputDescriptor<Input> = descriptor(&[ID_INPUT]);
 
-fn check_json(bytes: &[u8]) -> Result<(), InputError> {
-    #[derive(Deserialize)]
-    struct Fields {
-        #[serde(rename = "ThresholdValue")]
-        _threshold_value: Option<f64>,
-        #[serde(rename = "TimeFrame")]
-        _time_frame: Option<i64>,
-        #[serde(rename = "Filter")]
-        filter: Option<Box<RawValue>>,
-        #[serde(rename = "Resend")]
-        _resend: Option<Resend>,
-    }
-    let fields = serde_json::from_slice::<Option<Fields>>(bytes)
-        .map_err(|_| InputError("--cli-input-json: invalid log alarm input"))?;
-    if fields
-        .and_then(|fields| fields.filter)
-        .is_some_and(|raw| !raw.get().starts_with('{'))
-    {
-        return Err(InputError("Filter must be a JSON object"));
-    }
-    Ok(())
-}
-const CHECKS: JsonChecks = JsonChecks {
-    validate: check_json,
-    read_error: |error| error,
-};
 macro_rules! write {
     ($name:literal,$go:literal,$title:literal,$method:ident,$desc:ident,$kind:ident,$flags:expr,$json:expr,$input:expr,$notes:expr,$example:literal) => {
         Operation {
@@ -295,7 +268,7 @@ macro_rules! write {
                         })
                     },
                     OutputView::default(),
-                    Some(CHECKS),
+                    None,
                 ))
             })),
         }

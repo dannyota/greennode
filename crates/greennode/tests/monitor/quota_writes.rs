@@ -199,3 +199,74 @@ fn synthetic_delete_effect_survives_both_parse_and_preflight_refusals() {
         assert_eq!(server.requests(), 0);
     }
 }
+
+#[test]
+fn quota_warnings_follow_their_go_dispatch_phases() {
+    let server = Server::start(vec![]);
+    let (status, _, stderr) = invoke(
+        &[
+            "ensure-synthetic-quota",
+            "--max-price",
+            "1",
+            "--read-only",
+            "--debug",
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert!(stderr.starts_with(b"Warning: pay: true may debit the balance"));
+    assert_eq!(server.requests(), 0);
+    for args in [
+        &[
+            "create-notification-quota",
+            "--kind",
+            "Email",
+            "--max-price",
+            "1",
+            "--debug",
+        ][..],
+        &[
+            "set-synthetic-quota-auto-renew",
+            "--enabled=true",
+            "--debug",
+        ][..],
+    ] {
+        let server = Server::start(vec![response_with_status("403 Forbidden", "{}")]);
+        let (_, _, stderr) = invoke(args, &server);
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.find("write started").unwrap() < stderr.find("Warning:").unwrap());
+    }
+}
+
+#[test]
+fn quota_refusals_match_go_error_envelopes() {
+    let cases = [
+        (
+            &["delete-notification-quota", "--kind", "Email", "--yes"][..],
+            vec![
+                response_with_status("200 OK", EMAIL),
+                response_with_status("200 OK", EMAIL),
+                response_with_status("409 Conflict", r#"{"message":"ignored"}"#),
+            ],
+            &include_bytes!("../fixtures/monitor/notification-quota-delete-refused.stderr.golden")
+                [..],
+        ),
+        (
+            &["create-notification-quota", "--kind", "Email"][..],
+            vec![
+                response_with_status("404 Not Found", ABSENT),
+                response_with_status("200 OK", PACKAGES),
+                response_with_status("200 OK", r#"{"optimumPrice":1}"#),
+            ],
+            &include_bytes!("../fixtures/monitor/notification-quota-price-refused.stderr.golden")[..],
+        ),
+    ];
+    for (args, replies, golden) in cases {
+        let count = replies.len();
+        let server = Server::start(replies);
+        let (status, _, stderr) = invoke(args, &server);
+        assert_eq!(status, ExitCode::from(1));
+        assert!(stderr == golden);
+        assert_eq!(server.requests(), count);
+    }
+}

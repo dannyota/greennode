@@ -4,9 +4,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 use crate::cli::dispatch::{self, OutputView};
-use crate::cli::input::{
-    InputDescriptor, InputError, InputField, InputGuard, JsonChecks, Requirement,
-};
+use crate::cli::input::{InputDescriptor, InputError, InputField, InputGuard, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation};
 
 #[derive(Default)]
@@ -136,49 +134,11 @@ const LOCATIONS_INPUT: InputField<Input> = InputField {
     },
     set_flag: Some(|input, matches| {
         let values = matches.get_many::<String>(LOCATIONS.name).ok_or(())?;
-        let mut locations = Vec::new();
-        for text in values {
-            locations.extend(split_string_slice_arg(text)?);
-        }
-        input.locations = Some(locations);
+        input.locations = Some(values.cloned().collect());
         Ok(())
     }),
     requirement: Requirement::Optional,
 };
-
-pub(super) fn split_string_slice_arg(text: &str) -> Result<Vec<String>, ()> {
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut fields = Vec::new();
-    let mut record = text.chars().peekable();
-    loop {
-        let mut field = String::new();
-        if record.next_if_eq(&'"').is_some() {
-            loop {
-                match record.next() {
-                    Some('"') if record.next_if_eq(&'"').is_some() => field.push('"'),
-                    Some('"') => break,
-                    Some(ch) => field.push(ch),
-                    None => return Err(()),
-                }
-            }
-        } else {
-            while let Some(ch) = record.next_if(|ch| *ch != ',') {
-                if ch == '"' || ch == '\n' || ch == '\r' {
-                    return Err(());
-                }
-                field.push(ch);
-            }
-        }
-        fields.push(field);
-        match record.next() {
-            Some(',') => (),
-            None => return Ok(fields),
-            _ => return Err(()),
-        }
-    }
-}
 
 macro_rules! json_only {
     ($field:ident,$name:literal,$map:expr) => {
@@ -217,11 +177,38 @@ impl From<Notifications> for sdk::CheckNotifications {
 }
 const HEADERS_INPUT: InputField<Input> = json_only!(headers, "Headers", std::convert::identity);
 const QUERY_INPUT: InputField<Input> = json_only!(query, "Query", std::convert::identity);
-const ASSERTIONS_INPUT: InputField<Input> =
-    json_only!(assertions, "Assertions", std::convert::identity);
-const NOTIFICATIONS_INPUT: InputField<Input> =
-    json_only!(notifications, "Notifications", |value: Notifications| value
-        .into());
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Assertion {
+    r#type: String,
+    operator: String,
+    target: String,
+}
+const ASSERTIONS_INPUT: InputField<Input> = InputField {
+    set_json: |input, value| {
+        input.assertions = Some(super::decode_nested_list(
+            value,
+            &["type", "operator", "target"],
+            |assertion: Assertion| sdk::Assertion {
+                r#type: assertion.r#type,
+                operator: assertion.operator,
+                target: assertion.target,
+            },
+        )?);
+        Ok(())
+    },
+    ..json_only!(assertions, "Assertions", std::convert::identity)
+};
+const NOTIFICATIONS_INPUT: InputField<Input> = InputField {
+    set_json: |input, value| {
+        let notifications: Notifications =
+            super::decode_nested(value, &["In-alarm", "Up", "Undetermined"])?;
+        input.notifications = Some(notifications.into());
+        Ok(())
+    },
+    ..json_only!(notifications, "Notifications", |value: Notifications| value
+        .into())
+};
 
 macro_rules! occurrence {
     ($member:ident,$flag:ident,$name:literal) => {
@@ -411,48 +398,6 @@ fn notifications(input: &Input) -> Option<sdk::CheckNotifications> {
     Some(result)
 }
 
-fn check_json(bytes: &[u8]) -> Result<(), InputError> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Fields {
-        #[serde(rename = "CheckID")]
-        _check_id: Option<String>,
-        #[serde(rename = "Name")]
-        _name: Option<String>,
-        #[serde(rename = "URL")]
-        _url: Option<String>,
-        #[serde(rename = "Locations")]
-        _locations: Option<Vec<String>>,
-        #[serde(rename = "Method")]
-        _method: Option<String>,
-        #[serde(rename = "Body")]
-        _body: Option<String>,
-        #[serde(rename = "Timeout")]
-        _timeout: Option<i64>,
-        #[serde(rename = "TestFrequency")]
-        _test_frequency: Option<i64>,
-        #[serde(rename = "Tests")]
-        _tests: Option<i64>,
-        #[serde(rename = "FailedLocations")]
-        _failed_locations: Option<i64>,
-        #[serde(rename = "Headers")]
-        _headers: Option<BTreeMap<String, String>>,
-        #[serde(rename = "Query")]
-        _query: Option<BTreeMap<String, String>>,
-        #[serde(rename = "Assertions")]
-        _assertions: Option<Vec<sdk::Assertion>>,
-        #[serde(rename = "Notifications")]
-        _notifications: Option<Notifications>,
-    }
-    serde_json::from_slice::<Option<Fields>>(bytes)
-        .map(|_| ())
-        .map_err(|_| InputError("--cli-input-json: invalid check input"))
-}
-const CHECKS: JsonChecks = JsonChecks {
-    validate: check_json,
-    read_error: |error| error,
-};
-
 macro_rules! write {
     ($name:literal,$go:literal,$title:literal,$method:ident,$desc:ident,$kind:ident,$flags:expr,$json:expr,$extra:expr,$input:expr,$notes:expr,$example:literal) => {
         Operation {
@@ -482,7 +427,7 @@ macro_rules! write {
                         })
                     },
                     OutputView::default(),
-                    Some(CHECKS),
+                    None,
                 ))
             })),
         }

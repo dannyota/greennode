@@ -1,4 +1,4 @@
-mod outcome;
+pub(super) mod outcome;
 
 use super::*;
 use crate::cli::{dispatch::WritePolicy, op::ParsePreflight};
@@ -76,10 +76,11 @@ macro_rules! operation {
                         invocation, operation, matches, &INPUT,
                         |ctx, config, input| Box::pin(async move {
                             let result = sdk::Client::new(config).$method(ctx, $input(input)).await;
-                            SHAPE.project(result, |out| &out.outcome)
+                            SHAPE.project(result)
                         }),
                         (OutputView::default(), None, WritePolicy {
-                            warning: Some(warning),
+                            input_warning: Some(warning),
+                            warning: None,
                             preflight: Some(|error| SHAPE.preflight(error)),
                             error_writer: Some(|stderr, error, _| SHAPE.write_error(stderr, error.code, error.status)),
                             finish: Some(|stdout, stderr, format, result| SHAPE.finish(stdout, stderr, format, result)),

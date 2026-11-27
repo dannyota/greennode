@@ -41,6 +41,58 @@ const PAGE: Shape<'static> = Shape::Object(&[
         shape: Shape::Any,
     },
 ]);
+const GUARDED_PAGE: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "content",
+        shape: Shape::Array(&PROJECT_GUARD),
+    },
+    ShapeField {
+        name: "currentPage",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "pageSize",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "totalPages",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "totalElements",
+        shape: Shape::Any,
+    },
+]);
+const PROJECT_GUARD: Shape<'static> = Shape::Object(&[
+    ShapeField {
+        name: "id",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "name",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "description",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "status",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "billingStatus",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "projectType",
+        shape: Shape::Any,
+    },
+    ShapeField {
+        name: "createdAt",
+        shape: Shape::Any,
+    },
+]);
 const RETENTION_GUARD: Shape<'static> = Shape::Object(&[
     ShapeField {
         name: "amount",
@@ -544,7 +596,7 @@ impl Client {
         let page = page.to_string();
         let query = [("page", page.as_str()), ("size", "100"), ("query", name)];
         let raw = self.read(ctx, &read, &[], &query, evidence).await?;
-        let wire: ProjectPage = super::wire::decode(&raw, &PAGE, &read, evidence)?;
+        let wire: ProjectPage = super::wire::decode(&raw, &GUARDED_PAGE, &read, evidence)?;
         let ProjectPage {
             items: Some(items),
             page: Some(page),
@@ -555,21 +607,11 @@ impl Client {
         else {
             return Err(super::settlement::name_failure(mutation, evidence));
         };
-        for project in &items {
-            if evidence.id_reflects(&project.id)
-                || [
-                    &project.project_name,
-                    &project.project_description,
-                    &project.status,
-                    &project.billing_status,
-                    &project.project_type,
-                    &project.created_at,
-                ]
-                .into_iter()
-                .any(|value| evidence.text_reflects(value))
-            {
-                return Err(mutation.invalid(200, evidence));
-            }
+        if items
+            .iter()
+            .any(|project| !safe_project_guard(project, evidence))
+        {
+            return Err(mutation.invalid(200, evidence));
         }
         Ok(PagedList {
             items,
@@ -585,4 +627,18 @@ pub(super) struct LogOrder {
     pub(super) body: serde_json::Value,
     pub(super) class_id: String,
     pub(super) package_id: String,
+}
+
+pub(super) fn safe_project_guard(project: &LogProject, evidence: &Evidence) -> bool {
+    !(evidence.id_reflects(&project.id)
+        || [
+            &project.project_name,
+            &project.project_description,
+            &project.status,
+            &project.billing_status,
+            &project.project_type,
+            &project.created_at,
+        ]
+        .into_iter()
+        .any(|value| evidence.text_reflects(value)))
 }

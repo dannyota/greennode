@@ -47,6 +47,7 @@ enum FileBinding<T> {
 pub(crate) type ErrorWriter = fn(&mut dyn Write, &errors::Envelope<'_>, Option<&Error>);
 pub(crate) type WriteFinisher = fn(&mut dyn Write, &mut dyn Write, Format, ExecutionResult) -> u8;
 pub(crate) struct WritePolicy<T> {
+    pub(crate) input_warning: Option<fn(&T) -> Option<&'static str>>,
     pub(crate) warning: Option<fn(&T) -> Option<&'static str>>,
     pub(crate) preflight: Option<fn(&errors::Envelope<'_>) -> Option<render::Projected>>,
     pub(crate) error_writer: Option<ErrorWriter>,
@@ -56,6 +57,7 @@ impl<T> Default for WritePolicy<T> {
     fn default() -> Self {
         Self {
             warning: None,
+            input_warning: None,
             preflight: None,
             error_writer: None,
             finish: None,
@@ -268,6 +270,10 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
         Ok(())
     }
 
+    fn input_warning(&self, input: &ManagementInput<'_, T>) -> Option<&'static str> {
+        let warn = self.write_policy.input_warning?;
+        input.value.as_ref().and_then(|input| warn(&input.value))
+    }
     fn before_send_warning(&self, input: &ManagementInput<'_, T>) -> Option<&'static str> {
         let warn = self.write_policy.warning?;
         input.value.as_ref().and_then(|input| warn(&input.value))

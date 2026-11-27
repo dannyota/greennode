@@ -256,7 +256,13 @@ impl Client {
                 mutation,
                 evidence,
             )? {
-                return Ok(names.result());
+                let found = names.result();
+                if found.as_ref().is_some_and(|project| {
+                    !super::log_projects::safe_project_guard(project, evidence)
+                }) {
+                    return Err(mutation.invalid(200, evidence));
+                }
+                return Ok(found);
             }
         }
         Err(name_failure(mutation, evidence))

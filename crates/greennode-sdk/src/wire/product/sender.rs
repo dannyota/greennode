@@ -340,6 +340,7 @@ pub(super) struct RouteInputs<'a> {
     pub(super) query: &'a [(&'a str, &'a str)],
     pub(super) password_slot: Option<super::options::PasswordSlot<'a>>,
     pub(super) identifier_query_keys: &'a [&'a str],
+    pub(super) dispatch_record: Option<&'a super::options::DispatchRecord>,
 }
 
 impl RouteInputs<'_> {
@@ -553,7 +554,10 @@ async fn run_inner(
                 .map_err(|_| Error::InvalidRequest)?;
             *outgoing.headers_mut() = headers;
             let mut observed = send::Evidence::default();
-            let result = bounded(&ctx, clock, || {
+            let result = bounded(&ctx, clock, || async {
+                if let Some(record) = route_inputs.dispatch_record {
+                    record.record(&credentials);
+                }
                 send::once_with_evidence(
                     client,
                     outgoing,
@@ -563,6 +567,7 @@ async fn run_inner(
                     deadline,
                     &mut observed,
                 )
+                .await
             })
             .await;
             if let Some(status) = observed.status {

@@ -57,21 +57,6 @@ const NOTIFY_RENEW_INPUT: InputDescriptor<Input> =
     descriptor(&[NOTIFICATION_KIND, ENABLED, CAP, EXPECTED]);
 const SYNTH_RENEW_INPUT: InputDescriptor<Input> = descriptor(&[ENABLED, CAP, EXPECTED]);
 
-fn check_cap(bytes: &[u8]) -> Result<(), InputError> {
-    #[derive(serde::Deserialize)]
-    struct Fields {
-        #[serde(rename = "MaxPrice")]
-        _max_price: Option<f64>,
-    }
-    serde_json::from_slice::<Option<Fields>>(bytes)
-        .map(|_| ())
-        .map_err(|_| InputError("--cli-input-json: invalid quota input"))
-}
-const CHECKS: JsonChecks = JsonChecks {
-    validate: check_cap,
-    read_error: |error| error,
-};
-
 fn check_delete_query(_: &Input, matches: &ArgMatches) -> Result<(), InputError> {
     if matches.value_source("query") == Some(ValueSource::CommandLine) {
         return Err(InputError(
@@ -92,8 +77,8 @@ macro_rules! write {
         Operation{name:$name,sdk_operation:concat!("monitor.",$go),short_help:$title,example:Some(concat!("greennode monitor ",$example)),
             presence_required_fields:&[],inherited_bindings:&[],kind:Kind::$kind,flags:$flags,json_fields:$json,extra_flags:&[],notes:$notes,
             handler:Some(Handler::new(&$desc,|operation,matches,invocation|Box::pin(dispatch::management_with_write_policy(invocation,operation,matches,&$desc,|ctx,config,input|{
-                Box::pin(async move{dispatch::project_result(sdk::Client::new(config).$method(ctx,($input)(input)).await,$project)})
-            },($view,Some(CHECKS),$policy))))$(.with_parse_preflight($preflight))?)
+                Box::pin(async move{($project)(sdk::Client::new(config).$method(ctx,($input)(input)).await)})
+            },($view,None,$policy))))$(.with_parse_preflight($preflight))?)
         }
     };
 }
@@ -117,7 +102,7 @@ pub(super) const CREATE: Operation = write!(
         ..WritePolicy::default()
     },
     quota::synthetic_view(),
-    std::convert::identity,
+    project_value,
     &[
         "Orders one month of Email or SMS quota. A positive --max-price is consent to the higher of the package and quote prices. Billing may debit the balance. --no-wait leaves the attempt open for reconciliation. Serialize writes across processes per account and kind. Retain a durable pending marker and reconcile with read-only quota reads and console billing after uncertainty."
     ],
@@ -139,7 +124,7 @@ pub(super) const DELETE: Operation = write!(
     delete,
     WritePolicy::default(),
     quota::synthetic_view(),
-    std::convert::identity,
+    project_value,
     &[
         "Requires --yes and an active notification quota with auto-renew and POC off. The optional ExpectedQuotaID guards the read snapshot. The provider request is per kind. Purge is unsupported. Serialize writes across processes per account and kind, and reconcile after uncertainty."
     ],
@@ -162,7 +147,7 @@ pub(super) const RENEW_NOTIFY: Operation = write!(
     notification_renew,
     WritePolicy::default(),
     quota::synthetic_view(),
-    std::convert::identity,
+    project_value,
     &[
         "Requires explicit --enabled=false. Enabling is refused before requests. Optional ExpectedQuotaID binds the intended snapshot. A later read confirms the setting. Serialize writes per account and kind."
     ],
@@ -183,7 +168,7 @@ pub(super) const RENEW_SYNTH: Operation = write!(
         ..WritePolicy::default()
     },
     quota::synthetic_view(),
-    std::convert::identity,
+    project_value,
     &[
         "Requires explicit --enabled=true. Disabling is unsupported. The SDK quotes the free quota, checks the frozen terms, sends once, and confirms by reading. The free quota server refusal remains visible."
     ],
@@ -191,9 +176,152 @@ pub(super) const RENEW_SYNTH: Operation = write!(
 );
 pub(super) const DELETE_SYNTH: Operation = write!("delete-synthetic-quota","DeleteSyntheticQuota","Delete a synthetic quota and its checks",delete_synthetic_quota,DELETE_SYNTH_INPUT,DestructiveWrite,
     &[flag(&PURGE),flag(&REQUIRED_EXPECTED)],&[],delete_synthetic,
-    WritePolicy{preflight:Some(delete_preflight),..WritePolicy::default()},OutputView::default(),delete_effect,
+    WritePolicy{preflight:Some(delete_preflight),finish:Some(finish_delete),..WritePolicy::default()},OutputView::default(),project_delete,
     &["Deleting this quota permanently deletes every synthetic check. Requires --yes and --expected-quota-id. Purge and --query are unsupported. Only an exact source 404 confirms deletion. Serialize per account and kind, retain a durable pending marker, and reconcile with reads after uncertainty."],
     "delete-synthetic-quota --expected-quota-id <quota-id> --yes"; ParsePreflight{project:delete_preflight,error_writer:None});
+
+#[expect(
+    clippy::result_large_err,
+    reason = "The dispatcher retains the typed error"
+)]
+fn project_value<T: Serialize>(
+    result: Result<T, greennode_sdk::Failure<T>>,
+) -> dispatch::ExecutionResult {
+    dispatch::project_result(result, std::convert::identity)
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "The dispatcher retains the typed error"
+)]
+fn project_delete(
+    result: Result<
+        sdk::DeleteSyntheticQuotaOutput,
+        greennode_sdk::Failure<sdk::DeleteSyntheticQuotaOutput>,
+    >,
+) -> dispatch::ExecutionResult {
+    let project = |value: sdk::DeleteSyntheticQuotaOutput| {
+        let effect = delete_effect(value);
+        render::project(&effect).or_else(|_| render::project(&fallback_delete(&effect.stage)))
+    };
+    match result {
+        Ok(value) => {
+            let effect = delete_effect(value);
+            match render::project(&effect) {
+                Ok(output) => Ok(Some(Ok(output))),
+                Err(_) => Err(dispatch::ExecutionFailure::Projection(
+                    render::project(&fallback_delete(&effect.stage)).ok(),
+                )),
+            }
+        }
+        Err(failure) => {
+            let (error, partial, dispatch) = failure.into_parts();
+            Err(dispatch::OperationFailure {
+                error,
+                partial: partial.and_then(|value| project(value).ok()),
+                dispatch,
+                query_partial: false,
+            }
+            .into())
+        }
+    }
+}
+
+fn fallback_delete(stage: &str) -> DeleteEffect {
+    DeleteEffect {
+        quota: None,
+        stage: if matches!(stage, "sent" | "settled") {
+            "sent".into()
+        } else {
+            stage.into()
+        },
+        purged: false,
+        effect: EFFECT,
+    }
+}
+
+fn finish_delete(
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+    format: Format,
+    result: dispatch::ExecutionResult,
+) -> u8 {
+    use super::synthetic_writes::outcome::encode;
+    use crate::cli::errors::{self, Envelope};
+    use dispatch::ExecutionFailure;
+    use greennode_sdk::WriteDispatch;
+
+    let (output, failure, projection_failed) = match result {
+        Ok(Some(Ok(output))) => (Some(output), None, false),
+        Err(ExecutionFailure::Projection(output)) => (output, None, true),
+        Err(ExecutionFailure::Sdk(failure)) => (
+            failure.partial,
+            Some((failure.error, failure.dispatch)),
+            false,
+        ),
+        Err(ExecutionFailure::Local(error)) => return dispatch::local(stderr, error),
+        Ok(_) => (None, None, true),
+    };
+    let mut may_have_sent = failure
+        .as_ref()
+        .is_some_and(|(_, dispatch)| *dispatch == WriteDispatch::MayHaveBeenSent);
+    let mut output_failed = projection_failed;
+    if let Some(output) = output.as_ref() {
+        if let Ok(Value::Object(fields)) = output.for_query()
+            && let Some(Value::String(stage)) = fields.get("Stage")
+        {
+            may_have_sent |= matches!(stage.as_str(), "sent" | "settled");
+        }
+        match encode(output, format) {
+            Ok(bytes) => {
+                if stdout.write_all(&bytes).is_err() {
+                    output_failed = true;
+                }
+            }
+            Err(_) => {
+                output_failed = true;
+                write_delete_fallback(stdout, format, may_have_sent);
+            }
+        }
+    } else {
+        write_delete_fallback(stdout, format, may_have_sent);
+    }
+    if output_failed {
+        let code = if may_have_sent {
+            "NotSettled"
+        } else {
+            "RequestFailed"
+        };
+        errors::write_error(
+            stderr,
+            &Envelope {
+                code,
+                message: "quota output unavailable; reconcile with reads",
+                operation: None,
+                status: None,
+            },
+        );
+        1
+    } else if let Some((error, _)) = failure {
+        let mut classified = errors::classify(&error, SERVICE.error_rules);
+        if let Some(message) = error.detail::<String>() {
+            classified.envelope.message = message;
+        }
+        errors::write_error(stderr, &classified.envelope);
+        classified.exit
+    } else {
+        0
+    }
+}
+
+fn write_delete_fallback(stdout: &mut dyn Write, format: Format, may_have_sent: bool) {
+    let stage = if may_have_sent { "sent" } else { "" };
+    if let Ok(projected) = render::project(&fallback_delete(stage))
+        && let Ok(bytes) = super::synthetic_writes::outcome::encode(&projected, format)
+    {
+        let _ = stdout.write_all(&bytes);
+    }
+}
 
 fn create(input: &Input) -> sdk::CreateNotificationQuotaInput {
     let mut value = sdk::CreateNotificationQuotaInput::new(&input.kind);
@@ -302,4 +430,32 @@ fn delete_preflight(_: &crate::cli::errors::Envelope<'_>) -> Option<render::Proj
         effect: EFFECT,
     })
     .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_delete_table_failure_keeps_send_evidence_and_effect() {
+        let mut fields =
+            std::collections::BTreeMap::from([("Stage".into(), Value::String("settled".into()))]);
+        fields.extend((0..101).map(|index| (format!("column-{index}"), Value::Null)));
+        let projected = render::project(&Value::Object(fields)).unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let code = finish_delete(
+            &mut stdout,
+            &mut stderr,
+            Format::Table,
+            Ok(Some(Ok(projected))),
+        );
+        assert_eq!(code, 1);
+        let fallback = render::project(&fallback_delete("sent")).unwrap();
+        let expected =
+            super::super::synthetic_writes::outcome::encode(&fallback, Format::Table).unwrap();
+        assert!(stdout == expected);
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "NotSettled");
+    }
 }

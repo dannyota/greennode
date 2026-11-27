@@ -28,6 +28,9 @@ impl Privacy {
             visit(&mut self.operands, &json, false);
         }
     }
+    pub(super) fn diagnostics(&self) -> &Evidence {
+        &self.diagnostics
+    }
     pub(super) fn validate(
         &self,
         mutation: &Mutation,
@@ -36,10 +39,9 @@ impl Privacy {
         evidence: &Evidence,
     ) -> Result<(), Error> {
         let invalid = || mutation.invalid(status, evidence);
-        if evidence.credentials().values().len() > 256
-            || self.diagnostics.credentials().values().len() > 256
-            || self.operands.credentials().values().len() > 256
-        {
+        let mut combined = evidence.credentials().clone();
+        combined.extend(self.diagnostics.credentials());
+        if combined.values().len() > 256 {
             return Err(invalid());
         }
         if check_ids(check).any(|id| evidence.id_reflects(id) || self.operands.id_reflects(id)) {

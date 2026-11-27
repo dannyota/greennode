@@ -19,6 +19,7 @@ pub(crate) struct ScopedBearer<'a> {
     source: &'a dyn BearerSource,
     identifiers: &'a [&'a str],
     operation: &'static str,
+    privacy: Option<std::sync::Mutex<crate::wire::product::evidence::SentCredentials>>,
 }
 
 impl<'a> ScopedBearer<'a> {
@@ -31,7 +32,15 @@ impl<'a> ScopedBearer<'a> {
             source,
             identifiers,
             operation,
+            privacy: None,
         }
+    }
+    pub(crate) fn with_privacy(
+        mut self,
+        values: crate::wire::product::evidence::SentCredentials,
+    ) -> Self {
+        self.privacy = Some(std::sync::Mutex::new(values));
+        self
     }
 }
 
@@ -51,6 +60,15 @@ impl BearerSource for ScopedBearer<'_> {
                 evidence.absorb(credentials);
             }
             evidence.add_secret(&token.token.access_token);
+            if let Some(privacy) = &self.privacy {
+                let mut combined = privacy.lock().map_err(|_| Error::provider_failed())?;
+                combined.extend(evidence.credentials());
+                if combined.values().len() > 256 {
+                    return Err(Error::new(crate::ErrorClass::Api).with_outer_detail(
+                        "monitor: credential safety limit exceeded".to_owned(),
+                    ));
+                }
+            }
             if self.identifiers.iter().any(|id| evidence.id_reflects(id)) {
                 return Err(credential_conflict(self.operation)
                     .screen_api(&|text| evidence.text_reflects(text)));
@@ -151,6 +169,7 @@ pub(super) async fn exchange(
         source,
         identifiers,
         operation: operation.id,
+        privacy: None,
     };
     let result = operation::execute_with_evidence::<MonitorDocument>(
         runtime,

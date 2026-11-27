@@ -28,25 +28,6 @@ const CREATE_INPUT: InputDescriptor<Input> = descriptor(&[
 ]);
 const DELETE_INPUT: InputDescriptor<Input> = descriptor(&[LOG_PROJECT_ID, PURGE, NO_WAIT]);
 
-fn check_cap(bytes: &[u8]) -> Result<(), InputError> {
-    #[derive(serde::Deserialize)]
-    struct NumericFields {
-        #[serde(rename = "MaxPrice")]
-        _max_price: Option<f64>,
-        #[serde(rename = "RetentionDays")]
-        _retention_days: Option<i64>,
-        #[serde(rename = "GBPerDay")]
-        _gb_per_day: Option<i64>,
-    }
-    serde_json::from_slice::<Option<NumericFields>>(bytes)
-        .map(|_| ())
-        .map_err(|_| InputError("--cli-input-json: invalid log project input"))
-}
-const CHECKS: JsonChecks = JsonChecks {
-    validate: check_cap,
-    read_error: |error| error,
-};
-
 pub(super) const CREATE: Operation = Operation {
     name: "create-log-project",
     sdk_operation: "monitor.CreateLogProject",
@@ -95,7 +76,7 @@ pub(super) const CREATE: Operation = Operation {
                     })
                 },
                 OutputView::default(),
-                Some(CHECKS),
+                None,
             ))
         },
     )),

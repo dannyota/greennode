@@ -3,14 +3,34 @@ use super::wire::input_error;
 use super::{Alarm, AlarmFilter, LogAlarmDetail, LogAlarmResend, ResponseField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, Failure};
-use serde_json::{Value, json, value::RawValue};
+use serde::{Serialize, Serializer, ser::SerializeMap};
+use serde_json::{Map, Value, json, value::RawValue};
 
-pub(super) fn body(
+pub(super) struct Body<'a> {
+    fields: Map<String, Value>,
+    filter: Option<&'a RawValue>,
+}
+
+impl Serialize for Body<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut output = serializer
+            .serialize_map(Some(self.fields.len() + usize::from(self.filter.is_some())))?;
+        for (name, value) in &self.fields {
+            output.serialize_entry(name, value)?;
+        }
+        if let Some(filter) = self.filter {
+            output.serialize_entry("filter", filter)?;
+        }
+        output.end()
+    }
+}
+
+pub(super) fn body<'a>(
     alarm: &Alarm,
-    detail: &LogAlarmDetail,
+    detail: &'a LogAlarmDetail,
     update: bool,
     send_resend: bool,
-) -> Option<Value> {
+) -> Option<Body<'a>> {
     let threshold = number(detail.threshold_value)?;
     let threshold_text = crate::output_number::f64(threshold, crate::output_number::Style::Fixed)?;
     let op = match detail.condition.as_str() {
@@ -27,22 +47,20 @@ pub(super) fn body(
     };
     let reason = format!("{label}({}) {op}{threshold_text}", detail.query_string);
     let group = (!detail.group_by_field.is_empty()).then_some(&detail.group_by_field);
-    let mut wire = json!({"name":alarm.name,"description":alarm.description,"severity":alarm.severity,
+    let Value::Object(mut object) = json!({"name":alarm.name,"description":alarm.description,"severity":alarm.severity,
         "logProjectId":detail.log_project_id,"projectName":detail.log_project_name,"zone":"", "queryString":detail.query_string,
         "logSearchQuery":detail.raw_log_search_query,"thresholdType":detail.threshold_type,"condition":detail.condition,
         "thresholdValue":threshold,"timeFrame":number(detail.time_frame)?,"groupByField":group,"reason":reason,
         "inAlarm":join_ids(&detail.in_alarm),"ok":join_ids(&detail.ok),"undetermined":"","resendStatus":detail.resend.statuses.join(","),
-    });
-    let object = wire.as_object_mut()?;
+    }) else {
+        return None;
+    };
     if !detail.id.is_empty() {
         object.insert("id".into(), json!(detail.id));
     }
     if update {
         object.insert("logProject".into(), json!(detail.log_project_id));
         object.insert("logProjectName".into(), json!(detail.log_project_name));
-    }
-    if let Some(filter) = detail.filter.0.as_ref() {
-        object.insert("filter".into(), serde_json::from_str(filter.get()).ok()?);
     }
     if !detail.agg_field.is_empty() {
         object.insert("metricAggKey".into(), json!(detail.agg_field));
@@ -58,14 +76,17 @@ pub(super) fn body(
         object.insert("resendPeriod".into(), json!(number(detail.resend.period)?));
         object.insert("resendTimes".into(), json!(number(detail.resend.times)?));
     }
-    Some(wire)
+    Some(Body {
+        fields: object,
+        filter: detail.filter.0.as_deref(),
+    })
 }
 
 pub(super) fn validate_request(
     mutation: &Mutation,
     alarm: &Alarm,
     detail: &LogAlarmDetail,
-    wire: &Value,
+    wire: &Body<'_>,
     evidence: &Evidence,
 ) -> Result<(), Error> {
     if [&alarm.id, &detail.id, &detail.log_project_id]
@@ -73,7 +94,15 @@ pub(super) fn validate_request(
         .chain(&detail.in_alarm)
         .chain(&detail.ok)
         .any(|id| evidence.id_reflects(id))
-        || evidence.reflected_in(wire)
+        || evidence.reflected_in(&Value::Object(wire.fields.clone()))
+        || wire.filter.is_some_and(|filter| {
+            crate::wire::product::operation::reflects_json(
+                filter.get().as_bytes(),
+                evidence.credentials(),
+                true,
+            )
+            .unwrap_or(true)
+        })
     {
         return Err(usage(mutation.id, "request operand withheld"));
     }

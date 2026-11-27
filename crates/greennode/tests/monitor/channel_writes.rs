@@ -6,9 +6,17 @@ use std::{ffi::OsString, process::ExitCode};
 
 const TOKEN: &str = "toy-monitor-write-token";
 pub(super) fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_options(args, server, ConfigOptions::default())
+}
+
+pub(super) fn invoke_with_options(
+    args: &[&str],
+    server: &Server,
+    options: ConfigOptions,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let context = RequestContext::new().0;
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
-    let options = ConfigOptions::default().with_static_token(Secret::new(TOKEN));
+    let options = options.with_static_token(Secret::new(TOKEN));
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -142,4 +150,25 @@ fn literal_channel_secrets_and_destructive_or_read_only_guard_failures_send_noth
         assert!(!String::from_utf8_lossy(&stderr).contains("redacted-value"));
         assert_eq!(server.requests(), 0);
     }
+}
+
+#[test]
+fn channel_input_validates_only_the_surviving_top_level_value() {
+    let server = Server::start(vec![response(
+        r#"{"id":"channel-1","name":"Fixture","address":"fixture@example.test"}"#,
+    )]);
+    let (status, _, _) = invoke(
+        &[
+            "create-channel",
+            "--type",
+            "Email",
+            "--address",
+            "fixture@example.test",
+            "--cli-input-json",
+            r#"{"Name":false,"Name":"Fixture"}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(server.requests(), 1);
 }

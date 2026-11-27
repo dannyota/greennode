@@ -3,7 +3,7 @@ use greennode_sdk::monitor::{
     CreateNotificationQuotaInput, DeleteNotificationQuotaInput, DeleteSyntheticQuotaInput,
     SetNotificationQuotaAutoRenewInput, SetSyntheticQuotaAutoRenewInput,
 };
-use greennode_sdk::testing::Server;
+use greennode_sdk::testing::{Response, Server};
 use greennode_sdk::{ErrorClass, RequestContext, WriteDispatch};
 
 const EMAIL: &str = include_str!("../fixtures/monitor/notification_quota_email.json");
@@ -145,4 +145,194 @@ async fn synthetic_delete_requires_an_unexpired_snapshot_and_exact_absence() {
     assert_eq!(output.stage, "settled");
     assert_eq!(output.quota.unwrap().id, "quota-1");
     assert!(server.heads()[4].starts_with(b"DELETE /billing-api/v1/synthetic/quota "));
+}
+
+#[tokio::test]
+async fn delete_never_uses_a_status_that_reflects_a_bearer() {
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("204 No Content", ""),
+        response("404 Not Found", ABSENT),
+    ]);
+    let options = greennode_sdk::ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(greennode_sdk::Secret::new("ACTIVE"));
+    let options = greennode_sdk::testing::with_write_loopback(
+        greennode_sdk::testing::Product::Monitor,
+        options,
+        &server,
+    );
+    let config = greennode_sdk::Config::new(options).unwrap();
+    let client = greennode_sdk::monitor::Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .delete_notification_quota(
+            &ctx,
+            greennode_sdk::monitor::DeleteNotificationQuotaInput::new("Email"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+pub(super) struct DispatchBearer {
+    calls: std::sync::atomic::AtomicUsize,
+    at: usize,
+    third: &'static str,
+    wait: Option<tokio::sync::Notify>,
+}
+
+impl DispatchBearer {
+    pub(super) fn changing_at(at: usize, token: &'static str) -> Self {
+        Self {
+            calls: Default::default(),
+            at,
+            third: token,
+            wait: None,
+        }
+    }
+}
+
+impl greennode_sdk::CredentialsProvider for DispatchBearer {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<greennode_sdk::Token, greennode_sdk::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            let third = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == self.at;
+            if third && let Some(wait) = &self.wait {
+                wait.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(greennode_sdk::Token::new(
+                greennode_sdk::Secret::new(if third {
+                    self.third
+                } else {
+                    "fixture-first-bearer"
+                }),
+                None,
+            ))
+        })
+    }
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a greennode_sdk::Secret,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), greennode_sdk::Error>> + Send + 'a>,
+    > {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+pub(super) fn with_dispatch_bearer(
+    server: &Server,
+    provider: std::sync::Arc<DispatchBearer>,
+) -> greennode_sdk::monitor::Client {
+    let options = greennode_sdk::ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_credentials_provider(provider);
+    let options = greennode_sdk::testing::with_write_loopback(
+        greennode_sdk::testing::Product::Monitor,
+        options,
+        server,
+    );
+    greennode_sdk::monitor::Client::new(&greennode_sdk::Config::new(options).unwrap())
+}
+
+#[tokio::test]
+async fn bodyless_delete_checks_identity_against_the_final_bearer() {
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("204 No Content", ""),
+    ]);
+    let client = with_dispatch_bearer(
+        &server,
+        std::sync::Arc::new(DispatchBearer {
+            calls: Default::default(),
+            at: 2,
+            third: "quota-email",
+            wait: None,
+        }),
+    );
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn dropping_while_acquiring_final_bearer_leaves_no_pending_attempt() {
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        response("204 No Content", ""),
+        response("404 Not Found", ABSENT),
+    ]);
+    let source = std::sync::Arc::new(DispatchBearer {
+        calls: Default::default(),
+        at: 2,
+        third: "fixture-unused",
+        wait: Some(tokio::sync::Notify::new()),
+    });
+    let client = with_dispatch_bearer(&server, source.clone());
+    let (ctx, _) = RequestContext::new();
+    {
+        let mut attempt = std::pin::pin!(
+            client.delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        );
+        tokio::select! {
+            () = source.wait.as_ref().unwrap().notified() => (),
+            _ = &mut attempt => panic!("quota write completed before reaching final credential acquisition"),
+        }
+    }
+    assert_eq!(server.requests(), 2);
+    let result = client
+        .delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        .await
+        .unwrap();
+    assert_eq!(result.stage, "settled");
+    assert_eq!(server.requests(), 6);
+}
+
+#[tokio::test]
+async fn dropping_a_dispatched_delete_preserves_the_pending_attempt() {
+    let (received, receipt) = tokio::sync::oneshot::channel();
+    let server = Server::start(vec![
+        response("200 OK", EMAIL),
+        response("200 OK", EMAIL),
+        Response::StallBeforeHead(received),
+        response("404 Not Found", ABSENT),
+    ]);
+    let client = client(&server);
+    let (ctx, _) = RequestContext::new();
+    {
+        let mut attempt = std::pin::pin!(
+            client.delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        );
+        tokio::select! {
+            result = receipt => result.unwrap(),
+            _ = &mut attempt => panic!("quota write completed before the fixture held its response"),
+        }
+    }
+    let result = client
+        .delete_notification_quota(&ctx, DeleteNotificationQuotaInput::new("Email"))
+        .await
+        .unwrap();
+    assert_eq!(result.stage, "settled");
+    assert_eq!(server.requests(), 4);
 }

@@ -303,6 +303,7 @@ async fn send_route<T>(
             query,
             password_slot: options.password_slot,
             identifier_query_keys: options.identifier_query_keys,
+            dispatch_record: options.dispatch_record,
         },
     )
     .await

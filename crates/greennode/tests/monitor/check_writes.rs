@@ -84,7 +84,7 @@ fn five_check_writes_match_go_in_all_formats() {
 }
 
 #[test]
-fn notification_flags_are_unsplit_but_locations_use_comma_separated_values() {
+fn notification_and_location_flags_keep_each_occurrence() {
     let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
     let (status, _, _) = invoke(
         &[
@@ -106,7 +106,7 @@ fn notification_flags_are_unsplit_but_locations_use_comma_separated_values() {
     );
     assert_eq!(status, ExitCode::SUCCESS);
     let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
-    assert!(body["locations"] == serde_json::json!(["loc-1", "loc-2"]));
+    assert!(body["locations"] == serde_json::json!(["loc-1,loc-2"]));
     assert!(
         body["notifications"]
             == serde_json::json!({"In-alarm":["one,two","three"],"Up":["old"],"Undetermined":[]})
@@ -202,4 +202,72 @@ fn generated_check_reference_keeps_string_array_and_slice_type_names() {
             .lines()
             .any(|line| line.contains("`--locations`") && line.contains("`[]string`"))
     );
+}
+
+#[test]
+fn locations_keep_commas_and_empty_occurrences() {
+    for value in ["loc-1,loc-2", ""] {
+        let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+        let (status, _, _) = invoke(
+            &[
+                "create-check",
+                "--name",
+                "Probe",
+                "--url",
+                "https://example.test/",
+                "--locations",
+                "loc-1",
+                "--locations",
+                value,
+            ],
+            &server,
+        );
+        assert_eq!(status, ExitCode::SUCCESS);
+        let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+        assert!(body["locations"] == serde_json::json!(["loc-1", value]));
+    }
+}
+
+#[test]
+fn assertions_refuse_unknown_nested_fields() {
+    let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+    let (status, _, _) = invoke(
+        &[
+            "create-check",
+            "--name",
+            "Probe",
+            "--url",
+            "https://example.test/",
+            "--locations",
+            "loc-1",
+            "--cli-input-json",
+            r#"{"Assertions":[{"Type":"status","Unknown":1}]}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn nested_check_input_accepts_go_case_fallback() {
+    let server = Server::start(vec![response_with_status("201 Created", CHECK)]);
+    let (status, _, _) = invoke(
+        &[
+            "create-check",
+            "--name",
+            "Probe",
+            "--url",
+            "https://example.test/",
+            "--locations",
+            "loc-1",
+            "--cli-input-json",
+            r#"{"Assertions":[{"TyPe":"status","OPERATOR":"eq","Target":"200"}],"Notifications":{"UP":["fixture-channel"]}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
+    assert!(body["config"]["assertions"][0]["type"] == "status");
+    assert!(body["notifications"]["Up"][0] == "fixture-channel");
 }

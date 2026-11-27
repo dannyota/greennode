@@ -180,6 +180,8 @@ fn load_local(
         source.home.filter(|path| path.is_absolute()),
         (options.iam_details, options.endpoint_overrides),
     )?;
+    #[cfg(any(test, feature = "test-support"))]
+    let session = session.with_fixture_clock(options.test_clock);
     if let Some(end) = check() {
         return Err(end.into());
     }

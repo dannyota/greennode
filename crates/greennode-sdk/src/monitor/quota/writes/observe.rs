@@ -7,6 +7,7 @@ use super::super::{
     wire::{Object, Reader},
 };
 use super::state::{Attempt, Goal, Kind, Observation, POLL, Snapshot, field, unsettled};
+use crate::model::wire::WireField;
 use crate::monitor::settlement::Wait;
 use crate::monitor::wire::{BodyReadFailure, Family};
 use crate::monitor::{Client, Quota};
@@ -161,13 +162,10 @@ impl Client {
                 quota: quota.to_model(),
                 details: None,
             };
+            snapshot.screen_decisions(&reader)?;
             if kind == Kind::Synthetic && detail(&snapshot) {
                 snapshot.details = Some(read_synthetic_detail(&quota, &mut reader).await?.into());
-            }
-            if reader.evidence.id_reflects(snapshot.id())
-                || reader.evidence.id_reflects(snapshot.package())
-            {
-                return Err(reader.invalid());
+                snapshot.screen_decisions(&reader)?;
             }
             Ok(Observation::Present(snapshot))
         }
@@ -188,5 +186,35 @@ fn ready(goal: &Goal, fresh: &Snapshot) -> bool {
         }
         Goal::Delete { .. } => false,
         goal => goal.synthetic_candidate(fresh) && goal.synthetic_terms_match(fresh),
+    }
+}
+
+impl Snapshot {
+    fn screen_decisions(&mut self, reader: &Reader<'_>) -> Result<(), Error> {
+        let evidence = &reader.evidence;
+        if evidence.id_reflects(self.id()) || evidence.id_reflects(self.package()) {
+            return Err(reader.invalid());
+        }
+        let quota = &mut self.quota;
+        for time in [
+            &mut quota.start_time,
+            &mut quota.end_time,
+            &mut quota.created_at,
+            &mut quota.updated_at,
+        ] {
+            if let crate::monitor::ResponseField::Value(time) = time
+                && !time.redact(evidence)
+            {
+                return Err(reader.invalid());
+            }
+        }
+        if !quota.status.redact(evidence)
+            || !quota.auto_renew.redact(evidence)
+            || !quota.poc.redact(evidence)
+            || !quota.auto_renew_period.redact(evidence)
+        {
+            return Err(reader.invalid());
+        }
+        Ok(())
     }
 }

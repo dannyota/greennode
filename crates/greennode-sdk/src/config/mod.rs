@@ -49,6 +49,8 @@ pub struct ConfigOptions {
     endpoint_overrides: EndpointOverrides,
     #[cfg(any(test, feature = "test-support"))]
     product_fixtures: Vec<crate::testing::ProductFixture>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) test_clock: Option<std::sync::Arc<dyn crate::Clock>>,
     #[cfg(test)]
     hooks: Option<std::sync::Arc<ParseHooks>>,
 }
@@ -266,6 +268,8 @@ impl Config {
             None,
             (options.iam_details, options.endpoint_overrides),
         )?;
+        #[cfg(any(test, feature = "test-support"))]
+        let session = session.with_fixture_clock(options.test_clock);
         #[cfg(any(test, feature = "test-support"))]
         session
             .set_product_fixtures(&options.product_fixtures)

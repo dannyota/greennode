@@ -118,3 +118,25 @@ async fn delete_check_uses_its_own_route_and_accepts_a_204() {
         "/vmonitor-uptime-manager/v1/uptimes/chk-1"
     );
 }
+
+#[tokio::test]
+async fn check_privacy_limit_is_enforced_before_post() {
+    let server = Server::start(vec![response("201 Created", CHECK)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = greennode_sdk::monitor::CreateCheckInput::new(
+        "Probe",
+        "https://example.test",
+        vec!["loc-1".into()],
+    );
+    input.headers = (0..256)
+        .map(|index| {
+            (
+                format!("x-fixture-{index}"),
+                format!("fixture-private-{index}"),
+            )
+        })
+        .collect();
+    let failure = client(&server).create_check(&ctx, input).await.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}

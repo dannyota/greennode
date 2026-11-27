@@ -97,3 +97,75 @@ fn log_alarm_invalid_threshold_and_destructive_guard_send_nothing() {
         assert_eq!(server.requests(), 0);
     }
 }
+
+#[test]
+fn channel_flags_keep_commas_and_empty_occurrences() {
+    for flag in ["--in-alarm", "--ok"] {
+        for value in ["one,two", ""] {
+            let server = Server::start(vec![
+                response_with_status("200 OK", PAGE),
+                response_with_status("200 OK", PROJECT),
+                response_with_status("201 Created", "{}"),
+            ]);
+            let (status, _, _) = invoke(
+                &[
+                    "create-log-alarm",
+                    "--name",
+                    "Probe",
+                    "--log-project-id",
+                    "project-1",
+                    "--threshold-value",
+                    "0",
+                    "--no-wait",
+                    flag,
+                    value,
+                ],
+                &server,
+            );
+            assert_eq!(status, ExitCode::from(2));
+            assert_eq!(server.requests(), 0);
+        }
+    }
+}
+
+#[test]
+fn resend_codec_refuses_unknown_nested_fields() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", ALARM),
+        response_with_status("200 OK", ""),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "update-log-alarm",
+            "--alarm-id",
+            "alarm-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Resend":{"Enabled":true,"Unknown":1}}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::from(2));
+    assert_eq!(server.requests(), 0);
+}
+
+#[test]
+fn superseded_filter_value_is_ignored() {
+    let server = Server::start(vec![
+        response_with_status("200 OK", ALARM),
+        response_with_status("200 OK", ""),
+    ]);
+    let (status, _, _) = invoke(
+        &[
+            "update-log-alarm",
+            "--alarm-id",
+            "alarm-1",
+            "--no-wait",
+            "--cli-input-json",
+            r#"{"Filter":0,"Filter":{},"QueryString":"search"}"#,
+        ],
+        &server,
+    );
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(server.requests(), 2);
+}

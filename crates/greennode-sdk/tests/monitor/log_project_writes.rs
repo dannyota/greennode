@@ -89,3 +89,66 @@ async fn log_project_purge_after_a_missing_live_resource_uses_the_trash_route() 
     assert!(heads[0].starts_with(b"DELETE /billing-api/v1/log/quotas/project-1 "));
     assert!(heads[1].starts_with(b"DELETE /billing-api/v1/trash/log/quotas/project-1 "));
 }
+
+#[tokio::test]
+async fn name_lookup_refuses_a_lone_nested_status_alias() {
+    let row = include_str!("../fixtures/monitor/remaining_log_project.json")
+        .replace("\"status\"", "\"Status\"");
+    let page = format!(
+        r#"{{"content":[{}],"currentPage":0,"pageSize":100,"totalPages":1,"totalElements":1}}"#,
+        row
+    );
+    let server = Server::start(vec![response("200 OK", &page)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .create_log_project(&ctx, CreateLogProjectInput::new("Project"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().api_error().map(|error| error.code()),
+        Some("InvalidResponse")
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn retained_project_is_screened_against_bearer_from_later_page() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let page = |current, row| {
+        format!(
+            r#"{{"content":[{row}],"currentPage":{current},"pageSize":100,"totalPages":2,"totalElements":2}}"#
+        )
+    };
+    let server = Server::start(vec![
+        response("200 OK", EMPTY),
+        response("200 OK", CLASSES),
+        response("200 OK", QUOTE),
+        response("201 Created", r#"{"orderId":4001,"paymentUrl":null}"#),
+        response(
+            "200 OK",
+            &page(
+                0,
+                r#"{"id":"project-1","name":"Logs","status":"ACTIVE","description":"fixture-later-bearer"}"#,
+            ),
+        ),
+        response(
+            "200 OK",
+            &page(
+                1,
+                r#"{"id":"project-2","name":"Another","status":"ACTIVE"}"#,
+            ),
+        ),
+    ]);
+    let source = std::sync::Arc::new(DispatchBearer::changing_at(5, "fixture-later-bearer"));
+    let client = with_dispatch_bearer(&server, source);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateLogProjectInput::new("Logs");
+    input.max_price = 5.0;
+    let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(
+        failure.error().api_error().map(|error| error.code()),
+        Some("InvalidResponse")
+    );
+    assert_eq!(server.requests(), 6);
+}

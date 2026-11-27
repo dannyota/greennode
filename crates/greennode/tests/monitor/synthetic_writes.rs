@@ -1,8 +1,11 @@
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 
-use super::{channel_writes::invoke, response_with_status};
+use super::{
+    channel_writes::{invoke, invoke_with_options},
+    response_with_status,
+};
 use greennode_sdk::monitor::QuotaTimestamp;
-use greennode_sdk::testing::{Response, Server};
+use greennode_sdk::testing::{Response, Server, with_fixture_clock};
 use serde_json::Value;
 
 macro_rules! fixture {
@@ -68,40 +71,6 @@ fn responses(quota: Option<&str>, status: &str, reply: &str) -> Vec<Response> {
         .collect()
 }
 
-fn expected_create(golden: &str, stdout: &str, format: &str) -> String {
-    const FIXED: &str = "2000-01-01T00:00:00Z";
-    let stamp = match format {
-        "table" => stdout
-            .lines()
-            .nth(3)
-            .unwrap()
-            .split('|')
-            .nth(7)
-            .unwrap()
-            .trim()
-            .to_owned(),
-        "text" => stdout.trim_end().split('\t').nth(6).unwrap().to_owned(),
-        _ => serde_json::from_str::<Value>(stdout).unwrap()["SentAt"]
-            .as_str()
-            .unwrap()
-            .to_owned(),
-    };
-    assert!(serde_json::from_value::<QuotaTimestamp>(Value::String(stamp.clone())).is_ok());
-    let expected = golden.replace(FIXED, &stamp);
-    if format != "table" {
-        return expected;
-    }
-    expected
-        .replace(
-            "SentAt               |",
-            &format!("{:<width$} |", "SentAt", width = stamp.len()),
-        )
-        .replace(
-            "----------------------+",
-            &format!("{}+", "-".repeat(stamp.len() + 2)),
-        )
-}
-
 #[test]
 fn synthetic_order_writes_match_go_output_in_all_formats() {
     let trash = ACTIVE
@@ -139,16 +108,19 @@ fn synthetic_order_writes_match_go_output_in_all_formats() {
             let server = Server::start(replies);
             let mut args = vec![op, "--output", format, "--max-price", "0", "--no-wait"];
             args.extend(flags);
-            let (status, stdout, stderr) = invoke(&args, &server);
+            let fixed: QuotaTimestamp = serde_json::from_str(r#""2000-01-01T00:00:00Z""#).unwrap();
+            let options = with_fixture_clock(
+                greennode_sdk::ConfigOptions::default(),
+                Arc::new(greennode_sdk::TestClock::new(fixed.0)),
+            );
+            let (status, stdout, stderr) = if quota.is_none() {
+                invoke_with_options(&args, &server, options)
+            } else {
+                invoke(&args, &server)
+            };
             assert_eq!(status, ExitCode::SUCCESS, "{op}/{format}");
             assert!(stderr.is_empty(), "{op}/{format}");
-            let stdout = String::from_utf8(stdout).unwrap();
-            let expected = if quota.is_none() {
-                expected_create(golden, &stdout, format)
-            } else {
-                golden.into()
-            };
-            assert_eq!(stdout, expected, "{op}/{format}");
+            assert!(stdout == golden.as_bytes(), "{op}/{format}");
             assert_eq!(server.requests(), count);
         }
     }

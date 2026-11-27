@@ -328,6 +328,20 @@ impl Error {
             cause: None,
         }
     }
+    pub(crate) fn with_api_operation(mut self, operation: &'static str) -> Self {
+        let mut node = &mut self;
+        loop {
+            if let Some(api) = &mut node.api {
+                api.operation = operation;
+            }
+            let Some(cause) = node.cause.as_deref_mut() else {
+                break;
+            };
+            node = cause;
+        }
+        self
+    }
+
     pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
         if let Some(api) = self.api.as_mut() {
             if api

@@ -249,3 +249,59 @@ async fn guarded_channel_lookup_withholds_a_known_address_from_not_found_diagnos
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
 }
+
+#[tokio::test]
+async fn channel_create_ignores_fields_outside_the_five_field_ack() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"id":"channel-new","name":"Alerts","address":"https://example.test","metricMappingId":"unrelated","updatedDate":"2000-04-01","createdDate":"2000-01-01"}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .create_channel(
+            &ctx,
+            CreateChannelInput::new("Alerts", "Webhook", "https://example.test"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(output.channel.created_date, "2000-01-01");
+    assert!(output.channel.metric_mapping_id.is_empty());
+    assert!(output.channel.updated_date.is_empty());
+}
+
+#[tokio::test]
+async fn channel_privacy_limit_is_enforced_before_post() {
+    let server = Server::start(vec![response("200 OK", CREATED)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = CreateChannelInput::new("Alerts", "Webhook", "https://example.test");
+    input.headers = (0..256)
+        .map(|index| greennode_sdk::monitor::ChannelHeader {
+            key: format!("x-fixture-{index}"),
+            value: format!("fixture-private-{index}"),
+        })
+        .collect();
+    let failure = client(&server)
+        .create_channel(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn opaque_json_header_values_are_screened_recursively() {
+    let original = serde_json::to_string(r#"[{"key":"X-Hook","value":"toy-hook"}]"#).unwrap();
+    let nested = serde_json::to_string(r#"{"nested":[{"value":"fixture-private-hook"}]}"#).unwrap();
+    assert!(CHANNELS.contains(&original));
+    let current = CHANNELS.replace(&original, &nested);
+    let server = Server::start(vec![response("200 OK", &current)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateChannelInput::new("channel-1");
+    input.name = Some("fixture-private-hook".into());
+    let failure = client(&server)
+        .update_channel(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}

@@ -13,7 +13,7 @@ use serde_json::value::RawValue;
 use time::OffsetDateTime;
 
 use super::synthetic_settlement::Action;
-use crate::monitor::mutation::{GuardedBody, Mutation, Reply, screen_details};
+use crate::monitor::mutation::{Mutation, Reply, SendGuard, screen_details};
 use crate::monitor::wire::input_error;
 use crate::monitor::{Client, Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
@@ -305,15 +305,29 @@ impl Client {
         ids: &[&str],
         attempt: &mut Attempt,
     ) -> Result<SendState, Error> {
-        self.quota_ledger.put(attempt)?;
-        let guarded = body.map(|value| GuardedBody { value, ids });
-        let data = guarded
-            .as_ref()
-            .map(|value| value as &dyn crate::monitor::mutation::SerializeBody);
-        match self
-            .mutate::<()>(ctx, mutation, path, data, &mut attempt.evidence)
-            .await
-        {
+        let mut cancellation = PendingSend {
+            ledger: &self.quota_ledger,
+            attempt: attempt.copy(),
+            dispatch: Default::default(),
+            completed: false,
+        };
+        let data = body.map(|value| value as &dyn crate::monitor::mutation::SerializeBody);
+        let sent = self
+            .mutate_guarded::<()>(
+                ctx,
+                mutation,
+                path,
+                data,
+                &mut attempt.evidence,
+                SendGuard {
+                    ids,
+                    dispatch: Some(&cancellation.dispatch),
+                    privacy: None,
+                },
+            )
+            .await;
+        cancellation.completed = true;
+        match sent {
             Ok(reply) => {
                 attempt.observed_status = reply.status;
                 self.quota_ledger.put(attempt)?;
@@ -325,9 +339,34 @@ impl Client {
             Err(failure) => {
                 let (error, _, dispatch) = failure.into_parts();
                 let status = error
-                    .api_error()
-                    .and_then(crate::ApiError::status)
+                    .detail::<StatusCode>()
+                    .map(|value| value.as_u16())
+                    .or_else(|| error.api_error().and_then(crate::ApiError::status))
                     .unwrap_or_default();
+                let error = if error.is_body_too_large() {
+                    mutation
+                        .error(
+                            (status != 0).then_some(status),
+                            "ResponseTooLarge",
+                            "quota response exceeded size limit",
+                            &attempt.evidence,
+                        )
+                        .with_cause(error)
+                } else if let Some(api) = error.api_error().filter(|_| status > 0) {
+                    let withheld = mutation.error(
+                        Some(status),
+                        if status < 400 { "InvalidResponse" } else { "" },
+                        "quota response withheld",
+                        &attempt.evidence,
+                    );
+                    if api.message() == "quota response withheld" {
+                        error
+                    } else {
+                        withheld.with_cause(error)
+                    }
+                } else {
+                    error
+                };
                 if dispatch == WriteDispatch::NotSent || (400..500).contains(&status) {
                     self.quota_ledger.clear(attempt.kind)?;
                     return Ok(SendState::Refused {
@@ -343,6 +382,24 @@ impl Client {
                     reply: None,
                 })
             }
+        }
+    }
+}
+
+struct PendingSend<'a> {
+    ledger: &'a QuotaLedger,
+    attempt: Attempt,
+    dispatch: crate::wire::product::options::DispatchRecord,
+    completed: bool,
+}
+
+impl Drop for PendingSend<'_> {
+    fn drop(&mut self) {
+        if !self.completed
+            && let Some(credentials) = self.dispatch.take()
+        {
+            self.attempt.evidence.absorb(&credentials);
+            let _ = self.ledger.put(&self.attempt);
         }
     }
 }
@@ -374,10 +431,10 @@ pub(super) fn mutation(
         ..Mutation::standard(op, route, method)
     }
 }
-pub(super) fn unsettled(op: &str, cause: Option<Error>) -> Error {
+pub(super) fn unsettled(op: &'static str, cause: Option<Error>) -> Error {
     let error=Error::new(ErrorClass::NotSettled).with_outer_detail(format!("{op}: quota attempt remains unresolved; reconcile reads and inspect billing before another write"));
     match cause {
-        Some(cause) => error.with_cause(cause),
+        Some(cause) => error.with_cause(cause.with_api_operation(op)),
         None => error,
     }
 }
@@ -401,16 +458,8 @@ pub(super) fn price_guard(
     }
     let guard = list.max(quote);
     if guard > cap {
-        let guard = format!("{guard:.0}");
-        let cap = format!("{cap:.0}");
-        let detail = if evidence.text_reflects(&guard) || evidence.text_reflects(&cap) {
-            "vngcloud: quoted price is above MaxPrice".into()
-        } else {
-            format!(
-                "{op}: quote {guard} VND exceeds MaxPrice {cap} VND: vngcloud: quoted price is above MaxPrice"
-            )
-        };
-        return Err(Error::new(ErrorClass::PriceAboveMax).with_outer_detail(detail));
+        return Err(Error::new(ErrorClass::PriceAboveMax)
+            .with_outer_detail(format!("{op}: vngcloud: quoted price is above MaxPrice")));
     }
     Ok(())
 }
@@ -488,7 +537,7 @@ pub(super) fn decode_order(
     let ack: Ack =
         serde_json::from_str(raw).map_err(|_| mutation.invalid(reply.status, evidence))?;
     let id = ack.id.unwrap_or_default();
-    if !id.is_empty() && (!PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id)) {
+    if !id.is_empty() && !evidence.id_reflects(&id) && !PathIds::WithUnderscore.allows(&id) {
         return Err(mutation.invalid(reply.status, evidence));
     }
     Ok((

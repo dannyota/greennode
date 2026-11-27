@@ -75,3 +75,11 @@ pub fn with_billing_loopback(
 ) -> crate::ConfigOptions {
     with_product_loopback(Product::Billing, options, server)
 }
+/// Uses a deterministic clock for an SDK fixture.
+pub fn with_fixture_clock(
+    mut options: crate::ConfigOptions,
+    clock: std::sync::Arc<dyn crate::Clock>,
+) -> crate::ConfigOptions {
+    options.test_clock = Some(clock);
+    options
+}

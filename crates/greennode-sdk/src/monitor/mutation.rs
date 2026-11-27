@@ -127,6 +127,13 @@ impl Reply {
     }
 }
 
+#[derive(Default)]
+pub(super) struct SendGuard<'a> {
+    pub(super) ids: &'a [&'a str],
+    pub(super) privacy: Option<&'a Evidence>,
+    pub(super) dispatch: Option<&'a crate::wire::product::options::DispatchRecord>,
+}
+
 impl Client {
     pub(super) fn write_evidence(
         &self,
@@ -156,13 +163,30 @@ impl Client {
         body: Option<&dyn SerializeBody>,
         evidence: &mut Evidence,
     ) -> Result<Reply, Failure<T>> {
+        self.mutate_guarded(ctx, mutation, path, body, evidence, SendGuard::default())
+            .await
+    }
+
+    pub(super) async fn mutate_guarded<T>(
+        &self,
+        ctx: &RequestContext,
+        mutation: &Mutation,
+        path: &[&str],
+        body: Option<&dyn SerializeBody>,
+        evidence: &mut Evidence,
+        guard: SendGuard<'_>,
+    ) -> Result<Reply, Failure<T>> {
         let base = self
             .session
             .endpoints()
             .monitor
             .as_ref()
             .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
-        let identifiers = body.map_or(&[][..], SerializeBody::identifiers);
+        let identifiers = if guard.ids.is_empty() {
+            body.map_or(&[][..], SerializeBody::identifiers)
+        } else {
+            guard.ids
+        };
         if path
             .iter()
             .chain(identifiers)
@@ -205,9 +229,19 @@ impl Client {
             .runtime(ctx, &mut jitter)
             .map_err(|error| not_sent(*error))?;
         let bearer = self.session.bearer_source();
-        let scoped =
+        let mut scoped =
             crate::quote::request::monitor::ScopedBearer::new(bearer, identifiers, mutation.id);
-        let bearer = if identifiers.is_empty() {
+        if let Some(privacy) = guard.privacy {
+            let mut values = evidence.credentials().clone();
+            values.extend(privacy.credentials());
+            if values.values().len() > 256 {
+                return Err(not_sent(Error::new(ErrorClass::Api).with_outer_detail(
+                    "monitor: credential safety limit exceeded".to_owned(),
+                )));
+            }
+            scoped = scoped.with_privacy(values);
+        }
+        let bearer = if identifiers.is_empty() && guard.privacy.is_none() {
             bearer
         } else {
             &scoped
@@ -217,6 +251,7 @@ impl Client {
             base,
             &operation,
             &Options {
+                dispatch_record: guard.dispatch,
                 report_redirect: mutation.no_redirect || matches!(mutation.retry, Retry::Once),
                 ..Options::DEFAULT
             },

@@ -1,10 +1,12 @@
+mod privacy;
+
 use http::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
 use super::inventory::get_input;
-use super::mutation::{Mutation, WriteError, before_write, maybe_sent, not_sent};
+use super::mutation::{Mutation, SendGuard, WriteError, before_write, maybe_sent, not_sent};
 use super::response_times::{safe_time, serialize_time};
 use super::wire::{check_path_id, input_error, requires_failure};
 use super::{Channel, ChannelHeader, Client};
@@ -13,6 +15,7 @@ use crate::wire::product::evidence::Evidence;
 use crate::wire::product::{options::PathIds, redirect::Retry};
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
+use privacy::channel_values;
 
 const CHANNEL: &str = "notification-gateway/api/v1/notification";
 const CREATE: Mutation = Mutation {
@@ -179,6 +182,16 @@ const CHALLENGE: Shape<'static> = Shape::Object(&[
         shape: Shape::Any,
     },
 ]);
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct CreateAck {
+    id: Option<Field<String>>,
+    name: Option<Field<String>>,
+    address: Option<Field<String>>,
+    header: Option<Field<String>>,
+    created_date: Option<Field<String>>,
+}
+
 const CREATED: Shape<'static> = Shape::Object(&[
     ShapeField {
         name: "id",
@@ -264,12 +277,32 @@ impl Client {
             .await?;
         let body = json!({"name":input.name,"type":input.r#type,"address":input.address,"header":header,"otpCode":code.expose_secret()});
         let reply = self
-            .mutate(ctx, &CREATE, &[], Some(&body), &mut evidence)
+            .mutate_guarded(
+                ctx,
+                &CREATE,
+                &[],
+                Some(&body),
+                &mut evidence,
+                SendGuard {
+                    privacy: Some(&privacy),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|failure| screen_failure(failure, &privacy))?;
-        let mut channel: Channel = reply
+        let ack: CreateAck = reply
             .decode(&CREATE, &CREATED, &evidence)
             .map_err(maybe_sent)?;
+        let header = ack.header.map(|value| value.0).unwrap_or_default();
+        let mut channel = Channel {
+            id: ack.id.map(|value| value.0).unwrap_or_default(),
+            name: ack.name.map(|value| value.0).unwrap_or_default(),
+            address: ack.address.map(|value| value.0).unwrap_or_default(),
+            headers: super::channels::decoded_headers(&header),
+            raw_header: header,
+            created_date: ack.created_date.map(|value| value.0).unwrap_or_default(),
+            ..Channel::default()
+        };
         if channel.id.is_empty() {
             return Err(maybe_sent(CREATE.error(
                 Some(reply.status),
@@ -384,7 +417,17 @@ impl Client {
             UPDATE
         };
         let reply = self
-            .mutate(ctx, &update, &[], Some(&body), &mut evidence)
+            .mutate_guarded(
+                ctx,
+                &update,
+                &[],
+                Some(&body),
+                &mut evidence,
+                SendGuard {
+                    privacy: Some(&privacy),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|failure| screen_failure(failure, &privacy))?;
         validate_channel(&UPDATE, reply.status, &mut channel, &evidence, &privacy)
@@ -451,7 +494,17 @@ impl Client {
         );
         let body = json!({"type":input.r#type,"address":input.address,"header":header});
         let reply = self
-            .mutate(ctx, &SEND, &[], Some(&body), &mut evidence)
+            .mutate_guarded(
+                ctx,
+                &SEND,
+                &[],
+                Some(&body),
+                &mut evidence,
+                SendGuard {
+                    privacy: Some(&privacy),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|failure| screen_failure(failure, &privacy))?;
         #[derive(Deserialize)]
@@ -505,7 +558,17 @@ impl Client {
         };
         let body = json!({"otp":challenge.otp.expose_secret(),"address":challenge.address,"ref":challenge.reference,"header":challenge.header});
         let result = self
-            .mutate::<T>(ctx, &mutation, &[], Some(&body), evidence)
+            .mutate_guarded::<T>(
+                ctx,
+                &mutation,
+                &[],
+                Some(&body),
+                evidence,
+                SendGuard {
+                    privacy: Some(privacy),
+                    ..SendGuard::default()
+                },
+            )
             .await
             .map_err(|failure| before_write(screen_failure(failure, privacy)))?;
         #[derive(Deserialize)]
@@ -589,47 +652,6 @@ fn encode_headers(headers: &[ChannelHeader]) -> Result<String, Error> {
                 .replace('\u{2029}', "\\u2029")
         })
         .map_err(|_| input_error("monitor channel headers could not be encoded".into()))
-}
-fn channel_values(
-    address: &str,
-    headers: &[ChannelHeader],
-    raw_header: &str,
-    reference: &str,
-    otp: &Secret,
-) -> Evidence {
-    let mut evidence = Evidence::new();
-    evidence.add_redaction(otp);
-    for value in [raw_header, reference, address]
-        .into_iter()
-        .chain(headers.iter().map(|header| header.value.as_str()))
-    {
-        evidence.add_redaction(&Secret::new(value));
-        if let Ok(url) = url::Url::parse(value) {
-            evidence.add_redaction(&Secret::new(url.username()));
-            if let Some(password) = url.password() {
-                evidence.add_redaction(&Secret::new(password));
-            }
-            for (_, value) in url.query_pairs() {
-                evidence.add_redaction(&Secret::new(value.into_owned()));
-            }
-        }
-        if let Some((scheme, value)) = value.trim().split_once(' ') {
-            if scheme.eq_ignore_ascii_case("Bearer") {
-                evidence.add_redaction(&Secret::new(value.trim()));
-            }
-            if scheme.eq_ignore_ascii_case("Basic")
-                && let Ok(bytes) = data_encoding::BASE64.decode(value.trim().as_bytes())
-                && let Ok(decoded) = String::from_utf8(bytes)
-            {
-                evidence.add_redaction(&Secret::new(&decoded));
-                if let Some((left, right)) = decoded.split_once(':') {
-                    evidence.add_redaction(&Secret::new(left));
-                    evidence.add_redaction(&Secret::new(right));
-                }
-            }
-        }
-    }
-    evidence
 }
 fn validate_channel(
     mutation: &Mutation,

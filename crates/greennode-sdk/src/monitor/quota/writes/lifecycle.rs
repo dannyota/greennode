@@ -341,7 +341,11 @@ impl Client {
         if let Some(mut attempt) = self.quota_ledger.get(input.kind).map_err(not_sent)? {
             let mismatch = !input.expected.is_empty() && input.expected != attempt.goal.id();
             let matched = attempt.op == input.op && !mismatch;
-            if mismatch && input.op != DELETE_SYNTH {
+            let was_order = matches!(
+                attempt.goal,
+                Goal::SyntheticCreate { .. } | Goal::SyntheticChange { .. }
+            );
+            if mismatch && input.op != DELETE_SYNTH && !was_order {
                 return initial(invalid(
                     input.op,
                     "ExpectedQuotaID differs from intended quota",
@@ -365,6 +369,9 @@ impl Client {
                         &attempt.evidence,
                     );
                 }
+                Ok(_) if mismatch && was_order => {
+                    return initial(super::synthetic::changed(input.op));
+                }
                 Ok(_) => return initial(changed_intent(input.op)),
                 Err(error) if matched || input.op == DELETE_SYNTH => {
                     return lifecycle_result(
@@ -376,6 +383,11 @@ impl Client {
                     );
                 }
                 Err(error) => {
+                    let error = if mismatch && was_order {
+                        error.with_cause(super::synthetic::changed(input.op))
+                    } else {
+                        error
+                    };
                     return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
                 }
             }

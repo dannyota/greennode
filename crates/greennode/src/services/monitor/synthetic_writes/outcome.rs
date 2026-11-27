@@ -50,6 +50,46 @@ impl<'a> From<&'a errors::Envelope<'_>> for Meta<'a> {
 
 type Fields = std::collections::BTreeMap<String, Value>;
 
+pub(super) trait Output: Serialize {
+    fn outcome(&self) -> &QuotaMutationOutcome;
+    fn fallback_fields(&self) -> Fields;
+}
+
+macro_rules! output {
+    ($name:ident, $time:ident, $key:literal $(, $action:ident)?) => {
+        impl Output for greennode_sdk::monitor::$name {
+            fn outcome(&self) -> &QuotaMutationOutcome { &self.outcome }
+            fn fallback_fields(&self) -> Fields {
+                #[allow(unused_mut)]
+                let mut fields = Fields::from([
+                    ("OrderID".into(), Value::String(self.order_id.clone())),
+                    ("PaymentPending".into(), Value::Bool(self.payment_pending)),
+                    ($key.into(), render::project(&self.$time).and_then(|value| value.for_query()).unwrap_or(Value::Null)),
+                ]);
+                $(fields.insert("Action".into(), Value::String(self.$action.clone()));)?
+                fields
+            }
+        }
+    };
+}
+output!(CreateSyntheticQuotaOutput, sent_at, "SentAt");
+output!(
+    RenewSyntheticQuotaOutput,
+    previous_end_time,
+    "PreviousEndTime"
+);
+output!(
+    RecoverSyntheticQuotaOutput,
+    previous_end_time,
+    "PreviousEndTime"
+);
+output!(
+    EnsureSyntheticQuotaOutput,
+    previous_end_time,
+    "PreviousEndTime",
+    action
+);
+
 impl Shape {
     pub(super) fn preflight(self, envelope: &errors::Envelope<'_>) -> Option<render::Projected> {
         self.fallback(None, "no", envelope.into())
@@ -59,13 +99,9 @@ impl Shape {
         clippy::result_large_err,
         reason = "ExecutionResult carries the classified SDK failure"
     )]
-    pub(super) fn project<T: Serialize>(
-        self,
-        result: Result<T, Failure<T>>,
-        outcome: impl Fn(&T) -> &QuotaMutationOutcome,
-    ) -> ExecutionResult {
+    pub(super) fn project<T: Output>(self, result: Result<T, Failure<T>>) -> ExecutionResult {
         let encoding_fallback = |value: &T| {
-            let evidence = outcome(value);
+            let evidence = value.outcome();
             let meta = evidence.error.as_ref().map_or(Meta::FAILED, |error| Meta {
                 code: &error.code,
                 status: match error.status {
@@ -73,7 +109,7 @@ impl Shape {
                     ResponseField::Redacted => None,
                 },
             });
-            self.fallback(None, &evidence.sent, meta)
+            self.fallback(Some(&value.fallback_fields()), &evidence.sent, meta)
         };
         match result {
             Ok(value) => match render::project(&value) {
@@ -325,7 +361,10 @@ impl Serialize for Fallback<'_> {
     }
 }
 
-fn encode(projected: &render::Projected, format: Format) -> Result<Vec<u8>, render::Error> {
+pub(in crate::services::monitor) fn encode(
+    projected: &render::Projected,
+    format: Format,
+) -> Result<Vec<u8>, render::Error> {
     let mut buffer = Vec::new();
     match format {
         Format::Json => render::write_json(&mut buffer, projected)?,
@@ -352,6 +391,21 @@ mod tests {
                 Err(serde::ser::Error::custom("test encoding failure"))
             }
         }
+        impl Output for Invalid {
+            fn outcome(&self) -> &QuotaMutationOutcome {
+                &self.0
+            }
+            fn fallback_fields(&self) -> Fields {
+                Fields::from([
+                    ("OrderID".into(), Value::String("fixture-order".into())),
+                    ("PaymentPending".into(), Value::Bool(true)),
+                    (
+                        "PreviousEndTime".into(),
+                        Value::String("2099-02-01T00:00:00Z".into()),
+                    ),
+                ])
+            }
+        }
         let outcome = QuotaMutationOutcome {
             sent: "yes".into(),
             stage: "confirmed".into(),
@@ -363,7 +417,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
             Format::Json,
-            RENEW.project(Ok(Invalid(outcome)), |value| &value.0),
+            RENEW.project(Ok(Invalid(outcome))),
         );
         assert_eq!(code, 1);
         let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
@@ -371,6 +425,9 @@ mod tests {
         assert_eq!(output["Stage"], "unconfirmed");
         assert_eq!(output["Error"]["Code"], "NotSettled");
         assert_eq!(output["Renewed"], false);
+        assert_eq!(output["OrderID"], "fixture-order");
+        assert_eq!(output["PaymentPending"], true);
+        assert_eq!(output["PreviousEndTime"], "2099-02-01T00:00:00Z");
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(error["error"]["code"], "NotSettled");
     }

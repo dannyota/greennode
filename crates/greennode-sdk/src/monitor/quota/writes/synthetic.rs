@@ -166,8 +166,13 @@ impl Client {
             state.adopt(&pending);
             let mismatch = spec.guard_mismatch(&pending.goal, state.expected_end);
             let matches = spec.matches(&pending, state.expected_end);
+            let bound = if matches!(spec.intent, Intent::Create { .. }) {
+                pending.goal.bound()
+            } else {
+                ORDER_BOUND
+            };
             match self
-                .reconcile_quota(ctx, &mut pending, spec.op, ORDER_BOUND)
+                .reconcile_quota(ctx, &mut pending, spec.op, bound)
                 .await
             {
                 Ok(quota) if matches => {
@@ -570,7 +575,7 @@ struct Prepared {
     body: Value,
 }
 
-fn changed(op: &str) -> Error {
+pub(super) fn changed(op: &str) -> Error {
     Error::new(ErrorClass::Api)
         .with_outer_detail(crate::monitor::ErrorDetail::QuotaChanged)
         .with_outer_detail(format!("{op}: quota terms changed"))

@@ -87,7 +87,7 @@ pub struct Alarm {
 }
 
 /// Settings for a log alarm.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct LogAlarmDetail {
     /// Log alarm configuration identifier.
@@ -125,6 +125,16 @@ pub struct LogAlarmDetail {
     pub resend: LogAlarmResend,
     #[serde(skip)]
     pub(super) raw_log_search_query: String,
+}
+
+impl std::fmt::Debug for LogAlarmDetail {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LogAlarmDetail")
+            .field("id", &self.id)
+            .field("log_project_id", &self.log_project_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Settings for repeating notifications.

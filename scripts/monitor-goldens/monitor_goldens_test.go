@@ -678,3 +678,41 @@ func TestMonitorSyntheticConfirmationGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMonitorQuotaWriteErrorGoldens(t *testing.T) {
+	load := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	const email = "/billing-api/v1/email/quota"
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		routes map[string]func(http.ResponseWriter, *http.Request)
+		count  int
+	}{
+		{"notification-quota-delete-refused", []string{"delete-notification-quota", "--kind", "Email", "--yes"}, map[string]func(http.ResponseWriter, *http.Request){email: func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "DELETE" {
+				jsonHandler(409, `{"message":"ignored"}`)(w, r)
+			} else {
+				jsonHandler(200, load("notification_quota_email"))(w, r)
+			}
+		}}, 3},
+		{"notification-quota-price-refused", []string{"create-notification-quota", "--kind", "Email"}, map[string]func(http.ResponseWriter, *http.Request){email: jsonHandler(404, load("notification_quote_absent")), "/billing-api/v1/email/packages": jsonHandler(200, load("notification_quote_packages")), "/billing-api/v2/email/prices/created-price": jsonHandler(200, `{"optimumPrice":1}`)}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newSvcFixture(tc.routes)
+			_, stdout, stderr := newSvcRoot(t, server)
+			args := append([]string{"--region", "hcm-3", "--output", "json", "monitor"}, tc.args...)
+			if code := Main(context.Background(), args, strings.NewReader(""), stdout, stderr); code != 1 || server.requestCount() != tc.count {
+				t.Fatalf("quota refusal mismatch (exit %d, requests %d)", code, server.requestCount())
+			}
+			if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), tc.name+".stderr.golden"), stderr.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

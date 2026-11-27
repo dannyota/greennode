@@ -270,6 +270,14 @@ impl Session {
         &self.endpoints
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn with_fixture_clock(mut self, clock: Option<Arc<dyn Clock>>) -> Self {
+        if let Some(clock) = clock {
+            self.clock = clock;
+        }
+        self
+    }
+
     pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }

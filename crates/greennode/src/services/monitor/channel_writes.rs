@@ -6,9 +6,7 @@ use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 
 use crate::cli::dispatch::{self, OutputView};
-use crate::cli::input::{
-    InputDescriptor, InputError, InputField, InputGuard, JsonChecks, Requirement,
-};
+use crate::cli::input::{InputDescriptor, InputError, InputField, InputGuard, Requirement};
 use crate::cli::op::{Field, Handler, Kind, Operation};
 
 #[derive(Default)]
@@ -116,8 +114,8 @@ const OTP_INPUT: InputField<Input> = text!(
     Requirement::Optional
 );
 
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "PascalCase", deny_unknown_fields)]
 struct Header {
     #[serde(alias = "key")]
     key: String,
@@ -132,16 +130,14 @@ const HEADERS_INPUT: InputField<Input> = InputField {
     set_flag: None,
     requirement: Requirement::Optional,
     set_json: |input, value| {
-        let headers = serde_json::from_value::<Vec<Header>>(value).map_err(|_| ())?;
-        input.headers = Some(
-            headers
-                .into_iter()
-                .map(|header| sdk::ChannelHeader {
-                    key: header.key,
-                    value: header.value,
-                })
-                .collect(),
-        );
+        input.headers = Some(super::decode_nested_list(
+            value,
+            &["Key", "Value"],
+            |header: Header| sdk::ChannelHeader {
+                key: header.key,
+                value: header.value,
+            },
+        )?);
         Ok(())
     },
 };
@@ -240,34 +236,6 @@ fn guard_update(_: &Input, matches: &ArgMatches) -> Result<(), InputError> {
     Ok(())
 }
 
-fn check_json(bytes: &[u8]) -> Result<(), InputError> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "PascalCase", deny_unknown_fields)]
-    struct ChannelInput {
-        #[serde(rename = "ChannelID")]
-        _channel_id: Option<String>,
-        #[serde(rename = "Name")]
-        _name: Option<String>,
-        #[serde(rename = "Type")]
-        _type: Option<String>,
-        #[serde(rename = "Address")]
-        _address: Option<String>,
-        #[serde(rename = "Headers")]
-        _headers: Option<Vec<Header>>,
-        #[serde(rename = "OTPRef")]
-        _otp_ref: Option<String>,
-        #[serde(rename = "OTP")]
-        _otp: Option<String>,
-    }
-    serde_json::from_slice::<Option<ChannelInput>>(bytes)
-        .map(|_| ())
-        .map_err(|_| InputError("--cli-input-json: invalid channel input"))
-}
-const CHECKS: JsonChecks = JsonChecks {
-    validate: check_json,
-    read_error: |error| error,
-};
-
 macro_rules! write {
     ($name:literal,$sdk:literal,$title:literal,$method:ident,$descriptor:ident,$kind:ident,$flags:expr,$json:expr,$value:expr,$project:expr,$notes:expr,$example:literal) => {
         Operation {
@@ -298,7 +266,7 @@ macro_rules! write {
                             })
                         },
                         OutputView::default(),
-                        Some(CHECKS),
+                        None,
                     ))
                 },
             )),
