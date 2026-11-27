@@ -1,3 +1,5 @@
+use crate::wire::product::guard::{Decision, decide};
+use crate::wire::product::operation::RefusedGuard;
 use std::collections::HashSet;
 
 use http::{Method, StatusCode};
@@ -252,7 +254,11 @@ impl Client {
                     .settle_server(ctx, id, Settlement::Deleted, &mut server, &mut evidence)
                     .await
                 {
-                    let partial = delete_output(ids, input.delete_volumes, &evidence);
+                    let partial = decide(&evidence, |decision| {
+                        delete_output(decision, ids, input.delete_volumes)
+                    })
+                    .ok()
+                    .flatten();
                     return Err(Failure::new(
                         settlement_error(
                             DELETE.id,
@@ -272,9 +278,15 @@ impl Client {
                             .get_volume_with_evidence(ctx, &volume_id, &mut evidence)
                             .await;
                         match result {
-                            Ok(_) => kept.push(volume_id),
-                            Err(error) if error.has_class(ErrorClass::NotFound) => {}
-                            Err(error) => {
+                            Err(error)
+                                if error.detail::<RefusedGuard>().is_some()
+                                    || error.is_body_too_large() =>
+                            {
+                                let partial = decide(&evidence, |decision| {
+                                    delete_output(decision, kept, false)
+                                })
+                                .ok()
+                                .flatten();
                                 return Err(Failure::new(
                                     settlement_error(
                                         DELETE.id,
@@ -282,16 +294,33 @@ impl Client {
                                         "read the volume to confirm it was kept",
                                         &evidence,
                                     ),
-                                    delete_output(kept, false, &evidence),
+                                    partial,
                                     WriteDispatch::MayHaveBeenSent,
                                 ));
                             }
+                            Err(error) if error.has_class(ErrorClass::NotFound) => {}
+                            _ => kept.push(volume_id),
                         }
                     }
                     ids = kept;
                 }
             }
-            delete_output(ids, input.delete_volumes, &evidence).ok_or_else(|| {
+            decide(&evidence, |decision| {
+                delete_output(decision, ids, input.delete_volumes)
+            })
+            .map_err(|error| {
+                Failure::new(
+                    settlement_error(
+                        DELETE.id,
+                        *error,
+                        "read the volumes to confirm which were kept",
+                        &evidence,
+                    ),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })?
+            .ok_or_else(|| {
                 Failure::new(
                     delete_inventory_error(&evidence),
                     None,
@@ -560,10 +589,11 @@ fn create_error(
 }
 
 fn delete_output(
+    decision: Decision<'_>,
     ids: Vec<String>,
     delete: bool,
-    evidence: &Evidence,
 ) -> Option<DeleteServerOutput> {
+    let evidence = decision.evidence();
     if !evidence.can_retain_partial() {
         return None;
     }

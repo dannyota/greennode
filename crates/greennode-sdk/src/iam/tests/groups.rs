@@ -482,3 +482,93 @@ async fn membership_rechecks_user_proofs_before_a_privilege_refusal() {
         );
     }
 }
+
+#[tokio::test]
+async fn policy_delete_rechecks_all_attachment_proofs_before_resource_in_use() {
+    for (note, allowed) in [("ordinary-note", true), ("toy-last-attachment", false)] {
+        let group = json!([{"id":"group-1","name":"example","note":note}]).to_string();
+        let server = Server::start(vec![
+            response("200 OK", br#"{"userId":"usr-1","userType":"iam-user"}"#),
+            response("200 OK", br#"{"id":"pol-1","manager":"user"}"#),
+            response("200 OK", group.as_bytes()),
+            response("200 OK", b"[]"),
+            response("200 OK", b"[]"),
+        ]);
+        let client = confirmation_client(
+            &server,
+            Arc::new(ConfirmationProvider {
+                attempts: AtomicUsize::new(0),
+                tokens: vec![
+                    "toy-caller",
+                    "toy-policy",
+                    "toy-groups",
+                    "toy-users",
+                    "toy-last-attachment",
+                ],
+            }),
+        );
+        let failure = client
+            .delete_policy(
+                &RequestContext::new().0,
+                crate::iam::DeletePolicyInput::new("pol-1"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(
+            failure.error().detail::<crate::iam::WriteError>()
+                == Some(&crate::iam::WriteError::ResourceInUse),
+            allowed
+        );
+        assert_eq!(
+            failure
+                .error()
+                .detail::<crate::wire::product::operation::RefusedGuard>()
+                .is_some(),
+            !allowed
+        );
+        assert_eq!(server.requests(), 5);
+    }
+}
+
+#[tokio::test]
+async fn iam_group_member_receipt_uses_identifier_rules_at_dispatch() {
+    for (bearer, allowed) in [("jkl", false), ("mno", true)] {
+        let server = Server::start(vec![
+            response("200 OK", br#"{"userId":"usr-1","userType":"iam-user"}"#),
+            response(
+                "200 OK",
+                br#"[{"action":"CreatePolicy","label":"Write","resources":[]}]"#,
+            ),
+            response("200 OK", br#"{"data":[],"totalItems":0}"#),
+            response("200 OK", b"[]"),
+            response(
+                "200 OK",
+                br#"{"id":"group-1","mode":"iam","iamUsers":["pre6A6B6Cpost"],"policies":[]}"#,
+            ),
+            response("200 OK", br#"{"data":[],"totalItems":0}"#),
+            response("200 OK", b"[]"),
+            response("204 No Content", b""),
+        ]);
+        let mut tokens = vec!["toy-early"; 7];
+        tokens.push(bearer);
+        let client = confirmation_client(
+            &server,
+            Arc::new(ConfirmationProvider {
+                attempts: AtomicUsize::new(0),
+                tokens,
+            }),
+        );
+        let result = client
+            .add_user_to_group(
+                &RequestContext::new().0,
+                crate::iam::AddUserToGroupInput::new("group-1", "usr-2"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        if let Err(failure) = result {
+            assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        }
+        assert_eq!(server.requests(), if allowed { 8 } else { 7 });
+    }
+}

@@ -1,3 +1,5 @@
+use super::deletes::resource_in_use;
+use crate::wire::product::guard::decide;
 use crate::wire::product::guard::{Guarded, guarded_poll};
 mod timing;
 
@@ -364,10 +366,9 @@ impl Client {
                 "loadbalancer: resource in use: {}: pool {} is used in listener {id} as its default pool",
                 child.operation, child.id
             );
-            return Err(Box::new(
-                local(ErrorClass::Api, &message, evidence)
-                    .with_outer_detail(WriteError::ResourceInUse),
-            ));
+            return Err(Box::new(decide(evidence, |decision| {
+                resource_in_use(decision, local(ErrorClass::Api, &message, evidence))
+            })?));
         }
         Ok(())
     }
@@ -621,9 +622,13 @@ impl Child<'_> {
             "loadbalancer: resource in use: {}: pool {id}{reason}",
             self.operation
         );
-        local(ErrorClass::Api, &message, evidence)
-            .with_outer_detail(WriteError::ResourceInUse)
-            .with_cause(error)
+        decide(evidence, |decision| {
+            resource_in_use(
+                decision,
+                local(ErrorClass::Api, &message, evidence).with_cause(error),
+            )
+        })
+        .unwrap_or_else(|error| *error)
     }
 
     fn failed(&self, kind: &str, id: &str, evidence: &Evidence) -> Box<Error> {

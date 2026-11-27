@@ -37,6 +37,20 @@ pub(super) enum Protection {
     Caller,
 }
 
+#[derive(Default, Serialize)]
+#[serde(transparent)]
+struct AttachmentId(String);
+
+impl Wire for AttachmentId {
+    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
+        String::decode(raw).map(Self)
+    }
+
+    fn scan_operands(&self, scan: &crate::wire::product::output::FieldScan<'_>, _: bool) -> bool {
+        self.0.scan_operands(scan, true)
+    }
+}
+
 pub(super) struct Attachments {
     groups: Vec<GroupSummary>,
     users: Vec<String>,
@@ -118,11 +132,20 @@ impl<'a> Guard<'a> {
                 .attachment_array("policies-api/v1/policies/{}/groups", ids)
                 .await?,
             users: self
-                .attachment_array("policies-api/v1/policies/{}/iam-users", ids)
-                .await?,
+                .attachment_array::<AttachmentId, _>("policies-api/v1/policies/{}/iam-users", ids)
+                .await?
+                .into_iter()
+                .map(|id| id.0)
+                .collect(),
             accounts: self
-                .attachment_array("policies-api/v1/policies/{}/service-accounts", ids)
-                .await?,
+                .attachment_array::<AttachmentId, _>(
+                    "policies-api/v1/policies/{}/service-accounts",
+                    ids,
+                )
+                .await?
+                .into_iter()
+                .map(|id| id.0)
+                .collect(),
         };
         self.check_ids(attachments.groups.iter().map(|group| group.id.as_str()))?;
         self.check_ids(
@@ -226,6 +249,23 @@ impl<'a> Guard<'a> {
         }
     }
 
+    pub(super) fn decide<O, T>(
+        &self,
+        evaluate: impl FnOnce(crate::wire::product::guard::Decision<'_>) -> T,
+    ) -> Result<T, Failure<O>> {
+        crate::wire::product::guard::decide(self.evidence, evaluate)
+            .map_err(|error| super::writes::not_sent(*error))
+    }
+
+    pub(super) fn check_protection<O>(
+        &self,
+        op: &str,
+        protection: Protection,
+        reason: &str,
+    ) -> Result<(), Failure<O>> {
+        self.decide(|decision| protection_error(decision, op, protection, reason))?
+    }
+
     pub(super) async fn membership_protection<O>(
         &mut self,
         user: &str,
@@ -233,9 +273,6 @@ impl<'a> Guard<'a> {
     ) -> Result<Protection, Failure<O>> {
         let user = self.user(user).await?;
         let group = self.group(group).await?;
-        self.evidence
-            .recheck_read_proofs()
-            .map_err(|error| super::writes::not_sent(*error))?;
         Ok(user.max(group))
     }
 
@@ -413,7 +450,8 @@ impl<'a> Guard<'a> {
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
-pub(super) fn protection_error<O>(
+fn protection_error<O>(
+    decision: crate::wire::product::guard::Decision<'_>,
     op: &str,
     protection: Protection,
     reason: &str,
@@ -426,9 +464,10 @@ pub(super) fn protection_error<O>(
             ),
             Some(WriteError::SelfChange),
         )),
-        Protection::Privileged => Err(guard_refusal(
+        Protection::Privileged => Err(super::writes::decided_refusal(
+            decision,
+            super::writes::ProofRefusal::Privileged,
             &format!("iam: refused: target is protected: {op}: {reason}"),
-            Some(WriteError::PrivilegedChange),
         )),
     }
 }
@@ -493,6 +532,14 @@ impl Wire for AttachmentPage {
             total_pages: decode_field(&fields, "totalPages")?,
         })
     }
+
+    fn scan_operands(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.data.scan_operands(scan, identifier)
+    }
 }
 
 #[derive(Default, Serialize)]
@@ -519,6 +566,10 @@ impl Wire for UserGroup {
             id: decode_field(&fields, "id")?,
             policies: decode_field(&fields, "policies")?,
         })
+    }
+
+    fn scan_operands(&self, scan: &crate::wire::product::output::FieldScan<'_>, _: bool) -> bool {
+        self.id.scan_operands(scan, true) || self.policies.scan_operands(scan, true)
     }
 }
 
@@ -553,6 +604,14 @@ impl Wire for PolicySnapshot {
             complete,
             statements: wire::field(&fields, "statements").map(ToOwned::to_owned),
         })
+    }
+
+    fn scan_operands(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.policy.scan_operands(scan, identifier)
     }
 }
 

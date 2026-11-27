@@ -1,6 +1,6 @@
 use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
-use super::{redirect, response::Screen, retry, sender};
+use super::{redirect, retry, sender};
 use crate::wire::send;
 use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
@@ -129,7 +129,7 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     }
     if operation.reflection == Reflection::Refuse
         && operation.success.contains(&status)
-        && response.reflection == Screen::Reflected
+        && response.reflection.clean().is_none()
     {
         let error = T::reflected_response(operation, &response);
         return Err(crate::Failure::new(
@@ -192,7 +192,7 @@ pub(crate) async fn execute_raw(
     .await?;
     if operation.reflection == Reflection::Refuse
         && operation.success.contains(&response.status)
-        && response.reflection == Screen::Reflected
+        && response.reflection.clean().is_none()
     {
         let dispatch = if matches!(operation.class, redirect::Classification::Write) {
             crate::WriteDispatch::MayHaveBeenSent
@@ -513,7 +513,10 @@ async fn send_route<T>(
     };
     evidence.absorb(&response.credentials);
     if operation.reflection == Reflection::Guard
-        && !evidence.keep_guard(operation.id, &response.body)
+        && !response
+            .reflection
+            .clean()
+            .is_some_and(|clean| evidence.keep_guard(operation.id, &response.body, clean))
     {
         return Err(crate::Failure::new(
             unsafe_guard_response(operation.id),
@@ -534,6 +537,7 @@ pub(crate) fn decode_response<T: Output>(
 ) -> Result<T, Box<crate::Error>> {
     let status = response.status;
     let invalid = || Box::new(invalid_response(operation, status));
+    let clean = response.reflection.clean();
     let body = super::response::classify(
         operation.id,
         status,
@@ -542,11 +546,7 @@ pub(crate) fn decode_response<T: Output>(
         (true, operation.sensitive, operation.retry),
         &response.credentials,
     )?;
-    if operation.reflection == crate::wire::product::operation::Reflection::Refuse
-        && response.reflection == Screen::Indeterminate
-        && !(operation.allow_empty && body.is_empty())
-        && !operation.no_output
-    {
+    if operation.reflection == Reflection::Refuse && clean.is_none() {
         return Err(invalid());
     }
     if operation.no_output {
@@ -559,19 +559,10 @@ pub(crate) fn unsafe_json_response(
     body: &[u8],
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
-    validate: bool,
 ) -> bool {
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return false;
-    }
     let mut evidence = Evidence::from_credentials(known);
     evidence.absorb(sent);
-    let screen = evidence.peer_body_screen(body);
-    if validate {
-        !screen.is_clean()
-    } else {
-        screen == Screen::Reflected
-    }
+    evidence.peer_body_screen(body).clean().is_none()
 }
 
 fn encode_query(input: &str, output: &mut String) {
@@ -1003,14 +994,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_output_discards_bounded_success_body() {
-        let server = Server::start(vec![response("200 OK", b"not json")]);
+    async fn no_output_discards_only_a_clean_success_body() {
         let mut op = declaration();
         op.no_output = true;
-        assert_eq!(
-            call(&server, &op, &["one"]).await.unwrap().1,
-            Example::default()
-        );
+        for (body, accepted) in [
+            (br#"{"ignored":true}"#.as_slice(), true),
+            (b"", true),
+            (b"not json", false),
+        ] {
+            let server = Server::start(vec![response("200 OK", body)]);
+            let result = call(&server, &op, &["one"]).await;
+            assert_eq!(result.is_ok(), accepted);
+            if let Ok((_, output)) = result {
+                assert_eq!(output, Example::default());
+            }
+        }
     }
 
     #[tokio::test]

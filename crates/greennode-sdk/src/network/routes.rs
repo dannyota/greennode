@@ -74,12 +74,11 @@ impl Client {
                 .await
                 .map_err(failure)?;
             let text = go_json(&raw);
-            if evidence.go_peer_body_screen(&raw)
-                == crate::wire::product::response::Screen::Reflected
-            {
-                return Err(failure(ROUTE_TABLE.invalid(&evidence)));
-            }
             let envelope = ROUTE_TABLE.fields(&text, &evidence).map_err(failure)?;
+            evidence
+                .go_peer_body_screen(&raw)
+                .clean()
+                .ok_or_else(|| failure(ROUTE_TABLE.invalid(&evidence)))?;
             let invalid = |()| failure(ROUTE_TABLE.invalid(&evidence));
             let incomplete = || failure(ROUTE_TABLE.incomplete(&evidence));
             let mut table: RouteTable = field(&envelope, "data").map_err(|()| incomplete())?;

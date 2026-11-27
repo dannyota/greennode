@@ -60,6 +60,22 @@ async fn route_table_refuses_credentials_in_unknown_fields() {
 }
 
 #[tokio::test]
+async fn route_table_refuses_indeterminate_unknown_fields() {
+    for (extra, allowed) in [("ordinary", true), ("%252541", false)] {
+        let body =
+            serde_json::json!({"data":{"uuid":"rt-1","status":"ACTIVE","routes":[]},"extra":extra})
+                .to_string();
+        let server = Server::start(vec![response("200 OK", &body)]);
+        let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+        let result = Client::new(&config)
+            .get_route_table(&RequestContext::new().0, GetRouteTableInput::new("rt-1"))
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
 async fn route_table_accepts_underscore_in_project_id() {
     let server = Server::start(vec![response(
         "200 OK",

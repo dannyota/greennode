@@ -21,10 +21,10 @@ impl Output for Json {
 async fn the_live_guard_receipt_limit_fails_closed_and_retirement_frees_space() {
     let server = Server::start(vec![response("200 OK", b"{}"), response("200 OK", b"{}")]);
     let mut evidence = Evidence::new();
-    assert!(evidence.keep_guard("test", b"{}"));
+    assert!(evidence.keep_guard_for_test("test", b"{}"));
     let checkpoint = evidence.guard_checkpoint();
     for _ in checkpoint..512 {
-        assert!(evidence.keep_guard("test", b"{}"));
+        assert!(evidence.keep_guard_for_test("test", b"{}"));
     }
     let mut op = declaration();
     op.reflection = Reflection::Guard;

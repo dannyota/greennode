@@ -34,6 +34,15 @@ macro_rules! screen_field {
     };
 }
 
+macro_rules! identifier_role {
+    () => {
+        false
+    };
+    (screen_id) => {
+        true
+    };
+}
+
 macro_rules! record {
     ($(#[$meta:meta])* $name:ident $(<$item:ident>)? {
         $($(#[$field_meta:meta])* $(@ $screen:ident)? $field:ident: $ty:ty => $wire:literal, $go:literal $(, $decoder:path)? $(=> $projection:path)?;) +
@@ -62,6 +71,10 @@ macro_rules! record {
                     masked: Vec::new(),
                 })
             }
+            fn scan_operands(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
+                $(self.$field.scan_operands(scan, identifier || identifier_role!($($screen)?)
+                    || crate::wire::product::identifier::declared($wire, $go)) ||)+ false
+            }
         }
 
         impl $(<$item: Screen>)? Screen for $name $(<$item>)? {
@@ -75,7 +88,7 @@ macro_rules! record {
 
         impl $(<$item: crate::wire::product::output::PublicOutput>)? crate::wire::product::output::PublicOutput for $name $(<$item>)? {
             fn public_reflects(&self, scan: &crate::wire::product::output::FieldScan<'_>, identifier: bool) -> bool {
-                $(scan.field(&self.$field, identifier, $wire, $go) ||)+ false
+                $(scan.field(&self.$field, identifier || identifier_role!($($screen)?), $wire, $go) ||)+ false
             }
         }
 
@@ -84,13 +97,13 @@ macro_rules! record {
                 let mut output = serializer.serialize_struct(stringify!($name), [$($go),+].len())?;
                 $(
                     if self.masked.contains(&$go) {
-                        if crate::wire::product::identifier::declared($wire, $go) {
+                        if identifier_role!($($screen)?) || crate::wire::product::identifier::declared($wire, $go) {
                             crate::wire::product::identifier::check::<_, S::Error>(REDACTED)?;
                         }
                         output.serialize_field($go, REDACTED)?;
                     } else {
                         let value = projected!(&self.$field $(, $projection)?);
-                        if crate::wire::product::identifier::declared($wire, $go) {
+                        if identifier_role!($($screen)?) || crate::wire::product::identifier::declared($wire, $go) {
                             crate::wire::product::identifier::check::<_, S::Error>(value)?;
                         }
                         output.serialize_field($go, value)?;

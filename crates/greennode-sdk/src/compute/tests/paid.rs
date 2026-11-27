@@ -665,3 +665,109 @@ async fn compute_quote_keeps_clean_peer_message_and_withholds_a_reflected_one() 
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.message(), "Bad Request");
 }
+
+#[cfg(test)]
+mod kept_volume_proofs {
+    use super::*;
+    use std::{
+        future::{Future, ready},
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct Provider(AtomicUsize);
+
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            let bearer = if self.0.fetch_add(1, Ordering::Relaxed) < 5 {
+                CANARY
+            } else {
+                "last-volume-bearer"
+            };
+            Box::pin(ready(Ok(crate::Token::new(Secret::new(bearer), None))))
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(ready(Ok(())))
+        }
+    }
+
+    fn preflight() -> Vec<Response> {
+        vec![
+            response(r#"{"data":{"uuid":"server-1","bootVolumeId":"vol-boot"}}"#),
+            response(r#"[{"uuid":"vol-boot"},{"uuid":"vol-a"},{"uuid":"vol-b"}]"#),
+            http("202 Accepted", ""),
+            http("404 Not Found", "{}"),
+        ]
+    }
+
+    fn delete() -> DeleteServerInput {
+        DeleteServerInput {
+            server_id: "server-1".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_server_rechecks_earlier_404_before_reporting_kept_volumes() {
+        for (note, allowed) in [("ordinary-note", true), ("last-volume-bearer", false)] {
+            let mut replies = preflight();
+            replies.extend([
+                http(
+                    "404 Not Found",
+                    &serde_json::json!({"note":note}).to_string(),
+                ),
+                response(r#"{"data":{"uuid":"vol-b","status":"AVAILABLE"}}"#),
+            ]);
+            let server = TestServer::start(replies);
+            let config = Config::new(
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_project_id("project-1".into())
+                    .with_credentials_provider(Arc::new(Provider(0.into())))
+                    .with_endpoint_overrides(EndpointOverrides {
+                        vserver: Some(server.origin.clone()),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
+            config
+                .session()
+                .set_test_product_root(server.root_der.clone());
+            let result = Client::new(&config)
+                .delete_server(&RequestContext::new().0, delete())
+                .await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Err(failure) = result {
+                assert_eq!(
+                    failure.write_dispatch(),
+                    crate::WriteDispatch::MayHaveBeenSent
+                );
+            }
+            assert_eq!(server.heads().len(), 6);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_server_keeps_volume_after_ordinary_read_failure_and_continues() {
+        let mut replies = preflight();
+        replies.extend([http("403 Forbidden", "{}"), http("404 Not Found", "{}")]);
+        let server = TestServer::start(replies);
+        let result = client(&server)
+            .delete_server(&RequestContext::new().0, delete())
+            .await
+            .unwrap();
+        assert_eq!(result.kept_volume_ids, ["vol-a"]);
+        assert_eq!(server.heads().len(), 6);
+    }
+}

@@ -1,7 +1,7 @@
 mod peer;
 
 use super::options::PasswordSlot;
-use super::response::{self, Screen};
+use super::response::{self, Clean, Screen};
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
 use std::sync::{Arc, LazyLock, OnceLock};
@@ -353,7 +353,7 @@ impl Evidence {
         }
     }
 
-    pub(super) fn keep_guard(&mut self, id: &'static str, body: &[u8]) -> bool {
+    pub(super) fn keep_guard(&mut self, id: &'static str, body: &[u8], clean: Clean) -> bool {
         let Some(total) = self.guard_bytes.checked_add(body.len()) else {
             return false;
         };
@@ -361,13 +361,13 @@ impl Evidence {
             return false;
         }
         self.guard_bytes = total;
-        self.guards.push(super::guard::Proof::new(id, body));
+        self.guards.push(super::guard::Proof::new(id, body, clean));
         true
     }
 
     #[cfg(test)]
     pub(crate) fn keep_guard_for_test(&mut self, id: &'static str, body: &[u8]) -> bool {
-        self.keep_guard(id, body)
+        self.keep_guard(id, body, Screen::Clean.clean().unwrap())
     }
 
     pub(crate) fn guard_checkpoint(&self) -> usize {
@@ -577,6 +577,10 @@ impl Evidence {
 
     pub(crate) fn peer_bytes_reflect(&self, body: &[u8]) -> bool {
         response::reflects_bytes(body, &self.credentials)
+    }
+
+    pub(super) fn opaque_body_screen(&self, body: &[u8]) -> Screen {
+        response::BodyMatcher::new(&self.credentials, body.len()).scan(body, false)
     }
 
     pub(crate) fn peer_body_screen(&self, body: &[u8]) -> Screen {

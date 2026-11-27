@@ -1,4 +1,8 @@
-use super::{evidence::Evidence, operation::unsafe_guard_response, response::BodyMatcher};
+use super::{
+    evidence::Evidence,
+    operation::unsafe_guard_response,
+    response::{BodyMatcher, Clean},
+};
 use crate::{Error, ErrorClass};
 use bytes::Bytes;
 use http::StatusCode;
@@ -83,7 +87,7 @@ pub(super) struct Proof {
 }
 
 impl Proof {
-    pub(super) fn new(id: &'static str, body: &[u8]) -> Self {
+    pub(super) fn new(id: &'static str, body: &[u8], _: Clean) -> Self {
         Self {
             id,
             body: Bytes::copy_from_slice(body),
@@ -132,6 +136,22 @@ impl Proof {
     }
 }
 
+pub(crate) struct Decision<'a>(&'a Evidence);
+
+impl<'a> Decision<'a> {
+    pub(crate) fn evidence(self) -> &'a Evidence {
+        self.0
+    }
+}
+
+pub(crate) fn decide<T>(
+    proofs: &Evidence,
+    evaluate: impl FnOnce(Decision<'_>) -> T,
+) -> Result<T, Box<Error>> {
+    proofs.recheck_read_proofs()?;
+    Ok(evaluate(Decision(proofs)))
+}
+
 pub(crate) struct Guarded<T> {
     value: T,
     proofs: Vec<Proof>,
@@ -160,8 +180,9 @@ impl<T> Guarded<T> {
         evidence: &mut Evidence,
         id: &'static str,
         body: &[u8],
+        clean: Clean,
     ) -> Result<Self, Box<Error>> {
-        if !evidence.keep_guard(id, body) {
+        if !evidence.keep_guard(id, body, clean) {
             return Err(Box::new(unsafe_guard_response(id)));
         }
         Self::latest(value, evidence)
@@ -262,6 +283,76 @@ pub(crate) use guarded_poll;
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    fn production_files(root: &Path, mut inspect: impl FnMut(&Path, &str)) {
+        let mut files = vec![root.to_owned()];
+        while let Some(file) = files.pop() {
+            if file.is_dir() {
+                files.extend(file.read_dir().unwrap().map(|entry| entry.unwrap().path()));
+                continue;
+            }
+            let path = file.strip_prefix(root).unwrap();
+            if file.extension().is_none_or(|ext| ext != "rs")
+                || path.iter().any(|part| part == "tests")
+                || path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
+            {
+                continue;
+            }
+            let source = std::fs::read_to_string(&file).unwrap();
+            inspect(path, source.split("#[cfg(test)]\nmod ").next().unwrap());
+        }
+    }
+
+    #[test]
+    fn screen_decisions_do_not_reject_only_reflected_responses() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let reflected_only = regex_lite::Regex::new(concat!(
+            r"(?s)(?:==|!=)\s*(?:[\w:]+::)?Screen::Reflected\b",
+            r"|Screen::Reflected\s*(?:==|!=|=>)",
+            r"|matches!\s*\([^;]{0,160},\s*(?:[\w:]+::)?Screen::Reflected\s*\)",
+        ))
+        .unwrap();
+        production_files(&root, |path, source| {
+            assert!(!reflected_only.is_match(source), "{}", path.display());
+        });
+    }
+
+    #[test]
+    fn typed_read_outcomes_require_a_current_decision_witness() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        production_files(&root, |path, source| {
+            let path_name = path.to_str().unwrap();
+            let factory = match path_name {
+                "iam/writes.rs" => Some("decided_refusal"),
+                "loadbalancer/deletes.rs" => Some("resource_in_use"),
+                "compute/server_writes.rs" => Some("delete_output"),
+                _ => None,
+            };
+            let mut rest = source.to_owned();
+            if let Some(factory) = factory {
+                let body = definition(source, factory).unwrap();
+                assert!(body.contains("Decision<'_>"), "{path_name} {factory}");
+                rest = rest.replacen(body, "", 1);
+            }
+            for marker in ["WriteError::ResourceInUse", "WriteError::PrivilegedChange"] {
+                assert!(
+                    !rest
+                        .replace(&format!("Some(&{marker})"), "")
+                        .contains(marker),
+                    "{path_name} {marker}"
+                );
+            }
+            assert!(
+                !rest
+                    .replace("pub struct DeleteServerOutput {", "")
+                    .replace("public_fields!(DeleteServerOutput {", "")
+                    .contains("DeleteServerOutput {"),
+                "{path_name}"
+            );
+        });
+    }
 
     fn definition<'a>(text: &'a str, name: &str) -> Option<&'a str> {
         let declaration = regex_lite::Regex::new(&format!(
@@ -408,7 +499,7 @@ mod tests {
             destination_id: "pre6A6B6Cpost".into(),
         };
         let mut evidence = Evidence::for_write();
-        assert!(evidence.keep_guard("test", body));
+        assert!(evidence.keep_guard_for_test("test", body));
         evidence.keep_decoded_operands("test", &value).unwrap();
         let before = super::Guarded::latest((), &evidence).unwrap();
         assert!(before.recheck(&evidence).is_ok());

@@ -8,6 +8,7 @@ use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{Operation, Output},
+    output::{FieldScan, PublicOutput},
     response,
     sender::Response,
 };
@@ -23,6 +24,24 @@ pub(super) trait Wire: Default {
     const SHAPE: Shape<'static> = Shape::Any;
 
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error>;
+
+    fn scan_operands(&self, _: &FieldScan<'_>, _: bool) -> bool {
+        false
+    }
+}
+
+pub(super) struct WireOperands<'a, T>(pub(super) &'a T);
+
+impl<T> std::fmt::Debug for WireOperands<'_, T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("WireOperands")
+    }
+}
+
+impl<T: Wire> PublicOutput for WireOperands<'_, T> {
+    fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.0.scan_operands(scan, identifier)
+    }
 }
 
 pub(super) fn field<'a>(
@@ -90,6 +109,10 @@ impl Wire for String {
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
         serde_json::from_str::<Option<Self>>(raw.get()).map(Option::unwrap_or_default)
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        identifier && self.public_reflects(scan, true)
+    }
 }
 
 impl Wire for bool {
@@ -105,6 +128,10 @@ impl Wire for i64 {
             json => serde_json::from_str(json),
         }
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        identifier && self.public_reflects(scan, true)
+    }
 }
 
 impl<T: Wire> Wire for Option<T> {
@@ -117,6 +144,11 @@ impl<T: Wire> Wire for Option<T> {
             T::decode(raw).map(Some)
         }
     }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.as_ref()
+            .is_some_and(|value| value.scan_operands(scan, identifier))
+    }
 }
 
 impl<T: Wire> Wire for Vec<T> {
@@ -128,6 +160,11 @@ impl<T: Wire> Wire for Vec<T> {
             .into_iter()
             .map(T::decode)
             .collect()
+    }
+
+    fn scan_operands(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        self.iter()
+            .any(|value| value.scan_operands(scan, identifier))
     }
 }
 

@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::groups::CreatedId;
-use super::policy_guard::{Guard, POLICY, Protection, protection_error};
+use super::policy_guard::{Guard, POLICY, Protection};
 use super::wire::Screen;
 use super::writes::{
     WriteError, error_reason, guard_failed, guard_refusal, settle, unsettled, withheld_operand,
@@ -145,6 +145,7 @@ impl Client {
             let mut guard = Guard::new(self, ctx, CREATE, &mut evidence).await?;
             guard.load_actions().await?;
             refuse_privileged(
+                &guard,
                 CREATE,
                 guard.privileged(&input.statements)?,
                 "the statements grant an IAM write action",
@@ -249,21 +250,23 @@ impl Client {
             let attachments = guard.attachments(id).await?;
             let protection = guard.attached_protection(attachments).await?;
             if protection == Protection::Caller {
-                protection_error(UPDATE, protection, "")?;
+                guard.check_protection(UPDATE, protection, "")?;
             }
             refuse_privileged(
+                &guard,
                 UPDATE,
                 guard.privileged(&current.statements)?,
                 "the policy's current statements grant an IAM write action",
             )?;
             if let Some(statements) = &input.statements {
                 refuse_privileged(
+                    &guard,
                     UPDATE,
                     guard.privileged(statements)?,
                     "the proposed statements grant an IAM write action",
                 )?;
             }
-            protection_error(
+            guard.check_protection(
                 UPDATE,
                 protection,
                 "the policy is attached to a protected principal or group",
@@ -314,12 +317,18 @@ impl Client {
             let mut evidence = self.write_evidence(ctx, DELETE, &[("PolicyID", id)], &[])?;
             let mut guard = Guard::new(self, ctx, DELETE, &mut evidence).await?;
             check_managed(DELETE, &guard.policy(id).await?)?;
-            if !guard.attachments(id).await?.is_empty() {
-                return Err(guard_refusal(
-                    "iam: refused: resource in use: iam.DeletePolicy: the policy is attached",
-                    Some(WriteError::ResourceInUse),
-                ));
-            }
+            let attachments = guard.attachments(id).await?;
+            guard.decide(|decision| {
+                if attachments.is_empty() {
+                    Ok(())
+                } else {
+                    Err(super::writes::decided_refusal(
+                        decision,
+                        super::writes::ProofRefusal::InUse,
+                        "iam: refused: resource in use: iam.DeletePolicy: the policy is attached",
+                    ))
+                }
+            })??;
             let op = write_operation(
                 DELETE,
                 Method::DELETE,
@@ -415,9 +424,14 @@ fn check_managed<O>(op: &str, policy: &Policy) -> Result<(), Failure<O>> {
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
-fn refuse_privileged<O>(op: &str, privileged: bool, reason: &str) -> Result<(), Failure<O>> {
+fn refuse_privileged<O>(
+    guard: &Guard<'_>,
+    op: &str,
+    privileged: bool,
+    reason: &str,
+) -> Result<(), Failure<O>> {
     if privileged {
-        protection_error(op, Protection::Privileged, reason)?;
+        guard.check_protection(op, Protection::Privileged, reason)?;
     }
     Ok(())
 }

@@ -217,21 +217,11 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> S
             _ => Zeroizing::new(input.to_vec()),
         };
         if next.as_slice() != input {
-            if counts[step] == 2 {
-                return if step == 3 {
-                    match state
-                        .patterns
-                        .literal(&next, true, state.strict_base64, &mut state.work)
-                    {
-                        Some(true) => Screen::Reflected,
-                        _ => Screen::Indeterminate,
-                    }
-                } else {
-                    Screen::Indeterminate
-                };
+            if step != 3 && counts[step] == 2 {
+                return Screen::Indeterminate;
             }
             let mut next_counts = counts;
-            next_counts[step] += 1;
+            next_counts[step] = if step == 3 { 1 } else { counts[step] + 1 };
             let error_text = state.error_text;
             if step == 3 {
                 state.error_text = false;

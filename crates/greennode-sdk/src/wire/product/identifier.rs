@@ -44,6 +44,7 @@ pub(super) fn declared_wire(wire: &str) -> bool {
                 | "server_id_list"
                 | "policyIdList"
                 | "associatedNetworks"
+                | "subnetAssociationList"
         )
 }
 
@@ -289,6 +290,55 @@ struct Projection {
             out.serialize_entry(key, value)?;
         "#;
         assert_eq!(inventory.missing_manual(serializer), ["VPCID", "Project"]);
+    }
+
+    #[test]
+    fn guard_receipts_recheck_the_role_of_each_wire_identifier_declaration() {
+        use super::super::evidence::Evidence;
+        use crate::Secret;
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let fields = Regex::new(r#"(?m)^\s*(?P<spec>[^\n]*?)\s*(?P<syntax>=>|=)\s*"(?P<first>\w+)",\s*"(?P<second>\w+)"(?:,\s*[^;\n]*)?;"#).unwrap();
+        let checked = std::cell::Cell::new(0);
+        inspect_fields(&root, &|path, source| {
+            let relative = path.strip_prefix(&root).unwrap();
+            if relative.starts_with("wire") || relative.iter().any(|part| part == "tests") {
+                return;
+            }
+            for row in fields.captures_iter(source) {
+                let (wire, output) = if &row["syntax"] == "=" && relative.starts_with("volume") {
+                    (&row["second"], &row["first"])
+                } else if &row["syntax"] == "=>" {
+                    (&row["first"], &row["second"])
+                } else {
+                    continue;
+                };
+                let explicit = row["spec"].contains("@ screen_id");
+                if !declared(wire, output) && !explicit {
+                    continue;
+                }
+                if explicit && !declared_wire(wire) {
+                    assert_eq!(relative, Path::new("iam/models.rs"));
+                    assert!(source.contains("identifier_role!($($screen)?)"));
+                    let fetch = std::fs::read_to_string(root.join("iam/mod.rs")).unwrap();
+                    assert!(fetch.contains(
+                        "keep_decoded_operands(operation.id, &wire::WireOperands(&output))"
+                    ));
+                    continue;
+                }
+                let body = serde_json::json!({wire: ["pre6A6B6Cpost"]}).to_string();
+                let mut evidence = Evidence::for_write();
+                assert!(evidence.keep_guard_for_test("guard", body.as_bytes()));
+                evidence.add_bearer(&Secret::new("jkl"));
+                assert!(
+                    evidence.recheck_read_proofs().is_err(),
+                    "{} {wire} {output}",
+                    relative.display()
+                );
+                checked.set(checked.get() + 1);
+            }
+        });
+        assert!(checked.get() > 100);
     }
 
     #[test]

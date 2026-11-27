@@ -142,16 +142,6 @@ impl Patterns {
         !self.raw.is_empty() && self.raw.contains(input, work).unwrap_or(true)
     }
 
-    pub(super) fn literal(
-        &self,
-        input: &[u8],
-        decoded: bool,
-        strict: bool,
-        work: &mut usize,
-    ) -> Option<bool> {
-        self.scan(input, decoded, false, strict, work)
-    }
-
     pub(super) fn forms(
         &self,
         input: &[u8],

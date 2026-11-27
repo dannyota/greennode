@@ -145,6 +145,14 @@ impl Client {
             let error = wire::private_status_error(operation, error, evidence);
             failure(screen_error(error, evidence))
         })?;
+        if matches!(
+            evidence.field_names(),
+            crate::wire::strict_json::FieldNames::Canonical
+        ) {
+            evidence
+                .keep_decoded_operands(operation.id, &wire::WireOperands(&output))
+                .map_err(|error| failure(*error))?;
+        }
         Ok(output)
     }
 

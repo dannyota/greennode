@@ -153,7 +153,7 @@ fn guard_bandwidth(
     sent: &SentCredentials,
 ) -> Option<Box<Error>> {
     let body = go_json(body);
-    (operation::unsafe_json_response(body.as_bytes(), known, sent, true)
+    (operation::unsafe_json_response(body.as_bytes(), known, sent)
         || (!status.is_success()
             && [known, sent]
                 .into_iter()
@@ -176,7 +176,7 @@ fn guard_bandwidth_project(
     sent: &SentCredentials,
 ) -> Option<Box<Error>> {
     let body = go_json(body);
-    (operation::unsafe_json_response(body.as_bytes(), known, sent, status.is_success())
+    (operation::unsafe_json_response(body.as_bytes(), known, sent)
         || (!status.is_success()
             && [known, sent]
                 .into_iter()

@@ -551,7 +551,11 @@ async fn run_inner(
                 if op.guard.is_some() {
                     evidence = evidence.transport_only();
                 }
-                evidence.go_peer_body_screen(&reply.body)
+                if matches!(auth, Auth::None) {
+                    evidence.opaque_body_screen(&reply.body)
+                } else {
+                    evidence.go_peer_body_screen(&reply.body)
+                }
             });
             let refused = op
                 .guard
@@ -596,9 +600,7 @@ async fn run_inner(
                 }
             }
             if let Some(id) = refused {
-                if body_reflection == Screen::Reflected {
-                    evidence.status = None;
-                }
+                evidence.status = body_reflection.diagnostic_status(evidence.status);
                 let error = super::operation::unsafe_guard_response(id);
                 let error = if body_reflection == Screen::Indeterminate
                     && let Ok(reply) = &result

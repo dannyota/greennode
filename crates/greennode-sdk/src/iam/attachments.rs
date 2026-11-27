@@ -2,7 +2,7 @@ use http::{Method, StatusCode};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::policy_guard::{Guard, Protection, protection_error};
+use super::policy_guard::{Guard, Protection};
 use super::writes::write_operation;
 use super::{Api, Client};
 use crate::wire::product::redirect::Retry;
@@ -194,9 +194,10 @@ async fn account_policy<O>(
     policy_id: &str,
     account_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(
+    let protection = guard.account(account_id).await?;
+    guard.check_protection(
         op,
-        guard.account(account_id).await?,
+        protection,
         "the service account has a privileged policy attached",
     )?;
     require_non_privileged_policy(guard, op, policy_id).await
@@ -210,7 +211,7 @@ async fn membership<O>(
     user_id: &str,
 ) -> Result<(), Failure<O>> {
     let protection = guard.membership_protection(user_id, group_id).await?;
-    protection_error(op, protection, "the user or the group is protected")
+    guard.check_protection(op, protection, "the user or the group is protected")
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -220,7 +221,8 @@ async fn group_policy<O>(
     policy_id: &str,
     group_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(op, guard.group(group_id).await?, "the group is protected")?;
+    let protection = guard.group(group_id).await?;
+    guard.check_protection(op, protection, "the group is protected")?;
     require_non_privileged_policy(guard, op, policy_id).await
 }
 
@@ -231,7 +233,8 @@ async fn user_policy<O>(
     policy_id: &str,
     user_id: &str,
 ) -> Result<(), Failure<O>> {
-    protection_error(op, guard.user(user_id).await?, "the user is protected")?;
+    let protection = guard.user(user_id).await?;
+    guard.check_protection(op, protection, "the user is protected")?;
     require_non_privileged_policy(guard, op, policy_id).await
 }
 
@@ -243,7 +246,7 @@ async fn require_non_privileged_policy<O>(
 ) -> Result<(), Failure<O>> {
     let policy = guard.policy(policy_id).await?;
     if guard.privileged(&policy.statements)? {
-        protection_error(
+        guard.check_protection(
             op,
             Protection::Privileged,
             "the policy grants an IAM write action",

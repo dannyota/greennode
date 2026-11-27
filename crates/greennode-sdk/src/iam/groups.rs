@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json, value::RawValue};
 
 use super::wire::{self, Screen, Wire};
-use super::writes::{WriteError, guard_failed, guard_refusal, settle, write_operation};
+use super::writes::{guard_failed, guard_refusal, settle, write_operation};
 use super::{Api, Client, Group, OBJECT_CAP, invalid_input, read_operation};
 use crate::error::RecoveryAdvice;
 use crate::error::SafeText;
@@ -381,6 +381,14 @@ impl Wire for GroupRead {
             has_name,
         })
     }
+
+    fn scan_operands(
+        &self,
+        scan: &crate::wire::product::output::FieldScan<'_>,
+        identifier: bool,
+    ) -> bool {
+        self.group.scan_operands(scan, identifier)
+    }
 }
 
 #[derive(Default)]
@@ -431,6 +439,12 @@ impl Wire for GroupAttachments {
             unrecognized,
         })
     }
+
+    fn scan_operands(&self, scan: &crate::wire::product::output::FieldScan<'_>, _: bool) -> bool {
+        self.id.scan_operands(scan, true)
+            || self.iam_users.scan_operands(scan, true)
+            || self.policies.scan_operands(scan, true)
+    }
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -438,9 +452,10 @@ impl GroupAttachments {
     fn require_empty<O>(self, id: &str, evidence: &Evidence) -> Result<(), Failure<O>> {
         let (policies, users) = self.checked(DELETE, id, evidence)?;
         if !policies.is_empty() || !users.is_empty() {
-            return Err(guard_refusal(
+            return Err(super::writes::proved_refusal(
+                evidence,
+                super::writes::ProofRefusal::InUse,
                 "iam: refused: resource in use: iam.DeleteGroup: the group has a member or a policy",
-                Some(WriteError::ResourceInUse),
             ));
         }
         Ok(())

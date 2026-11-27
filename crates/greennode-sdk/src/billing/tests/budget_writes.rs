@@ -245,3 +245,23 @@ async fn envelope_errors_keep_code_and_http_status_with_advice() {
     assert_eq!(api.status(), Some(200));
     assert!(api.message().contains("read current state before retrying"));
 }
+
+#[tokio::test]
+async fn budget_acknowledgement_requires_a_clean_screen_even_without_output() {
+    for (body, allowed) in [
+        (b"".as_slice(), true),
+        (br#"{"code":200,"ignored":"%252541"}"#, false),
+    ] {
+        let server = Server::start(vec![response("200 OK", body)]);
+        let mut input = UpdateBudgetInput::new(BUDGET_ID);
+        input.name = Some("updated".into());
+        let result = client(&server, BEARER)
+            .update_budget(&RequestContext::new().0, input)
+            .await;
+        assert_eq!(result.is_ok(), allowed);
+        if let Err(failure) = result {
+            assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        }
+        assert_eq!(server.requests(), 1);
+    }
+}

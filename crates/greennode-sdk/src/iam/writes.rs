@@ -201,7 +201,7 @@ impl Client {
         if let Some(caller) = slot.as_ref() {
             check_cached_caller(caller, evidence)?;
             keep_caller_check(caller, evidence);
-            return self.classified(caller.clone(), op);
+            return self.classified(caller.clone(), op, evidence);
         }
         let fetched: super::GetCallerIdentityOutput = self
             .fetch::<_, O>(
@@ -237,7 +237,7 @@ impl Client {
                 None,
             ));
         }
-        let fetched = self.classified(fetched, op)?;
+        let fetched = self.classified(fetched, op, evidence)?;
         keep_caller_check(&fetched, evidence);
         *slot = Some(fetched.clone());
         drop(slot);
@@ -268,16 +268,18 @@ impl Client {
         &self,
         caller: super::GetCallerIdentityOutput,
         op: &str,
+        evidence: &Evidence,
     ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
         if !matches!(
             caller.user_type.as_str(),
             "iam-user" | "user-sa" | "service-sa"
         ) {
-            return Err(guard_refusal(
+            return Err(proved_refusal(
+                evidence,
+                ProofRefusal::Privileged,
                 &format!(
                     "iam: refused: target is protected: {op}: the caller's user type is not recognized"
                 ),
-                Some(WriteError::PrivilegedChange),
             ));
         }
         Ok(caller)
@@ -317,6 +319,35 @@ pub(super) fn withheld_operand<O>() -> Failure<O> {
             .into_parts()
             .0,
     )
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ProofRefusal {
+    Privileged,
+    InUse,
+}
+
+pub(super) fn decided_refusal<O>(
+    _: crate::wire::product::guard::Decision<'_>,
+    reason: ProofRefusal,
+    message: &str,
+) -> Failure<O> {
+    let detail = match reason {
+        ProofRefusal::Privileged => WriteError::PrivilegedChange,
+        ProofRefusal::InUse => WriteError::ResourceInUse,
+    };
+    guard_refusal(message, Some(detail))
+}
+
+pub(super) fn proved_refusal<O>(
+    evidence: &Evidence,
+    reason: ProofRefusal,
+    message: &str,
+) -> Failure<O> {
+    crate::wire::product::guard::decide(evidence, |decision| {
+        decided_refusal(decision, reason, message)
+    })
+    .unwrap_or_else(|error| not_sent(*error))
 }
 
 pub(super) fn guard_refusal<O>(message: &str, detail: Option<WriteError>) -> Failure<O> {

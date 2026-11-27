@@ -1,3 +1,4 @@
+use crate::wire::product::guard::{Decision, decide};
 use crate::wire::product::guard::{Guarded, guarded_poll};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -364,10 +365,9 @@ impl Client {
                 "loadbalancer: certificate in use: {DELETE_CERT}: certificate {} is in use",
                 safe_text(id, evidence)
             );
-            return Err(Box::new(
-                local(ErrorClass::Api, &message, evidence)
-                    .with_outer_detail(WriteError::ResourceInUse),
-            ));
+            return Err(Box::new(decide(evidence, |decision| {
+                resource_in_use(decision, local(ErrorClass::Api, &message, evidence))
+            })?));
         }
         Ok(())
     }
@@ -546,11 +546,16 @@ impl Client {
                 error = error.with_outer_detail(CompleteNotFound);
             }
             if in_use {
-                error = error.with_outer_detail(WriteError::ResourceInUse);
+                error = decide(evidence, |decision| resource_in_use(decision, error))
+                    .unwrap_or_else(|error| *error);
             }
             Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
         })
     }
+}
+
+pub(super) fn resource_in_use(_: Decision<'_>, error: Error) -> Error {
+    error.with_outer_detail(WriteError::ResourceInUse)
 }
 
 fn certificate_in_use(message: &str) -> bool {

@@ -355,11 +355,23 @@ impl Output for Inventory {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if !operation.success.contains(&response.status)
-            && crate::wire::product::evidence::Evidence::from_credentials(&response.credentials)
-                .peer_body_screen(&response.body)
-                == crate::wire::product::response::Screen::Reflected
+            && let Some(error) = response.reflection.untrusted_error(
+                || invalid_response(response.status),
+                || {
+                    crate::wire::product::response::classify(
+                        operation.id,
+                        response.status,
+                        bytes::Bytes::new(),
+                        &[],
+                        (true, operation.sensitive, operation.retry),
+                        &response.credentials,
+                    )
+                    .err()
+                    .unwrap_or_else(|| invalid_response(response.status))
+                },
+            )
         {
-            return Err(invalid_response(response.status));
+            return Err(error);
         }
         Ok(Self {
             credentials: response.credentials.clone(),
@@ -379,7 +391,7 @@ fn guard_project_response(
     known: &crate::wire::product::sender::SentCredentials,
     sent: &crate::wire::product::sender::SentCredentials,
 ) -> Option<Box<Error>> {
-    operation::unsafe_json_response(body, known, sent, status.is_success())
+    (status.is_success() && operation::unsafe_json_response(body, known, sent))
         .then(|| invalid_response(status))
 }
 
@@ -390,5 +402,5 @@ fn guard_estimate_project_response(
     known: &SentCredentials,
     sent: &SentCredentials,
 ) -> Option<Box<Error>> {
-    operation::unsafe_json_response(body, known, sent, true).then(|| invalid_response(status))
+    operation::unsafe_json_response(body, known, sent).then(|| invalid_response(status))
 }

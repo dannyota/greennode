@@ -244,15 +244,13 @@ impl Child<'_> {
         template: &'static str,
         valid: impl FnOnce(&model::Acceptance) -> bool,
     ) -> Option<Guarded<model::Acceptance>> {
-        if !reply.reflection.is_clean() {
-            return None;
-        }
+        let clean = reply.reflection.clean()?;
         let op = guard_operation(self.0.id, template);
         let value = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
         if !valid(&value) {
             return None;
         }
-        Guarded::acknowledgement(value, &mut self.0.evidence, op.id, &reply.body).ok()
+        Guarded::acknowledgement(value, &mut self.0.evidence, op.id, &reply.body, clean).ok()
     }
 
     fn fail<O: Serialize>(&self, reason: &'static str, partial: O) -> Failure<O> {

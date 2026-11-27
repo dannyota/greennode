@@ -66,8 +66,8 @@ impl<T: BudgetData> Output for Envelope<T> {
     fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
         if let Ok(header) = serde_json::from_slice::<Header<'_>>(&response.body)
             && header
-                .screened_code(&response.credentials)
-                .is_some_and(|code| success_code(code) == Some(false))
+                .proved_code(&response.credentials)
+                .is_some_and(|(code, _)| success_code(code) == Some(false))
         {
             return api_error(operation, response, header.not_found(&response.credentials));
         }
@@ -78,6 +78,7 @@ impl<T: BudgetData> Output for Envelope<T> {
         let status = response.status;
         let invalid = || Box::new(invalid_response(operation, status, false));
         if status == StatusCode::BAD_REQUEST
+            && response.reflection.clean().is_some()
             && serde_json::from_slice::<Header<'_>>(&response.body).is_ok_and(|header| {
                 (header.code.is_none() || header.screened_code(&response.credentials).is_some())
                     && header.not_found(&response.credentials)
@@ -91,6 +92,27 @@ impl<T: BudgetData> Output for Envelope<T> {
             }
             return operation::decode_response(operation, response);
         }
+        if !operation.no_output && operation.reflection == operation::Reflection::Redact {
+            let header =
+                serde_json::from_slice::<Header<'_>>(&response.body).map_err(|_| invalid())?;
+            let (code, clean) = header
+                .proved_code(&response.credentials)
+                .ok_or_else(invalid)?;
+            return Self::decoded_projection(operation, response, &header, code, clean);
+        }
+        let clean = response.reflection.clean().ok_or_else(invalid)?;
+        Self::accepted_response(operation, response, clean)
+    }
+}
+
+impl<T: BudgetData> Envelope<T> {
+    fn accepted_response(
+        operation: &Operation,
+        response: &Response,
+        clean: response::Clean,
+    ) -> Result<Self, Box<Error>> {
+        let status = response.status;
+        let invalid = || Box::new(invalid_response(operation, status, false));
         if operation.allow_empty && response.body.is_empty() {
             return Ok(Self::default());
         }
@@ -98,6 +120,18 @@ impl<T: BudgetData> Output for Envelope<T> {
         let code = header
             .screened_code(&response.credentials)
             .ok_or_else(invalid)?;
+        Self::decoded_projection(operation, response, &header, code, clean)
+    }
+
+    fn decoded_projection(
+        operation: &Operation,
+        response: &Response,
+        header: &Header<'_>,
+        code: &str,
+        _: response::Clean,
+    ) -> Result<Self, Box<Error>> {
+        let status = response.status;
+        let invalid = || Box::new(invalid_response(operation, status, false));
         if !success_code(code).ok_or_else(invalid)? {
             strict_json::validate_shape(&response.body, &HEADER_SCHEMA, operation.cap)
                 .map_err(|_| invalid())?;
@@ -133,6 +167,14 @@ struct Header<'a> {
 }
 
 impl Header<'_> {
+    fn proved_code(&self, credentials: &SentCredentials) -> Option<(&str, response::Clean)> {
+        let raw = self.code?.get();
+        let clean = crate::wire::product::evidence::Evidence::from_credentials(credentials)
+            .peer_body_screen(raw.as_bytes())
+            .clean()?;
+        Some((self.screened_code(credentials)?, clean))
+    }
+
     fn screened_code(&self, credentials: &SentCredentials) -> Option<&str> {
         let wire = self.code?.get();
         if credentials.text_reflects(wire) {

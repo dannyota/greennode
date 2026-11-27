@@ -5,9 +5,41 @@ pub(crate) enum Screen {
     Indeterminate,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct Clean(());
+
 impl Screen {
+    pub(crate) fn clean(self) -> Option<Clean> {
+        match self {
+            Self::Clean => Some(Clean(())),
+            Self::Reflected | Self::Indeterminate => None,
+        }
+    }
+
     pub(crate) fn is_clean(self) -> bool {
-        self == Self::Clean
+        self.clean().is_some()
+    }
+
+    pub(crate) fn untrusted_error<T>(
+        self,
+        reflected: impl FnOnce() -> T,
+        indeterminate: impl FnOnce() -> T,
+    ) -> Option<T> {
+        match self {
+            Self::Clean => None,
+            Self::Reflected => Some(reflected()),
+            Self::Indeterminate => Some(indeterminate()),
+        }
+    }
+
+    pub(super) fn diagnostic_status(
+        self,
+        status: Option<http::StatusCode>,
+    ) -> Option<http::StatusCode> {
+        match self {
+            Self::Clean | Self::Indeterminate => status,
+            Self::Reflected => None,
+        }
     }
 
     pub(super) fn then(self, next: impl FnOnce() -> Self) -> Self {
@@ -1011,10 +1043,7 @@ mod tests {
                     .as_bytes(),
             );
             let matcher = BodyMatcher::new(&credentials, ordinary.len());
-            assert_eq!(
-                matcher.scan(ordinary.as_bytes(), false),
-                Screen::Indeterminate
-            );
+            assert_eq!(matcher.scan(ordinary.as_bytes(), false), Screen::Clean);
         }
         assert!(!reflects_credential("glb-1", &credentials));
     }

@@ -119,7 +119,7 @@ impl Output for VnetworkDocument {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
-        if response.reflection == crate::wire::product::response::Screen::Reflected {
+        if response.status == StatusCode::OK && response.reflection.clean().is_none() {
             return Err(invalid(op.id, response.status.as_u16()));
         }
         let normalized = crate::model::wire::go_json(&response.body);
@@ -155,7 +155,7 @@ fn guard_exchange(
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
 ) -> Option<Box<Error>> {
-    let unsafe_body = operation::unsafe_json_response(body, known, sent, true)
+    let unsafe_body = operation::unsafe_json_response(body, known, sent)
         || (op == "pricing.GetQuote"
             && std::str::from_utf8(body).is_ok_and(|body| {
                 [known, sent].into_iter().any(|credentials| {
