@@ -175,9 +175,13 @@ fn check_password_body(
 
 const REDACTED: &str = "<redacted>";
 
+pub(crate) type CachedCheck =
+    std::sync::Arc<dyn Fn(&SentCredentials) -> Option<Box<crate::Error>> + Send + Sync>;
+
 #[derive(Default)]
 pub(crate) struct Evidence {
     credentials: SentCredentials,
+    cached: Vec<CachedCheck>,
 }
 
 impl Evidence {
@@ -205,6 +209,7 @@ impl Evidence {
     pub(crate) fn transport_only(&self) -> Self {
         Self {
             credentials: self.credentials.transport_only(),
+            cached: Vec::new(),
         }
     }
 
@@ -213,7 +218,16 @@ impl Evidence {
             credentials: self
                 .credentials
                 .filtered(|_, source| source != Source::OperationPassword),
+            cached: Vec::new(),
         }
+    }
+
+    pub(crate) fn keep_cached_check(&mut self, check: CachedCheck) {
+        self.cached.push(check);
+    }
+
+    pub(crate) fn cached_checks(&self) -> &[CachedCheck] {
+        &self.cached
     }
 
     pub(crate) fn credentials(&self) -> &SentCredentials {

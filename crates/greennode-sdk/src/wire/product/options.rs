@@ -58,6 +58,18 @@ impl PathIds {
     }
 }
 
+pub(crate) type AttemptCheckFn<'a> =
+    &'a (dyn Fn(&super::evidence::SentCredentials) -> Option<Box<crate::Error>> + Sync);
+
+#[derive(Clone, Copy)]
+pub(crate) struct AttemptCheck<'a>(pub(crate) AttemptCheckFn<'a>);
+
+impl std::fmt::Debug for AttemptCheck<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AttemptCheck")
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Options<'a> {
     pub(crate) path_ids: PathIds,
@@ -67,6 +79,7 @@ pub(crate) struct Options<'a> {
     pub(crate) password_slot: Option<PasswordSlot<'a>>,
     pub(crate) headers: &'a [(&'static str, &'a str)],
     pub(crate) report_redirect: bool,
+    pub(crate) attempt_check: Option<AttemptCheck<'a>>,
 }
 
 impl Options<'_> {
@@ -78,6 +91,7 @@ impl Options<'_> {
         password_slot: None,
         headers: &[],
         report_redirect: false,
+        attempt_check: None,
     };
 
     pub(crate) fn apply_headers(&self, headers: &mut http::HeaderMap) -> Result<(), ()> {

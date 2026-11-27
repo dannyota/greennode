@@ -127,7 +127,7 @@ impl Client {
         if !administer {
             return Ok(target);
         }
-        let actions = self.guard_write_actions(ctx, evidence).await?;
+        let actions = self.guard_write_actions(ctx, true, evidence).await?;
         let direct = self
             .paged_policy_ids(ctx, op, USER_POLICIES, ("UserID", id), evidence)
             .await?;

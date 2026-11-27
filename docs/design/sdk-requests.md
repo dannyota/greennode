@@ -213,6 +213,17 @@ Where Go itself refuses any lone case variant, as the network NAT family's
 field-name check does, refuse it too. A refused case variant is
 `InvalidResponse`.
 
+The IAM client caches the caller identity and the write-action names per client,
+shared by its clones and never expired, as Go does. A failed, refused, empty or
+reflecting read is never cached. Concurrent first uses fetch once, under a lock
+whose wait is bounded by the request context. A cached value is rechecked
+against the operation's credentials when it is read and at every attempt of the
+operation's write, after that attempt's bearer and sign-in credentials are
+recorded; this is stricter than Go, which rechecks only on a hit and only for
+operations with privacy options. A failed recheck refuses the write with Go's
+`unsafe cached guard response` text and sends nothing more. An operation that
+did not use a cached value never consults it.
+
 ### Signed S3
 
 `ObjectConfig` is independent of `Config`: explicit `ObjectCredentials` (two

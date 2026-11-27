@@ -1,3 +1,4 @@
+mod cache;
 mod groups;
 mod policy_writes;
 mod service_accounts;

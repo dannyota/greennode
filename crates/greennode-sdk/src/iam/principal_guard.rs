@@ -6,7 +6,9 @@ use serde::Serialize;
 use serde_json::value::RawValue;
 
 use super::wire::{self, Wire};
-use super::writes::{confirmed_identity, guard_failed, guard_refusal};
+use super::writes::{
+    check_cached_actions, confirmed_identity, guard_failed, guard_refusal, keep_actions_check,
+};
 use super::{
     Action, Api, Client, LIST_CAP, OBJECT_CAP, Operation, Policy, PolicySummary, WriteError,
     read_operation,
@@ -81,7 +83,7 @@ impl Client {
                 Some(WriteError::SelfChange),
             ));
         }
-        let actions = self.guard_write_actions(ctx, evidence).await?;
+        let actions = self.guard_write_actions(ctx, true, evidence).await?;
         let ids = self
             .paged_policy_ids(
                 ctx,
@@ -113,24 +115,35 @@ impl Client {
     pub(super) async fn guard_write_actions<O>(
         &self,
         ctx: &RequestContext,
+        sensitive: bool,
         evidence: &mut Evidence,
     ) -> Result<Vec<String>, Failure<O>> {
+        let unsafe_text = if sensitive {
+            "iam: iam.ListActions: unsafe action list"
+        } else {
+            "iam: iam.ListActions: unsafe guard response"
+        };
+        let mut slot = self.lock_bounded(&self.guard.write_actions, ctx).await?;
+        if !slot.is_empty() {
+            check_cached_actions(&slot, evidence)?;
+            keep_actions_check(&slot, evidence);
+            return Ok(slot.clone());
+        }
         let actions: Vec<Action> = self
             .fetch(
                 ctx,
                 Api::Policies,
-                &guard_read("iam.ListActions", ACTIONS, LIST_CAP),
+                &Operation {
+                    sensitive,
+                    ..read_operation("iam.ListActions", ACTIONS, LIST_CAP, false)
+                },
                 &[],
                 &[("product", "iam")],
                 evidence,
             )
             .await
             .map_err(guard_failed)?;
-        require_safe(
-            &actions,
-            "iam: iam.ListActions: unsafe action list",
-            evidence,
-        )?;
+        require_safe(&actions, unsafe_text, evidence)?;
         let names = write_action_names(&actions)
             .filter(|names| !names.is_empty())
             .ok_or_else(|| {
@@ -139,6 +152,14 @@ impl Client {
                     None,
                 )
             })?;
+        let derived_text = if sensitive {
+            "iam: iam.ListActions: unsafe cached guard response"
+        } else {
+            unsafe_text
+        };
+        require_safe(&names, derived_text, evidence)?;
+        keep_actions_check(&names, evidence);
+        slot.clone_from(&names);
         Ok(names)
     }
 

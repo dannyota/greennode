@@ -21,6 +21,8 @@ mod tests;
 
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use http::{Method, StatusCode};
 
 use crate::config::Session;
@@ -65,6 +67,13 @@ pub enum DecodeError {
 #[derive(Clone)]
 pub struct Client {
     session: Arc<Session>,
+    guard: Arc<GuardCache>,
+}
+
+#[derive(Default)]
+struct GuardCache {
+    caller: Mutex<Option<GetCallerIdentityOutput>>,
+    write_actions: Mutex<Vec<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +88,7 @@ impl Client {
     pub fn new(config: &Config) -> Self {
         Self {
             session: config.session().clone(),
+            guard: Arc::default(),
         }
     }
 
