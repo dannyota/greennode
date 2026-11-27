@@ -180,29 +180,14 @@ fn guard_exchange(
 }
 
 fn response_body(op: &Operation, response: &sender::Response) -> Result<Bytes, Box<Error>> {
-    let result = crate::wire::product::response::classify(
+    crate::wire::product::response::classify(
         op.id,
         response.status,
         Bytes::copy_from_slice(&response.body),
         op.success,
         (true, op.sensitive, op.retry),
         &response.credentials,
-    );
-    if !op.sensitive {
-        return result.map_err(|error| {
-            let Some(api_error) = error.api_error() else {
-                return error;
-            };
-            Box::new(api(
-                op.id,
-                api_error.status(),
-                api_error.code(),
-                response.status.canonical_reason().unwrap_or(""),
-                api_error.retryable(),
-            ))
-        });
-    }
-    result
+    )
 }
 
 pub(crate) async fn exchange(
@@ -211,17 +196,6 @@ pub(crate) async fn exchange(
     evidence: &mut Evidence,
     req: Request<'_>,
     pacing: Option<&Pacing>,
-) -> Result<Box<RawValue>, Box<Error>> {
-    exchange_with_code(session, ctx, evidence, req, pacing, false).await
-}
-
-pub(crate) async fn exchange_with_code(
-    session: &Session,
-    ctx: &RequestContext,
-    evidence: &mut Evidence,
-    req: Request<'_>,
-    pacing: Option<&Pacing>,
-    retain_code: bool,
 ) -> Result<Box<RawValue>, Box<Error>> {
     let direct = pacing.is_none();
     let base = req
@@ -256,7 +230,7 @@ pub(crate) async fn exchange_with_code(
         no_output: false,
         keep_status: true,
         overflow_overrides_status: false,
-        sensitive: !retain_code,
+        sensitive: !direct,
         reject_reflected_credentials: false,
         no_redirect: true,
         retry_config: retry::Config::default(),

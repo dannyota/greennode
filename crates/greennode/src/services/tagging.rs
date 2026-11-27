@@ -66,7 +66,7 @@ pub(super) const SERVICE: Service = Service {
                 include_api_status: false,
             }),
             exit: Some(RuleExit::Failure),
-            message: Some("tagging: key is a system tag"),
+            message: None,
         },
         Rule {
             identity: "tagging-not-settled",

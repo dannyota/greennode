@@ -283,3 +283,70 @@ async fn system_tag_refusal_has_baseline_identity() {
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert!(server.heads().is_empty());
 }
+
+fn refusal_text(failure: &Failure<serde_json::Value>) -> String {
+    failure
+        .error()
+        .detail::<crate::RecoveryAdvice>()
+        .map(|advice| advice.message().to_owned())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn system_tag_refusal_names_operation_resource_and_quoted_key() {
+    let system = r#"[{"key":"zone","value":"a","systemTag":true}]"#;
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![]);
+    let client = test_client(&server, "toy-token");
+    let failure = client
+        .tag_resource(&ctx, write_input("vng.a\"b\u{85}"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_text(&failure),
+        "tagging: key is a system tag: tagging.TagResource: key \"vng.a\\\"b\\u0085\""
+    );
+    let failure = client
+        .untag_resource(
+            &ctx,
+            UntagResourceInput {
+                resource_id: "res-1".into(),
+                resource_type: "SERVER".into(),
+                key: "vng.zone".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_text(&failure),
+        "tagging: key is a system tag: tagging.UntagResource: key \"vng.zone\""
+    );
+    let server = Server::start(vec![http_response(system)]);
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("zone"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refusal_text(&failure),
+        "tagging: key is a system tag: tagging.TagResource: resource res-1: key \"zone\""
+    );
+}
+
+#[tokio::test]
+async fn system_tag_refusal_falls_back_to_fixed_text_for_a_reflected_credential() {
+    let (ctx, _) = RequestContext::new();
+    let server = Server::start(vec![]);
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("vng.toy-token"))
+        .await
+        .unwrap_err();
+    assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
+    let server = Server::start(vec![http_response(
+        r#"[{"key":"toy-token","value":"a","systemTag":true}]"#,
+    )]);
+    let failure = test_client(&server, "toy-token")
+        .tag_resource(&ctx, write_input("toy-token"))
+        .await
+        .unwrap_err();
+    assert_eq!(refusal_text(&failure), "tagging: key is a system tag");
+}

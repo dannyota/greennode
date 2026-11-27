@@ -141,11 +141,12 @@ jobs:
           cp "dist/greennode$EXT" "binary/greennode$EXT"
           cp LICENSE dist/LICENSE
           cp crates/greennode/licenses/go-jmespath-LICENSE dist/licenses/go-jmespath-LICENSE
+          cp crates/greennode-sdk/licenses/go-LICENSE dist/licenses/go-LICENSE
           archive="greennode-$PLATFORM.$ARCHIVE"
           if [ "$ARCHIVE" = zip ]; then
-            (cd dist && 7z a "../$archive" "greennode$EXT" LICENSE licenses/go-jmespath-LICENSE)
+            (cd dist && 7z a "../$archive" "greennode$EXT" LICENSE licenses/go-jmespath-LICENSE licenses/go-LICENSE)
           else
-            tar -C dist -czf "$archive" "greennode$EXT" LICENSE licenses/go-jmespath-LICENSE
+            tar -C dist -czf "$archive" "greennode$EXT" LICENSE licenses/go-jmespath-LICENSE licenses/go-LICENSE
           fi
           python3 -c 'import hashlib, pathlib, sys; p = pathlib.Path(sys.argv[1]); pathlib.Path(sys.argv[2]).write_text(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n", encoding="ascii")' "$archive" "greennode-$PLATFORM.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -436,7 +437,7 @@ jobs:
           python3 -I - <<'PYTHON'
           import hashlib, pathlib, shutil, tarfile, zipfile
           root = pathlib.Path('artifacts')
-          license_files = {'LICENSE': pathlib.Path('LICENSE').read_bytes(), 'licenses/go-jmespath-LICENSE': pathlib.Path('crates/greennode/licenses/go-jmespath-LICENSE').read_bytes()}
+          license_files = {'LICENSE': pathlib.Path('LICENSE').read_bytes(), 'licenses/go-jmespath-LICENSE': pathlib.Path('crates/greennode/licenses/go-jmespath-LICENSE').read_bytes(), 'licenses/go-LICENSE': pathlib.Path('crates/greennode-sdk/licenses/go-LICENSE').read_bytes()}
           for platform, ext in [('darwin-arm64', 'tar.gz'), ('linux-amd64', 'tar.gz'), ('linux-arm64', 'tar.gz'), ('windows-amd64', 'zip')]:
               directory = root / platform
               binary = 'greennode.exe' if ext == 'zip' else 'greennode'

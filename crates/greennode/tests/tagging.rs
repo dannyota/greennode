@@ -225,7 +225,7 @@ fn writes_match_baseline_output_formats() {
 }
 
 #[test]
-fn tagging_errors_have_fixed_messages() {
+fn tagging_errors_have_baseline_messages() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -287,7 +287,10 @@ fn tagging_errors_have_fixed_messages() {
         let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         if mode == "system" {
             assert_eq!(error["error"]["code"], "SystemTag");
-            assert_eq!(error["error"]["message"], "tagging: key is a system tag");
+            assert_eq!(
+                error["error"]["message"],
+                "tagging: key is a system tag: tagging.TagResource: key \"vng.zone\""
+            );
         } else {
             assert_eq!(error["error"]["code"], "NotSettled");
             assert_eq!(
@@ -295,5 +298,96 @@ fn tagging_errors_have_fixed_messages() {
                 "tagging: write outcome is unconfirmed; read tags before retrying"
             );
         }
+    }
+}
+
+#[test]
+fn system_tag_errors_match_baseline_goldens() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let system = r#"[{"key":"zone","value":"a","systemTag":true}]"#;
+    let tag = |key: &'static str| {
+        [
+            "tag-resource",
+            "--resource-id",
+            "res-1",
+            "--resource-type",
+            "SERVER",
+            "--key",
+            key,
+            "--value",
+            "new",
+        ]
+    };
+    let untag = |key: &'static str| {
+        [
+            "untag-resource",
+            "--resource-id",
+            "res-1",
+            "--resource-type",
+            "SERVER",
+            "--key",
+            key,
+        ]
+    };
+    let cases: [(&str, Vec<&str>, Option<&str>); 4] = [
+        ("system-tag-prefix", tag("vng.zone").to_vec(), None),
+        (
+            "system-tag-untag-prefix",
+            untag("vng.a\"b\u{85}\u{e9}").to_vec(),
+            None,
+        ),
+        ("system-tag-resource", tag("zone").to_vec(), Some(system)),
+        (
+            "system-tag-untag-resource",
+            untag("zone").to_vec(),
+            Some(system),
+        ),
+    ];
+    for (name, args, body) in cases {
+        let responses = body
+            .map(|body| {
+                vec![Response::Http {
+                    status: "200 OK".into(),
+                    headers: vec![("Content-Length".into(), body.len().to_string())],
+                    body: body.as_bytes().to_vec(),
+                }]
+            })
+            .unwrap_or_default();
+        let server = Server::start(responses);
+        let options = with_product_loopback(
+            Product::Vserver,
+            ConfigOptions::default().with_static_token(Secret::new("toy-token")),
+            &server,
+        );
+        let (context, _) = RequestContext::new();
+        let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
+        let status = runtime.block_on(run_invocation(Invocation {
+            args: ["greennode", "--project-id", "project-1", "tagging"]
+                .into_iter()
+                .chain(args)
+                .map(OsString::from)
+                .collect(),
+            source: &Source,
+            config_options: options,
+            stdin: &mut stdin,
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+            stdin_terminal: false,
+            stdout_terminal: false,
+            stderr_terminal: false,
+            clock: &SystemClock,
+            context: &context,
+        }));
+        assert_eq!(status, ExitCode::from(1), "{name}");
+        assert!(stdout.is_empty(), "{name}");
+        let golden = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/tagging/{name}.stderr.golden")),
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(stderr).unwrap(), golden, "{name}");
     }
 }

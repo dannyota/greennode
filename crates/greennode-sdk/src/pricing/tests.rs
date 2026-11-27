@@ -672,3 +672,27 @@ async fn estimate_screens_encoded_catalog_region_in_success_and_partial_output()
         }
     }
 }
+
+#[tokio::test]
+async fn get_quote_keeps_screened_peer_code_and_message() {
+    let (ctx, _) = RequestContext::new();
+    let refused = r#"{"code":"QuoteRefused","message":"quantity is not allowed"}"#;
+    let server = Server::start(vec![response("400 Bad Request", refused)]);
+    let failure = client(&server)
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(400));
+    assert_eq!(api.code(), "QuoteRefused");
+    assert_eq!(api.message(), "quantity is not allowed");
+    let reflected = format!(r#"{{"code":"QuoteRefused","message":"bad {CANARY}"}}"#);
+    let server = Server::start(vec![response("400 Bad Request", &reflected)]);
+    let failure = client(&server)
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.message(), "Bad Request");
+    assert!(!format!("{:?}", api.message()).contains(CANARY));
+}

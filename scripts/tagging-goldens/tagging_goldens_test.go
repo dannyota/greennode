@@ -72,3 +72,31 @@ func TestTaggingReadGoldens(t *testing.T) {
 		})
 	}
 }
+
+func TestTaggingSystemTagGoldens(t *testing.T) {
+	cases := []struct {
+		name, body string
+		args       []string
+	}{
+		{"system-tag-prefix", "", []string{"tag-resource", "--resource-id", "res-1", "--resource-type", "SERVER", "--key", "vng.zone", "--value", "new"}},
+		{"system-tag-untag-prefix", "", []string{"untag-resource", "--resource-id", "res-1", "--resource-type", "SERVER", "--key", "vng.a\"b\u0085\u00e9"}},
+		{"system-tag-resource", `[{"key":"zone","value":"a","systemTag":true}]`, []string{"tag-resource", "--resource-id", "res-1", "--resource-type", "SERVER", "--key", "zone", "--value", "new"}},
+		{"system-tag-untag-resource", `[{"key":"zone","value":"a","systemTag":true}]`, []string{"untag-resource", "--resource-id", "res-1", "--resource-type", "SERVER", "--key", "zone"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			handler := jsonHandler(http.StatusOK, c.body)
+			fixture := newSvcFixture(map[string]func(http.ResponseWriter, *http.Request){"/v2/project-1/tag/resource/res-1": handler})
+			root, stdout, stderr := newSvcRoot(t, fixture)
+			root.SetArgs(append([]string{"--region", "hcm-3", "--project-id", "project-1", "tagging"}, c.args...))
+			err := root.ExecuteContext(context.Background())
+			if err == nil || stdout.Len() != 0 {
+				t.Fatal("expected a failure with empty stdout")
+			}
+			printError(stderr, err)
+			if err := os.WriteFile(filepath.Join(os.Getenv("TAGGING_GOLDEN_DIR"), c.name+".stderr.golden"), stderr.Bytes(), 0600); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

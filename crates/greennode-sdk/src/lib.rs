@@ -20,6 +20,7 @@ mod error;
 mod event;
 mod file_diagnostic;
 pub mod globalloadbalancer;
+mod go_text;
 pub mod iam;
 pub mod loadbalancer;
 mod model;

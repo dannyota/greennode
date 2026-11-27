@@ -1,4 +1,5 @@
 use super::*;
+use crate::RecoveryAdvice;
 use crate::wire::product::{evidence::Evidence, options::Options};
 use serde_json::{Value, json};
 
@@ -58,8 +59,21 @@ fn safe_partial(evidence: &Evidence, mut value: Value) -> Value {
     value
 }
 
-fn system_tag_error() -> Error {
-    Error::new(ErrorClass::Api).with_detail(ErrorDetail::SystemTag)
+fn system_tag_error(evidence: &Evidence, op: &str, resource: Option<&str>, key: &str) -> Error {
+    const FIXED: &str = "tagging: key is a system tag";
+    let text =
+        if evidence.text_reflects(key) || resource.is_some_and(|id| evidence.text_reflects(id)) {
+            FIXED.to_owned()
+        } else {
+            let key = crate::go_text::go_quote(key);
+            match resource {
+                Some(id) => format!("{FIXED}: {op}: resource {id}: key {key}"),
+                None => format!("{FIXED}: {op}: key {key}"),
+            }
+        };
+    Error::new(ErrorClass::Api)
+        .with_detail(ErrorDetail::SystemTag)
+        .with_outer_detail(RecoveryAdvice::new(&text))
 }
 
 fn operation(id: &'static str, write: bool) -> Operation {
@@ -148,8 +162,20 @@ impl Client {
         {
             return Err(fail(Error::new(ErrorClass::InvalidInput)));
         }
+        let op_id = if value.is_some() {
+            "tagging.TagResource"
+        } else {
+            "tagging.UntagResource"
+        };
         if key.starts_with("vng.") {
-            return Err(fail(system_tag_error()));
+            let mut known = Evidence::new();
+            let mut jitter = || self.session.retry_jitter();
+            if let Ok(runtime) = self.session.runtime(ctx, &mut jitter)
+                && let Some(credentials) = runtime.configured_credentials
+            {
+                known.absorb(credentials);
+            }
+            return Err(fail(system_tag_error(&known, op_id, None, key)));
         }
         let mut evidence = Evidence::new();
         let project = self
@@ -163,11 +189,6 @@ impl Client {
             .vserver
             .as_ref()
             .ok_or_else(|| fail(Error::new(ErrorClass::InvalidConfig)))?;
-        let op_id = if value.is_some() {
-            "tagging.TagResource"
-        } else {
-            "tagging.UntagResource"
-        };
         let read = operation(op_id, false);
         let write = operation(op_id, true);
         let mut jitter = || self.session.retry_jitter();
@@ -193,7 +214,7 @@ impl Client {
         })?;
         let current = snapshot.0;
         if current.iter().any(|tag| tag.system_tag && tag.key == key) {
-            return Err(fail(system_tag_error()));
+            return Err(fail(system_tag_error(&evidence, op_id, Some(id), key)));
         }
         let mut next: Vec<Tag> = current.iter().filter(|t| !t.system_tag).cloned().collect();
         let index = next.iter().position(|tag| tag.key == key);
