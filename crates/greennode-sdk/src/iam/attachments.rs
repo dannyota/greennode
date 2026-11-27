@@ -8,6 +8,15 @@ use super::{Api, Client};
 use crate::wire::product::redirect::Retry;
 use crate::{Failure, RequestContext};
 
+macro_rules! pre_guard {
+    (account_policy, $guard:ident) => {
+        $guard.reject_service_account_caller()
+    };
+    ($other:ident, $guard:ident) => {
+        Ok::<(), Failure<_>>(())
+    };
+}
+
 macro_rules! attachment {
     ($(#[$doc:meta])* $method:ident, $input:ident, $output:ident, $first:ident, $second:ident,
      $guard:ident, $op:literal, $field1:literal, $field2:literal, $method_type:ident, $retry:ident, $route:literal) => {
@@ -39,6 +48,7 @@ macro_rules! attachment {
                 let second = input.$second.as_str();
                 let mut evidence = self.write_evidence(ctx, $op, &[($field1, first), ($field2, second)], &[])?;
                 let mut guard = Guard::new(self, ctx, $op, &mut evidence).await?;
+                pre_guard!($guard, guard)?;
                 guard.load_actions().await?;
                 $guard(&mut guard, $op, first, second).await?;
                 let operation = write_operation($op, Method::$method_type, $route, Retry::$retry, &[StatusCode::NO_CONTENT]);
@@ -139,6 +149,52 @@ attachment!(
     Repeatable,
     "policies-api/v1/policies/{}/iam-users/{}"
 );
+
+attachment!(
+    /// Attaches a non-privileged policy to an unprotected service account.
+    attach_service_account_policy,
+    AttachServiceAccountPolicyInput,
+    AttachServiceAccountPolicyOutput,
+    policy_id,
+    service_account_id,
+    account_policy,
+    "iam.AttachServiceAccountPolicy",
+    "PolicyID",
+    "ServiceAccountID",
+    POST,
+    NonIdempotent,
+    "policies-api/v1/policies/{}/service-accounts/{}"
+);
+attachment!(
+    /// Detaches a non-privileged policy from an unprotected service account.
+    detach_service_account_policy,
+    DetachServiceAccountPolicyInput,
+    DetachServiceAccountPolicyOutput,
+    policy_id,
+    service_account_id,
+    account_policy,
+    "iam.DetachServiceAccountPolicy",
+    "PolicyID",
+    "ServiceAccountID",
+    DELETE,
+    Repeatable,
+    "policies-api/v1/policies/{}/service-accounts/{}"
+);
+
+#[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
+async fn account_policy<O>(
+    guard: &mut Guard<'_>,
+    op: &str,
+    policy_id: &str,
+    account_id: &str,
+) -> Result<(), Failure<O>> {
+    protection_error(
+        op,
+        guard.account(account_id).await?,
+        "the service account has a privileged policy attached",
+    )?;
+    require_non_privileged_policy(guard, op, policy_id).await
+}
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
 async fn membership<O>(

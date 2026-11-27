@@ -150,7 +150,13 @@ fn transport_failure(error: &hyper_util::client::legacy::Error) -> SendFailure {
 }
 
 #[derive(Default)]
-pub(crate) struct Evidence {
+pub(crate) struct Evidence<'a> {
+    #[cfg(test)]
+    pub(crate) attempt_counter: Option<&'a dyn crate::wire::product::sender::Sleeper>,
+    #[cfg(test)]
+    pub(crate) attempted: bool,
+    #[cfg(not(test))]
+    marker: std::marker::PhantomData<&'a ()>,
     pub(crate) started: bool,
     pub(crate) status: Option<StatusCode>,
 }
@@ -182,7 +188,7 @@ pub(crate) async fn once_with_evidence(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    evidence: &mut Evidence,
+    evidence: &mut Evidence<'_>,
 ) -> Result<Reply, Error> {
     once_inner(
         client,
@@ -203,7 +209,7 @@ pub(crate) async fn once_with_expected(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    (evidence, expected): (&mut Evidence, &[StatusCode]),
+    (evidence, expected): (&mut Evidence<'_>, &[StatusCode]),
 ) -> Result<Reply, Error> {
     once_inner(
         client,
@@ -224,7 +230,7 @@ async fn once_inner(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    (evidence, expected): (&mut Evidence, Option<&[StatusCode]>),
+    (evidence, expected): (&mut Evidence<'_>, Option<&[StatusCode]>),
 ) -> Result<Reply, Error> {
     let method = request.method();
     if !matches!(
@@ -260,6 +266,13 @@ async fn once_inner(
     let is_head = request.method() == Method::HEAD;
     let mut request = Box::pin(client.request(request));
     let send = poll_fn(|cx| {
+        #[cfg(test)]
+        if !evidence.attempted {
+            evidence.attempted = true;
+            if let Some(counter) = evidence.attempt_counter {
+                counter.record_write_attempt();
+            }
+        }
         let result = request.as_mut().poll(cx);
         evidence.started |= guard.capture.connection_metadata().is_some();
         result

@@ -168,6 +168,8 @@ impl Failure {
 pub(crate) trait Sleeper: Send + Sync {
     fn sleep(&self, duration: std::time::Duration)
     -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+    #[cfg(test)]
+    fn record_write_attempt(&self) {}
 }
 async fn bounded<T, F: Future<Output = T>>(
     ctx: &RequestContext,
@@ -516,6 +518,10 @@ async fn run_inner(
                 .map_err(|_| Error::InvalidRequest)?;
             *outgoing.headers_mut() = headers;
             let mut observed = send::Evidence::default();
+            #[cfg(test)]
+            if matches!(op.class, redirect::Classification::Write) {
+                observed.attempt_counter = Some(sleeper);
+            }
             let result = bounded(&ctx, clock, || {
                 send::once_with_evidence(
                     client,

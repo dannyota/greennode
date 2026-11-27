@@ -52,6 +52,15 @@ pub struct Server {
 
 impl Server {
     pub fn start(responses: Vec<Response>) -> Self {
+        Self::start_inner(responses, None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_stopping_after(responses: Vec<Response>, count: usize) -> Self {
+        Self::start_inner(responses, Some(count))
+    }
+
+    fn start_inner(responses: Vec<Response>, stop_after: Option<usize>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -85,13 +94,18 @@ impl Server {
                 .build()
                 .unwrap();
             runtime.block_on(async move {
-                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let mut listener = Some(tokio::net::TcpListener::from_std(listener).unwrap());
+                let (stop_accept, mut stop_accept_rx) = tokio::sync::mpsc::unbounded_channel::<oneshot::Sender<()>>();
                 let acceptor = TlsAcceptor::from(Arc::new(config));
                 let mut tasks = tokio::task::JoinSet::new();
                 loop {
                     tokio::select! {
                         _ = &mut stop => break,
-                        result = listener.accept() => {
+                        Some(ack) = stop_accept_rx.recv() => {
+                            drop(listener.take());
+                            let _ = ack.send(());
+                        },
+                        result = async { listener.as_ref().unwrap().accept().await }, if listener.is_some() => {
                             let (stream, _) = result.unwrap();
                             connection_count.fetch_add(1, Ordering::SeqCst);
                             let acceptor = acceptor.clone();
@@ -100,6 +114,7 @@ impl Server {
                             let protocol = Arc::clone(&protocol_count);
                             let request_heads = Arc::clone(&request_heads);
                             let request_bodies = Arc::clone(&request_bodies);
+                            let stop_accept = stop_accept.clone();
                             tasks.spawn(async move {
                                 let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
                                 let Ok(mut stream) = acceptor.accept(stream).await else { return };
@@ -134,7 +149,12 @@ impl Server {
                                     let mut body = vec![0; length];
                                     if stream.read_exact(&mut body).await.is_err() { return; }
                                     request_bodies.lock().unwrap().push(body);
-                                    requests.fetch_add(1, Ordering::SeqCst);
+                                    let count = requests.fetch_add(1, Ordering::SeqCst) + 1;
+                                    let final_response = stop_after == Some(count);
+                                    if final_response {
+                                        let (ack, done) = oneshot::channel();
+                                        if stop_accept.send(ack).is_err() || done.await.is_err() { return; }
+                                    }
                                     let bytes = match response {
                                         Response::ResetMidBody(_) => unreachable!(),
                                         Response::Fragment { first, proceed, last } => {
@@ -174,12 +194,14 @@ impl Server {
                                         Response::Http { status, headers, body } => {
                                             let mut bytes = format!("HTTP/1.1 {status}\r\n").into_bytes();
                                             for (name, value) in headers { bytes.extend_from_slice(format!("{name}: {value}\r\n").as_bytes()); }
+                                            if final_response { bytes.extend_from_slice(b"Connection: close\r\n"); }
                                             bytes.extend_from_slice(b"\r\n");
                                             bytes.extend_from_slice(&body);
                                             bytes
                                         }
                                     };
                                     if stream.write_all(&bytes).await.is_err() || stream.flush().await.is_err() { return; }
+                                    if final_response { return; }
                                 }
                                 }).await;
                             });

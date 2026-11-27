@@ -145,7 +145,11 @@ mod user_writes;
 
 macro_rules! permission_change {
     ($input:ident, $method:ident, $name:literal, $go:literal, $help:literal,
-     $reason:literal, [$($flag:ident => $field:expr),+ $(,)?]) => {{
+     $reason:literal, [$($flag:ident => $field:expr),+ $(,)?]) => {
+        permission_change!($input, $method, $name, $go, $help, $reason, &[], [$($flag => $field),+])
+    };
+    ($input:ident, $method:ident, $name:literal, $go:literal, $help:literal,
+     $reason:literal, $notes:expr, [$($flag:ident => $field:expr),+ $(,)?]) => {{
         const INPUT: InputDescriptor<sdk::$input> = InputDescriptor {
             defaults: || sdk::$input::new("", ""),
             fields: &[$($field),+],
@@ -166,7 +170,7 @@ macro_rules! permission_change {
             flags: &[$($flag),+],
             json_fields: &[],
             extra_flags: &[],
-            notes: &[],
+            notes: $notes,
             handler: Some(Handler::new(&INPUT, |op, matches, invocation| {
                 Box::pin(dispatch::management_with_confirmation(
                     invocation, op, matches, &INPUT,
@@ -180,6 +184,9 @@ macro_rules! permission_change {
     }};
 }
 
+const ACCOUNT_POLICY_GUARD_NOTE: &[&str] = &[
+    "Refuses with `SelfChange` when the caller is a service account, and `PrivilegedChange` when the policy grants an IAM write action or the target service account already holds one. Neither guard can be disabled.",
+];
 const PAGE_NOTE: &str =
     "Returns one zero-based page. The default size is 10000. Unknown page metadata is null.";
 const USER_NOTE: &str = "Use `list-user-policies` and `list-user-groups` with the user ID to see attached policies and memberships.";
@@ -253,6 +260,13 @@ pub(super) const SERVICE: Service = Service {
             ]
         ),
         permission_change!(
+            AttachServiceAccountPolicyInput, attach_service_account_policy, "attach-service-account-policy", "AttachServiceAccountPolicy",
+            "Attach an IAM policy to a service account", "grants permissions", ACCOUNT_POLICY_GUARD_NOTE, [
+                POLICY_ID => required_string!(sdk::AttachServiceAccountPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                SERVICE_ACCOUNT_ID => required_string!(sdk::AttachServiceAccountPolicyInput, service_account_id, SERVICE_ACCOUNT_ID, "ServiceAccountID"),
+            ]
+        ),
+        permission_change!(
             AttachUserPolicyInput, attach_user_policy, "attach-user-policy", "AttachUserPolicy",
             "Attach an IAM policy to a user", "grants permissions", [
                 POLICY_ID => required_string!(sdk::AttachUserPolicyInput, policy_id, POLICY_ID, "PolicyID"),
@@ -264,6 +278,13 @@ pub(super) const SERVICE: Service = Service {
             "Detach an IAM policy from a group", "removes permissions", [
                 POLICY_ID => required_string!(sdk::DetachGroupPolicyInput, policy_id, POLICY_ID, "PolicyID"),
                 GROUP_ID => required_string!(sdk::DetachGroupPolicyInput, group_id, GROUP_ID, "GroupID"),
+            ]
+        ),
+        permission_change!(
+            DetachServiceAccountPolicyInput, detach_service_account_policy, "detach-service-account-policy", "DetachServiceAccountPolicy",
+            "Detach an IAM policy from a service account", "removes permissions", ACCOUNT_POLICY_GUARD_NOTE, [
+                POLICY_ID => required_string!(sdk::DetachServiceAccountPolicyInput, policy_id, POLICY_ID, "PolicyID"),
+                SERVICE_ACCOUNT_ID => required_string!(sdk::DetachServiceAccountPolicyInput, service_account_id, SERVICE_ACCOUNT_ID, "ServiceAccountID"),
             ]
         ),
         permission_change!(

@@ -21,6 +21,8 @@ pub(crate) struct Session {
     default_auth_endpoints: bool,
     #[cfg(any(test, feature = "test-support"))]
     product_fixtures: OnceLock<Vec<(crate::testing::Product, bool)>>,
+    #[cfg(test)]
+    retry_attempts: std::sync::atomic::AtomicUsize,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
@@ -320,6 +322,12 @@ impl Session {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_retry_attempts(&self) -> usize {
+        self.retry_attempts
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_test_product_root(&self, root: rustls::pki_types::CertificateDer<'static>) {
         assert!(
             self.clients
@@ -506,6 +514,8 @@ impl Session {
             default_auth_endpoints,
             #[cfg(any(test, feature = "test-support"))]
             product_fixtures: OnceLock::new(),
+            #[cfg(test)]
+            retry_attempts: std::sync::atomic::AtomicUsize::new(0),
             clients: OnceLock::new(),
             clock,
             timeout,
@@ -567,6 +577,12 @@ fn product_clients(
 }
 
 impl Sleeper for Session {
+    #[cfg(test)]
+    fn record_write_attempt(&self) {
+        self.retry_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.clock
             .sleep_until(self.clock.monotonic_now() + duration)

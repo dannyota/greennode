@@ -321,6 +321,15 @@ impl Clock for BeforeRequestClock {
         Box::pin(std::future::pending())
     }
 }
+struct CountingAttempts(AtomicUsize);
+impl Sleeper for CountingAttempts {
+    fn sleep(&self, _: std::time::Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
+    fn record_write_attempt(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 #[tokio::test]
 async fn deadline_before_request_poll_stays_not_sent() {
     let server = Server::start(vec![response("200 OK", &[])]);
@@ -331,7 +340,7 @@ async fn deadline_before_request_poll_stays_not_sent() {
         sleeps: AtomicUsize::new(0),
     };
     let deadline = clock.start + std::time::Duration::from_secs(5);
-    let sleeper = Immediate::default();
+    let sleeper = CountingAttempts(AtomicUsize::new(0));
     let err = failure(
         run!(
             &clients,
@@ -348,6 +357,7 @@ async fn deadline_before_request_poll_stays_not_sent() {
     );
     assert_eq!(err.dispatch, WriteDispatch::NotSent);
     assert_eq!(server.requests(), 0);
+    assert_eq!(sleeper.0.load(Ordering::SeqCst), 0);
 }
 struct HeadClock {
     clock: TestClock,
@@ -414,7 +424,7 @@ async fn cancel_waiting_for_headers_is_possibly_sent() {
     let (ctx, cancel) = RequestContext::new();
     let clock = TestClock::new(OffsetDateTime::UNIX_EPOCH);
     let deadline = clock.monotonic_now() + std::time::Duration::from_secs(5);
-    let sleeper = Immediate::default();
+    let sleeper = CountingAttempts(AtomicUsize::new(0));
     let op = write(Method::POST, redirect::Retry::Once);
     let request = request(&server.origin);
     let mut jitter = || 0;
@@ -431,6 +441,7 @@ async fn cancel_waiting_for_headers_is_possibly_sent() {
     );
     tokio::pin!(future);
     tokio::select! { result=&mut future=>panic!("ended before cancellation: {}", result.is_ok()), ready=received=>assert!(ready.is_ok()) }
+    assert_eq!(sleeper.0.load(Ordering::SeqCst), 1);
     cancel.cancel();
     let err = failure(future.await);
     assert_eq!(err.dispatch, WriteDispatch::MayHaveBeenSent);

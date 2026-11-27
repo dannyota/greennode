@@ -194,6 +194,8 @@ fn validate_ids<'a, T>(
         if value.is_empty() {
             return Err(invalid_input(format!("{operation} requires {field}")));
         }
+    }
+    for (field, value) in ids {
         if !Options::DEFAULT.path_ids.allows(value) {
             let message = if operation == "iam.GetPolicy" {
                 "iam.GetPolicy requires a valid PolicyID".to_owned()

@@ -58,12 +58,6 @@ impl<'a> Guard<'a> {
         evidence: &'a mut Evidence,
     ) -> Result<Self, Failure<O>> {
         let caller = client.require_classified_caller(ctx, op, evidence).await?;
-        if caller.user_type == "iam-user" && !PathIds::WithUnderscore.allows(&caller.user_id) {
-            return Err(guard_refusal(
-                "iam: iam.GetCallerIdentity: unsafe caller identity",
-                None,
-            ));
-        }
         Ok(Self {
             client,
             ctx,
@@ -201,6 +195,37 @@ impl<'a> Guard<'a> {
         Ok(protection)
     }
 
+    pub(super) fn reject_service_account_caller<O>(&self) -> Result<(), Failure<O>> {
+        if self.is_service_account() {
+            return Err(guard_refusal(
+                &format!(
+                    "iam: refused: target is the caller: {}: the caller is a service account",
+                    self.op
+                ),
+                Some(WriteError::SelfChange),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn account<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
+        let attached = self
+            .policy_summaries(
+                "policies-api/v1/user-attachments/service-accounts/{}/policies",
+                "ServiceAccountID",
+                id,
+            )
+            .await?;
+        if self
+            .any_privileged(attached.iter().map(|policy| policy.id.as_str()))
+            .await?
+        {
+            Ok(Protection::Privileged)
+        } else {
+            Ok(Protection::None)
+        }
+    }
+
     pub(super) async fn group<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
         let group: GroupAttachments = self
             .client
@@ -233,6 +258,14 @@ impl<'a> Guard<'a> {
     }
 
     pub(super) async fn user<O>(&mut self, id: &str) -> Result<Protection, Failure<O>> {
+        if self.caller.user_type == "iam-user"
+            && !PathIds::WithUnderscore.allows(&self.caller.user_id)
+        {
+            return Err(guard_refusal(
+                "iam: iam.GetCallerIdentity: unsafe caller identity",
+                None,
+            ));
+        }
         self.check_response(self.op, &self.caller)?;
         self.check_ids([self.caller.user_id.as_str(), id])?;
         if !self.is_service_account() && id.eq_ignore_ascii_case(&self.caller.user_id) {

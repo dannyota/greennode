@@ -2896,5 +2896,589 @@
     ],
     "exit": 2,
     "replies": []
+  },
+  {
+    "name": "attach-service-account-policy",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts/sa-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "attach-service-account-policy-requires-yes",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-service-account-policy-read-only",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-service-account-policy",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 0,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:ListActions"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "DELETE",
+        "route": "/policies-api/v1/policies/pol-1/service-accounts/sa-1",
+        "status": 204,
+        "body": null
+      }
+    ]
+  },
+  {
+    "name": "detach-service-account-policy-requires-yes",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "detach-service-account-policy-read-only",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes",
+      "--read-only"
+    ],
+    "exit": 2,
+    "replies": []
+  },
+  {
+    "name": "attach-service-account-policy-self",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "user-sa"
+        }
+      }
+    ]
+  },
+  {
+    "name": "attach-service-account-policy-protected",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "id": "pol-2"
+            }
+          ],
+          "totalItems": 1
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-2",
+        "status": 200,
+        "body": {
+          "id": "pol-2",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:CreatePolicy"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "attach-service-account-policy-privileged",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:CreatePolicy"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "attach-service-account-policy-truncated",
+    "args": [
+      "attach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 1
+        }
+      }
+    ]
+  },
+  {
+    "name": "detach-service-account-policy-self",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "user-sa"
+        }
+      }
+    ]
+  },
+  {
+    "name": "detach-service-account-policy-protected",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "id": "pol-2"
+            }
+          ],
+          "totalItems": 1
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-2",
+        "status": 200,
+        "body": {
+          "id": "pol-2",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:CreatePolicy"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "detach-service-account-policy-privileged",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 0
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/policies/pol-1",
+        "status": 200,
+        "body": {
+          "id": "pol-1",
+          "statements": [
+            {
+              "effect": "allow",
+              "actions": [
+                "iam:CreatePolicy"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "detach-service-account-policy-truncated",
+    "args": [
+      "detach-service-account-policy",
+      "--policy-id",
+      "pol-1",
+      "--service-account-id",
+      "sa-1",
+      "--yes"
+    ],
+    "exit": 1,
+    "replies": [
+      {
+        "method": "GET",
+        "route": "/accounts-api/v1/auth/userinfo",
+        "status": 200,
+        "body": {
+          "userId": "usr-1",
+          "userType": "iam-user"
+        }
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/actions?product=iam",
+        "status": 200,
+        "body": [
+          {
+            "action": "iam:CreatePolicy",
+            "label": "Write",
+            "resources": []
+          }
+        ]
+      },
+      {
+        "method": "GET",
+        "route": "/policies-api/v1/user-attachments/service-accounts/sa-1/policies?pageNumber=0&pageSize=10000",
+        "status": 200,
+        "body": {
+          "data": [],
+          "totalItems": 1
+        }
+      }
+    ]
   }
 ]

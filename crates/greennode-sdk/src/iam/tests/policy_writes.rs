@@ -1,11 +1,402 @@
 use super::{client, response};
 use crate::iam::{
-    AttachUserPolicyInput, CreatePolicyInput, DeletePolicyInput, Statement, UpdatePolicyInput,
-    WriteError,
+    AttachServiceAccountPolicyInput, AttachUserPolicyInput, CreatePolicyInput, DeletePolicyInput,
+    DetachServiceAccountPolicyInput, Statement, UpdatePolicyInput, WriteError,
 };
 use crate::wire::test_server::{Response, Server};
 use crate::{ErrorClass, RequestContext, WriteDispatch};
 use serde_json::{Value, json};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+struct RefreshingProvider(AtomicUsize);
+
+impl crate::CredentialsProvider for RefreshingProvider {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>,
+    > {
+        let value = if self.0.load(Ordering::SeqCst) == 0 {
+            "first-token"
+        } else {
+            "second-token"
+        };
+        Box::pin(async move { Ok(crate::Token::new(crate::Secret::new(value), None)) })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a crate::Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::Error>> + Send + 'a>>
+    {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[tokio::test]
+async fn account_policy_retries_401_after_provider_refresh() {
+    for detach in [false, true] {
+        let server = Server::start(vec![caller(), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#), response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#), response("401 Unauthorized", b"{}"), response("403 Forbidden", b"{}")]);
+        let provider = Arc::new(RefreshingProvider(AtomicUsize::new(0)));
+        let config = crate::Config::new(
+            crate::ConfigOptions::default()
+                .with_region("han-1".into())
+                .with_project_id("unscoped".into())
+                .with_credentials_provider(provider.clone())
+                .with_endpoint_overrides(crate::EndpointOverrides {
+                    dashboard: Some(format!("{}/dashboard/", server.origin)),
+                    iam: Some(format!("{}/iam/", server.origin)),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+        config
+            .session()
+            .set_test_product_root(server.root_der.clone());
+        let client = crate::iam::Client::new(&config);
+        let (ctx, _) = RequestContext::new();
+        let (error, dispatch) = if detach {
+            let failure = client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap_err();
+            let dispatch = failure.write_dispatch();
+            (failure.into_parts().0, dispatch)
+        } else {
+            let failure = client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap_err();
+            let dispatch = failure.write_dispatch();
+            (failure.into_parts().0, dispatch)
+        };
+        assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+        assert_eq!(server.requests(), 6);
+        let heads = server.heads();
+        assert!(
+            heads[4]
+                .windows(b"first-token".len())
+                .any(|part| part == b"first-token")
+        );
+        assert!(
+            heads[5]
+                .windows(b"second-token".len())
+                .any(|part| part == b"second-token")
+        );
+        assert_eq!(error.class(), ErrorClass::PermissionDenied);
+        let api = error.api_error().unwrap();
+        assert_eq!(api.code(), "Forbidden");
+        assert_eq!(api.status(), Some(403));
+        assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+    }
+}
+
+#[tokio::test]
+async fn account_policy_refuses_service_account_caller_before_policy_reads() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"userId":"usr-1","userType":"user-sa"}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .attach_service_account_policy(&ctx, AttachServiceAccountPolicyInput::new("pol-1", "sa-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<WriteError>(),
+        Some(&WriteError::SelfChange)
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn account_policy_response_failures_match_transport_contract() {
+    for detach in [false, true] {
+        for (kind, expected_class, code, status) in [
+            ("truncated", ErrorClass::Api, "", None),
+            (
+                "oversized",
+                ErrorClass::PermissionDenied,
+                "Forbidden",
+                Some(403),
+            ),
+            ("redirect", ErrorClass::Api, "", None),
+        ] {
+            let last = match kind {
+                "truncated" => Response::RawClose(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 20\r\n\r\n{}".to_vec(),
+                ),
+                "oversized" => response("403 Forbidden", &vec![b'x'; 8 * 1024 * 1024 + 1]),
+                _ => Response::Http {
+                    status: "307 Temporary Redirect".into(),
+                    headers: vec![
+                        ("Content-Length".into(), "0".into()),
+                        ("Location".into(), "/other".into()),
+                    ],
+                    body: vec![],
+                },
+            };
+            let server = Server::start(vec![caller(), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#), response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#), last]);
+            let (ctx, _) = RequestContext::new();
+            let client = client(&server, BEARER);
+            let (error, dispatch) = if detach {
+                let failure = client
+                    .detach_service_account_policy(
+                        &ctx,
+                        DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                    )
+                    .await
+                    .unwrap_err();
+                let dispatch = failure.write_dispatch();
+                (failure.into_parts().0, dispatch)
+            } else {
+                let failure = client
+                    .attach_service_account_policy(
+                        &ctx,
+                        AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                    )
+                    .await
+                    .unwrap_err();
+                let dispatch = failure.write_dispatch();
+                (failure.into_parts().0, dispatch)
+            };
+            assert_eq!(error.class(), expected_class, "{kind} detach={detach}");
+            let api = error.api_error().unwrap();
+            assert_eq!(api.code(), code, "{kind} detach={detach}");
+            assert_eq!(api.status(), status, "{kind} detach={detach}");
+            assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+            assert_eq!(server.heads().len(), 5);
+        }
+    }
+}
+
+#[tokio::test]
+async fn account_policy_retries_follow_write_method() {
+    for detach in [false, true] {
+        for (status, class, code, expected_requests) in [
+            ("400 Bad Request", ErrorClass::Api, "BadRequest", 5),
+            ("404 Not Found", ErrorClass::NotFound, "NotFound", 5),
+            ("409 Conflict", ErrorClass::Api, "Conflict", 5),
+            (
+                "500 Internal Server Error",
+                ErrorClass::Api,
+                "ServerError",
+                5,
+            ),
+            (
+                "429 Too Many Requests",
+                ErrorClass::RateLimited,
+                "Throttled",
+                8,
+            ),
+            (
+                "502 Bad Gateway",
+                ErrorClass::Api,
+                "ServerError",
+                if detach { 8 } else { 5 },
+            ),
+            ("401 Unauthorized", ErrorClass::Auth, "Unauthorized", 5),
+        ] {
+            let mut responses = vec![caller(), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#), response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#)];
+            responses.extend((0..4).map(|_| response(status, b"{}")));
+            let server = Server::start(responses);
+            let (ctx, _) = RequestContext::new();
+            let client = client(&server, BEARER);
+            let (error, dispatch) = if detach {
+                let failure = client
+                    .detach_service_account_policy(
+                        &ctx,
+                        DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                    )
+                    .await
+                    .unwrap_err();
+                let dispatch = failure.write_dispatch();
+                (failure.into_parts().0, dispatch)
+            } else {
+                let failure = client
+                    .attach_service_account_policy(
+                        &ctx,
+                        AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                    )
+                    .await
+                    .unwrap_err();
+                let dispatch = failure.write_dispatch();
+                (failure.into_parts().0, dispatch)
+            };
+            assert_eq!(error.class(), class, "{status} detach={detach}");
+            let api = error.api_error().unwrap();
+            assert_eq!(api.code(), code, "{status} detach={detach}");
+            assert_eq!(api.status(), Some(status[..3].parse().unwrap()));
+            assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
+            assert_eq!(
+                server.requests(),
+                expected_requests,
+                "{status} detach={detach}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn loopback_server_stops_accepting_after_the_configured_response() {
+    let server = Server::start_stopping_after(vec![caller()], 1);
+    let (ctx, _) = RequestContext::new();
+    client(&server, BEARER)
+        .get_caller_identity(&ctx, crate::iam::GetCallerIdentityInput)
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 1);
+    assert!(std::net::TcpStream::connect(server.address).is_err());
+}
+
+#[tokio::test]
+async fn account_policy_failed_dial_after_guard_is_not_sent() {
+    for detach in [false, true] {
+        let server = Server::start_stopping_after(vec![
+            caller(), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#),
+            response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#),
+        ], 4);
+        let (ctx, _) = RequestContext::new();
+        let client = client(&server, BEARER);
+        let (error, dispatch) = if detach {
+            let failure = client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap_err();
+            let dispatch = failure.write_dispatch();
+            (failure.into_parts().0, dispatch)
+        } else {
+            let failure = client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap_err();
+            let dispatch = failure.write_dispatch();
+            (failure.into_parts().0, dispatch)
+        };
+        assert_eq!(error.class(), ErrorClass::Api);
+        let api = error.api_error().unwrap();
+        assert_eq!(api.code(), "");
+        assert_eq!(api.status(), None);
+        assert_eq!(dispatch, WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 4);
+        assert_eq!(client.session.test_retry_attempts(), 4);
+    }
+}
+
+#[tokio::test]
+async fn account_policy_accepts_classified_caller_without_path_id() {
+    for detach in [false, true] {
+        let server = Server::start(vec![response("200 OK", br#"{"userId":"user@example.com","userType":"iam-user"}"#), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#), response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#), response("204 No Content", b"")]);
+        let (ctx, _) = RequestContext::new();
+        let client = client(&server, BEARER);
+        if detach {
+            client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap();
+        } else {
+            client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(server.heads().len(), 5);
+    }
+}
+
+#[tokio::test]
+async fn unclassified_caller_is_not_cached() {
+    let server = Server::start(vec![
+        response("200 OK", b"{}"),
+        caller(),
+        catalog(),
+        response("200 OK", br#"{"data":[],"totalItems":0}"#),
+        response(
+            "200 OK",
+            br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#,
+        ),
+        response("204 No Content", b""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, BEARER);
+    assert!(
+        client
+            .attach_service_account_policy(
+                &ctx,
+                AttachServiceAccountPolicyInput::new("pol-1", "sa-1")
+            )
+            .await
+            .is_err()
+    );
+    client
+        .attach_service_account_policy(&ctx, AttachServiceAccountPolicyInput::new("pol-1", "sa-1"))
+        .await
+        .unwrap();
+    assert_eq!(server.heads().len(), 6);
+}
+
+#[tokio::test]
+async fn account_policy_checks_required_fields_before_id_syntax() {
+    for detach in [false, true] {
+        let server = Server::start(vec![]);
+        let (ctx, _) = RequestContext::new();
+        let client = client(&server, BEARER);
+        let error = if detach {
+            client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("bad/id", ""),
+                )
+                .await
+                .unwrap_err()
+                .into_parts()
+                .0
+        } else {
+            client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("bad/id", ""),
+                )
+                .await
+                .unwrap_err()
+                .into_parts()
+                .0
+        };
+        assert!(
+            error
+                .api_error()
+                .unwrap()
+                .message()
+                .ends_with("requires ServiceAccountID")
+        );
+        assert_eq!(server.heads().len(), 0);
+    }
+}
 
 const BEARER: &str = "toy/bearer";
 const POLICY_ID: &str = "pol-1";
