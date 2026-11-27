@@ -1,14 +1,18 @@
+use std::sync::Arc;
+use std::task::Poll;
+
 use bytes::Bytes;
 use http::{Method, StatusCode};
 use serde_json::Value;
+use tokio::sync::{Mutex, MutexGuard};
 
 use super::wire::{Body, ObservedResponse, Wire};
 use super::{Api, Client, DEFAULT_CAP, OBJECT_CAP, read_operation, require_identity, screen_error};
 use crate::error::RecoveryAdvice;
 use crate::wire::product::{
-    evidence::Evidence,
+    evidence::{Evidence, SentCredentials},
     operation::{self, Operation},
-    options::{Options, PasswordSlot},
+    options::{AttemptCheck, Options, PasswordSlot},
     redirect::{Classification, Retry},
 };
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
@@ -152,13 +156,13 @@ impl Client {
         let runtime = session
             .runtime(ctx, &mut jitter)
             .map_err(|e| not_sent(*e))?;
-        if let Some(configured) = runtime.configured_credentials {
-            evidence.absorb(configured);
-        }
-        if let Some(caller) = self.guard.caller.lock().await.as_ref() {
-            check_cached_caller(caller, evidence)?;
-        }
-        check_cached_actions(&self.guard.write_actions.lock().await, evidence)?;
+        let checks = evidence.cached_checks().to_vec();
+        let attempt =
+            move |credentials: &SentCredentials| checks.iter().find_map(|check| check(credentials));
+        let options = Options {
+            attempt_check: Some(AttemptCheck(&attempt)),
+            ..options
+        };
         operation::execute_with_evidence::<Body<T>>(
             runtime,
             base,
@@ -191,9 +195,10 @@ impl Client {
         op: &str,
         evidence: &mut Evidence,
     ) -> Result<super::GetCallerIdentityOutput, Failure<O>> {
-        let mut slot = self.guard.caller.lock().await;
+        let mut slot = self.lock_bounded(&self.guard.caller, ctx).await?;
         if let Some(caller) = slot.as_ref() {
             check_cached_caller(caller, evidence)?;
+            keep_caller_check(caller, evidence);
             return self.classified(caller.clone(), op);
         }
         let fetched: super::GetCallerIdentityOutput = self
@@ -230,9 +235,30 @@ impl Client {
                 None,
             ));
         }
+        keep_caller_check(&fetched, evidence);
         *slot = Some(fetched.clone());
         drop(slot);
         self.classified(fetched, op)
+    }
+
+    pub(super) async fn lock_bounded<'a, T, O>(
+        &self,
+        mutex: &'a Mutex<T>,
+        ctx: &RequestContext,
+    ) -> Result<MutexGuard<'a, T>, Failure<O>> {
+        let clock = self.session.clock();
+        if let Some(end) = ctx.check(clock) {
+            return Err(not_sent(end.into()));
+        }
+        let mut end = Box::pin(ctx.wait(clock));
+        let mut lock = Box::pin(mutex.lock());
+        std::future::poll_fn(|cx| {
+            if let Poll::Ready(end) = end.as_mut().poll(cx) {
+                return Poll::Ready(Err(not_sent(end.into())));
+            }
+            lock.as_mut().poll(cx).map(Ok)
+        })
+        .await
     }
 
     fn classified<O>(
@@ -391,8 +417,35 @@ fn caller_reflected(caller: &super::GetCallerIdentityOutput, evidence: &Evidence
         || evidence.reflected_in(&Value::from(caller.account_id))
 }
 
+fn unsafe_cached_error(op: &str) -> Error {
+    Error::new(ErrorClass::Api).with_outer_detail(RecoveryAdvice::new(&format!(
+        "iam: {op}: unsafe cached guard response"
+    )))
+}
+
 fn unsafe_cached<O>(op: &str) -> Failure<O> {
-    guard_refusal(&format!("iam: {op}: unsafe cached guard response"), None)
+    not_sent(unsafe_cached_error(op))
+}
+
+fn keep_caller_check(caller: &super::GetCallerIdentityOutput, evidence: &mut Evidence) {
+    let caller = caller.clone();
+    evidence.keep_cached_check(Arc::new(move |credentials| {
+        let mut probe = Evidence::new();
+        probe.absorb(credentials);
+        caller_reflected(&caller, &probe)
+            .then(|| Box::new(unsafe_cached_error("iam.GetCallerIdentity")))
+    }));
+}
+
+pub(super) fn keep_actions_check(names: &[String], evidence: &mut Evidence) {
+    let names = names.to_vec();
+    evidence.keep_cached_check(Arc::new(move |credentials| {
+        let mut probe = Evidence::new();
+        probe.absorb(credentials);
+        serde_json::to_value(&names)
+            .map_or(true, |value| probe.reflected_in(&value))
+            .then(|| Box::new(unsafe_cached_error("iam.ListActions")))
+    }));
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]

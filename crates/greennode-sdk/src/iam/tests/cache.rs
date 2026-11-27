@@ -1,12 +1,21 @@
 use super::{client, response};
+use crate::iam::Api;
 use crate::iam::policy_guard::Guard;
 use crate::iam::writes::write_operation;
-use crate::iam::{Api, GetCallerIdentityOutput};
+use crate::iam::{Client, CreatePolicyInput, CreateUserInput, Statement};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::product::redirect::Retry;
 use crate::wire::test_server::Server;
-use crate::{RequestContext, Secret};
+use crate::{
+    Config, ConfigOptions, CredentialsProvider, EndpointOverrides, Error, ErrorClass,
+    RecoveryAdvice, RequestContext, Secret, Token, WriteDispatch,
+};
 use http::{Method, StatusCode};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 const CALLER: &[u8] =
     br#"{"userId":"usr-1","userType":"iam-user","username":"alice","accountId":7}"#;
@@ -61,11 +70,11 @@ async fn write_actions_are_read_once_and_rechecked() {
     let client = client(&server, "toy-bearer");
     let (ctx, _) = RequestContext::new();
     let first = client
-        .guard_write_actions::<()>(&ctx, &mut Evidence::new())
+        .guard_write_actions::<()>(&ctx, true, &mut Evidence::new())
         .await
         .unwrap();
     let second = client
-        .guard_write_actions::<()>(&ctx, &mut Evidence::new())
+        .guard_write_actions::<()>(&ctx, true, &mut Evidence::new())
         .await
         .unwrap();
     assert_eq!(first, second);
@@ -73,7 +82,7 @@ async fn write_actions_are_read_once_and_rechecked() {
     let mut evidence = Evidence::new();
     evidence.add_secret(&Secret::new("iam:createpolicy"));
     let refused = client
-        .guard_write_actions::<()>(&ctx, &mut evidence)
+        .guard_write_actions::<()>(&ctx, true, &mut evidence)
         .await
         .unwrap_err();
     let text = refused
@@ -126,18 +135,110 @@ async fn concurrent_first_uses_send_one_caller_and_one_actions_read() {
         client.require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut e2),
     );
     let (c, d) = tokio::join!(
-        client.guard_write_actions::<()>(&ctx, &mut e3),
-        client.guard_write_actions::<()>(&ctx, &mut e4),
+        client.guard_write_actions::<()>(&ctx, true, &mut e3),
+        client.guard_write_actions::<()>(&ctx, true, &mut e4),
     );
     assert!(a.is_ok() && b.is_ok() && c.is_ok() && d.is_ok());
     assert_eq!(server.requests(), 2);
 }
 
+struct Tokens {
+    next: AtomicUsize,
+    tokens: Vec<&'static str>,
+}
+
+impl CredentialsProvider for Tokens {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+        let at = self.next.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            self.tokens
+                .get(at)
+                .map(|token| Token::new(Secret::new(*token), None))
+                .ok_or_else(|| Error::new(ErrorClass::Auth))
+        })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn provider_client(server: &Server, tokens: Vec<&'static str>) -> Client {
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("han-1".into())
+            .with_credentials_provider(Arc::new(Tokens {
+                next: AtomicUsize::new(0),
+                tokens,
+            }))
+            .with_endpoint_overrides(EndpointOverrides {
+                dashboard: Some(format!("{}/dashboard/", server.origin)),
+                iam: Some(format!("{}/iam/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    Client::new(&config)
+}
+
+fn write_op() -> crate::wire::product::operation::Operation {
+    write_operation(
+        "iam.DeleteGroup",
+        Method::POST,
+        "policies-api/v1/groups/x",
+        Retry::Repeatable,
+        &[StatusCode::OK],
+    )
+}
+
+fn message<T>(failure: &crate::Failure<T>) -> String {
+    failure
+        .error()
+        .detail::<RecoveryAdvice>()
+        .map(|advice| advice.message().to_owned())
+        .unwrap_or_default()
+}
+
 #[tokio::test]
-async fn cached_values_are_rechecked_before_a_write_is_sent() {
+async fn write_bearer_matching_a_cached_value_is_refused_before_the_write_is_sent() {
+    let server = Server::start(vec![response("200 OK", CALLER), response("200 OK", b"{}")]);
+    let client = provider_client(&server, vec!["toy-first", "usr-1"]);
+    let (ctx, _) = RequestContext::new();
+    client
+        .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new())
+        .await
+        .unwrap();
+    let mut evidence = Evidence::new();
+    client
+        .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut evidence)
+        .await
+        .unwrap();
+    let refused = client
+        .write::<bool, ()>(&ctx, Api::Policies, &write_op(), &[], None, &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        message(&refused),
+        "iam: iam.GetCallerIdentity: unsafe cached guard response"
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn write_that_used_no_cached_value_is_not_rechecked() {
     let server = Server::start(vec![
         response("200 OK", CALLER),
-        response("200 OK", CATALOG),
+        response("200 OK", b"true"),
     ]);
     let client = client(&server, "toy-bearer");
     let (ctx, _) = RequestContext::new();
@@ -145,32 +246,76 @@ async fn cached_values_are_rechecked_before_a_write_is_sent() {
         .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new())
         .await
         .unwrap();
+    let mut evidence = Evidence::new();
+    evidence.add_secret(&Secret::new("usr-1"));
     client
-        .guard_write_actions::<()>(&ctx, &mut Evidence::new())
+        .write::<bool, ()>(&ctx, Api::Policies, &write_op(), &[], None, &mut evidence)
         .await
         .unwrap();
-    let operation = write_operation(
-        "iam.DeleteGroup",
-        Method::POST,
-        "policies-api/v1/groups/x",
-        Retry::Once,
-        &[StatusCode::OK],
-    );
-    for secret in ["usr-1", "iam:createpolicy"] {
-        let mut evidence = Evidence::new();
-        evidence.add_secret(&Secret::new(secret));
-        let refused = client
-            .write::<GetCallerIdentityOutput, ()>(
-                &ctx,
-                Api::Policies,
-                &operation,
-                &[],
-                None,
-                &mut evidence,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(refused.write_dispatch(), crate::WriteDispatch::NotSent);
-        assert_eq!(server.requests(), 2);
-    }
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn create_user_on_a_warm_client_ignores_the_cache() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            br#"{"userId":"usr-1","userType":"iam-user","username":"xtoy-pass-123x","accountId":7}"#,
+        ),
+        response("201 Created", br#"{"id":"abc"}"#),
+    ]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, _) = RequestContext::new();
+    client
+        .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new())
+        .await
+        .unwrap();
+    let mut input = CreateUserInput::new("worker");
+    input.password = Some(Secret::new("toy-pass-123"));
+    let _ = client.create_user(&ctx, input).await;
+    let heads = server.heads();
+    assert!(heads.len() >= 2 && heads[1].starts_with(b"POST "));
+}
+
+#[tokio::test]
+async fn policy_write_keeps_the_api_error_when_the_action_read_fails() {
+    let server = Server::start(vec![
+        response("200 OK", CALLER),
+        response("403 Forbidden", br#"{"message":"no access"}"#),
+    ]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, _) = RequestContext::new();
+    let mut statement = Statement::default();
+    statement.effect = "allow".into();
+    statement.actions = vec!["iam:ListActions".into()];
+    statement.resources = vec!["*".into()];
+    let failure = client
+        .create_policy(&ctx, CreatePolicyInput::new("reader", vec![statement]))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(403));
+    assert_eq!(api.message(), "no access");
+}
+
+#[tokio::test]
+async fn lock_wait_is_bounded_by_the_request_context() {
+    let server = Server::start(vec![]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, cancel) = RequestContext::new();
+    let held = client.guard.caller.lock().await;
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+    });
+    let waited = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new()),
+    )
+    .await
+    .expect("lock wait ignored the context");
+    drop(held);
+    assert_eq!(waited.unwrap_err().write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 0);
 }

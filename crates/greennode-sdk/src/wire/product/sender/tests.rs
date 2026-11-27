@@ -97,6 +97,7 @@ fn operation(method: Method, retry: redirect::Retry) -> Operation<'static> {
     Operation {
         pacing: None,
         response_guard: None,
+        attempt_check: None,
         method,
         class: redirect::Classification::Read,
         retry,

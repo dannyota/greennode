@@ -78,7 +78,7 @@ impl<'a> Guard<'a> {
     pub(super) async fn load_actions<O>(&mut self) -> Result<(), Failure<O>> {
         self.actions = self
             .client
-            .guard_write_actions(self.ctx, self.evidence)
+            .guard_write_actions(self.ctx, false, self.evidence)
             .await?;
         Ok(())
     }

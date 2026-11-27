@@ -80,6 +80,7 @@ pub(crate) type ResponseGuard = fn(
 pub(crate) struct Operation<'a> {
     pub(crate) pacing: Option<&'a super::options::Pacing>,
     pub(crate) response_guard: Option<(&'static str, ResponseGuard)>,
+    pub(crate) attempt_check: Option<super::options::AttemptCheck<'a>>,
     pub(crate) method: Method,
     pub(crate) class: redirect::Classification,
     pub(crate) retry: redirect::Retry,
@@ -462,6 +463,11 @@ async fn run_inner(
     'attempt: loop {
         if let Some(token) = &bearer {
             reflection.record_product_credential(&token.token.access_token);
+        }
+        if let Some(check) = op.attempt_check
+            && let Some(error) = (check.0)(reflection)
+        {
+            return Err(Error::Provider(error));
         }
         if let Some(credentials) = bearer
             .as_ref()
