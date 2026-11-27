@@ -55,7 +55,8 @@ impl Server {
         Self::start_inner(responses, None)
     }
 
-    pub fn start_stopping_after(responses: Vec<Response>, count: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn start_stopping_after(responses: Vec<Response>, count: usize) -> Self {
         Self::start_inner(responses, Some(count))
     }
 

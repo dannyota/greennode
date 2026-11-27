@@ -32,6 +32,10 @@ greennode iam attach-group-policy --policy-id <policy-id> --group-id <group-id> 
 
 Kind: Write, destructive.
 
+Refuses with `SelfChange` when the caller is a service account, and
+`PrivilegedChange` when the policy grants an IAM write action or the target
+service account already holds one. Neither guard can be disabled.
+
 | Flag                   | Type     | Required |
 | ---------------------- | -------- | -------- |
 | `--policy-id`          | `string` | yes      |
@@ -201,6 +205,10 @@ greennode iam detach-group-policy --policy-id <policy-id> --group-id <group-id> 
 ## detach-service-account-policy
 
 Kind: Write, destructive.
+
+Refuses with `SelfChange` when the caller is a service account, and
+`PrivilegedChange` when the policy grants an IAM write action or the target
+service account already holds one. Neither guard can be disabled.
 
 | Flag                   | Type     | Required |
 | ---------------------- | -------- | -------- |

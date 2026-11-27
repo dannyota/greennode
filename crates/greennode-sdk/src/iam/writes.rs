@@ -235,10 +235,11 @@ impl Client {
                 None,
             ));
         }
+        let fetched = self.classified(fetched, op)?;
         keep_caller_check(&fetched, evidence);
         *slot = Some(fetched.clone());
         drop(slot);
-        self.classified(fetched, op)
+        Ok(fetched)
     }
 
     pub(super) async fn lock_bounded<'a, T, O>(

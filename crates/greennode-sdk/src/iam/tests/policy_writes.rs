@@ -178,7 +178,7 @@ async fn account_policy_response_failures_match_transport_contract() {
             assert_eq!(api.code(), code, "{kind} detach={detach}");
             assert_eq!(api.status(), status, "{kind} detach={detach}");
             assert_eq!(dispatch, WriteDispatch::MayHaveBeenSent);
-            assert_eq!(server.requests(), 5);
+            assert_eq!(server.heads().len(), 5);
         }
     }
 }
@@ -187,6 +187,15 @@ async fn account_policy_response_failures_match_transport_contract() {
 async fn account_policy_retries_follow_write_method() {
     for detach in [false, true] {
         for (status, class, code, expected_requests) in [
+            ("400 Bad Request", ErrorClass::Api, "BadRequest", 5),
+            ("404 Not Found", ErrorClass::NotFound, "NotFound", 5),
+            ("409 Conflict", ErrorClass::Api, "Conflict", 5),
+            (
+                "500 Internal Server Error",
+                ErrorClass::Api,
+                "ServerError",
+                5,
+            ),
             (
                 "429 Too Many Requests",
                 ErrorClass::RateLimited,
@@ -289,7 +298,103 @@ async fn account_policy_failed_dial_after_guard_is_not_sent() {
         assert_eq!(api.status(), None);
         assert_eq!(dispatch, WriteDispatch::NotSent);
         assert_eq!(server.requests(), 4);
-        assert_eq!(client.session.test_retry_attempts() - server.requests(), 4);
+        assert_eq!(client.session.test_retry_attempts(), 4);
+    }
+}
+
+#[tokio::test]
+async fn account_policy_accepts_classified_caller_without_path_id() {
+    for detach in [false, true] {
+        let server = Server::start(vec![response("200 OK", br#"{"userId":"user@example.com","userType":"iam-user"}"#), catalog(), response("200 OK", br#"{"data":[],"totalItems":0}"#), response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#), response("204 No Content", b"")]);
+        let (ctx, _) = RequestContext::new();
+        let client = client(&server, BEARER);
+        if detach {
+            client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap();
+        } else {
+            client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("pol-1", "sa-1"),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(server.heads().len(), 5);
+    }
+}
+
+#[tokio::test]
+async fn unclassified_caller_is_not_cached() {
+    let server = Server::start(vec![
+        response("200 OK", b"{}"),
+        caller(),
+        catalog(),
+        response("200 OK", br#"{"data":[],"totalItems":0}"#),
+        response(
+            "200 OK",
+            br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#,
+        ),
+        response("204 No Content", b""),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let client = client(&server, BEARER);
+    assert!(
+        client
+            .attach_service_account_policy(
+                &ctx,
+                AttachServiceAccountPolicyInput::new("pol-1", "sa-1")
+            )
+            .await
+            .is_err()
+    );
+    client
+        .attach_service_account_policy(&ctx, AttachServiceAccountPolicyInput::new("pol-1", "sa-1"))
+        .await
+        .unwrap();
+    assert_eq!(server.heads().len(), 6);
+}
+
+#[tokio::test]
+async fn account_policy_checks_required_fields_before_id_syntax() {
+    for detach in [false, true] {
+        let server = Server::start(vec![]);
+        let (ctx, _) = RequestContext::new();
+        let client = client(&server, BEARER);
+        let error = if detach {
+            client
+                .detach_service_account_policy(
+                    &ctx,
+                    DetachServiceAccountPolicyInput::new("bad/id", ""),
+                )
+                .await
+                .unwrap_err()
+                .into_parts()
+                .0
+        } else {
+            client
+                .attach_service_account_policy(
+                    &ctx,
+                    AttachServiceAccountPolicyInput::new("bad/id", ""),
+                )
+                .await
+                .unwrap_err()
+                .into_parts()
+                .0
+        };
+        assert!(
+            error
+                .api_error()
+                .unwrap()
+                .message()
+                .ends_with("requires ServiceAccountID")
+        );
+        assert_eq!(server.heads().len(), 0);
     }
 }
 

@@ -27,6 +27,25 @@ struct Reply {
     headers: BTreeMap<String, String>,
 }
 
+#[test]
+fn account_policy_docs_name_both_guard_refusals() {
+    let docs = include_str!("../../../../docs/wiki/CLI-IAM.md");
+    for operation in [
+        "attach-service-account-policy",
+        "detach-service-account-policy",
+    ] {
+        let section = docs
+            .split(&format!("## {operation}\n"))
+            .nth(1)
+            .unwrap()
+            .split("\n## ")
+            .next()
+            .unwrap();
+        assert!(section.contains("`SelfChange`"));
+        assert!(section.contains("`PrivilegedChange`"));
+    }
+}
+
 #[tokio::test]
 async fn writes_match_go_routes_exit_codes_and_output() {
     check_go_goldens("writes", |case| {
@@ -130,6 +149,13 @@ async fn check_go_goldens(dir: &str, select: impl Fn(&str) -> bool) {
                 assert!(head.starts_with(
                     format!("{} /{product}{} ", reply.method, reply.route).as_bytes()
                 ));
+                if matches!(
+                    case.name.as_str(),
+                    "attach-service-account-policy" | "detach-service-account-policy"
+                ) && matches!(reply.method.as_str(), "POST" | "DELETE")
+                {
+                    assert!(body.is_empty());
+                }
                 if let Some(expected) = &reply.request {
                     assert!(serde_json::from_slice::<Value>(&body).unwrap() == *expected);
                 }

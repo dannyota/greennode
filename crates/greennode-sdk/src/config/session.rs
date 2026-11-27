@@ -314,9 +314,6 @@ impl Session {
     }
 
     pub(crate) fn retry_jitter(&self) -> u64 {
-        #[cfg(test)]
-        self.retry_attempts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut bytes = [0; 8];
         match getrandom::fill(&mut bytes) {
             Ok(()) => u64::from_ne_bytes(bytes),
@@ -580,6 +577,12 @@ fn product_clients(
 }
 
 impl Sleeper for Session {
+    #[cfg(test)]
+    fn record_write_attempt(&self) {
+        self.retry_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         self.clock
             .sleep_until(self.clock.monotonic_now() + duration)
