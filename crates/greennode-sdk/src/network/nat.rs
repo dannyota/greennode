@@ -239,7 +239,7 @@ impl Client {
         Ok((raw, evidence))
     }
 
-    fn nat_base(&self) -> Result<Base, Error> {
+    pub(super) fn nat_base(&self) -> Result<Base, Error> {
         if !matches!(self.region.as_str(), "hcm-3" | "han-1") {
             return Err(Error::new(ErrorClass::InvalidConfig));
         }
@@ -253,7 +253,7 @@ impl Client {
             .ok_or_else(|| Error::new(ErrorClass::InvalidConfig))
     }
 
-    async fn nat_zone(
+    pub(super) async fn nat_zone(
         &self,
         ctx: &RequestContext,
         base: &Base,
@@ -331,7 +331,7 @@ fn decode_detail(text: &str, expected_id: &str, evidence: &Evidence) -> Result<N
     let vpc: Fields<'_> = fields.required("vpc")?;
     let vpc_id: String = vpc.required("uuid")?;
     if id != expected_id
-        || !PathIds::WithUnderscore.allows(&vpc_id)
+        || !PathIds::Strict.allows(&vpc_id)
         || evidence.id_reflects(&id)
         || evidence.id_reflects(&vpc_id)
     {

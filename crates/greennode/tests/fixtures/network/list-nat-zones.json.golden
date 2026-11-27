@@ -1,0 +1,12 @@
+{
+  "Items": [
+    {
+      "UUID": "az-1",
+      "Name": "Example",
+      "ZoneType": "AVAILABILITY",
+      "IsEnabled": true,
+      "IsDefault": false,
+      "Description": "Example"
+    }
+  ]
+}

@@ -2,9 +2,19 @@
 
 mod bandwidth;
 mod connectivity;
+mod endpoint_models;
+mod endpoint_quote;
+mod endpoint_quote_scope;
+mod endpoints;
+mod inventory;
 mod nat;
+mod nat_catalog;
+mod nat_models;
+mod nat_quote;
+mod prices;
 mod route_inventory;
 mod routes;
+mod server_reads;
 mod virtual_ip;
 mod vpc;
 mod vpn;
@@ -17,6 +27,9 @@ pub use connectivity::{
     ListNetworkInterfacesInput, ListNetworkInterfacesOutput, ListPeeringsInput, ListPeeringsOutput,
     ListWanIpsInput, ListWanIpsOutput, Peering, WanIp,
 };
+pub use endpoint_models::{Endpoint, EndpointTag, VNetworkRegion};
+pub use endpoint_quote::*;
+pub use endpoints::*;
 pub use nat::{
     GetNatInstanceInput, GetNatInstanceOutput, ListNatInboundRulesInput, ListNatInboundRulesOutput,
     NatDetail, NatInboundRule,
@@ -37,9 +50,15 @@ pub use vpn::{
     VpnPhase2Config, VpnProject, VpnSite, VpnSubnet, VpnTunnel, VpnVpc,
 };
 
+pub use nat_catalog::*;
+pub use nat_models::*;
+pub use nat_quote::*;
+pub use prices::*;
+pub use server_reads::*;
+
 pub use vpc::*;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::config::Session;
 use crate::{Config, Error, Failure, WriteDispatch};
@@ -49,6 +68,7 @@ use crate::{Config, Error, Failure, WriteDispatch};
 pub struct Client {
     session: Arc<Session>,
     region: String,
+    endpoint_zone: Arc<OnceLock<String>>,
 }
 
 impl Client {
@@ -57,6 +77,7 @@ impl Client {
         Self {
             session: Arc::clone(config.session()),
             region: config.region().to_owned(),
+            endpoint_zone: Arc::new(OnceLock::new()),
         }
     }
 }

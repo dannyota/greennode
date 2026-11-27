@@ -158,6 +158,41 @@ async fn plain_header_cannot_repeat_bearer_value() {
     assert_eq!(server.requests(), 0);
 }
 #[tokio::test]
+async fn encoded_header_cannot_repeat_refreshed_bearer() {
+    let server = Server::start(vec![
+        response("401 Unauthorized", &[]),
+        response("200 OK", &[]),
+    ]);
+    let clients = client(&server);
+    let (ctx, clock, deadline) = ctx();
+    let source = Provider::default();
+    let sleeper = Immediate::default();
+    let mut req = request(&server.origin);
+    req.headers
+        .insert("x-note", http::HeaderValue::from_static("to%79-next"));
+    let result = run!(
+        &clients,
+        &ctx,
+        &clock,
+        deadline,
+        &operation(Method::GET, redirect::Retry::Repeatable),
+        Auth::Bearer(&PublicSource(&source)),
+        &req,
+        &sleeper,
+        &mut || 0
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(Failure {
+            error: Error::InvalidRequest,
+            ..
+        })
+    ));
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn initial_uri_with_bearer_is_refused() {
     let server = Server::start(vec![response("200 OK", &[])]);
     let clients = client(&server);

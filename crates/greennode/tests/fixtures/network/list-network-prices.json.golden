@@ -1,0 +1,157 @@
+{
+  "Items": [
+    {
+      "Kind": "floating-ip",
+      "Name": "Floating IP",
+      "Type": "",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "unknown",
+        "Basis": "",
+        "Currency": "",
+        "Tax": "",
+        "Source": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/floating-ip.md",
+        "MonthlyPrice": null,
+        "OriginalPrice": null,
+        "DiscountPrice": null,
+        "DiscountPercent": null
+      }
+    },
+    {
+      "Kind": "external-interface",
+      "Name": "External Interface",
+      "Type": "",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "unknown",
+        "Basis": "",
+        "Currency": "",
+        "Tax": "",
+        "Source": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/instance-ip-address.md",
+        "MonthlyPrice": null,
+        "OriginalPrice": null,
+        "DiscountPrice": null,
+        "DiscountPercent": null
+      }
+    },
+    {
+      "Kind": "reservation",
+      "Name": "Floating IP reservation",
+      "Type": "",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "unknown",
+        "Basis": "",
+        "Currency": "",
+        "Tax": "",
+        "Source": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/floating-ip.md",
+        "MonthlyPrice": null,
+        "OriginalPrice": null,
+        "DiscountPrice": null,
+        "DiscountPercent": null
+      }
+    },
+    {
+      "Kind": "public-vip",
+      "Name": "Public Virtual IP (public)",
+      "Type": "public",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "quoted",
+        "Basis": "monthly-total",
+        "Currency": "VND",
+        "Tax": "as-returned",
+        "Source": "pricing.GetQuote",
+        "MonthlyPrice": 120000,
+        "OriginalPrice": 120000,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      }
+    },
+    {
+      "Kind": "public-vip",
+      "Name": "Public Virtual IP (public-mkp)",
+      "Type": "public-mkp",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "quoted",
+        "Basis": "monthly-total",
+        "Currency": "VND",
+        "Tax": "as-returned",
+        "Source": "pricing.GetQuote",
+        "MonthlyPrice": 120000,
+        "OriginalPrice": 120000,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      }
+    },
+    {
+      "Kind": "public-vip",
+      "Name": "Public Virtual IP (public-vm)",
+      "Type": "public-vm",
+      "Scope": "hcm-3",
+      "Unit": "IP-month",
+      "Price": {
+        "Status": "quoted",
+        "Basis": "monthly-total",
+        "Currency": "VND",
+        "Tax": "as-returned",
+        "Source": "pricing.GetQuote",
+        "MonthlyPrice": 120000,
+        "OriginalPrice": 120000,
+        "DiscountPrice": 0,
+        "DiscountPercent": 0
+      }
+    }
+  ],
+  "Metadata": {
+    "Region": "hcm-3",
+    "Complete": true,
+    "Requests": 3,
+    "QuotedAt": "<time>",
+    "Failures": [],
+    "Notes": [
+      {
+        "Topic": "account-scope",
+        "Scope": "quotes",
+        "Text": "Quotes reflect the current account. Returned discounts do not establish eligibility for a program.",
+        "SourceURL": "https://docs.greennode.ai/partner-portal-user-guide/registration-of-partner-discount.md",
+        "Evidence": "published"
+      },
+      {
+        "Topic": "bandwidth",
+        "Scope": "network",
+        "Text": "Bandwidth tariffs and capacity units are unverified and excluded from public-IP prices.",
+        "SourceURL": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/bandwidth.md",
+        "Evidence": "unverified"
+      },
+      {
+        "Topic": "quote-scope",
+        "Scope": "public-vip",
+        "Text": "Each public-VIP type has a separate account quote. Equal amounts do not establish interchangeable products.",
+        "SourceURL": "",
+        "Evidence": "observed"
+      },
+      {
+        "Topic": "unknown-ip-charges",
+        "Scope": "network",
+        "Text": "Floating IP, external-interface, and reservation charges remain unknown. Reservation affects Floating IP billing; detached External Interfaces keep billing until release.",
+        "SourceURL": "https://docs.greennode.ai/vserver/compute-hcm03-1a/vpc/instance-ip-address.md",
+        "Evidence": "published"
+      },
+      {
+        "Topic": "nat",
+        "Scope": "network",
+        "Text": "NAT costs are excluded. Use network list-nat-zones, list-nat-packages, and quote-create-nat-instance separately.",
+        "SourceURL": "",
+        "Evidence": "unverified"
+      }
+    ],
+    "ExcludedGroups": null
+  }
+}

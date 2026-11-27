@@ -88,6 +88,17 @@ pub(crate) fn decide(
     }
 }
 
+pub(super) fn no_token() -> crate::Error {
+    let api = crate::ApiError::new(
+        "",
+        Some(401),
+        crate::error::SafeText::new("", &[]),
+        crate::error::SafeText::new("no access token available", &[]),
+        false,
+    );
+    crate::Error::new(crate::ErrorClass::Auth).with_cause(crate::Error::from_api(api))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

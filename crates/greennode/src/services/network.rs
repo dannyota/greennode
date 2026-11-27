@@ -113,9 +113,51 @@ macro_rules! read {
     };
 }
 
+macro_rules! run {
+    ($method:ident, $input:ident) => {
+        fn $method<'a>(
+            ctx: &'a RequestContext,
+            config: &'a Config,
+            input: &'a $input,
+        ) -> FutureResult<'a, ExecutionResult> {
+            Box::pin(async move {
+                dispatch::project_result(
+                    Client::new(config).$method(ctx, input.clone()).await,
+                    std::convert::identity,
+                )
+            })
+        }
+    };
+}
+
+macro_rules! integer {
+    ($json:literal, $flag:ident, $field:ident) => {
+        InputField {
+            json_name: $json,
+            flag: Some($flag),
+            secret: false,
+            nullable: false,
+            set_json: |input, value| {
+                input.$field = value.as_i64().ok_or(())?;
+                Ok(())
+            },
+            set_flag: Some(|input, matches| {
+                input.$field = *matches.get_one::<i64>($flag.name).ok_or(())?;
+                Ok(())
+            }),
+            requirement: Requirement::Optional,
+        }
+    };
+}
+
+mod catalog;
+mod inventory;
+mod prices;
+mod quotes;
+
 pub(super) const SERVICE: Service = Service {
     name: "network",
-    error_rules: &[],
+    error_rules: &[prices::DISCOVERY_INCOMPLETE],
     operations: &[
         routes::GET_ROUTE_TABLE,
         routes::GET_VIRTUAL_IP_ADDRESS,
@@ -130,6 +172,18 @@ pub(super) const SERVICE: Service = Service {
         routes::LIST_VIRTUAL_IP_ADDRESSES,
         routes::LIST_VPN_CONNECTIONS,
         routes::LIST_WAN_IPS,
+        quotes::ENDPOINT,
+        quotes::NAT,
+        prices::OPERATION,
+        catalog::INSTANCES,
+        catalog::PACKAGES,
+        catalog::ZONES,
+        inventory::GET_ENDPOINT,
+        inventory::LIST_ENDPOINT_TAGS,
+        inventory::LIST_ENDPOINTS,
+        inventory::SERVERS_BY_GROUP,
+        inventory::SERVERS_BY_SUBNET,
+        inventory::REGIONS,
         read!(
             "get-nat-instance",
             "network.GetNATInstance",
@@ -175,23 +229,6 @@ pub(super) const SERVICE: Service = Service {
         vpc::LIST_VPCS,
     ],
 };
-
-macro_rules! run {
-    ($method:ident, $input:ident) => {
-        fn $method<'a>(
-            ctx: &'a RequestContext,
-            config: &'a Config,
-            input: &'a $input,
-        ) -> FutureResult<'a, ExecutionResult> {
-            Box::pin(async move {
-                dispatch::project_result(
-                    Client::new(config).$method(ctx, input.clone()).await,
-                    std::convert::identity,
-                )
-            })
-        }
-    };
-}
 
 run!(get_nat_instance, GetNatInstanceInput);
 run!(list_bandwidth_packages, ListBandwidthPackagesInput);

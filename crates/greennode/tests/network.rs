@@ -33,6 +33,30 @@ fn invoke(
     command: &str,
     args: &[&str],
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    let options = with_product_loopback(
+        product,
+        ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
+        server,
+    );
+    invoke_with_options(options, format, command, args)
+}
+
+fn invoke_with_options(
+    options: ConfigOptions,
+    format: &str,
+    command: &str,
+    args: &[&str],
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_in_project(options, "proj-1", format, command, args)
+}
+
+fn invoke_in_project(
+    options: ConfigOptions,
+    project_id: &str,
+    format: &str,
+    command: &str,
+    args: &[&str],
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let status = tokio::runtime::Builder::new_current_thread()
@@ -45,7 +69,7 @@ fn invoke(
                 "--region",
                 "hcm-3",
                 "--project-id",
-                "proj-1",
+                project_id,
                 "--read-only",
                 "--output",
                 format,
@@ -57,11 +81,7 @@ fn invoke(
             .map(OsString::from)
             .collect(),
             source: &Source,
-            config_options: with_product_loopback(
-                product,
-                ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
-                server,
-            ),
+            config_options: options,
             stdin: &mut std::io::empty(),
             stdout: &mut stdout,
             stderr: &mut stderr,
@@ -151,4 +171,284 @@ fn nat_required_id_and_invalid_response_keep_distinct_exit_codes() {
     assert_eq!(envelope["message"], "NAT response withheld");
     assert_eq!(envelope["status"], 200);
     assert_eq!(envelope["operation"], "network.ListNATInboundRules");
+}
+
+macro_rules! fixture {
+    ($file:literal) => {
+        include_str!(concat!(
+            "../../greennode-sdk/tests/fixtures/network/",
+            $file,
+            ".json"
+        ))
+    };
+}
+
+#[test]
+fn network_inventory_reads_match_go_goldens() {
+    type Case = (
+        &'static str,
+        &'static str,
+        Product,
+        &'static [&'static str],
+        &'static str,
+        &'static [&'static str],
+    );
+    let cases: &[Case] = &[
+        (
+            "get-endpoint",
+            fixture!("get_endpoint"),
+            Product::Vnetwork,
+            &["--endpoint-id", "endpoint-1"],
+            "GET /vnetwork/v1/zone-a/proj-1/endpoints/endpoint-1 ",
+            &[fixture!("list_vnetwork_regions")],
+        ),
+        (
+            "list-endpoint-tags",
+            fixture!("list_endpoint_tags"),
+            Product::Vnetwork,
+            &["--endpoint-id", "endpoint-1"],
+            "GET /vnetwork/v1/proj-1/tags?resourceUuid=endpoint-1 ",
+            &[],
+        ),
+        (
+            "list-endpoints",
+            fixture!("list_endpoints"),
+            Product::Vnetwork,
+            &[
+                "--zone-id",
+                "zone-a",
+                "--vpc-id",
+                "vpc-1",
+                "--uuid",
+                "endpoint-1",
+                "--page",
+                "2",
+                "--size",
+                "25",
+            ],
+            "GET /vnetwork/v1/zone-a/proj-1/endpoints?params=",
+            &[],
+        ),
+        (
+            "list-nat-instances",
+            fixture!("list_nat_instances"),
+            Product::Vnetwork,
+            &["--zone-id", "zone-1", "--page", "2", "--size", "5"],
+            "GET /vnetwork/v1/zone-1/proj-1/nats?params=",
+            &[],
+        ),
+        (
+            "list-nat-zones",
+            fixture!("list_nat_zones"),
+            Product::Vnetwork,
+            &["--zone-id", "zone-1"],
+            "GET /vnetwork/v1/zone-1/proj-1/nats/zones?params=",
+            &[],
+        ),
+        (
+            "list-nat-packages",
+            fixture!("list_nat_packages"),
+            Product::Vnetwork,
+            &["--zone-id", "zone-1", "--availability-zone-id", "az-1"],
+            "GET /vnetwork/v1/zone-1/proj-1/nats/nat-package?params=",
+            &[],
+        ),
+        (
+            "list-v-network-regions",
+            fixture!("list_vnetwork_regions"),
+            Product::Vnetwork,
+            &[],
+            "GET /vnetwork/v1/regions ",
+            &[],
+        ),
+        (
+            "list-servers-by-security-group",
+            fixture!("list_servers_by_security_group"),
+            Product::Vserver,
+            &["--security-group-id", "group-1"],
+            "GET /v2/proj-1/secgroups/group-1/servers ",
+            &[],
+        ),
+        (
+            "list-servers-by-subnet",
+            fixture!("list_servers_by_subnet"),
+            Product::Vserver,
+            &["--subnet-id", "subnet-1"],
+            "GET /v2/proj-1/servers/subnets/subnet-1 ",
+            &[],
+        ),
+    ];
+    for &(command, fixture, product, args, request, preceding) in cases {
+        for format in ["json", "table", "text"] {
+            let server = Server::start(
+                preceding
+                    .iter()
+                    .copied()
+                    .chain([fixture])
+                    .map(|body| response("200 OK", body))
+                    .collect(),
+            );
+            let project = Server::start(vec![response(
+                "200 OK",
+                r#"{"projects":[{"projectId":"proj-1","region":"hcm-3","userId":123}]}"#,
+            )]);
+            let mut options = with_product_loopback(
+                product,
+                ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
+                &server,
+            );
+            if command == "list-endpoint-tags" {
+                options = with_product_loopback(Product::Vserver, options, &project);
+            }
+            let (status, stdout, stderr) = invoke_with_options(options, format, command, args);
+            assert_eq!(
+                status,
+                ExitCode::SUCCESS,
+                "{command} {format} {}",
+                String::from_utf8_lossy(&stderr)
+            );
+            assert!(stderr.is_empty());
+            let golden = std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("tests/fixtures/network/{command}.{format}.golden")),
+            )
+            .unwrap();
+            assert!(
+                stdout == golden,
+                "{command} {format} output differs from the Go golden"
+            );
+            let heads = server.heads();
+            assert_eq!(heads.len(), preceding.len() + 1);
+            assert!(heads[preceding.len()].starts_with(request.as_bytes()));
+            if command == "list-endpoint-tags" {
+                assert!(project.heads()[0].starts_with(b"GET /v1/projects "));
+            }
+        }
+    }
+}
+
+#[test]
+fn network_prices_match_go_goldens_and_write_coverage_notes() {
+    let body =
+        include_str!("../../greennode-sdk/tests/fixtures/pricing/discovery_quote_public_vm.json");
+    for format in ["json", "table", "text"] {
+        let server = Server::start((0..3).map(|_| response("200 OK", body)).collect());
+        let (status, stdout, stderr) =
+            invoke(Product::Portal, &server, format, "list-network-prices", &[]);
+        assert_eq!(status, ExitCode::SUCCESS);
+        let mut stdout = String::from_utf8(stdout).unwrap();
+        if format == "json" {
+            let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            let quoted_at = output["Metadata"]["QuotedAt"].as_str().unwrap();
+            stdout = stdout.replacen(quoted_at, "<time>", 1);
+        }
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/network");
+        let golden =
+            std::fs::read_to_string(directory.join(format!("list-network-prices.{format}.golden")))
+                .unwrap();
+        let errors =
+            std::fs::read(directory.join(format!("list-network-prices.{format}.stderr.golden")))
+                .unwrap();
+        assert_eq!(stdout, golden, "network prices {format}");
+        assert_eq!(stderr, errors);
+        assert_eq!(server.heads().len(), 3);
+    }
+}
+
+#[test]
+fn network_purchase_quotes_match_go_goldens_on_read_only_profiles() {
+    const PROJECT: &str = "pro-00000000-0000-0000-0000-000000000001";
+    const ENDPOINT_ARGS: &[&str] = &[
+        "--name",
+        "edge",
+        "--vpc-id",
+        "net-00000000-0000-0000-0000-000000000002",
+        "--subnet-id",
+        "sub-00000000-0000-0000-0000-000000000003",
+    ];
+    const NAT_ARGS: &[&str] = &[
+        "--name",
+        "edge",
+        "--zone-id",
+        "zone-1",
+        "--availability-zone-id",
+        "az-1",
+        "--package-id",
+        "package-1",
+        "--vpc-id",
+        "vpc-1",
+    ];
+    for (command, project_id, args, fixtures) in [
+        (
+            "quote-create-nat-instance",
+            "proj-1",
+            NAT_ARGS,
+            &[
+                fixture!("nat_quote_whitelist"),
+                fixture!("list_nat_zones"),
+                fixture!("list_nat_packages"),
+                fixture!("nat_quote_vpcs"),
+                fixture!("quote_create_nat"),
+            ][..],
+        ),
+        (
+            "quote-create-endpoint",
+            PROJECT,
+            ENDPOINT_ARGS,
+            &[
+                fixture!("endpoint_quote_regions"),
+                fixture!("endpoint_quote_zones"),
+                fixture!("endpoint_quote_categories"),
+                fixture!("endpoint_quote_services"),
+                fixture!("endpoint_quote_packages"),
+                fixture!("endpoint_quote_vpcs"),
+                fixture!("endpoint_quote_subnets"),
+                fixture!("quote_create_nat"),
+            ][..],
+        ),
+    ] {
+        for format in ["json", "table", "text"] {
+            let endpoint = Server::start(
+                fixtures
+                    .iter()
+                    .map(|body| response("200 OK", body))
+                    .collect(),
+            );
+            let project = Server::start(vec![response(
+                "200 OK",
+                fixture!("endpoint_quote_projects"),
+            )]);
+            let mut options = with_product_loopback(
+                Product::Vnetwork,
+                ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
+                &endpoint,
+            );
+            if command == "quote-create-endpoint" {
+                options = with_product_loopback(Product::Vserver, options, &project);
+            }
+            let (status, stdout, stderr) =
+                invoke_in_project(options, project_id, format, command, args);
+            assert_eq!(status, ExitCode::SUCCESS, "{command} {format}");
+            assert!(stderr.is_empty());
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/network/{command}.{format}.golden"));
+            assert!(
+                stdout == std::fs::read(path).unwrap(),
+                "{command} {format} output differs from the Go golden"
+            );
+            let heads = endpoint.heads();
+            assert_eq!(heads.len(), fixtures.len());
+            assert!(
+                heads
+                    .last()
+                    .unwrap()
+                    .starts_with(b"POST /vnetwork/billing/v1/")
+            );
+            assert_eq!(
+                project.heads().len(),
+                usize::from(command == "quote-create-endpoint")
+            );
+        }
+    }
 }

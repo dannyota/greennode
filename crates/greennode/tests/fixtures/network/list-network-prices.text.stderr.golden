@@ -1,0 +1,5 @@
+account-scope: Quotes reflect the current account. Returned discounts do not establish eligibility for a program.
+bandwidth: Bandwidth tariffs and capacity units are unverified and excluded from public-IP prices.
+quote-scope: Each public-VIP type has a separate account quote. Equal amounts do not establish interchangeable products.
+unknown-ip-charges: Floating IP, external-interface, and reservation charges remain unknown. Reservation affects Floating IP billing; detached External Interfaces keep billing until release.
+nat: NAT costs are excluded. Use network list-nat-zones, list-nat-packages, and quote-create-nat-instance separately.

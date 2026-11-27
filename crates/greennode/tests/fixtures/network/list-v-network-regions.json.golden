@@ -1,0 +1,16 @@
+{
+  "Items": [
+    {
+      "UUID": "zone-a",
+      "Name": "\u003cname\u003e",
+      "Code": "hcm-3",
+      "GatewayURL": "",
+      "DashboardURL": "\u003cinternal-url\u003e",
+      "VServerEndpoint": "",
+      "VLBEndpoint": "",
+      "UIServerEndpoint": "",
+      "VNetworkEndpoint": "",
+      "VDNSEndpoint": ""
+    }
+  ]
+}

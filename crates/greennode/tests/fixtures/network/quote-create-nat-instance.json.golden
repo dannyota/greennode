@@ -1,0 +1,19 @@
+{
+  "OptimumPrice": 712400,
+  "OriginalPrice": 712400,
+  "DiscountPrice": 0,
+  "DiscountPercent": 0,
+  "Properties": [
+    {
+      "OptimumPrice": 712400,
+      "MonthlyPrice": 712400,
+      "CurrentPrice": null,
+      "DiscountPercent": 0,
+      "Name": "Standard",
+      "Description": "STANDARD"
+    }
+  ],
+  "MonthlyPrice": 712400,
+  "TotalPrice": 712400,
+  "Currency": "VND"
+}

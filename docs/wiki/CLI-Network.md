@@ -14,6 +14,18 @@ Kind: Read.
 greennode network get-dhcp-options --dhcp-options-id <dhcp-options-id> --query DHCPOptions
 ```
 
+## get-endpoint
+
+Kind: Read.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--endpoint-id` | `string` | yes      |
+
+```sh
+greennode network get-endpoint --endpoint-id <endpoint-id> --query Endpoint
+```
+
 ## get-nat-instance
 
 Kind: Read.
@@ -187,6 +199,34 @@ Kind: Read.
 greennode network list-dhcp-options
 ```
 
+## list-endpoint-tags
+
+Kind: Read.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--endpoint-id` | `string` | yes      |
+
+```sh
+greennode network list-endpoint-tags --endpoint-id <endpoint-id>
+```
+
+## list-endpoints
+
+Kind: Read.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--zone-id` | `string` |          |
+| `--vpc-id`  | `string` |          |
+| `--uuid`    | `string` |          |
+| `--page`    | `int`    |          |
+| `--size`    | `int`    |          |
+
+```sh
+greennode network list-endpoints
+```
+
 ## list-interconnects
 
 Kind: Read.
@@ -219,6 +259,60 @@ An omitted `--zone-id` requires a unique zone mapping for the selected region.
 greennode network list-nat-inbound-rules --nat-id <nat-id>
 ```
 
+## list-nat-instances
+
+Kind: Read.
+
+Reads in `hcm-3` or `han-1` with IAM or service-account authentication.
+Read-only profiles can run this command.
+
+An omitted `--zone-id` requires a unique zone mapping for the selected region.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--zone-id` | `string` |          |
+| `--page`    | `int`    |          |
+| `--size`    | `int`    |          |
+
+```sh
+greennode network list-nat-instances
+```
+
+## list-nat-packages
+
+Kind: Read.
+
+Reads in `hcm-3` or `han-1` with IAM or service-account authentication.
+Read-only profiles can run this command.
+
+An omitted `--zone-id` requires a unique zone mapping for the selected region.
+
+| Flag                     | Type     | Required |
+| ------------------------ | -------- | -------- |
+| `--zone-id`              | `string` |          |
+| `--availability-zone-id` | `string` | yes      |
+
+```sh
+greennode network list-nat-packages --availability-zone-id <availability-zone-id>
+```
+
+## list-nat-zones
+
+Kind: Read.
+
+Reads in `hcm-3` or `han-1` with IAM or service-account authentication.
+Read-only profiles can run this command.
+
+An omitted `--zone-id` requires a unique zone mapping for the selected region.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--zone-id` | `string` |          |
+
+```sh
+greennode network list-nat-zones
+```
+
 ## list-network-acls
 
 Kind: Read.
@@ -245,6 +339,32 @@ Kind: Read.
 
 ```sh
 greennode network list-network-interfaces
+```
+
+## list-network-prices
+
+Kind: Read.
+
+Quotes the public, public-vm, and public-mkp virtual IP types separately.
+Floating IP, external-interface, and reservation prices remain unknown.
+Bandwidth and NAT costs are excluded.
+
+Use `--sort-by name` or `--sort-by monthly-price`. Unknown prices sort last.
+Table and text coverage notes print on stderr.
+
+The request limit defaults to 500, with a maximum of 2000. Discovery needs space
+for three quotes and any uncached project lookup. With `--allow-partial`, usable
+results print before the incomplete coverage error.
+
+| Flag              | Type     | Required |
+| ----------------- | -------- | -------- |
+| `--max-requests`  | `int`    |          |
+| `--allow-partial` | `bool`   |          |
+| `--descending`    | `bool`   |          |
+| `--sort-by`       | `string` |          |
+
+```sh
+greennode network list-network-prices
 ```
 
 ## list-peerings
@@ -311,6 +431,36 @@ Kind: Read.
 greennode network list-security-groups
 ```
 
+## list-servers-by-security-group
+
+Kind: Read.
+
+PublicIP is the floating address derived from internal interfaces. Select
+addresses with `--query 'Items[].PublicIP'`.
+
+Responses are limited to 8 MiB. The SDK suppresses response captures and
+withholds unsafe server data.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--security-group-id` | `string` | yes      |
+
+```sh
+greennode network list-servers-by-security-group --security-group-id <security-group-id>
+```
+
+## list-servers-by-subnet
+
+Kind: Read.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--subnet-id` | `string` | yes      |
+
+```sh
+greennode network list-servers-by-subnet --subnet-id <subnet-id>
+```
+
 ## list-subnets
 
 Kind: Read.
@@ -334,6 +484,19 @@ Kind: Read.
 
 ```sh
 greennode network list-subnets-by-vpc --vpc-id <vpc-id>
+```
+
+## list-v-network-regions
+
+Kind: Read.
+
+Requests use the fixed regional gateway or the caller's explicit endpoint
+override. Discovered data cannot select a credential destination.
+
+No fields.
+
+```sh
+greennode network list-v-network-regions
 ```
 
 ## list-virtual-ip-addresses
@@ -399,4 +562,58 @@ Kind: Read.
 
 ```sh
 greennode network list-wanips
+```
+
+## quote-create-endpoint
+
+Kind: Read.
+
+Reads a fresh monthly VND quote for one Gateway endpoint. Read-only profiles can
+run this command.
+
+Requires SDK IAM-user login and default endpoints in `hcm-3`. The existing VPC
+and subnet must offer the selected Gateway endpoint.
+
+Omitted catalog selectors use HCM03-1C, the sole default category,
+vstorage.hcm03, and Standard. The JSON `MaxPrice` field does not cap the quote.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--name`                                 | `string`  | yes      |
+| `--vpc-id`                               | `string`  | yes      |
+| `--subnet-id`                            | `string`  | yes      |
+| `--availability-zone-id`                 | `string`  |          |
+| `--category-id`                          | `string`  |          |
+| `--service-id`                           | `string`  |          |
+| `--package-id`                           | `string`  |          |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+
+```sh
+greennode network quote-create-endpoint --region hcm-3 --name demo --vpc-id <net-id> --subnet-id <sub-id>
+```
+
+## quote-create-nat-instance
+
+Kind: Read.
+
+Reads a fresh one-month prepaid VND quote. Read-only profiles can run this
+command.
+
+Use the regional zone from `list-v-network-regions`, the availability zone from
+`list-nat-zones`, and the package UUID from `list-nat-packages`.
+
+Requires NAT V3 enabledForAll mode. The JSON `MaxPrice` field does not cap the
+quote.
+
+| Flag                                     | Type      | Required |
+| ---------------------------------------- | --------- | -------- |
+| `--name`                                 | `string`  | yes      |
+| `--zone-id`                              | `string`  | yes      |
+| `--availability-zone-id`                 | `string`  | yes      |
+| `--package-id`                           | `string`  | yes      |
+| `--vpc-id`                               | `string`  | yes      |
+| `MaxPrice` (via `--cli-input-json` only) | `float64` |          |
+
+```sh
+greennode network quote-create-nat-instance --name <name> --zone-id <zone-id> --availability-zone-id <availability-zone-id> --package-id <package-id> --vpc-id <vpc-id>
 ```

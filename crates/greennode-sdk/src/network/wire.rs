@@ -42,15 +42,18 @@ pub(super) const PAGING: &[&str] = &[
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Style {
     Nat,
+    NatCatalog,
+    NatList,
+    EndpointQuote,
     Bandwidth,
     BandwidthProject,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Read {
-    id: &'static str,
-    template: &'static str,
-    style: Style,
+    pub(super) id: &'static str,
+    pub(super) template: &'static str,
+    pub(super) style: Style,
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
@@ -97,7 +100,8 @@ impl Read {
         self.invalid_as(
             evidence,
             match self.style {
-                Style::Nat => NAT_MESSAGE,
+                Style::Nat | Style::NatCatalog | Style::NatList => NAT_MESSAGE,
+                Style::EndpointQuote => "endpoint response had invalid structure",
                 Style::Bandwidth | Style::BandwidthProject => {
                     "invalid bandwidth response; body withheld"
                 }
@@ -118,7 +122,8 @@ impl Read {
 
     fn withheld(self, status: Option<StatusCode>, retryable: bool) -> Error {
         let message = match self.style {
-            Style::Nat => NAT_MESSAGE,
+            Style::Nat | Style::NatCatalog | Style::NatList => NAT_MESSAGE,
+            Style::EndpointQuote => "endpoint response withheld",
             Style::Bandwidth | Style::BandwidthProject => BANDWIDTH_MESSAGE,
         };
         api(self.id, status, "", message, retryable)
@@ -211,6 +216,24 @@ impl Client {
         path: &[&str],
         evidence: &mut Evidence,
     ) -> Result<Vec<u8>, Error> {
+        self.read_query(
+            ctx,
+            base,
+            read,
+            super::inventory::Selection::path(path),
+            evidence,
+        )
+        .await
+    }
+
+    pub(super) async fn read_query(
+        &self,
+        ctx: &RequestContext,
+        base: &Base,
+        read: Read,
+        selection: super::inventory::Selection<'_>,
+        evidence: &mut Evidence,
+    ) -> Result<Vec<u8>, Error> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -227,16 +250,16 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: true,
-            overflow_overrides_status: true,
+            keep_status: read.style != Style::NatList,
+            overflow_overrides_status: !matches!(read.style, Style::NatCatalog | Style::NatList),
             sensitive: true,
             reject_reflected_credentials: false,
-            no_redirect: true,
+            no_redirect: read.style != Style::NatList,
             retry_config: retry::Config::default(),
         };
         let options = Options {
             response_guard: match read.style {
-                Style::Nat => None,
+                Style::Nat | Style::NatCatalog | Style::NatList | Style::EndpointQuote => None,
                 Style::Bandwidth => Some(guard_bandwidth),
                 Style::BandwidthProject => Some(guard_bandwidth_project),
             },
@@ -250,8 +273,8 @@ impl Client {
             base,
             &operation,
             &options,
-            path,
-            &[],
+            selection.path,
+            selection.query,
             RouteAuth::Bearer(self.session.bearer_source()),
             bytes::Bytes::new(),
             evidence,
@@ -265,7 +288,14 @@ impl Client {
                     .and_then(|status| StatusCode::from_u16(status).ok())
             });
             let error = if error.is_body_too_large() {
-                read.withheld(status, false).with_body_too_large()
+                match read.style {
+                    Style::NatCatalog => {
+                        read.invalid_as(evidence, "NAT response had invalid structure")
+                    }
+                    Style::NatList => read.invalid_as(evidence, "oversized list envelope"),
+                    Style::EndpointQuote => read.invalid(evidence),
+                    _ => read.withheld(status, false).with_body_too_large(),
+                }
             } else if matches!(
                 error.class(),
                 ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
@@ -275,7 +305,15 @@ impl Client {
                 } else {
                     error
                 }
-            } else if api.is_some_and(|api| api.code() == "InvalidResponse") {
+            } else if read.style == Style::NatList
+                && status == Some(StatusCode::OK)
+                && error.class() == ErrorClass::Api
+                && api.is_none_or(|api| api.status().is_none() && api.code() != "InvalidResponse")
+            {
+                read.invalid_as(evidence, "invalid list envelope")
+            } else if api.is_some_and(|api| api.code() == "InvalidResponse")
+                || read.style == Style::NatList
+            {
                 error
             } else if status.is_some() || (read.style == Style::Nat && api.is_some()) {
                 read.withheld(status, api.is_some_and(ApiError::retryable))
@@ -286,6 +324,26 @@ impl Client {
         })?;
         if response.status != StatusCode::OK {
             let status = response.status;
+            if matches!(read.style, Style::NatCatalog | Style::EndpointQuote) && status.is_success()
+            {
+                return Err(if read.style == Style::EndpointQuote {
+                    read.invalid(evidence)
+                } else {
+                    read.invalid_as(evidence, "NAT response had invalid structure")
+                });
+            }
+            if read.style == Style::NatList {
+                return crate::wire::product::response::classify(
+                    read.id,
+                    status,
+                    bytes::Bytes::copy_from_slice(&response.body),
+                    &[],
+                    (true, false, Retry::Repeatable),
+                    evidence.credentials(),
+                )
+                .map(Vec::from)
+                .map_err(|error| screen(*error, evidence));
+            }
             return Err(screen(
                 read.withheld(Some(status), matches!(status.as_u16(), 429 | 502..=504)),
                 evidence,
@@ -398,6 +456,10 @@ impl<'a> Fields<'a> {
         self.raw(name)?
             .map(|raw| serde_json::from_str(raw.get()).map_err(|_| ()))
             .transpose()
+    }
+
+    pub(super) fn only(&self, names: &[&str]) -> bool {
+        self.0.keys().all(|key| names.contains(&key.as_str()))
     }
 
     pub(super) fn has_any(&self, names: &[&str]) -> bool {

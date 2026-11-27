@@ -1,3 +1,9 @@
+mod endpoint_quotes;
+mod refusals;
+mod review;
+mod variants;
+mod zones;
+
 use super::*;
 use crate::testing::{Product, Response, Server, with_product_loopback};
 use crate::{ConfigOptions, EndpointOverrides, ErrorClass, RequestContext, Secret};
@@ -14,6 +20,16 @@ fn options() -> ConfigOptions {
     ConfigOptions::default()
         .with_region("hcm-3".into())
         .with_static_token(Secret::new("toy-secret"))
+}
+
+fn assert_invalid<T>(result: Result<T, crate::Failure<T>>) {
+    let Err(failure) = result else {
+        panic!("expected failure")
+    };
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
 }
 
 #[tokio::test]
@@ -151,24 +167,24 @@ async fn returned_identifiers_reject_embedded_encoded_credentials() {
         &server,
     ))
     .unwrap();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 1);
     let config = Config::new(with_product_loopback(
         Product::Vserver,
         opts.clone(),
         &server,
     ))
     .unwrap();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 2);
     let config = Config::new(with_product_loopback(
         Product::Vnetwork,
         opts.with_project_id("proj-1".into()),
@@ -177,12 +193,12 @@ async fn returned_identifiers_reject_embedded_encoded_credentials() {
     .unwrap();
     let mut input = ListNatInboundRulesInput::new("nat-1");
     input.zone_id = "zone-1".into();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_nat_inbound_rules(&ctx, input)
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 3);
 }
 
 #[tokio::test]
@@ -211,24 +227,24 @@ async fn returned_identifiers_reject_hex_credentials() {
         &server,
     ))
     .unwrap();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 1);
     let config = Config::new(with_product_loopback(
         Product::Vserver,
         opts.clone(),
         &server,
     ))
     .unwrap();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 2);
     let config = Config::new(with_product_loopback(
         Product::Vnetwork,
         opts.with_project_id("proj-1".into()),
@@ -237,12 +253,12 @@ async fn returned_identifiers_reject_hex_credentials() {
     .unwrap();
     let mut input = ListNatInboundRulesInput::new("nat-1");
     input.zone_id = "zone-1".into();
-    assert!(
+    assert_invalid(
         Client::new(&config)
             .list_nat_inbound_rules(&ctx, input)
-            .await
-            .is_err()
+            .await,
     );
+    assert_eq!(server.heads().len(), 3);
 }
 
 #[tokio::test]
@@ -365,8 +381,95 @@ async fn bandwidth_uses_fixed_origin_and_discovers_its_own_project() {
     );
 }
 
-async fn bandwidth_with_total_items_variant() -> bool {
-    let server = Server::start(vec![response("200 OK", r#"{"data":[],"TotalItems":0}"#)]);
+#[tokio::test]
+async fn metadata_discovery_records_its_bearer_in_caller_evidence() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3","userId":123}]}"#,
+    )]);
+    struct Provider;
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(crate::Token::new(Secret::new("discovery-only-toy"), None)) })
+        }
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("proj-1".into())
+            .with_credentials_provider(std::sync::Arc::new(Provider)),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let mut evidence = crate::wire::product::evidence::Evidence::new();
+    let project = config
+        .session()
+        .require_project_with_evidence(&ctx, &mut evidence)
+        .await
+        .unwrap();
+    assert_eq!(project.user_id, 123);
+    assert!(evidence.id_reflects("discovery-only-toy"));
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
+async fn endpoint_tags_use_numeric_project_metadata_on_the_vnetwork_origin() {
+    let project = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3","userId":123}]}"#,
+    )]);
+    let endpoint = Server::start(vec![response(
+        "200 OK",
+        include_str!("../../tests/fixtures/network/list_endpoint_tags.json"),
+    )]);
+    let options = options().with_project_id("proj-1".into());
+    let options = with_product_loopback(Product::Vserver, options, &project);
+    let options = with_product_loopback(Product::Vnetwork, options, &endpoint);
+    let config = Config::new(options).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let client = Client::new(&config);
+    let failure = client
+        .list_endpoint_tags(&ctx, ListEndpointTagsInput::new("toy-secret"))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert!(project.heads().is_empty() && endpoint.heads().is_empty());
+    let tags = client
+        .list_endpoint_tags(&ctx, ListEndpointTagsInput::new("endpoint-1"))
+        .await
+        .unwrap();
+    assert_eq!(tags.items[0].key, "env");
+    assert!(project.heads()[0].starts_with(b"GET /v1/projects "));
+    let headers = String::from_utf8_lossy(&endpoint.heads()[0]).to_ascii_lowercase();
+    assert!(headers.starts_with("get /vnetwork/v1/proj-1/tags?resourceuuid=endpoint-1 "));
+    assert!(headers.contains("\r\nportal-user-id: 123\r\n"));
+}
+
+#[tokio::test]
+async fn server_lookup_decodes_distinct_shapes_into_the_shared_model() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/list_servers_by_security_group.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/list_servers_by_subnet.json"),
+        ),
+    ]);
     let config = Config::new(with_product_loopback(
         Product::Vserver,
         options().with_project_id("proj-1".into()),
@@ -374,89 +477,182 @@ async fn bandwidth_with_total_items_variant() -> bool {
     ))
     .unwrap();
     let (ctx, _) = RequestContext::new();
-    Client::new(&config)
-        .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+    let client = Client::new(&config);
+    let by_group = client
+        .list_servers_by_security_group(&ctx, ListServersBySecurityGroupInput::new("group-1"))
         .await
-        .is_err()
+        .unwrap();
+    let by_subnet = client
+        .list_servers_by_subnet(&ctx, ListServersBySubnetInput::new("subnet-1"))
+        .await
+        .unwrap();
+    let first: &crate::compute::Server = &by_group.items[0];
+    assert_eq!(first.uuid, by_subnet.items[0].uuid);
+    let heads = server.heads();
+    assert!(heads[0].starts_with(b"GET /v2/proj-1/secgroups/group-1/servers "));
+    assert!(heads[1].starts_with(b"GET /v2/proj-1/servers/subnets/subnet-1 "));
 }
 
 #[tokio::test]
-async fn bandwidth_refuses_a_total_items_case_variant() {
-    assert!(bandwidth_with_total_items_variant().await);
-}
-
-#[tokio::test]
-async fn project_discovery_refuses_a_region_case_variant() {
+async fn nat_catalogs_send_distinct_queries_and_withhold_reflected_success() {
+    let package = include_str!("../../tests/fixtures/network/list_nat_packages.json");
+    let reflected = package.replace("Standard", "toy%2Dsecret");
     let server = Server::start(vec![
         response(
             "200 OK",
-            r#"{"projects":[{"projectId":"proj-1","Region":"han-1"}]}"#,
+            include_str!("../../tests/fixtures/network/list_nat_zones.json"),
         ),
-        response("200 OK", r#"{"data":[]}"#),
+        response("200 OK", package),
+        response("200 OK", &reflected),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/list_nat_instances.json"),
+        ),
     ]);
-    let config = Config::new(with_product_loopback(Product::Vserver, options(), &server)).unwrap();
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let zones = client
+        .list_nat_zones(
+            &ctx,
+            ListNatZonesInput {
+                zone_id: "zone-1".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(zones.items[0].uuid, "az-1");
+    let mut input = ListNatPackagesInput::new("az-1");
+    input.zone_id = "zone-1".into();
+    let packages = client.list_nat_packages(&ctx, input.clone()).await.unwrap();
+    assert_eq!(packages.items[0].price.optimum_price, 100.0);
+    let failure = client.list_nat_packages(&ctx, input).await.unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    let list = client
+        .list_nat_instances(
+            &ctx,
+            ListNatInstancesInput {
+                zone_id: "zone-1".into(),
+                page: 2,
+                size: 5,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!list.items.is_empty());
+    let heads = server.heads();
+    assert!(heads[0].starts_with(b"GET /vnetwork/v1/zone-1/proj-1/nats/zones?params="));
+    let package_head = String::from_utf8_lossy(&heads[1]);
+    assert!(package_head.starts_with("GET /vnetwork/v1/zone-1/proj-1/nats/nat-package?params="));
+    assert!(package_head.contains("&zoneUuid=az-1 "));
+    assert!(heads[3].starts_with(b"GET /vnetwork/v1/zone-1/proj-1/nats?params="));
+}
+
+#[tokio::test]
+async fn prices_preflight_and_quote_three_public_ip_kinds() {
+    let body = include_str!("../../tests/fixtures/pricing/discovery_quote_public_vm.json");
+    let server = Server::start(vec![
+        response("200 OK", body),
+        response("200 OK", body),
+        response("200 OK", body),
+    ]);
+    let config = Config::new(with_product_loopback(
+        Product::Portal,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let client = Client::new(&config);
     let (ctx, _) = RequestContext::new();
     assert!(
-        Client::new(&config)
-            .list_bandwidth_packages(&ctx, ListBandwidthPackagesInput::default())
+        client
+            .list_network_prices(
+                &ctx,
+                ListNetworkPricesInput {
+                    max_requests: 2,
+                    allow_partial: false
+                }
+            )
             .await
             .is_err()
+    );
+    assert!(server.heads().is_empty());
+    let output = client
+        .list_network_prices(&ctx, ListNetworkPricesInput::default())
+        .await
+        .unwrap();
+    assert_eq!(output.metadata.requests, 3);
+    assert_eq!(
+        output
+            .items
+            .iter()
+            .filter(|row| row.price.status == "quoted")
+            .count(),
+        3
+    );
+    assert_eq!(output.items.len(), 6);
+    assert!(
+        server
+            .heads()
+            .iter()
+            .all(|head| head.starts_with(b"POST /v1/price "))
     );
 }
 
 #[tokio::test]
-async fn nat_rules_refuse_paging_case_variants() {
-    for body in [
-        r#"{"success":true,"data":[],"Page":1}"#,
-        r#"{"success":true,"data":[],"Total":5}"#,
-        r#"{"success":true,"data":[],"NextPage":"more"}"#,
-    ] {
-        let server = Server::start(vec![response("200 OK", body)]);
-        let config = Config::new(with_product_loopback(
-            Product::Vnetwork,
-            options().with_project_id("proj-1".into()),
-            &server,
-        ))
-        .unwrap();
-        let (ctx, _) = RequestContext::new();
-        let mut input = ListNatInboundRulesInput::new("nat-1");
-        input.zone_id = "zone-1".into();
-        assert!(
-            Client::new(&config)
-                .list_nat_inbound_rules(&ctx, input)
-                .await
-                .is_err(),
-            "{body}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn nat_region_discovery_refuses_case_variants() {
-    for body in [
-        r#"{"success":true,"data":[{"uuid":"zone-1","VnetworkDashboard":"https://hcm-3-vnetwork.console.greennode.ai","gatewayUrl":"https://hcm-3-vnetwork.console.greennode.ai/vnetwork-gateway/"}]}"#,
-        r#"{"success":true,"data":[{"uuid":"zone-1","vnetworkDashboard":"https://hcm-3-vnetwork.console.greennode.ai","GatewayUrl":"https://hcm-3-vnetwork.console.greennode.ai/vnetwork-gateway/"}]}"#,
-    ] {
-        let server = Server::start(vec![
-            response("200 OK", body),
-            response(
-                "200 OK",
-                include_str!("../../tests/fixtures/network/get_nat_instance.json"),
-            ),
-        ]);
-        let config = Config::new(with_product_loopback(
-            Product::Vnetwork,
-            options().with_project_id("proj-1".into()),
-            &server,
-        ))
-        .unwrap();
-        let (ctx, _) = RequestContext::new();
-        assert!(
-            Client::new(&config)
-                .get_nat_instance(&ctx, GetNatInstanceInput::new("nat-1"))
-                .await
-                .is_err(),
-            "{body}"
-        );
-    }
+async fn nat_quote_checks_catalog_placement_before_posting_to_vnetwork() {
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/nat_quote_whitelist.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/list_nat_zones.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/list_nat_packages.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/nat_quote_vpcs.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../tests/fixtures/network/quote_create_nat.json"),
+        ),
+    ]);
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let mut input =
+        QuoteCreateNatInstanceInput::new("toy-secret", "zone-1", "az-1", "package-1", "vpc-1");
+    assert!(
+        client
+            .quote_create_nat_instance(&ctx, input.clone())
+            .await
+            .is_err()
+    );
+    assert!(server.heads().is_empty());
+    input.name = "edge".into();
+    let quote = client.quote_create_nat_instance(&ctx, input).await.unwrap();
+    assert_eq!(quote.monthly_price, 712_400.0);
+    let heads = server.heads();
+    assert_eq!(heads.len(), 5);
+    assert!(heads[0].starts_with(b"GET /vnetwork/v1/zone-1/proj-1/nats/v3-whitelist "));
+    assert!(heads[4].starts_with(b"POST /vnetwork/billing/v1/zone-1/proj-1/price "));
 }
