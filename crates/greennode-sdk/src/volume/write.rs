@@ -107,7 +107,7 @@ impl Client {
             keep_status: true,
             overflow_overrides_status: false,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };
@@ -222,15 +222,15 @@ pub(super) fn attached(volume: &Volume, server: &str) -> bool {
 }
 
 pub(super) fn screen_state(evidence: &Evidence, volume: &Volume) -> Result<(), Box<Error>> {
-    if evidence.output_reflects(&serde_json::json!([
-        volume.uuid,
-        volume.status,
-        volume.size,
-        volume.server_id,
-        volume.server_id_list,
-        volume.bootable,
-        volume.volume_type_id
-    ])) {
+    if evidence.output_reflects(&serde_json::json!({
+        "uuid": volume.uuid,
+        "status": volume.status,
+        "size": volume.size,
+        "serverId": volume.server_id,
+        "serverIds": volume.server_id_list,
+        "bootable": volume.bootable,
+        "volumeTypeId": volume.volume_type_id,
+    })) {
         return Err(Box::new(api(
             "volume.GetVolume",
             Some(200),
@@ -319,5 +319,24 @@ pub(super) fn finish<T: Serialize + Redact>(
             partial,
             dispatch,
         )),
+    }
+}
+
+#[cfg(test)]
+mod screening_tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn settlement_rechecks_identifiers_after_a_later_bearer() {
+        let mut evidence = Evidence::new();
+        let volume = Volume {
+            uuid: "volume-1".into(),
+            server_id_list: Some(vec!["pre6A6B6Cpost".into()]),
+            ..Default::default()
+        };
+        assert!(screen_state(&evidence, &volume).is_ok());
+        evidence.add_bearer(&Secret::new("jkl"));
+        assert!(screen_state(&evidence, &volume).is_err());
     }
 }

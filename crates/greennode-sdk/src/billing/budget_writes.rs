@@ -314,7 +314,7 @@ pub(super) fn write_operation(
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

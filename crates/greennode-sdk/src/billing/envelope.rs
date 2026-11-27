@@ -63,6 +63,17 @@ impl<T: BudgetData> Output for Envelope<T> {
         },
     ]);
 
+    fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
+        if let Ok(header) = serde_json::from_slice::<Header<'_>>(&response.body)
+            && header
+                .code
+                .is_some_and(|code| success_code(code.get()) == Some(false))
+        {
+            return api_error(operation, response, header.not_found());
+        }
+        Box::new(invalid_response(operation, response.status, false))
+    }
+
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let status = response.status;
         let invalid = || Box::new(invalid_response(operation, status, false));

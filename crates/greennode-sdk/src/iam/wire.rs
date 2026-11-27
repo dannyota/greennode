@@ -343,7 +343,10 @@ impl<T: Wire> Output for Body<T> {
             operation.success,
             (true, account || private, operation.retry),
             &response.credentials,
-        )?;
+        )
+        .map_err(|error| {
+            Box::new(error.with_outer_detail(ObservedResponse::from_status(response.status)))
+        })?;
         if operation.no_output || (body.is_empty() && operation.allow_empty) {
             return Ok(Self::default());
         }
@@ -354,7 +357,7 @@ impl<T: Wire> Output for Body<T> {
         strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
             .map_err(|_| error(super::DecodeError::InvalidShape))?;
         let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
-        if operation.reject_reflected_credentials
+        if operation.reflection == crate::wire::product::operation::Reflection::Refuse
             && Evidence::from_credentials(&response.credentials)
                 .go_peer_body_reflects(&response.body)
                 != Some(false)
@@ -479,6 +482,16 @@ pub(super) fn account_error(id: &'static str, error: Error) -> Error {
             SafeText::new(&message, &[]),
             api.retryable(),
         ));
+    }
+    if error.detail::<ObservedResponse>().is_some() && api.status().is_none() {
+        let safe = Error::from_api(ApiError::without_fallback(
+            api.operation(),
+            None,
+            SafeText::new(api.code(), &[]),
+            SafeText::new("IAM response withheld", &[]),
+            api.retryable(),
+        ));
+        return Error::new(error.class()).with_cause(safe).with_cause(error);
     }
     if error.is_body_too_large() {
         let message = format!("{id}: read {label}: transport: response body exceeds limit");

@@ -152,7 +152,7 @@ impl Client {
     ) -> Result<ListResourcesOutput, Failure<ListResourcesOutput>> {
         let operation = Operation {
             cap: 4 << 20,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             overflow_overrides_status: true,
             ..history_operation("billing.ListResources", "gateway/api/v1/resources")
         };

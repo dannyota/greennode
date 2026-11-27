@@ -81,15 +81,24 @@ pub(super) fn redact_text(text: &mut String, evidence: &Evidence) {
     }
 }
 
+pub(super) fn redact_id(text: &mut String, evidence: &Evidence) {
+    if evidence.id_reflects(text) {
+        *text = REDACTED.to_owned();
+    }
+}
+
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
+    let raw_reflects = evidence.peer_body_reflects(text.get().as_bytes()) != Some(false);
     match serde_json::from_str::<Value>(text.get()) {
         Ok(mut value) if evidence.output_reflects(&value) => {
-            evidence.redact(&mut value);
-            *raw = serde_json::value::to_raw_value(&value).ok();
+            *raw = evidence
+                .redact(&mut value)
+                .then(|| serde_json::value::to_raw_value(&value).ok())
+                .flatten();
         }
-        Ok(_) => {}
-        Err(_) => *raw = None,
+        Ok(_) if !raw_reflects => {}
+        _ => *raw = None,
     }
 }
 
@@ -214,7 +223,7 @@ pub struct Certificate {
 
 impl Certificate {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         redact_text(&mut self.common_name, evidence);
         redact_text(&mut self.c_name, evidence);
         redact_text(&mut self.issuer, evidence);
@@ -321,7 +330,7 @@ impl WebAcceleratorSummary {
         if let Field::Value(status) = self.status {
             self.status_name = status_name(status);
         }
-        redact_text(&mut self.cdn_id, evidence);
+        redact_id(&mut self.cdn_id, evidence);
         redact_text(&mut self.domain_name, evidence);
         redact_text(&mut self.cdn_domain, evidence);
         for text in &mut self.c_names {
@@ -364,7 +373,7 @@ pub struct Upstream {
 
 impl Upstream {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         self.priority.redact(evidence);
         redact_text(&mut self.ip_address, evidence);
         self.status.redact(evidence);
@@ -403,7 +412,7 @@ pub struct RuleAction {
 
 impl RuleAction {
     pub(super) fn redact(&mut self, evidence: &Evidence) {
-        redact_text(&mut self.id, evidence);
+        redact_id(&mut self.id, evidence);
         redact_text(&mut self.name, evidence);
         redact_text(&mut self.value, evidence);
         self.order.redact(evidence);
@@ -528,7 +537,7 @@ impl WebAccelerator {
         if let Field::Value(status) = self.status {
             self.status_name = status_name(status);
         }
-        redact_text(&mut self.cdn_id, evidence);
+        redact_id(&mut self.cdn_id, evidence);
         redact_text(&mut self.kind, evidence);
         redact_text(&mut self.domain_name, evidence);
         redact_text(&mut self.cdn_domain, evidence);
@@ -537,7 +546,7 @@ impl WebAccelerator {
         }
         self.status.redact(evidence);
         redact_text(&mut self.status_name, evidence);
-        redact_text(&mut self.certificate_id, evidence);
+        redact_id(&mut self.certificate_id, evidence);
         redact_text(&mut self.lb_type, evidence);
         redact_text(&mut self.origin_host_header, evidence);
         for text in &mut self.fail_over_error_codes {
@@ -551,5 +560,37 @@ impl WebAccelerator {
         }
         redact_raw(&mut self.page_rules, evidence);
         redact_raw(&mut self.advanced_rule, evidence);
+    }
+}
+
+#[cfg(test)]
+mod screening_tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn raw_cdn_rules_withhold_reflection_in_original_number_spelling() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("1E06"));
+        let mut rule = Some(RawValue::from_string(r#"{"score":1E06}"#.into()).unwrap());
+        redact_raw(&mut rule, &evidence);
+        assert!(
+            rule.is_none()
+                || rule
+                    .as_ref()
+                    .is_some_and(|value| !value.get().contains("1E06"))
+        );
+    }
+
+    #[test]
+    fn cdn_certificate_redacts_short_encoding_inside_identifier() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&Secret::new("jkl"));
+        let mut certificate = Certificate {
+            id: "pre6A6B6Cpost".into(),
+            ..Default::default()
+        };
+        certificate.redact(&evidence);
+        assert!(certificate.id == REDACTED);
     }
 }

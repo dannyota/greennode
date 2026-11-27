@@ -148,8 +148,15 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Collection<T> {
             .map_err(de::Error::custom)
     }
 }
-impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
+impl<T: for<'de> Deserialize<'de> + Serialize> Output for Collection<T> {
     const SCHEMA: Shape<'static> = Shape::Any;
+
+    fn reflected_response(
+        operation: &Operation,
+        response: &crate::wire::product::sender::Response,
+    ) -> Box<Error> {
+        Box::new(super::envelope::invalid_response(operation, response))
+    }
 
     fn decode_response(
         operation: &Operation,
@@ -161,18 +168,20 @@ impl<T: for<'de> Deserialize<'de>> Output for Collection<T> {
         {
             return operation::decode_response(operation, response);
         }
-        operation::decode_response(operation, response).map_err(|_| {
-            Box::new(Error::from_api(crate::ApiError::without_fallback(
-                operation.id,
-                Some(response.status.as_u16()),
-                crate::error::SafeText::new("InvalidResponse", &[]),
-                crate::error::SafeText::new("invalid portal response; body withheld", &[]),
-                false,
-            )))
-        })
+        let invalid = || Self::reflected_response(operation, response);
+        let output: Self =
+            operation::decode_response(operation, response).map_err(|_| invalid())?;
+        let evidence =
+            crate::wire::product::evidence::Evidence::from_credentials(&response.credentials);
+        if evidence.serialized_output_reflects(&output.0) {
+            return Err(invalid());
+        }
+        Ok(output)
     }
 }
 
+#[derive(Serialize)]
+#[serde(transparent)]
 struct QuotaRow(UserInfo);
 
 impl<'de> Deserialize<'de> for QuotaRow {

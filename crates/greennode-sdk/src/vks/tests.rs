@@ -367,11 +367,11 @@ async fn reflected_bearers_in_strings_are_redacted_before_projection() {
     let server = Server::start(vec![
         response(
             "200 OK",
-            r#"[{"version":"prefix synthetic-vks-\u0062earer-canary","enable":false,"stage":"STABLE"}]"#,
+            r#"[{"version":"prefix synthetic-vks-%62earer-canary","enable":false,"stage":"STABLE"}]"#,
         ),
         response(
             "200 OK",
-            r#"{"items":[{"name":"synthetic-vks-\u0062earer-canary","description":"resource-canary","numNodes":3}],"total":1,"page":0,"pageSize":10}"#,
+            r#"{"items":[{"name":"synthetic-vks-%62earer-canary","description":"resource-canary","numNodes":3}],"total":1,"page":0,"pageSize":10}"#,
         ),
         response(
             "200 OK",

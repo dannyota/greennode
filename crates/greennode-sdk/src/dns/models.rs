@@ -326,7 +326,9 @@ impl Resource for Record {
         }
         redact_integer(&mut self.ttl, credentials);
         if let Some(sticky) = &mut self.enable_sticky_session {
-            sticky.redact_if(|value| credentials.reflects(if *value { b"true" } else { b"false" }));
+            sticky.redact_if(|value| {
+                credentials.text_reflects(if *value { "true" } else { "false" })
+            });
         }
         redact_times(
             &mut self.created_at,
@@ -350,16 +352,13 @@ fn redact_id(id: &mut String, keep: &impl Fn(&str) -> bool) {
 }
 
 fn redact_string(value: &mut String, credentials: &SentCredentials) {
-    if credentials.reflects(value.as_bytes()) {
+    if credentials.text_reflects(value) {
         *value = REDACTED.into();
     }
 }
 
 pub(super) fn redact_integer(value: &mut Field<i64>, credentials: &SentCredentials) {
-    value.redact_if(|value| {
-        credentials.reflects(value.to_string().as_bytes())
-            || crate::output_number::reflects(*value as f64, credentials, false)
-    });
+    value.redact_if(|value| credentials.integer_output_reflects(*value));
 }
 
 fn redact_times(
@@ -376,7 +375,7 @@ fn redact_times(
             value
                 .0
                 .format(&Rfc3339)
-                .map_or(true, |text| credentials.reflects(text.as_bytes()))
+                .map_or(true, |text| credentials.text_reflects(&text))
         });
     }
 }

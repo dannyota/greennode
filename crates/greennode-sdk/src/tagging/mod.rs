@@ -26,15 +26,7 @@ pub enum ErrorDetail {
     NotSettled,
 }
 
-/// Full refusal text for a system tag key, without the generic length cap.
-pub struct SystemTagText(pub(crate) String);
-
-impl SystemTagText {
-    /// Returns the refusal text.
-    pub fn message(&self) -> &str {
-        &self.0
-    }
-}
+pub use crate::error::SystemTagText;
 
 /// One resource tag, including whether it is managed by the platform.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -190,12 +182,12 @@ impl Output for Snapshot {
         for tag in &mut tags {
             if response
                 .credentials
-                .reflects(tag.system_tag.to_string().as_bytes())
+                .text_reflects(if tag.system_tag { "true" } else { "false" })
             {
                 return Err(invalid());
             }
             for value in [&mut tag.key, &mut tag.value, &mut tag.created_at] {
-                if response.credentials.reflects(value.as_bytes()) {
+                if response.credentials.text_reflects(value) {
                     *value = "<redacted>".to_owned();
                 }
             }
@@ -260,7 +252,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: true,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: false,
             retry_config: retry::Config::default(),
         };

@@ -125,7 +125,7 @@ async fn reads_use_regional_backup_center_without_project_scope() {
 
 #[tokio::test]
 async fn retained_response_strings_refuse_reflected_bearer() {
-    let reflected = format!("prefix-{}-suffix", TOKEN.replace('-', "\\u002d"));
+    let reflected = format!("prefix-{}-suffix", TOKEN.replace('-', "%2D"));
     let backend = BACKENDS.replace("\"backend\"", &format!("\"{reflected}\""));
     let policies = POLICIES.replace("\"incremental\"", &format!("\"{reflected}\""));
     let policy = POLICY.replace(

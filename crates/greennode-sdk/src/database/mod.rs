@@ -440,7 +440,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
         retry_config: retry::Config::default(),
     }

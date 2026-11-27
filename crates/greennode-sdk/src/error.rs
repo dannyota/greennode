@@ -111,6 +111,16 @@ impl RecoveryAdvice {
     }
 }
 
+/// Full refusal text for a system tag key, without the generic length cap.
+pub struct SystemTagText(pub(crate) String);
+
+impl SystemTagText {
+    /// Returns the refusal text.
+    pub fn message(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Sanitized details of a failed service request.
 pub struct ApiError {
     operation: &'static str,
@@ -269,12 +279,56 @@ impl fmt::Debug for ServiceAccountLoginError {
 }
 
 const DIAGNOSTIC_FALLBACK: &str = "request failed";
+const STATIC_DIAGNOSTIC_TEXT: &[&str] = &[
+    "BootVolume",
+    "DiscoveryIncomplete",
+    "EstimateLimit",
+    "EstimateOverflow",
+    "HistoryIncomplete",
+    "InvalidConfig",
+    "InvalidUsage",
+    "LoginFailed",
+    "NoCredentials",
+    "NotFound",
+    "NotSettled",
+    "PageFormat",
+    "PriceAboveMax",
+    "PurgeCooldown",
+    "QuotaChanged",
+    "QuotaStatusIncomplete",
+    "RequestFailed",
+    "ResourceBusy",
+    "ResourceInUse",
+    "ServerGroupInUse",
+    "ServerRunning",
+    "ServiceAccountLoginFailed",
+    "StatusUnconfirmed",
+    "SystemTag",
+    "TokenCacheFailed",
+    "UnexpectedStatus",
+    "Unpriced",
+    "VolumeInUse",
+    "WriteFailed",
+    "ZoneBusy",
+    "cdn: CDN status change not confirmed: the toggle was sent, or may have been sent, but no read showed the CDN changing; read the CDN before doing anything else",
+    "estimate arithmetic overflow",
+    "monitor.GetQuotaStatus",
+    "monitor.GetQuotaStatus: Kind must be synthetic, email, or sms: vngcloud: invalid input",
+    "monitor.QuoteRenewSyntheticQuota: unknown quota status: monitor: unexpected check status",
+    "monitor: quota status incomplete",
+    "no vCDN API key: pipe it to `greennode configure set vcdn_api_key -` or set GREENNODE_VCDN_API_KEY",
+    "pricing discovery incomplete",
+    "quota guard changed",
+    "request failed",
+    "tagging: write outcome is unconfirmed; read tags before retrying",
+    "volume.GetVolume: volume status is missing; body withheld (status 200)",
+];
 
 /// A categorized failure with optional typed details and a cause chain.
 pub struct Error {
     class: ErrorClass,
     identity: bool,
-    fallback_message_reflected: bool,
+    diagnostic_reflections: u64,
     api: Option<ApiError>,
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
@@ -284,7 +338,6 @@ pub struct Error {
 
 struct BodyTooLarge;
 
-#[allow(dead_code)]
 impl Error {
     /// Creates an authentication failure for a custom credential provider.
     pub fn provider_failed() -> Self {
@@ -295,7 +348,7 @@ impl Error {
         Self {
             class,
             identity: true,
-            fallback_message_reflected: false,
+            diagnostic_reflections: 0,
             api: None,
             login: None,
             service_login: None,
@@ -325,7 +378,7 @@ impl Error {
         Self {
             class,
             identity: false,
-            fallback_message_reflected: false,
+            diagnostic_reflections: 0,
             api: Some(api),
             login: None,
             service_login: None,
@@ -353,6 +406,45 @@ impl Error {
                 api.message.clear();
             }
         }
+        if let Some(login) = &mut self.login {
+            if reflects(login.reason) {
+                login.reason = "";
+            }
+            if login
+                .status
+                .is_some_and(|status| reflects(&status.to_string()))
+            {
+                login.status = None;
+            }
+        }
+        if let Some(login) = &mut self.service_login {
+            if reflects(login.reason) {
+                login.reason = "";
+            }
+            if login
+                .status
+                .is_some_and(|status| reflects(&status.to_string()))
+            {
+                login.status = None;
+            }
+        }
+        if let Some(detail) = self.detail.as_mut() {
+            if let Some(advice) = detail.downcast_mut::<RecoveryAdvice>()
+                && reflects(advice.message())
+            {
+                advice.0.0.clear();
+            }
+            if let Some(text) = detail.downcast_mut::<SystemTagText>()
+                && reflects(text.message())
+            {
+                text.0.clear();
+            }
+            if let Some(diagnostic) = detail.downcast_ref::<Diagnostic>()
+                && reflects(diagnostic.message())
+            {
+                self.detail = None;
+            }
+        }
         if self
             .detail
             .as_ref()
@@ -365,24 +457,36 @@ impl Error {
         self
     }
 
-    pub(crate) fn screen_diagnostic_fallback(
-        mut self,
-        reflects: impl FnOnce(&str) -> bool,
-    ) -> Self {
-        self.fallback_message_reflected |= reflects(DIAGNOSTIC_FALLBACK);
+    pub(crate) fn screen_diagnostic_fallback(mut self, reflects: impl Fn(&str) -> bool) -> Self {
+        for (index, text) in STATIC_DIAGNOSTIC_TEXT.iter().enumerate() {
+            if reflects(text) {
+                self.diagnostic_reflections |= 1 << index;
+            }
+        }
         self
     }
 
     /// Returns the diagnostic fallback after credential screening.
     pub fn diagnostic_fallback(&self) -> &'static str {
+        self.screened_diagnostic_text(DIAGNOSTIC_FALLBACK)
+    }
+
+    /// Withholds a fixed CLI diagnostic that matches evidence recorded for this failure.
+    pub fn screened_diagnostic_text<'a>(&self, text: &'a str) -> &'a str {
+        let Some(index) = STATIC_DIAGNOSTIC_TEXT
+            .iter()
+            .position(|candidate| *candidate == text)
+        else {
+            return text;
+        };
         let mut error = Some(self);
         while let Some(node) = error {
-            if node.fallback_message_reflected {
+            if node.diagnostic_reflections & (1 << index) != 0 {
                 return "";
             }
             error = node.cause.as_deref();
         }
-        DIAGNOSTIC_FALLBACK
+        text
     }
 
     pub(crate) fn with_cause(mut self, cause: Error) -> Self {
@@ -410,7 +514,7 @@ impl Error {
         Self {
             class: self.class,
             identity: false,
-            fallback_message_reflected: false,
+            diagnostic_reflections: 0,
             api: None,
             login: None,
             service_login: None,

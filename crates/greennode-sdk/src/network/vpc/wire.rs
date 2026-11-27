@@ -169,9 +169,10 @@ impl<'a> Reads<'a> {
         mut output: T,
     ) -> Result<T, Error> {
         let value = serde_json::to_value(&output).map_err(|_| self.invalid(read))?;
-        if self
-            .evidence
-            .output_fields_reflect_with(&value, &|number| self.protected_number(number.as_str()))
+        if output.identifiers_reflect(&self.evidence)
+            || self.evidence.output_fields_reflect_with(&value, &|number| {
+                self.protected_number(number.as_str())
+            })
         {
             return Err(self.invalid(read));
         }
@@ -301,7 +302,7 @@ impl<'a> Reads<'a> {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: protected,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
             retry_config: retry::Config::default(),
         };

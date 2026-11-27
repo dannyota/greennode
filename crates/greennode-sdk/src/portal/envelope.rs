@@ -71,6 +71,10 @@ fn decode_value(raw: &RawValue) -> serde_json::Result<Value> {
 impl Output for Envelope {
     const SCHEMA: Shape<'static> = Shape::Object(&[]);
 
+    fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
+        Box::new(invalid_response(operation, response))
+    }
+
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK
             || (!response.body.is_empty()
@@ -78,16 +82,19 @@ impl Output for Envelope {
         {
             return operation::decode_response(operation, response);
         }
-        operation::decode_response(operation, response).map_err(|_| {
-            Box::new(Error::from_api(ApiError::without_fallback(
-                operation.id,
-                Some(response.status.as_u16()),
-                SafeText::new("InvalidResponse", &[]),
-                SafeText::new("invalid portal response; body withheld", &[]),
-                false,
-            )))
-        })
+        operation::decode_response(operation, response)
+            .map_err(|_| Box::new(invalid_response(operation, response)))
     }
+}
+
+pub(super) fn invalid_response(operation: &Operation, response: &Response) -> Error {
+    Error::from_api(ApiError::without_fallback(
+        operation.id,
+        Some(response.status.as_u16()),
+        SafeText::new("InvalidResponse", &[]),
+        SafeText::new("invalid portal response; body withheld", &[]),
+        false,
+    ))
 }
 
 pub(super) fn withheld(operation: &Operation, error: Error) -> Error {

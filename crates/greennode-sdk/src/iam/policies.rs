@@ -195,7 +195,8 @@ impl Client {
             .await?;
         require_identity(&policy.id, id, "iam.GetPolicy: policy identity is unproven")?;
         policy.screen(&evidence);
-        Ok(GetPolicyOutput { policy })
+        super::screened_output(GetPolicyOutput { policy }, &evidence)
+            .map_err(|error| super::failure(*error))
     }
 
     /// Lists the groups, users, and service accounts attached to one policy.
@@ -250,11 +251,15 @@ impl Client {
         groups.screen(&evidence);
         user_ids.screen_id(&evidence);
         service_account_ids.screen_id(&evidence);
-        Ok(ListPolicyAttachmentsOutput {
-            groups,
-            user_ids,
-            service_account_ids,
-        })
+        super::screened_output(
+            ListPolicyAttachmentsOutput {
+                groups,
+                user_ids,
+                service_account_ids,
+            },
+            &evidence,
+        )
+        .map_err(|error| super::failure(*error))
     }
 
     /// Lists IAM groups visible to the caller.

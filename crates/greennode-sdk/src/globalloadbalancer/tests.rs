@@ -431,3 +431,18 @@ async fn go_integer_negative_zero_decodes_with_exact_signed_bounds() {
         );
     }
 }
+
+#[tokio::test]
+async fn package_redacts_short_encodings_using_the_wire_identifier_key() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"[{"id":"pre6A6B6Cpost","name":"pre6A6B6Cpost"}]"#,
+    )]);
+    let packages = client(&server, "jkl")
+        .list_packages(&RequestContext::new().0, ListPackagesInput {})
+        .await
+        .unwrap();
+    assert!(packages.items[0].id == "<redacted>");
+    assert!(packages.items[0].name == "pre6A6B6Cpost");
+    assert_eq!(server.requests(), 1);
+}

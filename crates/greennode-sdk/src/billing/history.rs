@@ -340,7 +340,7 @@ fn history_operation(id: &'static str, route: &'static str) -> Operation {
     Operation {
         sensitive: true,
         no_redirect: true,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         ..read_operation(id, route)
     }
 }

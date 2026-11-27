@@ -389,6 +389,15 @@ impl<T: Output> Output for RegistryResponse<T> {
         T::credential_error(op, sent)
     }
 
+    fn reflected_response(_: &Operation, _: &Response) -> Box<Error> {
+        Box::new(registry_error(
+            "",
+            None,
+            "",
+            "containerregistry: unsafe registry response",
+        ))
+    }
+
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if matches!(op.class, Classification::Read) && !op.sensitive {
             return T::decode_response(op, response).map(Self);
@@ -400,19 +409,9 @@ impl<T: Output> Output for RegistryResponse<T> {
             if !op.success.contains(&response.status) {
                 return error;
             }
-            let reflected = op.reject_reflected_credentials
-                && crate::wire::product::evidence::Evidence::from_credentials(
-                    &response.credentials,
-                )
-                .peer_body_reflects(&response.body)
-                    == Some(true);
             let malformed =
                 serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err();
-            let (operation, message) = if reflected && op.sensitive && op.template == "v1/user/permissions" {
-                (op.id, "containerregistry.CreateUser: could not distinguish an unknown action; known actions withheld")
-            } else if reflected {
-                ("", "containerregistry: unsafe registry response")
-            } else if malformed && op.sensitive {
+            let (operation, message) = if malformed && op.sensitive {
                 (op.id, "invalid JSON response; body withheld")
             } else if op.sensitive {
                 (op.id, "response failed to decode; body withheld")
@@ -444,7 +443,7 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: true,
+        reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }

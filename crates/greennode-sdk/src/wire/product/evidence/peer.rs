@@ -1,14 +1,14 @@
-use super::{Evidence, identifier_key};
+use super::{identifier_key, response::BodyMatcher};
 use serde::Deserializer;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 use std::fmt;
 use zeroize::Zeroizing;
 
-pub(super) fn decoded_reflects(evidence: &Evidence, body: &[u8]) -> Option<bool> {
+pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Option<bool> {
     let raw: &RawValue = serde_json::from_slice(body).ok()?;
     Walker {
-        evidence,
+        matcher,
         identifier: false,
         depth: 0,
     }
@@ -17,7 +17,7 @@ pub(super) fn decoded_reflects(evidence: &Evidence, body: &[u8]) -> Option<bool>
 }
 
 struct Walker<'a> {
-    evidence: &'a Evidence,
+    matcher: &'a BodyMatcher<'a>,
     identifier: bool,
     depth: usize,
 }
@@ -34,16 +34,16 @@ impl Walker<'_> {
             Some(b'[') => decoder.deserialize_seq(self),
             Some(b'"') => {
                 let decoded = Zeroizing::new(serde_json::from_str::<String>(raw)?);
-                Ok(self.evidence.string_reflects(&decoded, self.identifier))
+                Ok(self.matcher.reflects(decoded.as_bytes(), self.identifier))
             }
-            Some(b'-' | b'0'..=b'9') => Ok(self.evidence.string_reflects(raw, self.identifier)),
-            _ => Ok(self.evidence.text_reflects(raw)),
+            Some(b'-' | b'0'..=b'9') => Ok(self.matcher.reflects(raw.as_bytes(), self.identifier)),
+            _ => Ok(self.matcher.reflects(raw.as_bytes(), false)),
         }
     }
 
     fn child(&self, identifier: bool) -> Self {
         Self {
-            evidence: self.evidence,
+            matcher: self.matcher,
             identifier,
             depth: self.depth + 1,
         }
@@ -62,7 +62,7 @@ impl<'de> Visitor<'de> for Walker<'_> {
         while let Some((key, raw)) = map.next_entry::<String, &RawValue>()? {
             let key = Zeroizing::new(key);
             if !reflects {
-                reflects = self.evidence.string_reflects(&key, self.identifier)
+                reflects = self.matcher.reflects(key.as_bytes(), self.identifier)
                     || self
                         .child(self.identifier || identifier_key(&key))
                         .check(raw)

@@ -420,7 +420,7 @@ impl Client {
     ) -> Result<Option<String>, Failure<()>> {
         let op = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation(CREATE, USERS, LIST_CAP, false)
         };
         let page: Page<User> = self

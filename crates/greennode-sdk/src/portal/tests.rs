@@ -6,6 +6,16 @@ const USER: &[u8] = include_bytes!("../../tests/fixtures/portal/get_user_info.js
 const BEARER: &str = "synthetic-portal-bearer";
 
 #[tokio::test]
+async fn quota_refuses_a_credential_in_a_normalized_number() {
+    let server = Server::start(vec![response("200 OK", br#"{"quotas":[{"used":1e6}]}"#)]);
+    let output = client_with_bearer(&server, "1000000")
+        .list_quota_used(&RequestContext::new().0, ListQuotaUsedInput::default())
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(output.is_err());
+}
+
+#[tokio::test]
 async fn sdk_serialization_redacts_nested_dynamic_keys() {
     let server = Server::start(vec![response(
         "200 OK",

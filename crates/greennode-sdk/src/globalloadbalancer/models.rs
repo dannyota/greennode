@@ -27,7 +27,11 @@ macro_rules! model {
             ]);
 
             fn redact(&mut self, evidence: &Evidence) -> bool {
-                $(self.$field.redact(evidence) &&)* true
+                $((if crate::wire::product::evidence::identifier_key($wire) {
+                    self.$field.redact_identifier(evidence)
+                } else {
+                    self.$field.redact(evidence)
+                }) &&)* true
             }
         }
     };

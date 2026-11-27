@@ -145,7 +145,7 @@ impl Client {
         Ok(output)
     }
 
-    async fn read<T: Wire + Screen, O>(
+    async fn read<T: Wire + Screen + serde::Serialize, O>(
         &self,
         ctx: &RequestContext,
         api: Api,
@@ -158,8 +158,15 @@ impl Client {
             .fetch(ctx, api, operation, ids, query, &mut evidence)
             .await?;
         output.screen(&evidence);
-        Ok(output)
+        screened_output(output, &evidence).map_err(|error| failure(*error))
     }
+}
+
+fn screened_output<T: serde::Serialize>(output: T, evidence: &Evidence) -> Result<T, Box<Error>> {
+    if evidence.serialized_output_reflects(&output) {
+        return Err(Box::new(evidence.screen_error(Error::new(ErrorClass::Api))));
+    }
+    Ok(output)
 }
 
 fn screen_error(mut error: Error, evidence: &Evidence) -> Error {
@@ -267,7 +274,7 @@ fn read_operation(
         keep_status: false,
         overflow_overrides_status: false,
         sensitive: false,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
         retry_config: retry::Config::default(),
     }

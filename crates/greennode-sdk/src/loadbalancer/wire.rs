@@ -305,7 +305,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: require_complete,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: require_complete,
             retry_config: retry::Config::default(),
         };

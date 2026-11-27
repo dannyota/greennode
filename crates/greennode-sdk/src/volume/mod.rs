@@ -143,7 +143,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: read.backup,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: false,
             retry_config: retry::Config::default(),
         };

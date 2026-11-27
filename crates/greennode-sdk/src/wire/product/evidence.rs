@@ -32,6 +32,14 @@ impl SentCredentials {
         }
     }
 
+    pub(crate) fn text_reflects(&self, text: &str) -> bool {
+        response::reflects_credential(text, self)
+    }
+
+    pub(crate) fn id_reflects(&self, text: &str) -> bool {
+        response::reflects_identifier(text, self)
+    }
+
     pub(crate) fn record(&mut self, secret: &Secret) {
         self.record_from(secret, Source::Credential);
     }
@@ -280,6 +288,10 @@ impl Evidence {
         !self.credentials.has_incomplete_signin()
     }
 
+    pub(crate) fn serialized_output_reflects(&self, value: &impl serde::Serialize) -> bool {
+        serde_json::to_value(value).map_or(true, |value| self.output_reflects(&value))
+    }
+
     pub(crate) fn output_reflects(&self, value: &Value) -> bool {
         self.output_value_reflects(value, false, false, &|_| false)
     }
@@ -329,8 +341,9 @@ impl Evidence {
         }
     }
 
-    pub(crate) fn redact(&self, value: &mut Value) {
+    pub(crate) fn redact(&self, value: &mut Value) -> bool {
         self.redact_value(value, false);
+        !self.output_reflects(value)
     }
 
     fn redact_value(&self, value: &mut Value, identifier: bool) {
@@ -383,14 +396,8 @@ impl Evidence {
             (WriteDispatch::NotSent, _) | (_, WriteDispatch::NotSent) => WriteDispatch::NotSent,
             _ => WriteDispatch::NotAWrite,
         };
-        let partial = self
-            .can_retain_partial()
-            .then(|| {
-                self.redact(&mut partial);
-                partial
-            })
-            .filter(|partial| !self.output_reflects(partial));
-        Failure::new(error, partial, dispatch)
+        let partial = (self.can_retain_partial() && self.redact(&mut partial)).then_some(partial);
+        Failure::new(self.screen_error(error), partial, dispatch)
     }
 
     pub(crate) fn text_reflects(&self, text: &str) -> bool {
@@ -406,15 +413,27 @@ impl Evidence {
     }
 
     pub(crate) fn peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
-        if self.peer_bytes_reflect(body) {
-            return Some(true);
-        }
-        peer::decoded_reflects(self, body)
+        self.screen_peer_body(body, false)
     }
 
     pub(crate) fn go_peer_body_reflects(&self, body: &[u8]) -> Option<bool> {
-        self.peer_body_reflects(body)
-            .or_else(|| self.peer_body_reflects(crate::model::wire::go_json(body).as_bytes()))
+        self.screen_peer_body(body, true)
+    }
+
+    fn screen_peer_body(&self, body: &[u8], go_compatible: bool) -> Option<bool> {
+        let matcher = response::BodyMatcher::new(&self.credentials, body.len());
+        if matcher.reflects(body, false) {
+            return Some(true);
+        }
+        peer::decoded_reflects(&matcher, body).or_else(|| {
+            if !go_compatible {
+                return None;
+            }
+            let std::borrow::Cow::Owned(normalized) = crate::model::wire::go_json(body) else {
+                return None;
+            };
+            peer::decoded_reflects(&matcher, normalized.as_bytes())
+        })
     }
 
     pub(crate) fn output_number_reflects(&self, amount: f64, include_sdk_json: bool) -> bool {
@@ -442,7 +461,7 @@ impl Evidence {
     }
 }
 
-fn identifier_key(key: &str) -> bool {
+pub(crate) fn identifier_key(key: &str) -> bool {
     let mut start = 0;
     let mut previous = None;
     for (index, ch) in key.char_indices() {
@@ -484,6 +503,29 @@ mod tests {
         assert!(evidence.output_reflects(&json!({"a": ["x", {"b": "has toy-secret inside"}]})));
         assert!(evidence.output_reflects(&json!({"toy-secret": 1})));
         assert!(!evidence.output_reflects(&json!({"a": ["x", 1, null, true]})));
+    }
+
+    #[test]
+    fn clean_short_base64_field_does_not_reflect_a_byte() {
+        let evidence = evidence(&["a"]);
+        assert_eq!(
+            evidence.peer_body_reflects(br#"{"note":"QmFk"}"#),
+            Some(false)
+        );
+        assert_eq!(
+            evidence.peer_body_reflects(br#"{"note":"YQ=="}"#),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn peer_body_charges_all_decoded_fields_to_one_budget() {
+        let credential = "z".repeat(4096);
+        let evidence = evidence(&[&credential]);
+        let body = format!(r#"[{}"ok"]"#, r#""ok","#.repeat(5000));
+        assert!(!evidence.peer_bytes_reflect(body.as_bytes()));
+        assert_eq!(evidence.peer_body_reflects(body.as_bytes()), Some(true));
+        assert_eq!(evidence.peer_body_reflects(br#"["ok","ok"]"#), Some(false));
     }
 
     #[test]

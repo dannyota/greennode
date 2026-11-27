@@ -124,11 +124,11 @@ pub(super) fn safe_request_error(
     safe
 }
 
-pub(super) struct Redactor(Option<Vec<Form>>);
+pub(super) struct Redactor(Option<Vec<Form>>, SentCredentials);
 
 impl Redactor {
     pub(super) fn new(credentials: &SentCredentials) -> Self {
-        Self(prepare(credentials))
+        Self(prepare(credentials), credentials.clone())
     }
 
     pub(super) fn redact(&self, text: &mut String) {
@@ -140,6 +140,9 @@ impl Redactor {
             && let Some(spans) = spans(text, forms)
         {
             if spans.is_empty() {
+                if self.1.text_reflects(text) {
+                    *text = REDACTED.into();
+                }
                 return;
             }
             let mut output = String::new();
@@ -150,7 +153,11 @@ impl Redactor {
                 copied = span.end;
             }
             output.push_str(&text[copied..]);
-            *text = output;
+            *text = if self.1.text_reflects(&output) {
+                REDACTED.into()
+            } else {
+                output
+            };
         } else {
             *text = REDACTED.into();
         }
@@ -318,4 +325,22 @@ fn spans(value: &str, forms: &[Form]) -> Option<Vec<Range<usize>>> {
         }
     }
     Some(merged)
+}
+
+#[cfg(test)]
+mod encoded_redaction_tests {
+    use super::*;
+    use crate::Secret;
+
+    #[test]
+    fn history_withholds_encoded_credentials_outside_literal_spans() {
+        let credentials = SentCredentials::for_test(vec![Secret::new("toy-history")]);
+        let redactor = Redactor::new(&credentials);
+        let mut text = String::from("prefix toy%2Dhistory suffix");
+        redactor.redact(&mut text);
+        assert!(text == REDACTED);
+        let mut clean = String::from("ordinary payment");
+        redactor.redact(&mut clean);
+        assert_eq!(clean, "ordinary payment");
+    }
 }

@@ -211,6 +211,19 @@ async fn inventory_separates_syntax_from_shape_and_screens_query_inputs() {
 }
 
 #[tokio::test]
+async fn vpc_rescreens_dns_identifier_using_its_wire_name() {
+    let server = Server::start(vec![reply(
+        "200 OK",
+        r#"{"id":"vpc-1","dnsId":"pre6A6B6Cpost"}"#,
+    )]);
+    let result = client_with_token(&server, "jkl")
+        .get_vpc(&RequestContext::new().0, GetVpcInput::new("vpc-1"))
+        .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn encoded_hex_credential_in_rendered_integer_is_rejected() {
     let server = Server::start(vec![reply("200 OK", r#"{"id":"vpc-1","mtu":-1500}"#)]);
     let (ctx, _) = RequestContext::new();

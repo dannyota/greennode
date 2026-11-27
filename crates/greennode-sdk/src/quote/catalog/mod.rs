@@ -216,7 +216,7 @@ impl<'a> Catalog<'a> {
     }
 }
 
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct Zone {
     #[serde(rename = "uuid")]

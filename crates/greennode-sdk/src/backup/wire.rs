@@ -51,7 +51,7 @@ impl Row for Backend {
         Shape::Object(&[field("id", Shape::Any), field("name", Shape::Any)]);
 
     fn reflects(&self, credentials: &SentCredentials) -> bool {
-        credentials.reflects(self.id.as_bytes()) || credentials.reflects(self.name.as_bytes())
+        credentials.id_reflects(&self.id) || credentials.text_reflects(&self.name)
     }
 }
 

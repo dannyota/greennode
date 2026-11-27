@@ -164,3 +164,22 @@ async fn nested_and_offset_times_keep_go_representation() {
     assert!(value["HostedZone"]["DeletedAt"].is_null());
     assert_eq!(value["HostedZone"]["UpdatedAt"], "2026-01-01T03:00:03Z");
 }
+
+#[tokio::test]
+async fn dns_redacts_encoded_descriptions() {
+    let body = r#"{"data":{"hostedZoneId":"zone-1","description":"synthetic-sdk-dns%2Dbearer"}}"#;
+    let server = Server::start(vec![response("200 OK", body), response("200 OK", ZONE)]);
+    let client = client(&server, BEARER);
+    let (ctx, _) = RequestContext::new();
+    let entry = client
+        .get_hosted_zone(&ctx, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(entry.hosted_zone.description == "<redacted>");
+    let entry = client
+        .get_hosted_zone(&ctx, GetHostedZoneInput::new("zone-1"))
+        .await
+        .unwrap();
+    assert!(entry.hosted_zone.description != "<redacted>");
+    assert_eq!(server.requests(), 2);
+}

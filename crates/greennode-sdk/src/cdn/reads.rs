@@ -145,6 +145,17 @@ pub(super) struct WebDetail {
     pub(super) model: WebAccelerator,
 }
 
+fn screened<T: serde::Serialize>(
+    output: T,
+    call: &Call,
+    evidence: &Evidence,
+) -> Result<T, Failure<T>> {
+    if evidence.serialized_output_reflects(&output) {
+        return Err(read_failure(evidence.screen_error(call.unexpected(200))));
+    }
+    Ok(output)
+}
+
 impl Client {
     /// Lists Web Accelerators in the account.
     pub async fn list_web_accelerators(
@@ -161,7 +172,7 @@ impl Client {
         for item in &mut items {
             item.redact(&answer.evidence);
         }
-        Ok(List { items })
+        screened(List { items }, &LIST_WEB, &answer.evidence)
     }
 
     /// Reads the Web Accelerator with the requested identifier.
@@ -179,9 +190,13 @@ impl Client {
             .await
             .map_err(convert)?;
         detail.model.redact(&evidence);
-        Ok(GetWebAcceleratorOutput {
-            web_accelerator: detail.model,
-        })
+        screened(
+            GetWebAcceleratorOutput {
+                web_accelerator: detail.model,
+            },
+            &GET_WEB,
+            &evidence,
+        )
     }
 
     pub(super) async fn read_web_detail(
@@ -235,7 +250,7 @@ impl Client {
         for certificate in &mut items {
             certificate.redact(&answer.evidence);
         }
-        Ok(List { items })
+        screened(List { items }, &LIST_CERTIFICATES, &answer.evidence)
     }
 
     /// Reads certificate metadata and its public PEM chain.
@@ -264,7 +279,11 @@ impl Client {
         answer.evidence.add_secret(&Secret::new(row.private_key));
         let mut certificate = row.certificate;
         certificate.redact(&answer.evidence);
-        Ok(GetCertificateOutput { certificate })
+        screened(
+            GetCertificateOutput { certificate },
+            &GET_CERTIFICATE,
+            &answer.evidence,
+        )
     }
 
     /// Lists key metadata and marks the key used for this request.
@@ -307,6 +326,6 @@ impl Client {
         for metadata in &mut items {
             metadata.redact(&answer.evidence);
         }
-        Ok(List { items })
+        screened(List { items }, &LIST_KEYS, &answer.evidence)
     }
 }

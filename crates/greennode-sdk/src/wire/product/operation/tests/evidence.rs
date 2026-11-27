@@ -18,13 +18,50 @@ impl Output for Json {
 }
 
 #[tokio::test]
+async fn ordinary_operation_refuses_reflected_wire_before_decode() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"{"projectId":"pre6A6B6Cpost"}"#,
+    )]);
+    let result = call_evidence(
+        &server,
+        &declaration(),
+        &Options::default(),
+        "one",
+        "jkl",
+        &mut Evidence::new(),
+    )
+    .await;
+    assert_eq!(server.requests(), 1);
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn fallback_api_code_cannot_reflect_the_bearer() {
+    let server = Server::start(vec![response("403 Forbidden", br#"{"message":"denied"}"#)]);
+    let failure = call_evidence(
+        &server,
+        &declaration(),
+        &Options::default(),
+        "one",
+        "Forbidden",
+        &mut Evidence::new(),
+    )
+    .await
+    .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert!(api.code().is_empty());
+    assert_eq!(api.message(), "denied");
+}
+
+#[tokio::test]
 async fn body_screens_bearer_spanning_key_and_delimiter() {
     let server = Server::start(vec![
         response("200 OK", br#"{"TAIL":"public"}"#),
         response("200 OK", br#"{"other":"public"}"#),
     ]);
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let token = "tail\":";
@@ -43,7 +80,7 @@ async fn body_screens_bearer_in_raw_escape_spelling() {
         response("200 OK", br#"{"name":"Z"}"#),
     ]);
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let reflected = call_evidence(&server, &op, &options, "one", "u005a", &mut evidence).await;
@@ -64,7 +101,7 @@ async fn body_screens_short_encodings_under_identifier_keys() {
     ];
     let server = Server::start(bodies.map(|body| response("200 OK", body)).into());
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let mut refused = Vec::new();
@@ -84,7 +121,7 @@ async fn body_does_not_render_ignored_numbers() {
     let body = br#"{"ignored":1e6}"#;
     let server = Server::start(vec![response("200 OK", body), response("200 OK", body)]);
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     op.no_output = true;
     let options = Options::default();
     let mut outcomes = Vec::new();
@@ -108,7 +145,8 @@ async fn retained_identifier_is_rescreened_after_later_bearer() {
         ),
         response("403 Forbidden", b"{}"),
     ]);
-    let op = declaration();
+    let mut op = declaration();
+    op.reflection = Reflection::Redact;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let (_, retained) = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)
@@ -249,7 +287,7 @@ async fn later_call_rejects_a_reflected_service_secret() {
     let body = br#"{"id":"issued-pw"}"#;
     let server = Server::start(vec![response("200 OK", body), response("200 OK", body)]);
     let mut op = declaration();
-    op.reject_reflected_credentials = true;
+    op.reflection = crate::wire::product::operation::Reflection::Refuse;
     let options = Options::default();
     let mut evidence = Evidence::new();
     let (_, output) = call_evidence(&server, &op, &options, "one", "toy-first", &mut evidence)

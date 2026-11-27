@@ -101,6 +101,18 @@ fn assert_numeric_bearer_rejected(args: &[&str], body: &str, number: &str) {
 }
 
 #[test]
+fn final_error_code_withholds_a_matching_bearer() {
+    let server = Server::start(vec![response("302 Found", "{}".into())]);
+    let (status, stdout, stderr) =
+        invoke_with_bearer(&["billing", "get-balances"], Some(&server), "RequestFailed");
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(status, ExitCode::from(1));
+    assert!(stdout.is_empty());
+    assert!(error["error"]["code"] == "");
+    assert_eq!(server.requests(), 1);
+}
+
+#[test]
 fn final_error_message_withholds_a_matching_bearer() {
     let server = Server::start(vec![
         response("599 Unassigned", "{}".into()),

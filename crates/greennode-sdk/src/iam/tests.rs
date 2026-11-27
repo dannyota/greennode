@@ -342,3 +342,21 @@ async fn reflected_observed_status_is_removed_from_typed_details() {
         assert_eq!(error.detail::<StatusCode>().is_some(), keeps_status);
     }
 }
+
+#[tokio::test]
+async fn iam_read_refuses_when_redaction_would_publish_the_bearer() {
+    let server = Server::start(vec![
+        response("200 OK", br#"{"userId":"user-1","username":"redacted"}"#),
+        response("200 OK", br#"{"userId":"user-1","username":"worker"}"#),
+    ]);
+    let client = client(&server, "redacted");
+    let (ctx, _) = RequestContext::new();
+    let first = client.get_user(&ctx, GetUserInput::new("user-1")).await;
+    assert!(first.is_err());
+    let clean = client
+        .get_user(&ctx, GetUserInput::new("user-1"))
+        .await
+        .unwrap();
+    assert_eq!(clean.user.username, "worker");
+    assert_eq!(server.requests(), 2);
+}

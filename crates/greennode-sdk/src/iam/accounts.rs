@@ -111,7 +111,8 @@ impl Client {
         let mut user = user
             .ok_or_else(|| refusal(ErrorClass::Api, "", "iam: iam.GetUser: missing user object"))?;
         user.screen(&evidence);
-        Ok(GetUserOutput { user })
+        super::screened_output(GetUserOutput { user }, &evidence)
+            .map_err(|error| super::failure(*error))
     }
 
     /// Lists one zero-based page of IAM users and optionally filters by name.
@@ -184,9 +185,13 @@ impl Client {
             "iam.GetServiceAccount: service account identity is unproven",
         )?;
         account.screen(&evidence);
-        Ok(GetServiceAccountOutput {
-            service_account: account,
-        })
+        super::screened_output(
+            GetServiceAccountOutput {
+                service_account: account,
+            },
+            &evidence,
+        )
+        .map_err(|error| super::failure(*error))
     }
 
     /// Lists one zero-based page of service accounts and optionally filters by name.

@@ -233,7 +233,7 @@ impl Client {
             keep_status: protected,
             overflow_overrides_status: protected,
             sensitive: protected,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
             retry_config: retry::Config::default(),
         };

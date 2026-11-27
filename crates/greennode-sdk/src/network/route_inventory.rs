@@ -261,7 +261,7 @@ impl Client {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: read.kind != ResponseKind::Standard,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.kind == ResponseKind::RouteTable,
             retry_config: retry::Config::default(),
         };

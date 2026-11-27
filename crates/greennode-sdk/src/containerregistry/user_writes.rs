@@ -167,7 +167,7 @@ impl Client {
             ));
         }
         let issued: IssuedSecret = self.request(
-            ctx, &Operation { allow_empty: true, sensitive: true, ..write_operation(
+            ctx, &Operation { allow_empty: true, sensitive: true, reflection: crate::wire::product::operation::Reflection::PrivateDelivery, ..write_operation(
                 CREATE, Method::POST, "v1/user", &[StatusCode::OK],
             ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
         ).await.map_err(|failure| create_failure(failure, concat!(
@@ -175,7 +175,9 @@ impl Client {
             "check list-users --name and reconcile ownership before any cleanup",
         )))?;
         let secret_key = Secret::new(issued.secret_key);
-        if secret_key.expose_secret().is_empty() {
+        if secret_key.expose_secret().is_empty()
+            || evidence.text_reflects(secret_key.expose_secret())
+        {
             return Err(Failure::new(
                 registry_error(
                     CREATE,
@@ -249,7 +251,7 @@ impl Client {
                 &Operation {
                     allow_empty: true,
                     no_output: true,
-                    reject_reflected_credentials: false,
+                    reflection: crate::wire::product::operation::Reflection::Redact,
                     ..write_operation(DELETE, Method::DELETE, "v1/user/{}", &[StatusCode::OK])
                 },
                 &[id],

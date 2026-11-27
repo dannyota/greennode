@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StorageRegion {
     pub(crate) region_id: String,
@@ -83,7 +83,7 @@ pub(crate) fn storage_data<'a>(
     .ok_or_else(|| invalid(op, 200))
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct StorageResource {
@@ -100,7 +100,7 @@ pub(crate) struct StorageResource {
     pub(crate) period: Option<i64>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct StorageType {
     pub(crate) id: i64,
@@ -113,7 +113,7 @@ pub(crate) struct StorageType {
     pub(crate) billable_resources: Vec<StorageResource>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 pub(crate) struct StoragePurchase {
     pub(crate) id: i64,
     pub(crate) name: String,
@@ -121,7 +121,8 @@ pub(crate) struct StoragePurchase {
     pub(crate) status: i64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct StorageCatalog {
     pub(crate) types: Vec<StorageType>,

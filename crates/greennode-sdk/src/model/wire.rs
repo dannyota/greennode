@@ -31,6 +31,10 @@ pub(crate) trait WireField: Default + DeserializeOwned {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool;
+
+    fn identifiers_reflect(&self, _: &Evidence) -> bool {
+        false
+    }
 }
 
 pub(crate) struct Field<T>(pub(crate) T);
@@ -50,6 +54,10 @@ impl<T: WireField> WireField for Vec<T> {
     fn redact(&mut self, evidence: &Evidence) -> bool {
         self.iter_mut().all(|item| item.redact(evidence))
     }
+
+    fn identifiers_reflect(&self, evidence: &Evidence) -> bool {
+        self.iter().any(|item| item.identifiers_reflect(evidence))
+    }
 }
 
 impl<T: WireField> WireField for Option<T> {
@@ -62,6 +70,11 @@ impl<T: WireField> WireField for Option<T> {
             || !evidence.text_reflects("null"),
             |item| item.redact(evidence),
         )
+    }
+
+    fn identifiers_reflect(&self, evidence: &Evidence) -> bool {
+        self.as_ref()
+            .is_some_and(|item| item.identifiers_reflect(evidence))
     }
 }
 
@@ -122,8 +135,7 @@ impl WireField for Value {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        evidence.redact(self);
-        !evidence.output_reflects(self)
+        evidence.redact(self)
     }
 }
 
@@ -359,6 +371,12 @@ macro_rules! model {
         impl $crate::model::wire::WireField for $model {
             fn redact(&mut self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
                 $(self.$field.redact(evidence) &&)* $(self.$derived.redact(evidence) &&)? true
+            }
+
+            fn identifiers_reflect(&self, evidence: &$crate::wire::product::evidence::Evidence) -> bool {
+                $(($crate::wire::product::evidence::identifier_key($wire)
+                    && serde_json::to_value(&self.$field).map_or(true, |value| evidence.identifier_output_reflects(&value)))
+                    || self.$field.identifiers_reflect(evidence) ||)* false
             }
         }
     };

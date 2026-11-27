@@ -74,7 +74,7 @@ fn snapshot_requires_complete_unique_keys() {
 async fn list_reads_the_resource_and_redacts_reflected_credentials() {
     use crate::wire::test_server::{Response, Server};
     use crate::{ConfigOptions, EndpointOverrides, Secret};
-    let body = r#"[{"key":"env","value":"toy-secret","systemTag":false,"createdAt":""}]"#;
+    let body = r#"[{"key":"env","value":"toy%2Dsecret","systemTag":false,"createdAt":""}]"#;
     let server = Server::start(vec![Response::Http {
         status: "200 OK".into(),
         headers: vec![("Content-Length".into(), body.len().to_string())],

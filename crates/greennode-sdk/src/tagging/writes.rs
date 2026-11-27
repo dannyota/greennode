@@ -98,7 +98,7 @@ fn operation(id: &'static str, write: bool) -> Operation {
         keep_status: write,
         overflow_overrides_status: !write,
         sensitive: false,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: write,
         retry_config: retry::Config::default(),
     }

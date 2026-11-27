@@ -128,6 +128,7 @@ fn credential_value(secret: &Secret, bearer: bool) -> Result<http::HeaderValue, 
 pub(crate) struct Response {
     pub(crate) reply: send::Reply,
     pub(crate) credentials: SentCredentials,
+    pub(crate) reflection: Option<bool>,
 }
 impl std::ops::Deref for Response {
     type Target = send::Reply;
@@ -338,7 +339,11 @@ pub(super) async fn run(
     let mut credentials = evidence.reflection;
     credentials.extend(&evidence.sent);
     match result {
-        Ok(reply) => Ok(Response { reply, credentials }),
+        Ok((reply, reflection)) => Ok(Response {
+            reply,
+            credentials,
+            reflection,
+        }),
         Err(error) => Err(Failure {
             error,
             status: evidence.status,
@@ -364,7 +369,7 @@ async fn run_inner(
     request: &Request,
     route_inputs: RouteInputs<'_>,
     evidence: &mut Evidence,
-) -> Result<send::Reply, Error> {
+) -> Result<(send::Reply, Option<bool>), Error> {
     let sent = &mut evidence.sent;
     let reflection = &mut evidence.reflection;
     let Runtime {
@@ -547,6 +552,11 @@ async fn run_inner(
                 evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
             }
             let result = result?;
+            let body_reflection = result.as_ref().ok().and_then(|reply| {
+                let mut evidence = super::evidence::Evidence::from_credentials(reflection);
+                evidence.absorb(sent);
+                evidence.go_peer_body_reflects(&reply.body)
+            });
             if let (Some((id, guard)), Ok(reply)) = (op.response_guard, &result)
                 && let Some(error) = guard(id, reply.status, &reply.body, reflection, sent)
             {
@@ -655,7 +665,9 @@ async fn run_inner(
                 attempt += 1;
                 continue 'attempt;
             }
-            return result.map_err(Error::Send);
+            return result
+                .map(|reply| (reply, body_reflection))
+                .map_err(Error::Send);
         }
     }
 }

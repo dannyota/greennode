@@ -308,7 +308,7 @@ async fn sensitive_preflight_distinguishes_invalid_json_and_shape() {
 }
 
 #[tokio::test]
-async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
+async fn unsafe_permission_response_is_refused_before_action_lookup() {
     let server = Server::start(vec![response(
         "200 OK",
         r#"[{"uuid":"policy-1","action":"synthetic-registry-\u0007token"}]"#,
@@ -325,7 +325,7 @@ async fn unknown_action_diagnostic_withholds_a_reassembled_bearer() {
         .unwrap_err();
     let message = failure.error().api_error().unwrap().message();
     assert!(!message.contains("synthetic-registry-token"));
-    assert!(message.contains("unknown action"));
+    assert!(message.contains("unsafe registry response"));
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }

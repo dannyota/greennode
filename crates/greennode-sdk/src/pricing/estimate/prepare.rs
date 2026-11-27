@@ -2,7 +2,9 @@ use super::{Cache, OP, QuoteRequest, Run, Shared, invalid_input};
 use crate::Error;
 use crate::pricing::{EstimateCoverage, EstimateServer, EstimateStorage, EstimateVolume};
 use crate::quote::{
-    catalog::{StorageRegion, VolumeType, storage_region, storage_region_name},
+    catalog::{
+        IMAGES, REGIONS, StorageRegion, VolumeType, ZONES, storage_region, storage_region_name,
+    },
     input,
 };
 use std::{future::Future, sync::Arc};
@@ -24,6 +26,13 @@ fn invalid(field: &'static str) -> Arc<Error> {
 }
 
 impl Run<'_> {
+    fn screen_cached(&self, operation: &'static str, value: &impl serde::Serialize) -> Shared<()> {
+        if self.catalog.evidence.serialized_output_reflects(value) {
+            return Err(Arc::from(crate::quote::request::invalid(operation, 200)));
+        }
+        Ok(())
+    }
+
     async fn project(&mut self) -> Shared<String> {
         cached(&mut self.memo.project, self.catalog.project()).await
     }
@@ -31,6 +40,7 @@ impl Run<'_> {
     async fn disks(&mut self, zone: &str) -> Shared<Vec<VolumeType>> {
         let project = self.project().await?;
         let zones = cached(&mut self.memo.zones, self.catalog.zones(&project)).await?;
+        self.screen_cached(ZONES, &zones)?;
         if !zones.iter().any(|row| row.id == zone) {
             return Err(invalid("ZoneID"));
         }
@@ -77,6 +87,7 @@ impl Run<'_> {
             self.catalog.images(&project, &row.zone_id),
         )
         .await?;
+        self.screen_cached(IMAGES, &images)?;
         let image = images
             .iter()
             .find(|image| image.id == row.image_id)
@@ -116,6 +127,7 @@ impl Run<'_> {
         let name = storage_region_name(self.region, &row.region)
             .ok_or_else(|| invalid("storage region"))?;
         let regions = cached(&mut self.memo.regions, self.catalog.storage_regions()).await?;
+        self.screen_cached(REGIONS, &regions)?;
         let StorageRegion {
             region_id,
             region_name,
@@ -131,6 +143,7 @@ impl Run<'_> {
             self.catalog.storage_catalog(OP, region_id),
         )
         .await?;
+        self.screen_cached(OP, &catalog)?;
         let (purchase, project) = catalog
             .resolve(&row.r#type, row.quota_gb)
             .ok_or_else(|| invalid("storage type or quota"))?;
@@ -214,4 +227,56 @@ fn disk(types: &[VolumeType], id: &str, size: i64) -> Shared<()> {
         return Err(invalid("disk size"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pricing::EstimateInput;
+    use crate::quote::catalog::{Catalog, Zone};
+    use crate::{Config, ConfigOptions, RequestContext, Secret};
+
+    #[tokio::test]
+    async fn estimate_rechecks_cached_zone_before_using_it_again() {
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("toy-setup")),
+        )
+        .unwrap();
+        let input = EstimateInput::default();
+        let (ctx, _) = RequestContext::new();
+        let mut run = Run {
+            input: &input,
+            catalog: Catalog::new(config.session(), &ctx, 10),
+            region: "hcm-3",
+            memo: super::super::Memo {
+                project: Some(Ok("project-1".into())),
+                zones: Some(Ok(vec![Zone {
+                    id: "zone-1".into(),
+                    name: "pre6A6B6Cpost".into(),
+                    enabled: Some(true),
+                }])),
+                volumes: Some(Ok(Vec::new())),
+                ..Default::default()
+            },
+            output: super::super::accounting::initialize(
+                &input,
+                "hcm-3",
+                time::OffsetDateTime::UNIX_EPOCH,
+            ),
+            errors: Vec::new(),
+            stopped: false,
+        };
+        assert!(run.disks("zone-1").await.is_ok());
+        run.catalog
+            .evidence
+            .add_bearer(&Secret::new("pre6A6B6Cpost"));
+        let result = run.disks("zone-1").await;
+        let Err(error) = result else {
+            panic!("retained zone reused after a later credential")
+        };
+        assert_eq!(error.api_error().unwrap().code(), "InvalidResponse");
+        assert_eq!(run.catalog.requests(), 0);
+    }
 }

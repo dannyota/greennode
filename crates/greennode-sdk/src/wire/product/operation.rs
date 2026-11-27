@@ -6,6 +6,13 @@ use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum Reflection {
+    Refuse,
+    Redact,
+    PrivateDelivery,
+}
+
 pub(crate) struct Operation {
     pub(crate) id: &'static str,
     pub(crate) template: &'static str,
@@ -20,7 +27,7 @@ pub(crate) struct Operation {
     pub(crate) keep_status: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
-    pub(crate) reject_reflected_credentials: bool,
+    pub(crate) reflection: Reflection,
     pub(crate) no_redirect: bool,
     pub(crate) retry_config: retry::Config,
 }
@@ -99,13 +106,19 @@ pub(crate) async fn execute_with_evidence<T: Output>(
             dispatch,
         ));
     }
-    let output = T::decode_response(operation, &response).map_err(|error| {
-        crate::Failure::new(
-            error.screen_diagnostic_fallback(|text| evidence.text_reflects(text)),
+    if operation.reflection == Reflection::Refuse
+        && operation.success.contains(&status)
+        && response.reflection == Some(true)
+    {
+        let error = T::reflected_response(operation, &response);
+        return Err(crate::Failure::new(
+            evidence.screen_error(*error),
             None,
             dispatch,
-        )
-    })?;
+        ));
+    }
+    let output = T::decode_response(operation, &response)
+        .map_err(|error| crate::Failure::new(evidence.screen_error(*error), None, dispatch))?;
     Ok((status, output))
 }
 
@@ -128,7 +141,7 @@ pub(crate) async fn execute_raw(
     body: bytes::Bytes,
     evidence: &mut Evidence,
 ) -> Result<sender::Response, crate::Failure<()>> {
-    send_route(
+    let response = send_route(
         runtime,
         base,
         operation,
@@ -140,7 +153,23 @@ pub(crate) async fn execute_raw(
         evidence,
         |_, _| None,
     )
-    .await
+    .await?;
+    if operation.reflection == Reflection::Refuse
+        && operation.success.contains(&response.status)
+        && response.reflection == Some(true)
+    {
+        let dispatch = if matches!(operation.class, redirect::Classification::Write) {
+            crate::WriteDispatch::MayHaveBeenSent
+        } else {
+            crate::WriteDispatch::NotAWrite
+        };
+        return Err(crate::Failure::new(
+            evidence.screen_error(invalid_response(operation, response.status)),
+            None,
+            dispatch,
+        ));
+    }
+    Ok(response)
 }
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -409,14 +438,16 @@ async fn send_route<T>(
     Ok(response)
 }
 
+fn invalid_response(operation: &Operation, status: StatusCode) -> crate::Error {
+    api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status)
+}
+
 pub(crate) fn decode_response<T: Output>(
     operation: &Operation,
     response: &sender::Response,
 ) -> Result<T, Box<crate::Error>> {
     let status = response.status;
-    let invalid = || {
-        Box::new(api_error(operation.id, None, crate::ErrorClass::Api).with_outer_detail(status))
-    };
+    let invalid = || Box::new(invalid_response(operation, status));
     let body = super::response::classify(
         operation.id,
         status,
@@ -425,9 +456,10 @@ pub(crate) fn decode_response<T: Output>(
         (true, operation.sensitive, operation.retry),
         &response.credentials,
     )?;
-    if operation.reject_reflected_credentials
-        && Evidence::from_credentials(&response.credentials).peer_body_reflects(&body)
-            != Some(false)
+    if operation.reflection == crate::wire::product::operation::Reflection::Refuse
+        && response.reflection.is_none()
+        && !(operation.allow_empty && body.is_empty())
+        && !operation.no_output
     {
         return Err(invalid());
     }
@@ -528,6 +560,10 @@ pub(crate) trait Output: DeserializeOwned + Default {
         None
     }
 
+    fn reflected_response(operation: &Operation, response: &sender::Response) -> Box<crate::Error> {
+        Box::new(invalid_response(operation, response.status))
+    }
+
     fn decode_response(
         operation: &Operation,
         response: &sender::Response,
@@ -605,7 +641,7 @@ mod tests {
             keep_status: false,
             overflow_overrides_status: false,
             sensitive: false,
-            reject_reflected_credentials: false,
+            reflection: Reflection::Refuse,
             no_redirect: false,
             retry_config: retry::Config::default(),
         }
@@ -930,7 +966,7 @@ mod tests {
         for body in [br#"{"id":"toy-token"}"#.as_slice(), escaped.as_bytes()] {
             let server = Server::start(vec![response("200 OK", body)]);
             let mut op = declaration();
-            op.reject_reflected_credentials = true;
+            op.reflection = crate::wire::product::operation::Reflection::Refuse;
             let Err(failure) = call(&server, &op, &["one"]).await else {
                 panic!("reflected response accepted");
             };
@@ -941,7 +977,9 @@ mod tests {
             );
         }
         let server = Server::start(vec![response("200 OK", br#"{"id":"toy-token"}"#)]);
-        assert!(call(&server, &declaration(), &["one"]).await.is_ok());
+        let mut op = declaration();
+        op.reflection = Reflection::Redact;
+        assert!(call(&server, &op, &["one"]).await.is_ok());
     }
 
     #[tokio::test]
@@ -954,7 +992,7 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(body.as_bytes()).is_err());
         let server = Server::start(vec![response("200 OK", body.as_bytes())]);
         let mut op = declaration();
-        op.reject_reflected_credentials = true;
+        op.reflection = crate::wire::product::operation::Reflection::Refuse;
         op.no_output = true;
         assert!(call(&server, &op, &["one"]).await.is_err());
         let server = Server::start(vec![response(

@@ -34,6 +34,10 @@ impl<T: Data> Output for Envelope<T> {
         field("data", T::SHAPE),
     ]);
 
+    fn reflected_response(operation: &Operation, _: &Response) -> Box<Error> {
+        Box::new(invalid_response(operation))
+    }
+
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {
             return operation::decode_response(operation, response).map_err(|error| {

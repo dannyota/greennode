@@ -140,7 +140,7 @@ impl Client {
             .write(
                 ctx,
                 &Operation {
-                    reject_reflected_credentials: false,
+                    reflection: crate::wire::product::operation::Reflection::Redact,
                     ..write_operation(
                         "billing.CreateBudgetThreshold",
                         Method::POST,

@@ -2,7 +2,6 @@ pub(crate) mod decode;
 pub(crate) mod monitor;
 
 use crate::config::session::Session;
-use crate::quote::catalog::REGIONS;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, Output},
@@ -104,11 +103,8 @@ impl Output for Document {
                 false,
             ))
         })?;
-        let peer_reflects = Evidence::from_credentials(&response.credentials)
-            .peer_body_reflects(&body)
-            .unwrap_or(true);
-        if strict_json::validate(&body, &[], op.cap).is_err() || (peer_reflects && op.id != REGIONS)
-        {
+        let peer_reflects = response.reflection.unwrap_or(true);
+        if strict_json::validate(&body, &[], op.cap).is_err() || peer_reflects {
             return Err(invalid(op.id, status));
         }
         Ok(Self(Some(raw)))
@@ -123,6 +119,9 @@ impl Output for VnetworkDocument {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
+        if response.reflection == Some(true) {
+            return Err(invalid(op.id, response.status.as_u16()));
+        }
         let normalized = crate::model::wire::go_json(&response.body);
         if response.status == StatusCode::OK {
             strict_json::validate(normalized.as_bytes(), &[], op.cap)
@@ -156,9 +155,6 @@ fn guard_exchange(
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
 ) -> Option<Box<Error>> {
-    if op == REGIONS && status.is_success() {
-        return None;
-    }
     let unsafe_body = operation::unsafe_json_response(body, known, sent, true)
         || (op == "pricing.GetQuote"
             && std::str::from_utf8(body).is_ok_and(|body| {
@@ -228,7 +224,7 @@ pub(crate) async fn exchange(
         keep_status: true,
         overflow_overrides_status: false,
         sensitive: !direct,
-        reject_reflected_credentials: false,
+        reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: match req.product {
             Product::Monitor { no_redirect, .. } => no_redirect,
             _ => true,

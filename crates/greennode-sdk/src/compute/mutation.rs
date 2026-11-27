@@ -124,7 +124,7 @@ impl Client {
             keep_status: true,
             overflow_overrides_status: mutation.overflow_overrides_status,
             sensitive: !matches!(policy, ReplyPolicy::Ordinary),
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: true,
             retry_config: retry::Config::default(),
         };

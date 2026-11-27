@@ -252,7 +252,7 @@ impl Client {
             keep_status: read.style != Style::NatList,
             overflow_overrides_status: !matches!(read.style, Style::NatCatalog | Style::NatList),
             sensitive: true,
-            reject_reflected_credentials: false,
+            reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.style != Style::NatList,
             retry_config: retry::Config::default(),
         };

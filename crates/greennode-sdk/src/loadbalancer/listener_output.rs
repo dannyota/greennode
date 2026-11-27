@@ -21,8 +21,7 @@ impl ListenerProjection {
         if !evidence.output_reflects(&value) {
             return Ok(None);
         }
-        evidence.redact(&mut value);
-        if evidence.output_reflects(&value) {
+        if !evidence.redact(&mut value) {
             return Err(());
         }
         scrub_listener(listener, evidence);

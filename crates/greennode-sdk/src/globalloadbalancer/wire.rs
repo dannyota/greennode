@@ -35,6 +35,14 @@ pub(super) trait WireField: Default + DeserializeOwned {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool;
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool
+    where
+        Self: Serialize,
+    {
+        serde_json::to_value(&*self).is_ok_and(|value| !evidence.identifier_output_reflects(&value))
+            && self.redact(evidence)
+    }
 }
 
 pub(super) fn deserialize_field<'de, D: Deserializer<'de>, T: WireField>(
@@ -84,6 +92,13 @@ impl WireField for String {
         }
         true
     }
+
+    fn redact_identifier(&mut self, evidence: &Evidence) -> bool {
+        if evidence.id_reflects(self) {
+            *self = "<redacted>".into();
+        }
+        !evidence.id_reflects(self)
+    }
 }
 
 impl WireField for i64 {
@@ -120,8 +135,7 @@ impl WireField for Value {
     }
 
     fn redact(&mut self, evidence: &Evidence) -> bool {
-        evidence.redact(self);
-        !evidence.output_reflects(self)
+        evidence.redact(self)
     }
 }
 

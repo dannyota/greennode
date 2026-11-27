@@ -115,24 +115,24 @@ pub struct DailyConfig {
 
 impl Policy {
     pub(super) fn reflects(&self, credentials: &SentCredentials) -> bool {
-        [
-            self.id.as_str(),
-            &self.backend_id,
-            &self.project_id,
-            &self.product,
-            &self.name,
-            &self.created_at,
-            &self.updated_at,
-            &self.config.time_zone,
-        ]
-        .into_iter()
-        .chain(
-            self.config
-                .daily_config
-                .as_ref()
-                .and_then(|daily| daily.backup_type.as_deref()),
-        )
-        .any(|text| credentials.reflects(text.as_bytes()))
+        [&self.id, &self.backend_id, &self.project_id]
+            .into_iter()
+            .any(|id| credentials.id_reflects(id))
+            || [
+                self.product.as_str(),
+                &self.name,
+                &self.created_at,
+                &self.updated_at,
+                &self.config.time_zone,
+            ]
+            .into_iter()
+            .chain(
+                self.config
+                    .daily_config
+                    .as_ref()
+                    .and_then(|daily| daily.backup_type.as_deref()),
+            )
+            .any(|text| credentials.text_reflects(text))
             || [
                 self.is_default,
                 self.config.hourly_enabled,
@@ -142,7 +142,7 @@ impl Policy {
                 self.config.is_protected_server,
             ]
             .into_iter()
-            .any(|value| credentials.reflects(if value { b"true" } else { b"false" }))
+            .any(|value| credentials.text_reflects(if value { "true" } else { "false" }))
             || [
                 self.backup_instance_count,
                 self.config.hour,

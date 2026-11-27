@@ -173,7 +173,7 @@ impl Client {
             json!({"repoName": input.name, "quotaLimit": input.quota_limit_gb, "isPublic": false});
         let mut evidence = Evidence::new();
         let RepositoryWrite(repo) = self.request(
-            ctx, &Operation { allow_empty: true, reject_reflected_credentials: false, ..write_operation(
+            ctx, &Operation { allow_empty: true, reflection: crate::wire::product::operation::Reflection::Redact, ..write_operation(
                 CREATE, Method::POST, "v1/repository", &[StatusCode::ACCEPTED],
             ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
         ).await.map_err(|failure| create_failure(failure, concat!(
@@ -243,7 +243,7 @@ impl Client {
             ctx,
             &Operation {
                 allow_empty: true,
-                reject_reflected_credentials: false,
+                reflection: crate::wire::product::operation::Reflection::Redact,
                 ..write_operation(
                     DELETE,
                     Method::DELETE,

@@ -218,7 +218,7 @@ fn redact_strings<'a>(
     credentials: &SentCredentials,
 ) {
     for value in values {
-        if credentials.reflects(value.as_bytes()) {
+        if credentials.text_reflects(value) {
             *value = "<redacted>".into();
         }
     }

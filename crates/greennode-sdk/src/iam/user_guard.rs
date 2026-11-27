@@ -53,7 +53,7 @@ impl Client {
     ) -> Result<UserDetail, Failure<O>> {
         let operation = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation(op, USER, OBJECT_CAP, false)
         };
         let user: Option<UserDetail> = self

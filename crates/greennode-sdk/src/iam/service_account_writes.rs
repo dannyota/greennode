@@ -284,6 +284,7 @@ impl Client {
         };
         let IssuedAccount { id, secret } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
             .map_err(|failed| uncertain(failed, &evidence, "iam.CreateServiceAccount: create may have already reached the server; check with list-service-accounts and match exactly; a service account found that way has lost its client secret and should have its secret reset"))?;
+        let secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret()));
         if let Some(secret) = &secret {
             record_issued(&mut evidence, secret);
         }
@@ -456,7 +457,7 @@ impl Client {
         );
         let IssuedSecret(secret) = self.write(ctx, Api::Accounts, &op, &[id], None, &mut evidence).await
             .map_err(|failed| uncertain(failed, &evidence, "iam.ResetServiceAccountSecret: reset may have reached the server; no read shows whether the secret changed, so treat the previous secret as revoked"))?;
-        let client_secret = secret.ok_or_else(|| Failure::new(
+        let client_secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret())).ok_or_else(|| Failure::new(
             outcome(WriteError::NoSecret, &format!("service account {} secret was probably rotated by this call but not returned; no file was written; run reset-service-account-secret again to get a usable value", safe_text(&evidence, id)), &evidence),
             None,
             WriteDispatch::MayHaveBeenSent,
@@ -476,7 +477,7 @@ impl Client {
     ) -> Result<ServiceAccount, Failure<O>> {
         let op = Operation {
             sensitive: true,
-            reject_reflected_credentials: true,
+            reflection: crate::wire::product::operation::Reflection::Refuse,
             ..read_operation("iam.GetServiceAccount", ACCOUNT, OBJECT_CAP, false)
         };
         let account: ServiceAccount = self
@@ -512,6 +513,7 @@ fn secret_operation(
     Operation {
         sensitive: true,
         keep_status: true,
+        reflection: crate::wire::product::operation::Reflection::PrivateDelivery,
         ..write_operation(id, Method::POST, template, Retry::Once, success)
     }
 }
