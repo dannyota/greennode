@@ -1,0 +1,19 @@
+{
+  "Items": [
+    {
+      "ID": "secr-1",
+      "SecurityGroupID": "sg-1",
+      "RuleID": "",
+      "Direction": "ingress",
+      "EtherType": "IPv4",
+      "Protocol": "tcp",
+      "PortRangeMin": 80,
+      "PortRangeMax": 80,
+      "RemoteIPPrefix": "\u003ccidr\u003e",
+      "RemoteGroupID": "",
+      "Status": "ACTIVE",
+      "Description": "\u003cdescription\u003e",
+      "CreatedAt": "2026-01-01T00:00:00Z"
+    }
+  ]
+}

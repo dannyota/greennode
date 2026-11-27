@@ -1,0 +1,39 @@
+{
+  "Items": [
+    {
+      "UUID": "vpc-1",
+      "Status": "ACTIVE",
+      "ElasticIPs": [],
+      "Name": "\u003cname\u003e",
+      "CreatedAt": "",
+      "CIDR": "\u003ccidr\u003e",
+      "DHCPOptionName": "",
+      "DHCPOptionID": "",
+      "RouteTableName": "\u003cname\u003e",
+      "RouteTableID": "rt-1",
+      "Zone": {
+        "UUID": "zone-1",
+        "Name": "\u003cname\u003e",
+        "ZoneType": "standard",
+        "IsDefault": true,
+        "Description": "\u003cdescription\u003e",
+        "IsEnabled": true,
+        "OpenStackZone": "nova",
+        "IPRanges": [
+          "\u003ccidr\u003e"
+        ],
+        "ServerCount": 0,
+        "VolumeCount": 0
+      },
+      "DNSStatus": "ACTIVE",
+      "DNSID": "dns-1",
+      "MTU": 0,
+      "ServerCount": 0,
+      "VolumeCount": 0
+    }
+  ],
+  "Page": 1,
+  "PageSize": 10,
+  "TotalPage": 1,
+  "TotalItem": 1
+}

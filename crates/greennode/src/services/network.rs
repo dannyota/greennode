@@ -145,6 +145,19 @@ pub(super) const SERVICE: Service = Service {
             RULES_INPUT,
             list_nat_inbound_rules
         ),
+        vpc::GET_DHCP_OPTIONS,
+        vpc::GET_NETWORK_ACL,
+        vpc::GET_SECURITY_GROUP,
+        vpc::GET_SUBNET,
+        vpc::GET_VPC,
+        vpc::LIST_ALL_SECURITY_GROUP_RULES,
+        vpc::LIST_DHCP_OPTIONS,
+        vpc::LIST_NETWORK_ACLS,
+        vpc::LIST_SECURITY_GROUP_RULES,
+        vpc::LIST_SECURITY_GROUPS,
+        vpc::LIST_SUBNETS,
+        vpc::LIST_SUBNETS_BY_VPC,
+        vpc::LIST_VPCS,
     ],
 };
 
@@ -168,3 +181,5 @@ macro_rules! run {
 run!(get_nat_instance, GetNatInstanceInput);
 run!(list_bandwidth_packages, ListBandwidthPackagesInput);
 run!(list_nat_inbound_rules, ListNatInboundRulesInput);
+
+mod vpc;

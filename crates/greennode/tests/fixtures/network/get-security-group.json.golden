@@ -1,0 +1,11 @@
+{
+  "SecurityGroup": {
+    "ID": "secg-1",
+    "Name": "\u003cname\u003e",
+    "Description": "\u003cdescription\u003e",
+    "Status": "ACTIVE",
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "IsSystem": false,
+    "System": false
+  }
+}

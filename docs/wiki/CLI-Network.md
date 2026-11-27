@@ -2,6 +2,18 @@
 
 # CLI: Network
 
+## get-dhcp-options
+
+Kind: Read.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--dhcp-options-id` | `string` | yes      |
+
+```sh
+greennode network get-dhcp-options --dhcp-options-id <dhcp-options-id> --query DHCPOptions
+```
+
 ## get-nat-instance
 
 Kind: Read.
@@ -20,6 +32,79 @@ An omitted `--zone-id` requires a unique zone mapping for the selected region.
 greennode network get-nat-instance --nat-id <nat-id>
 ```
 
+## get-network-acl
+
+Kind: Read.
+
+Sets `DefaultACL`, `VPCID`, `Rules`, and `SubnetIDs`. `list-network-acls` sets
+`NetworkID` and `SubnetID`. Fields specific to the other read have zero values.
+
+The detail response must contain explicit ACL state and unique subnet IDs. On a
+server error, a complete ACL inventory must confirm absence before the command
+reports `NotFound`.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+
+```sh
+greennode network get-network-acl --network-acl-id <network-acl-id> --query ACL
+```
+
+## get-security-group
+
+Kind: Read.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--security-group-id` | `string` | yes      |
+
+```sh
+greennode network get-security-group --security-group-id <security-group-id> --query SecurityGroup
+```
+
+## get-subnet
+
+Kind: Read.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--vpc-id`    | `string` | yes      |
+| `--subnet-id` | `string` | yes      |
+
+```sh
+greennode network get-subnet --vpc-id <vpc-id> --subnet-id <subnet-id> --query Subnet
+```
+
+## get-vpc
+
+Kind: Read.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--vpc-id` | `string` | yes      |
+
+```sh
+greennode network get-vpc --vpc-id <vpc-id> --query VPC
+```
+
+## list-all-security-group-rules
+
+Kind: Read.
+
+Reads every security group page, up to 50 pages and 500000 groups. Repeated IDs
+or pages, changing totals, and incomplete inventories return `InvalidResponse`
+without partial output.
+
+Each security group's response must contain an explicit rule array with valid,
+unique rule IDs.
+
+No fields.
+
+```sh
+greennode network list-all-security-group-rules
+```
+
 ## list-bandwidth-packages
 
 Kind: Read.
@@ -28,6 +113,20 @@ No fields.
 
 ```sh
 greennode network list-bandwidth-packages
+```
+
+## list-dhcp-options
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-dhcp-options
 ```
 
 ## list-nat-inbound-rules
@@ -46,4 +145,83 @@ An omitted `--zone-id` requires a unique zone mapping for the selected region.
 
 ```sh
 greennode network list-nat-inbound-rules --nat-id <nat-id>
+```
+
+## list-network-acls
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-network-acls
+```
+
+## list-security-group-rules
+
+Kind: Read.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--security-group-id` | `string` | yes      |
+
+```sh
+greennode network list-security-group-rules --security-group-id <security-group-id>
+```
+
+## list-security-groups
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-security-groups
+```
+
+## list-subnets
+
+Kind: Read.
+
+Reads subnets for the VPCs returned by the default `list-vpcs` page. Use
+`list-subnets-by-vpc` to read a specific VPC.
+
+No fields.
+
+```sh
+greennode network list-subnets
+```
+
+## list-subnets-by-vpc
+
+Kind: Read.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--vpc-id` | `string` | yes      |
+
+```sh
+greennode network list-subnets-by-vpc --vpc-id <vpc-id>
+```
+
+## list-vpcs
+
+Kind: Read.
+
+| Flag     | Type     | Required |
+| -------- | -------- | -------- |
+| `--name` | `string` |          |
+| `--page` | `int`    |          |
+| `--size` | `int`    |          |
+
+```sh
+greennode network list-vpcs
 ```

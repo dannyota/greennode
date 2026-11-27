@@ -1,0 +1,34 @@
+{
+  "Subnet": {
+    "UUID": "subnet-1",
+    "Name": "\u003cname\u003e",
+    "NetworkID": "vpc-1",
+    "NetworkUUID": "",
+    "CIDR": "\u003ccidr\u003e",
+    "Status": "ACTIVE",
+    "InterfaceACLPolicyID": "",
+    "InterfaceACLPolicyUUID": "",
+    "InterfaceACLPolicyName": "",
+    "RouteTableID": "",
+    "RouteTableUUID": "",
+    "ZoneID": "zone-a",
+    "Zone": {
+      "UUID": "",
+      "Name": "",
+      "ZoneType": "",
+      "IsDefault": false,
+      "Description": "",
+      "IsEnabled": false,
+      "OpenStackZone": "",
+      "IPRanges": [],
+      "ServerCount": 0,
+      "VolumeCount": 0
+    },
+    "Description": "",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ServerCount": 0,
+    "VolumeCount": 0,
+    "SecondarySubnets": []
+  }
+}

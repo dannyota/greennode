@@ -1,0 +1,17 @@
+{
+  "DHCPOptions": {
+    "UUID": "dop-1",
+    "Name": "\u003cname\u003e",
+    "Status": "ACTIVE",
+    "DNSServers": [
+      "10.166.12.196",
+      "10.166.12.197"
+    ],
+    "MTU": 1450,
+    "VPCIDs": [
+      "vpc-1"
+    ],
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "UpdatedAt": "2026-01-01T00:00:00Z"
+  }
+}

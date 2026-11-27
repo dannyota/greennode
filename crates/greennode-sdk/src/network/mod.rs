@@ -2,6 +2,7 @@
 
 mod bandwidth;
 mod nat;
+mod vpc;
 mod wire;
 
 pub use bandwidth::{BandwidthPackage, ListBandwidthPackagesInput, ListBandwidthPackagesOutput};
@@ -9,6 +10,8 @@ pub use nat::{
     GetNatInstanceInput, GetNatInstanceOutput, ListNatInboundRulesInput, ListNatInboundRulesOutput,
     NatDetail, NatInboundRule,
 };
+
+pub use vpc::*;
 
 use std::sync::Arc;
 
