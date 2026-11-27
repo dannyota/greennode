@@ -135,7 +135,9 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
             b"\xef\xbb\xbf {\"projectId\":\"ordinary-id\"",
             br#"{"projectId":"pre6A6B6Cpost"}"#,
             br#"1 {"projectId":"pre6A6B6Cpost"}"#,
+            b"\xef\xbb\xbf 1 {\"projectId\":\"pre6A6B6Cpost\"}",
             b"true{bad",
+            b"1 {} unavailable",
         ] {
             let server = Server::start(vec![
                 response(status, body),
@@ -164,23 +166,23 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
 
 #[tokio::test]
 async fn discovery_recovers_from_clean_error_bodies() {
-    for (status, body) in [
-        ("401 Unauthorized", b"token expired".as_slice()),
-        ("503 Service Unavailable", b"<html>Try again</html>"),
-        (
-            "503 Service Unavailable",
+    for status in ["401 Unauthorized", "503 Service Unavailable"] {
+        for body in [
+            b"token expired".as_slice(),
+            b"<html>Try again</html>",
             br#"1 {"projectId":"ordinary-id"}"#,
-        ),
-    ] {
-        let server = Server::start(vec![
-            response(status, body),
-            response("200 OK", br#"{"projects":[{"projectId":"one"}]}"#),
-        ]);
-        let project = call(&Discovery::default(), &server, &RequestContext::new().0)
-            .await
-            .unwrap();
-        assert_eq!(project.id, "one");
-        assert_eq!(server.requests(), 2);
+            b"503 Service Unavailable",
+        ] {
+            let server = Server::start(vec![
+                response(status, body),
+                response("200 OK", br#"{"projects":[{"projectId":"one"}]}"#),
+            ]);
+            let project = call(&Discovery::default(), &server, &RequestContext::new().0)
+                .await
+                .unwrap();
+            assert_eq!(project.id, "one");
+            assert_eq!(server.requests(), 2);
+        }
     }
 }
 

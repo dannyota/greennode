@@ -15,29 +15,29 @@ pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen
 }
 
 pub(super) fn discovery_stream_screen(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
-    let leading = body.trim_ascii_start();
-    let leading = leading
-        .strip_prefix(b"\xef\xbb\xbf")
-        .unwrap_or(leading)
-        .trim_ascii_start();
-    let mut require_json = matches!(leading.first(), Some(b'{' | b'[' | b'"'));
-    let text = crate::model::wire::go_json(body);
-    let values = serde_json::Deserializer::from_str(&text).into_iter::<&RawValue>();
-    for value in values {
-        let Ok(value) = value else {
-            return if require_json {
-                Screen::Indeterminate
-            } else {
-                Screen::Clean
-            };
+    let body = body.trim_ascii_start();
+    let body = body.strip_prefix(b"\xef\xbb\xbf").unwrap_or(body);
+    let text = crate::model::wire::go_json(body.trim_ascii_start());
+    let mut values = serde_json::Deserializer::from_str(&text).into_iter::<&RawValue>();
+    let mut require_json = false;
+    loop {
+        require_json = require_json
+            || matches!(
+                text.as_bytes()[values.byte_offset()..]
+                    .trim_ascii_start()
+                    .first(),
+                Some(b'{' | b'[' | b'"')
+            );
+        let value = match values.next() {
+            Some(Ok(value)) => value,
+            Some(Err(_)) if require_json => return Screen::Indeterminate,
+            Some(Err(_)) | None => return Screen::Clean,
         };
         let screen = decoded_value_screen(matcher, value);
         if !screen.is_clean() {
             return screen;
         }
-        require_json = true;
     }
-    Screen::Clean
 }
 
 fn decoded_value_screen(matcher: &BodyMatcher<'_>, value: &RawValue) -> Screen {
