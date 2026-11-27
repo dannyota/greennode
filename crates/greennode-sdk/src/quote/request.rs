@@ -231,7 +231,7 @@ pub(crate) async fn exchange(
 ) -> Result<Box<RawValue>, Box<Error>> {
     let direct = pacing.is_none();
     let monitor_log =
-        matches!(req.product, Product::Monitor { .. }) && req.operation == monitor::LOG_QUOTE;
+        matches!(req.product, Product::Monitor { .. }) && monitor::is_log_price(req.operation);
     let vnetwork = matches!(req.product, Product::Vnetwork(_));
     let base = req
         .product

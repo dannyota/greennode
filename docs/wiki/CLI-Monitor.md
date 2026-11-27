@@ -91,6 +91,31 @@ by reading before another create.
 greennode monitor create-log-alarm --name <name> --log-project-id <log-project-id> --threshold-value <threshold-value>
 ```
 
+## create-log-project
+
+Kind: Write.
+
+The order sends once and uses the same request body the SDK priced. The default
+--max-price 0 permits only a quote of zero VND. A negative or nonfinite cap is
+refused before requests. The exact name search must finish all pages with
+consistent counts and identities. Without --no-wait, waits up to 120 seconds for
+the project to become ACTIVE. If an order may have reached the server, list log
+projects by name before ordering again.
+
+| Flag               | Type      | Required |
+| ------------------ | --------- | -------- |
+| `--name`           | `string`  | yes      |
+| `--description`    | `string`  |          |
+| `--class`          | `string`  |          |
+| `--retention-days` | `int`     |          |
+| `--gb-per-day`     | `int`     |          |
+| `--max-price`      | `float64` |          |
+| `--no-wait`        | `bool`    |          |
+
+```sh
+greennode monitor create-log-project --name <name>
+```
+
 ## delete-channel
 
 Kind: Write, destructive.
@@ -132,6 +157,24 @@ alarm removes its history.
 
 ```sh
 greennode monitor delete-log-alarm --alarm-id <alarm-id> --yes
+```
+
+## delete-log-project
+
+Kind: Write, destructive.
+
+Requires --yes. --purge also removes the project from trash. By default, reads
+the initial project and waits up to 60 seconds for a 404 or a change in its
+status or billing status. --no-wait skips both reads.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--log-project-id` | `string` | yes      |
+| `--purge`          | `bool`   |          |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode monitor delete-log-project --log-project-id <log-project-id> --yes
 ```
 
 ## get-alarm

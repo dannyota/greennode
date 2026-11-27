@@ -15,10 +15,24 @@ use crate::wire::product::{
 use crate::wire::strict_json::{Shape, ShapeField, validate_canonical_shape};
 use crate::{ApiError, Error, ErrorClass, RequestContext, Secret, error::SafeText};
 
-struct ScopedBearer<'a> {
+pub(crate) struct ScopedBearer<'a> {
     source: &'a dyn BearerSource,
     identifiers: &'a [&'a str],
     operation: &'static str,
+}
+
+impl<'a> ScopedBearer<'a> {
+    pub(crate) fn new(
+        source: &'a dyn BearerSource,
+        identifiers: &'a [&'a str],
+        operation: &'static str,
+    ) -> Self {
+        Self {
+            source,
+            identifiers,
+            operation,
+        }
+    }
 }
 
 impl BearerSource for ScopedBearer<'_> {
@@ -56,6 +70,10 @@ impl BearerSource for ScopedBearer<'_> {
 }
 
 pub(crate) const LOG_QUOTE: &str = "monitor.QuoteCreateLogProject";
+pub(crate) const LOG_ORDER: &str = "monitor.CreateLogProject";
+pub(crate) fn is_log_price(operation: &str) -> bool {
+    matches!(operation, LOG_QUOTE | LOG_ORDER)
+}
 
 #[derive(Default, serde::Deserialize)]
 #[serde(transparent)]
@@ -68,7 +86,7 @@ impl Output for MonitorDocument {
     }]);
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
-        if op.id == LOG_QUOTE {
+        if is_log_price(op.id) {
             return log_document(op, response).map(|raw| Self(Some(raw)));
         }
         let body = response_body(op, response)?;
@@ -177,7 +195,7 @@ fn failure_error(
             false,
         )
         .with_body_too_large()
-    } else if op == LOG_QUOTE
+    } else if is_log_price(op)
         || matches!(
             failure.class(),
             ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
@@ -327,8 +345,12 @@ fn log_document(op: &Operation, response: &sender::Response) -> Result<Box<RawVa
     };
     let text = go_json(&body);
     let raw: Box<RawValue> = serde_json::from_str(&text).map_err(|_| decode_failure())?;
-    validate_shape(raw.get().as_bytes(), &LOG, raw.get().len())
-        .map_err(|_| Box::new(invalid(op.id)))?;
+    let validate = if op.id == LOG_ORDER {
+        validate_canonical_shape
+    } else {
+        validate_shape
+    };
+    validate(raw.get().as_bytes(), &LOG, raw.get().len()).map_err(|_| Box::new(invalid(op.id)))?;
     let price = serde_json::from_str::<Option<Price>>(raw.get())
         .map_err(|_| decode_failure())?
         .and_then(|shape| shape.optimum)

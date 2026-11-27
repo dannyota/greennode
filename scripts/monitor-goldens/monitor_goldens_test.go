@@ -425,3 +425,41 @@ func TestMonitorLogAlarmWriteGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestMonitorLogProjectWriteGoldens(t *testing.T) {
+	load := func(file string) string {
+		body, err := os.ReadFile(filepath.Join(os.Getenv("MONITOR_FIXTURE_DIR"), file+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+	for _, op := range []string{"create-log-project", "delete-log-project"} {
+		for _, format := range []string{"json", "table", "text"} {
+			t.Run(op+"/"+format, func(t *testing.T) {
+				args := []string{"--region", "hcm-3", "--output", format, "monitor", op}
+				routes := map[string]func(http.ResponseWriter, *http.Request){}
+				if op == "create-log-project" {
+					args = append(args, "--name", "Logs", "--max-price", "5", "--no-wait")
+					routes["/log-api/v1/projects"] = jsonHandler(200, `{"content":[],"currentPage":0,"pageSize":100,"totalPages":0,"totalElements":0}`)
+					routes["/billing-api/v2/log/quota-class"] = jsonHandler(200, load("remaining_log_classes"))
+					routes["/billing-api/v2/log/prices/created-price"] = jsonHandler(200, load("remaining_log_quote"))
+					routes["/billing-api/v2/log/quotas"] = jsonHandler(201, `{"orderId":4001}`)
+				} else {
+					args = append(args, "--log-project-id", "project-1", "--purge", "--no-wait", "--yes")
+					routes["/billing-api/v1/log/quotas/project-1"] = jsonHandler(404, `{}`)
+					routes["/billing-api/v1/trash/log/quotas/project-1"] = jsonHandler(204, "")
+				}
+				server := newSvcFixture(routes)
+				root, stdout, stderr := newSvcRoot(t, server)
+				root.SetArgs(args)
+				if err := root.ExecuteContext(context.Background()); err != nil || stderr.Len() != 0 || server.requestCount() != len(routes) {
+					t.Fatalf("log project write failed (requests %d)", server.requestCount())
+				}
+				if err := os.WriteFile(filepath.Join(os.Getenv("MONITOR_GOLDEN_DIR"), op+"."+format+".golden"), stdout.Bytes(), 0600); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}

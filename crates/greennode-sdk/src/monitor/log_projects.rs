@@ -2,7 +2,10 @@ use super::inventory::{get_input, id, list_input, output, page_values, plain, st
 use super::wire::{check_path_id, failure, input_error, requires_failure};
 use super::{Client, ResponseField};
 use crate::model::wire::{Field, WireField, model};
-use crate::quote::request::{self, Product, Request, monitor::LOG_QUOTE};
+use crate::quote::request::{
+    self, Product, Request,
+    monitor::{LOG_QUOTE, is_log_price},
+};
 use crate::wire::product::evidence::Evidence;
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Error, Failure, List, PagedList, RequestContext};
@@ -382,7 +385,7 @@ impl Client {
     ) -> Result<Vec<ClassWire>, Error> {
         let read = super::wire::Read { id: op, ..CLASSES };
         let raw = self.read(ctx, &read, &[], &[], evidence).await?;
-        if op == LOG_QUOTE {
+        if is_log_price(op) {
             return Ok(super::wire::decode::<Field<Vec<ClassWire>>>(
                 &raw,
                 &CLASS_GUARD,
@@ -415,30 +418,41 @@ impl Client {
                 "{LOG_QUOTE} requires a safe Name, Description, and Class"
             )));
         }
-        let classes = self.log_classes(ctx, LOG_QUOTE, &mut evidence).await?;
+        let terms = self
+            .prepare_log_order(ctx, LOG_QUOTE, &input, &mut evidence)
+            .await?;
+        self.price_log_order(ctx, LOG_QUOTE, &terms, &mut evidence)
+            .await
+    }
+
+    pub(super) async fn prepare_log_order(
+        &self,
+        ctx: &RequestContext,
+        op: &'static str,
+        input: &CreateLogProjectInput,
+        evidence: &mut Evidence,
+    ) -> Result<LogOrder, Error> {
+        let read = super::wire::Read { id: op, ..QUOTE };
+        let classes = self.log_classes(ctx, op, evidence).await?;
         let name = if input.class.is_empty() {
             "Basic"
         } else {
             &input.class
         };
         if evidence.text_reflects(name) {
-            return Err(QUOTE.invalid(&evidence));
+            return Err(read.invalid(evidence));
         }
         let quoted = crate::go_text::go_quote(name);
         let class = classes
             .iter()
             .find(|class| class.name == name)
             .filter(|class| class.status == "ACTIVE" && !class.config.items.is_empty())
-            .ok_or_else(|| {
-                input_error(format!(
-                    "{LOG_QUOTE} class {quoted} is not an orderable class"
-                ))
-            })?;
+            .ok_or_else(|| input_error(format!("{op} class {quoted} is not an orderable class")))?;
         let options = &class.config.items;
         let retention = if input.retention_days == 0 {
             let [only] = options.as_slice() else {
                 return Err(input_error(format!(
-                    "{LOG_QUOTE} class {quoted} has {} retention options, RetentionDays must name one",
+                    "{op} class {quoted} has {} retention options, RetentionDays must name one",
                     options.len()
                 )));
             };
@@ -449,7 +463,7 @@ impl Client {
                 .find(|option| option.amount == ResponseField::Value(input.retention_days))
                 .ok_or_else(|| {
                     input_error(format!(
-                        "{LOG_QUOTE} class {quoted} has no {}-day retention option",
+                        "{op} class {quoted} has no {}-day retention option",
                         input.retention_days
                     ))
                 })?
@@ -457,7 +471,7 @@ impl Client {
         let (ResponseField::Value(days), ResponseField::Value(minimum)) =
             (retention.amount, retention.min_size)
         else {
-            return Err(QUOTE.invalid(&evidence));
+            return Err(read.invalid(evidence));
         };
         let quantity = if input.gb_per_day == 0 {
             minimum
@@ -465,21 +479,37 @@ impl Client {
             input.gb_per_day
         }
         .checked_mul(days)
-        .ok_or_else(|| input_error(format!("{LOG_QUOTE} quantity overflows")))?;
+        .ok_or_else(|| input_error(format!("{op} quantity overflows")))?;
         let ids = [class.id.as_str(), retention.package_id.as_str()];
         if ids.iter().any(|id| {
             !crate::wire::product::options::PathIds::WithUnderscore.allows(id)
                 || evidence.id_reflects(id)
         }) {
-            return Err(QUOTE.invalid(&evidence));
+            return Err(read.invalid(evidence));
         }
         let body = json!({"redirectUrl":"https://vmonitor.console.vngcloud.vn/quota-usages/log","packageId":retention.package_id,"quantity":quantity,"buyWith":{},"monthPeriod":1,"projectName":input.name,"projectDescription":input.description,"pay":true});
+        Ok(LogOrder {
+            body,
+            class_id: class.id.clone(),
+            package_id: retention.package_id.clone(),
+        })
+    }
+
+    pub(super) async fn price_log_order(
+        &self,
+        ctx: &RequestContext,
+        op: &'static str,
+        terms: &LogOrder,
+        evidence: &mut Evidence,
+    ) -> Result<QuoteCreateLogProjectOutput, Error> {
+        let read = super::wire::Read { id: op, ..QUOTE };
+        let ids = [terms.class_id.as_str(), terms.package_id.as_str()];
         let raw = request::exchange(
             &self.session,
             ctx,
-            &mut evidence,
+            evidence,
             Request {
-                operation: LOG_QUOTE,
+                operation: op,
                 template: QUOTE.route,
                 product: Product::Monitor {
                     identifiers: &ids,
@@ -487,16 +517,72 @@ impl Client {
                 },
                 path: &[],
                 query: &[],
-                body: Some(&body),
+                body: Some(&terms.body),
             },
             None,
         )
         .await
         .map_err(|error| *error)?;
-        let mut quote: QuoteCreateLogProjectOutput = output(&raw, &Shape::Any, &QUOTE, &evidence)?;
-        if ids.iter().any(|id| evidence.id_reflects(id)) || !quote.redact(&evidence) {
-            return Err(QUOTE.invalid(&evidence));
+        let mut quote: QuoteCreateLogProjectOutput = output(&raw, &Shape::Any, &read, evidence)?;
+        if ids.iter().any(|id| evidence.id_reflects(id)) || !quote.redact(evidence) {
+            return Err(read.invalid(evidence));
         }
         Ok(quote)
     }
+    pub(super) async fn log_project_page_guard(
+        &self,
+        ctx: &RequestContext,
+        mutation: &super::mutation::Mutation,
+        name: &str,
+        page: i64,
+        evidence: &mut Evidence,
+    ) -> Result<PagedList<LogProject>, Error> {
+        let read = super::wire::Read {
+            id: mutation.id,
+            ..LIST
+        };
+        let page = page.to_string();
+        let query = [("page", page.as_str()), ("size", "100"), ("query", name)];
+        let raw = self.read(ctx, &read, &[], &query, evidence).await?;
+        let wire: ProjectPage = super::wire::decode(&raw, &PAGE, &read, evidence)?;
+        let ProjectPage {
+            items: Some(items),
+            page: Some(page),
+            size: Some(page_size),
+            total: Some(total_item),
+            pages: Some(total_page),
+        } = wire
+        else {
+            return Err(super::settlement::name_failure(mutation, evidence));
+        };
+        for project in &items {
+            if evidence.id_reflects(&project.id)
+                || [
+                    &project.project_name,
+                    &project.project_description,
+                    &project.status,
+                    &project.billing_status,
+                    &project.project_type,
+                    &project.created_at,
+                ]
+                .into_iter()
+                .any(|value| evidence.text_reflects(value))
+            {
+                return Err(mutation.invalid(200, evidence));
+            }
+        }
+        Ok(PagedList {
+            items,
+            page,
+            page_size,
+            total_item,
+            total_page,
+        })
+    }
+}
+
+pub(super) struct LogOrder {
+    pub(super) body: serde_json::Value,
+    pub(super) class_id: String,
+    pub(super) package_id: String,
 }

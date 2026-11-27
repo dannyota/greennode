@@ -158,7 +158,12 @@ impl Client {
             .monitor
             .as_ref()
             .ok_or_else(|| not_sent(Error::new(ErrorClass::InvalidConfig)))?;
-        if path.iter().any(|segment| evidence.id_reflects(segment)) {
+        let identifiers = body.map_or(&[][..], SerializeBody::identifiers);
+        if path
+            .iter()
+            .chain(identifiers)
+            .any(|segment| evidence.id_reflects(segment))
+        {
             return Err(not_sent(input_error(
                 "monitor request identifier withheld".into(),
             )));
@@ -195,6 +200,14 @@ impl Client {
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|error| not_sent(*error))?;
+        let bearer = self.session.bearer_source();
+        let scoped =
+            crate::quote::request::monitor::ScopedBearer::new(bearer, identifiers, mutation.id);
+        let bearer = if identifiers.is_empty() {
+            bearer
+        } else {
+            &scoped
+        };
         let response = execute_raw(
             runtime,
             base,
@@ -205,7 +218,7 @@ impl Client {
             },
             path,
             &[],
-            RouteAuth::Bearer(self.session.bearer_source()),
+            RouteAuth::Bearer(bearer),
             body,
             evidence,
         )
@@ -236,7 +249,23 @@ impl Client {
     }
 }
 
+pub(super) struct GuardedBody<'a, T> {
+    pub(super) value: &'a T,
+    pub(super) ids: &'a [&'a str],
+}
+impl<T: Serialize + Send + Sync> SerializeBody for GuardedBody<'_, T> {
+    fn identifiers(&self) -> &[&str] {
+        self.ids
+    }
+    fn encode(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self.value)
+    }
+}
+
 pub(super) trait SerializeBody: Send + Sync {
+    fn identifiers(&self) -> &[&str] {
+        &[]
+    }
     fn encode(&self) -> Result<Vec<u8>, serde_json::Error>;
 }
 impl<T: Serialize + Send + Sync> SerializeBody for T {

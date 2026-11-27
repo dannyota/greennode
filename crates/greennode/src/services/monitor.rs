@@ -32,6 +32,9 @@ struct Input {
     page: i64,
     size: i64,
     system: bool,
+    max_price: f64,
+    no_wait: bool,
+    purge: bool,
     location_id: String,
     alarm_id: String,
     channel_id: String,
@@ -274,6 +277,7 @@ macro_rules! read {
     (@project) => { std::convert::identity };
 }
 
+mod log_project_writes;
 mod remaining;
 
 fn dashboard_view() -> OutputView {
@@ -426,6 +430,8 @@ pub(super) const SERVICE: Service = Service {
         log_alarm_writes::CREATE,
         log_alarm_writes::UPDATE,
         log_alarm_writes::DELETE,
+        log_project_writes::CREATE,
+        log_project_writes::DELETE,
         remaining::LIST_CHECK_ALARM_HISTORY,
         remaining::GET_ALARM,
         remaining::LIST_ALARMS,
