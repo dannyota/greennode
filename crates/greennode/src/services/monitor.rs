@@ -29,6 +29,20 @@ struct Input {
     page: i64,
     size: i64,
     system: bool,
+    location_id: String,
+    alarm_id: String,
+    channel_id: String,
+    log_project_id: String,
+    name: String,
+    status: String,
+    severity: String,
+    channel_type: String,
+    search: String,
+    billing_status: String,
+    description: String,
+    class: String,
+    retention_days: i64,
+    gb_per_day: i64,
 }
 
 macro_rules! field {
@@ -158,6 +172,17 @@ const QUOTE_INPUT_CHECKS: JsonChecks = JsonChecks {
 fn check_quote_json(bytes: &[u8]) -> Result<(), InputError> {
     #[derive(serde::Deserialize)]
     struct Fields {
+        #[serde(rename = "Name")]
+        _name: Option<String>,
+        #[serde(rename = "Description")]
+        _description: Option<String>,
+        #[serde(rename = "Class")]
+        _class: Option<String>,
+        #[serde(rename = "RetentionDays")]
+        _retention_days: Option<i64>,
+        #[serde(rename = "GBPerDay")]
+        _gb_per_day: Option<i64>,
+
         #[serde(rename = "Kind")]
         _kind: Option<String>,
         #[serde(rename = "ClassID")]
@@ -219,7 +244,7 @@ const LIST_DASHBOARDS: InputDescriptor<Input> = descriptor(&[PAGE, SIZE, SYSTEM]
 const LIST_RESPONSE_TIMES: InputDescriptor<Input> = descriptor(&[CHECK_ID, START, END]);
 
 macro_rules! read {
-    ($name:literal, $sdk:literal, $help:literal, $method:ident, $input:ident, [$($field:ident),*], $value:expr, $view:expr, $notes:expr, $example:literal $(, [$($json:ident),*], $checks:expr)?) => {
+    ($name:literal, $sdk:literal, $help:literal, $method:ident, $input:ident, [$($field:ident),*], $value:expr, $view:expr, $notes:expr, $example:literal $(, [$($json:ident),*], $checks:expr)? $(; $project:expr)?) => {
         Operation {
             name: $name,
             sdk_operation: concat!("monitor.", $sdk),
@@ -236,13 +261,17 @@ macro_rules! read {
                 Box::pin(dispatch::management_custom(invocation, operation, matches, &$input, |ctx, config, input| {
                     Box::pin(async move {
                         let value = ($value)(input);
-                        dispatch::project_result(Client::new(config).$method(ctx, value).await, std::convert::identity)
+                        dispatch::project_result(Client::new(config).$method(ctx, value).await, read!(@project $($project)?))
                     })
                 }, $view, None $(.or(Some($checks)))?))
             })),
         }
     };
+    (@project $project:expr) => { $project };
+    (@project) => { std::convert::identity };
 }
+
+mod remaining;
 
 fn dashboard_view() -> OutputView {
     OutputView {
@@ -337,6 +366,23 @@ pub(super) const SERVICE: Service = Service {
         },
     ],
     operations: &[
+        remaining::LIST_CHECK_ALARM_HISTORY,
+        remaining::GET_ALARM,
+        remaining::LIST_ALARMS,
+        remaining::GET_CHANNEL,
+        remaining::LIST_CHANNELS,
+        remaining::LIST_CHANNEL_TYPES,
+        remaining::GET_CHECK,
+        remaining::LIST_CHECKS,
+        remaining::LIST_LOCATIONS,
+        remaining::GET_LOG_PROJECT,
+        remaining::LIST_LOG_PROJECTS,
+        remaining::LIST_LOG_PROJECT_CLASSES,
+        remaining::QUOTE_CREATE_LOG_PROJECT,
+        remaining::GET_QUOTA_USAGE,
+        remaining::GET_SYNTHETIC_QUOTA,
+        remaining::GET_SYNTHETIC_QUOTA_USAGE,
+        remaining::LIST_NOTIFICATION_PACKAGES,
         read!(
             "get-check-alarm",
             "GetCheckAlarm",

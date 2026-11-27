@@ -1,0 +1,34 @@
+{
+  "lstData": [
+    {
+      "id": "alarm-1",
+      "name": "Read alarm",
+      "description": "Match log records",
+      "type": "LOG",
+      "progressStatus": "ACTIVE",
+      "severity": "WARNING",
+      "alarmLog": {
+        "id": "log-1",
+        "logProject": "project-1",
+        "logProjectName": "Project",
+        "queryString": "level:error",
+        "filter": {
+          "condition": "error"
+        },
+        "thresholdValue": "2.5",
+        "timeFrame": "5",
+        "groupByField": 3,
+        "inAlarm": "channel-1,",
+        "ok": "",
+        "resendEnabled": true,
+        "resendStatus": "OK,,ALARM",
+        "resendPeriod": "2",
+        "resendTimes": 1
+      }
+    }
+  ],
+  "page": 1,
+  "pageSize": 10000,
+  "totalPage": 1,
+  "totalItem": 1
+}

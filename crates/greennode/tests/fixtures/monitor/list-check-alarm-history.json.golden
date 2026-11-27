@@ -1,0 +1,23 @@
+{
+  "Items": [
+    {
+      "ID": "transition-1",
+      "AlarmID": "sub-1",
+      "LocationID": "loc-1",
+      "LocationName": "Probe",
+      "OldState": "OK",
+      "NewState": "ALARM",
+      "Timestamp": "2000-01-04T00:00:00Z",
+      "SubAlarms": [
+        {
+          "State": "ALARM",
+          "CurrentValues": [
+            2.5
+          ]
+        }
+      ]
+    }
+  ],
+  "Start": "2000-01-01T07:00:00+07:00",
+  "End": "2000-01-05T00:00:00Z"
+}

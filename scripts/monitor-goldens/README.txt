@@ -21,3 +21,7 @@ with the same settings for the six notification quota and usage goldens.
 
 Run `go test ./internal/cli -run '^TestMonitorNextReadGoldens$' -count=1` to
 generate six notification quote and check alarm goldens.
+
+Run `go test ./internal/cli -run '^TestMonitorRemainingGoldens$' -count=1`
+with the same settings for the 51 history, alarm, channel, check, location,
+log-project, and quota read goldens.

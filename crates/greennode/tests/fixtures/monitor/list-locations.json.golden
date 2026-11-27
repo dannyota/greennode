@@ -1,0 +1,13 @@
+{
+  "Items": [
+    {
+      "ID": "loc-1",
+      "Name": "Probe",
+      "Type": "PUBLIC",
+      "Description": "Location",
+      "Status": "ACTIVE",
+      "CreatedAt": "2000-01-01",
+      "UpdatedAt": ""
+    }
+  ]
+}

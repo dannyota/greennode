@@ -2,6 +2,7 @@ mod catalog;
 mod notification;
 mod quotes;
 mod status;
+mod usage;
 mod wire;
 
 pub(super) use wire::integer;
@@ -10,6 +11,7 @@ pub use catalog::*;
 pub use notification::*;
 pub use quotes::*;
 pub use status::*;
+pub use usage::*;
 
 use std::collections::HashSet;
 use std::hash::Hash;

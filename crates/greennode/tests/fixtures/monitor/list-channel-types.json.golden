@@ -1,0 +1,9 @@
+{
+  "Items": [
+    {
+      "ID": "type-1",
+      "Name": "Webhook",
+      "Description": "Webhook channel"
+    }
+  ]
+}

@@ -55,6 +55,8 @@ impl BearerSource for ScopedBearer<'_> {
     }
 }
 
+pub(crate) const LOG_QUOTE: &str = "monitor.QuoteCreateLogProject";
+
 #[derive(Default, serde::Deserialize)]
 #[serde(transparent)]
 struct MonitorDocument(Option<Box<RawValue>>);
@@ -66,6 +68,9 @@ impl Output for MonitorDocument {
     }]);
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
+        if op.id == LOG_QUOTE {
+            return log_document(op, response).map(|raw| Self(Some(raw)));
+        }
         let body = response_body(op, response)?;
         if body.is_empty() {
             return Err(Box::new(invalid(op.id)));
@@ -172,10 +177,12 @@ fn failure_error(
             false,
         )
         .with_body_too_large()
-    } else if matches!(
-        failure.class(),
-        ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
-    ) {
+    } else if op == LOG_QUOTE
+        || matches!(
+            failure.class(),
+            ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
+        )
+    {
         failure
     } else if (!no_redirect || status.is_some_and(|status| !(300..400).contains(&status)))
         && status.is_some()
@@ -240,4 +247,107 @@ fn credential_conflict(op: &'static str) -> Error {
         "quota response had invalid structure",
         false,
     )
+}
+
+fn log_document(op: &Operation, response: &sender::Response) -> Result<Box<RawValue>, Box<Error>> {
+    use crate::model::wire::Field;
+    use crate::wire::strict_json::validate_shape;
+    use serde::Deserialize;
+    const PROPERTIES: Shape<'static> = Shape::Object(&[
+        ShapeField {
+            name: "name",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "description",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "optimumPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "originalPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "discountPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "discountPercent",
+            shape: Shape::Any,
+        },
+    ]);
+    const LOG: Shape<'static> = Shape::Object(&[
+        ShapeField {
+            name: "optimumPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "originalPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "discountPrice",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "discountPercent",
+            shape: Shape::Any,
+        },
+        ShapeField {
+            name: "propertiesPrice",
+            shape: Shape::Array(&PROPERTIES),
+        },
+    ]);
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Price {
+        #[serde(rename = "optimumPrice")]
+        optimum: Option<Field<f64>>,
+    }
+    let status = response.status;
+    let body = crate::wire::product::response::classify_full(
+        op.id,
+        status,
+        bytes::Bytes::copy_from_slice(&response.body),
+        op.success,
+        (true, false, op.retry),
+        &response.credentials,
+    )?;
+    let decode_failure = || {
+        Box::new(error(
+            op.id,
+            None,
+            "",
+            "response failed to decode; body withheld",
+            false,
+        ))
+    };
+    let text = go_json(&body);
+    let raw: Box<RawValue> = serde_json::from_str(&text).map_err(|_| decode_failure())?;
+    validate_shape(raw.get().as_bytes(), &LOG, raw.get().len())
+        .map_err(|_| Box::new(invalid(op.id)))?;
+    let price = serde_json::from_str::<Option<Price>>(raw.get())
+        .map_err(|_| decode_failure())?
+        .and_then(|shape| shape.optimum)
+        .map(|field| field.0);
+    match price {
+        None => Err(Box::new(error(
+            op.id,
+            Some(status.as_u16()),
+            "",
+            "quote response had no price",
+            false,
+        ))),
+        Some(value) if value < 0.0 => Err(Box::new(error(
+            op.id,
+            Some(status.as_u16()),
+            "InvalidResponse",
+            "quote response had an invalid create price",
+            false,
+        ))),
+        Some(_) => Ok(raw),
+    }
 }

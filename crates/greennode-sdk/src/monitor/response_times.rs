@@ -321,7 +321,7 @@ impl Window {
     }
 }
 
-fn milliseconds(time: OffsetDateTime) -> i128 {
+pub(super) fn milliseconds(time: OffsetDateTime) -> i128 {
     time.unix_timestamp_nanos().div_euclid(1_000_000)
 }
 
