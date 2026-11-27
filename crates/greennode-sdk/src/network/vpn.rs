@@ -143,7 +143,6 @@ fn decode_vpn(text: &str, evidence: &Evidence) -> Result<ListVpnConnectionsOutpu
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore]
     fn hex_credentials_in_numeric_fields_are_withheld_after_rebase() {
         let mut evidence = crate::wire::product::evidence::Evidence::new();
         evidence.add_secret(&crate::Secret::new("AAA"));
@@ -203,6 +202,7 @@ macro_rules! vpn_model {
         $($(#[$field_meta:meta])* $field:ident: $type:ty => $wire:literal, $go:literal;)*
     }) => {
         model! {
+            @ true;
             $(#[$meta])* pub struct $name {
                 $($(#[$field_meta])* $field: $type => $wire, $go;)*
             }

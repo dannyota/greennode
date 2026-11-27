@@ -260,7 +260,7 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: read.kind == ResponseKind::RouteTable,
+            keep_status: false,
             overflow_overrides_status: false,
             sensitive: read.kind != ResponseKind::Standard,
             reject_reflected_credentials: false,

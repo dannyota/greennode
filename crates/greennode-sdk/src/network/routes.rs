@@ -155,6 +155,7 @@ impl Client {
 }
 
 model! {
+    @ true;
     /// One entry in a route table.
     pub struct Route {
         /// Provider resource identifier.
@@ -173,6 +174,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A routing policy and its provider-reported routes.
     pub struct RouteTable {
         /// Provider resource identifier.
@@ -191,6 +193,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A route with the identifier of its containing table.
     pub struct RouteTableRoute {
         /// Identifier of the route table.

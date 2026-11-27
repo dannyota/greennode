@@ -315,8 +315,8 @@ async fn send_route<T>(
             }
             let status = failure.status;
             let overflow = matches!(&failure.error, sender::Error::Send(error) if matches!(error.kind(), send::Error::BodyTooLarge));
-            let refused_redirect =
-                operation.keep_status && matches!(&failure.error, sender::Error::Redirect(_));
+            let refused_redirect = (operation.keep_status || operation.no_redirect)
+                && matches!(&failure.error, sender::Error::Redirect(_));
             if let Some(status) = status
                 && (refused_redirect
                     || (overflow

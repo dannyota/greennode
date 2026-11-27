@@ -93,6 +93,7 @@ impl Client {
 }
 
 model! {
+    @ true;
     /// A public IP address in the selected project.
     pub struct WanIp {
         /// Provider resource identifier.
@@ -119,6 +120,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// An elastic network interface in the selected project.
     pub struct ElasticNetworkInterface {
         /// Provider resource identifier.
@@ -153,6 +155,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A connection between two VPCs.
     pub struct Peering {
         /// Provider resource identifier.
@@ -179,6 +182,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A project interconnect and its gateway details.
     pub struct Interconnect {
         /// Provider resource identifier.

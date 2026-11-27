@@ -23,7 +23,6 @@ async fn route_inventory_regressions() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn route_inventory_ignores_lone_case_variant_after_rebase() {
     let server = Server::start(vec![response(
         "200 OK",
@@ -228,6 +227,34 @@ async fn route_table_redirect_preserves_status_and_withholds_message() {
         (Some(302), "", "security group response withheld")
     );
     assert_eq!(server.heads().len(), 1);
+}
+
+#[tokio::test]
+async fn truncated_redirect_drops_status_and_reports_the_body_failure() {
+    let server = Server::start(vec![Response::RawClose(
+        b"HTTP/1.1 302 Found\r\nLocation: /other\r\nContent-Length: 20\r\n\r\n{}".to_vec(),
+    )]);
+    let config = config(Product::Vserver, &server, "toy-token", Some("proj-1"));
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let failure = client
+        .get_route_table(&ctx, GetRouteTableInput::new("rt-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), None);
+    assert_ne!(api.message(), "security group response withheld");
+    assert_eq!(server.heads().len(), 1);
+}
+
+#[test]
+fn interconnect_circuit_id_is_screened_by_its_rendered_number() {
+    let mut evidence = crate::wire::product::evidence::Evidence::new();
+    evidence.add_secret(&Secret::new("e+21"));
+    let interconnect: crate::network::Interconnect =
+        serde_json::from_str(r#"{"circuitId":1e21}"#).unwrap();
+    assert!(!evidence.text_reflects("1e21"));
+    assert!(super::ids_reflect(&interconnect, &evidence));
 }
 
 fn response(status: &str, body: &str) -> Response {

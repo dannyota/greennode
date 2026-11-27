@@ -367,14 +367,16 @@ impl<'a> Fields<'a> {
     }
 
     pub(super) fn raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {
-        if self
+        let variants = self
             .0
             .keys()
-            .any(|key| key != name && field_matches(key, name))
-        {
+            .filter(|key| key.as_str() != name && field_matches(key, name))
+            .count();
+        let exact = self.0.get(name).copied();
+        if variants > 1 || (variants == 1 && exact.is_some()) {
             return Err(());
         }
-        Ok(self.0.get(name).copied())
+        Ok(exact)
     }
 
     pub(super) fn required<T: Deserialize<'a>>(&self, name: &str) -> Result<T, ()> {

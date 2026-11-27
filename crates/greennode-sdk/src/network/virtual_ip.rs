@@ -276,6 +276,7 @@ impl Client {
 }
 
 model! {
+    @ true;
     /// A virtual IP address and its network placement.
     pub struct VirtualIpAddress {
         /// Provider resource identifier.
@@ -316,6 +317,7 @@ model! {
 }
 
 model! {
+    @ true;
     /// A virtual IP or subnet assignment to a network interface.
     pub struct AddressPair {
         /// Provider resource identifier.
