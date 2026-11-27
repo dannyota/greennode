@@ -520,7 +520,7 @@ async fn run_inner(
             let mut observed = send::Evidence::default();
             #[cfg(test)]
             if matches!(op.class, redirect::Classification::Write) {
-                sleeper.record_write_attempt();
+                observed.attempt_counter = Some(sleeper);
             }
             let result = bounded(&ctx, clock, || {
                 send::once_with_evidence(
