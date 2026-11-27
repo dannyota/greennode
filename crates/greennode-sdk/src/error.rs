@@ -1,6 +1,9 @@
 use std::any::Any;
 use std::fmt;
 
+#[path = "error/cause.rs"]
+mod cause;
+use cause::CauseChain;
 #[path = "error/detail.rs"]
 mod detail;
 use detail::Detail;
@@ -190,7 +193,7 @@ pub struct Error {
     login: Option<LoginError>,
     service_login: Option<ServiceAccountLoginError>,
     detail: Option<Detail>,
-    cause: Option<Box<Error>>,
+    cause: CauseChain,
 }
 
 #[derive(Debug)]
@@ -217,9 +220,9 @@ impl Error {
                 class,
                 ErrorClass::NoCredentials | ErrorClass::CredentialsFile
             ) {
-                Some(Box::new(Self::new(ErrorClass::InvalidConfig)))
+                CauseChain::from(Self::new(ErrorClass::InvalidConfig))
             } else {
-                None
+                CauseChain::default()
             },
         }
     }
@@ -241,8 +244,8 @@ impl Error {
             ..Self::new(class)
         }
     }
-    pub(crate) fn screen_api(mut self, reflects: &impl Fn(&str) -> bool) -> Self {
-        self = self.screen_diagnostic_fallback(reflects);
+    fn screen_layer(&mut self, reflects: &impl Fn(&str) -> bool) {
+        self.fallback_message_reflected |= reflects(DIAGNOSTIC_FALLBACK);
         if let Some(api) = self.api.as_mut() {
             if api
                 .status
@@ -278,10 +281,8 @@ impl Error {
         if let Some(detail) = &mut self.detail {
             detail.screen_fields(reflects);
         }
-        self.cause = self.cause.map(|cause| Box::new(cause.screen_api(reflects)));
         self.display_reflected =
             self.display_reflected || reflects(&zeroize::Zeroizing::new(self.to_string()));
-        self
     }
 
     pub(crate) fn screen_public(self, reflects: &impl Fn(&str) -> bool) -> Self {
@@ -301,7 +302,7 @@ impl Error {
                 login.screen_formatter(reflects);
             }
             current.debug_reflected |= debug_reflects(current, reflects);
-            node = current.cause.as_deref_mut();
+            node = current.cause.0.as_deref_mut();
         }
         error
     }
@@ -313,27 +314,19 @@ impl Error {
 
     /// Returns the diagnostic fallback after credential screening.
     pub fn diagnostic_fallback(&self) -> &'static str {
-        let mut error = Some(self);
-        while let Some(node) = error {
-            if node.fallback_message_reflected {
-                return "";
-            }
-            error = node.cause.as_deref();
+        if self.chain().any(|node| node.fallback_message_reflected) {
+            ""
+        } else {
+            DIAGNOSTIC_FALLBACK
         }
-        DIAGNOSTIC_FALLBACK
     }
 
     pub(crate) fn with_cause(mut self, cause: Error) -> Self {
-        match self.cause.as_mut() {
-            Some(existing) => {
-                let mut node = existing.as_mut();
-                while let Some(ref mut next) = node.cause {
-                    node = next;
-                }
-                node.cause = Some(Box::new(cause));
-            }
-            None => self.cause = Some(Box::new(cause)),
+        let mut tail = &mut self.cause.0;
+        while let Some(layer) = tail {
+            tail = &mut layer.cause.0;
         }
+        *tail = Some(Box::new(cause));
         self
     }
     pub(crate) fn with_login(mut self, detail: LoginError) -> Self {
@@ -363,7 +356,7 @@ impl Error {
             login: None,
             service_login: None,
             detail: Some(Detail::new(detail)),
-            cause: Some(Box::new(self)),
+            cause: CauseChain::from(self),
         }
     }
     pub(crate) fn is_body_too_large(&self) -> bool {
@@ -387,7 +380,7 @@ impl Error {
             {
                 node.detail = None;
             }
-            error = node.cause.as_deref_mut();
+            error = node.cause.0.as_deref_mut();
         }
     }
     /// Returns the outermost category.
@@ -409,38 +402,25 @@ impl Error {
     }
     /// Checks explicit category identities in the cause chain without HTTP status mapping.
     pub fn has_identity(&self, class: ErrorClass) -> bool {
-        (self.identity && self.class == class)
-            || self
-                .cause
-                .as_ref()
-                .is_some_and(|cause| cause.has_identity(class))
+        self.chain()
+            .any(|layer| layer.identity && layer.class == class)
     }
     /// Returns the first service error in the cause chain, if present.
     pub fn api_error(&self) -> Option<&ApiError> {
-        self.api
-            .as_ref()
-            .or_else(|| self.cause.as_ref().and_then(|cause| cause.api_error()))
+        self.chain().find_map(|layer| layer.api.as_ref())
     }
     /// Returns the first IAM login detail in the cause chain, if present.
     pub fn login_error(&self) -> Option<&LoginError> {
-        self.login
-            .as_ref()
-            .or_else(|| self.cause.as_ref().and_then(|cause| cause.login_error()))
+        self.chain().find_map(|layer| layer.login.as_ref())
     }
     /// Returns the first service-account login detail in the cause chain, if present.
     pub fn service_account_login_error(&self) -> Option<&ServiceAccountLoginError> {
-        self.service_login.as_ref().or_else(|| {
-            self.cause
-                .as_ref()
-                .and_then(|cause| cause.service_account_login_error())
-        })
+        self.chain().find_map(|layer| layer.service_login.as_ref())
     }
     /// Returns the first matching typed detail in the cause chain, if present.
     pub fn detail<T: Any + Send + Sync>(&self) -> Option<&T> {
-        self.detail
-            .as_ref()
-            .and_then(Detail::public)
-            .or_else(|| self.cause.as_ref().and_then(|cause| cause.detail::<T>()))
+        self.chain()
+            .find_map(|layer| layer.detail.as_ref().and_then(Detail::public))
     }
 }
 impl From<crate::ContextEnd> for Error {

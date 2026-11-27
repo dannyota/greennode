@@ -9,6 +9,7 @@ macro_rules! fixture {
     };
 }
 
+mod cause_chain;
 mod marker;
 
 const CANARY: &str = "estimate-canary";
