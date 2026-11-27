@@ -83,7 +83,10 @@ secret-input file flags keep the operation's bounds and safe opened-file checks.
 For secret output, check the path before dispatch, create exclusively without
 following a symlink, and keep the baseline's per-operation cleanup and recovery
 on failure. The secret file uses Unix mode 0600; only the safe output reaches
-stdout or `--query`.
+stdout or `--query`. Delivery stages in an owner-only directory under the
+anchored parent and links into place; on failure the staging directory is
+removed only if its device and inode still match, since POSIX cannot remove by
+descriptor.
 
 ## Root and process
 

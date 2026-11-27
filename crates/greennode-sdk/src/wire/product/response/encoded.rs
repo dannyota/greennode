@@ -1,5 +1,7 @@
 use zeroize::Zeroizing;
 
+pub(super) const STABLE_FLOOR: usize = 7;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Base64Alphabet {
     Standard,
@@ -10,6 +12,7 @@ pub(super) enum Base64Alphabet {
 pub(super) struct EncodedNeedle {
     value: Zeroizing<String>,
     alphabet: Base64Alphabet,
+    fragment: bool,
 }
 
 impl EncodedNeedle {
@@ -21,16 +24,22 @@ impl EncodedNeedle {
         needles: &mut Vec<Self>,
         value: Zeroizing<String>,
         alphabet: Base64Alphabet,
+        fragment: bool,
     ) {
         if let Some(needle) = needles
             .iter_mut()
             .find(|needle| needle.value.as_str() == value.as_str())
         {
+            needle.fragment |= fragment;
             if needle.alphabet != alphabet {
                 needle.alphabet = Base64Alphabet::Both;
             }
         } else {
-            needles.push(Self { value, alphabet });
+            needles.push(Self {
+                value,
+                alphabet,
+                fragment,
+            });
         }
     }
 
@@ -39,7 +48,7 @@ impl EncodedNeedle {
         input.utf8_chunks().any(|chunk| {
             let text = chunk.valid();
             text.match_indices(needle).any(|(start, _)| {
-                if strict || needle.len() >= 8 {
+                if strict || (self.fragment && needle.len() >= STABLE_FLOOR) {
                     return true;
                 }
                 let left = start
@@ -66,13 +75,22 @@ impl EncodedNeedle {
 }
 
 pub(super) fn contains_hex(input: &[u8], needle: &str) -> bool {
-    if needle.len() < 8 {
-        input == needle.as_bytes()
-    } else {
-        input
-            .utf8_chunks()
-            .any(|chunk| chunk.valid().contains(needle))
-    }
+    input.utf8_chunks().any(|chunk| {
+        let text = chunk.valid();
+        text.match_indices(needle).any(|(start, _)| {
+            if needle.len() >= STABLE_FLOOR {
+                return true;
+            }
+            let left = start
+                .checked_sub(1)
+                .and_then(|index| text.as_bytes().get(index));
+            let right = text.as_bytes().get(start + needle.len());
+            [left, right]
+                .into_iter()
+                .flatten()
+                .all(|byte| !byte.is_ascii_alphanumeric())
+        })
+    })
 }
 
 pub(super) fn insert_hex(needles: &mut Vec<Zeroizing<String>>, part: &str) {

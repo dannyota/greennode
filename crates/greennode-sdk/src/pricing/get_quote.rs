@@ -172,12 +172,7 @@ impl Client {
 }
 
 fn redact_marker(value: String) -> String {
-    let normalized: String = value
-        .chars()
-        .filter(|c| c.is_alphanumeric())
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect();
-    if normalized.contains("clientsecret") {
+    if crate::wire::product::response::has_credential_marker(&value) {
         "[redacted]".into()
     } else {
         value

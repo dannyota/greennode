@@ -153,6 +153,15 @@ pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredential
     matches_credential_forms(text, credentials, MatchContext::ErrorText)
 }
 
+pub(crate) fn has_credential_marker(text: &str) -> bool {
+    let normalized: String = text
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    normalized.contains("clientsecret")
+}
+
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
     !credentials.values().is_empty()
         && matches_credential_forms(text, credentials, MatchContext::Text)
@@ -191,6 +200,7 @@ fn matches_credential_forms(
                     &mut encoded_needles,
                     Zeroizing::new(encoding.encode(value.as_bytes())),
                     alphabet,
+                    false,
                 );
             }
         }
@@ -208,7 +218,7 @@ fn matches_credential_forms(
                 aligned.extend_from_slice(part.as_bytes());
                 let start = (offset * 8).div_ceil(6);
                 let end = offset.saturating_add(part.len()).saturating_mul(8) / 6;
-                if end.saturating_sub(start) >= 8 {
+                if end.saturating_sub(start) >= encoded::STABLE_FLOOR {
                     for encoding in [data_encoding::BASE64, data_encoding::BASE64URL] {
                         let encoded = Zeroizing::new(encoding.encode(&aligned));
                         if let Some(stable) = encoded.get(start..end) {
@@ -216,6 +226,7 @@ fn matches_credential_forms(
                                 &mut encoded_needles,
                                 Zeroizing::new(stable.to_owned()),
                                 Base64Alphabet::Both,
+                                true,
                             );
                         }
                     }
@@ -1162,10 +1173,33 @@ mod tests {
     }
 
     #[test]
-    fn short_hex_credential_matches_only_as_the_whole_value() {
+    fn short_hex_credential_matches_between_token_boundaries() {
         let credentials = SentCredentials::for_test(vec![crate::Secret::new("jkl")]);
         assert!(reflects_credential("6A6b6C", &credentials));
-        assert!(!reflects_credential("prefix-6A6b6C-suffix", &credentials));
+        assert!(reflects_credential("id=6A6b6C;", &credentials));
+        assert!(reflects_credential("prefix-6A6b6C-suffix", &credentials));
+        assert!(!reflects_credential("prefix6A6b6Csuffix", &credentials));
+        assert!(!reflects_credential("1236A6b6C9", &credentials));
+    }
+
+    #[test]
+    fn six_byte_code_is_withheld_at_each_base64_alignment() {
+        let secret = "483920";
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new(secret)]);
+        for encoding in [data_encoding::BASE64_NOPAD, data_encoding::BASE64URL_NOPAD] {
+            for prefix in ["", "x", "xx"] {
+                let encoded = encoding.encode(format!("{prefix}{secret}").as_bytes());
+                assert!(reflects_credential(
+                    &format!("token={encoded};"),
+                    &credentials
+                ));
+                let embedded = encoding.encode(format!("{prefix}{secret}suffix").as_bytes());
+                assert!(reflects_credential(
+                    &format!("token={embedded};"),
+                    &credentials
+                ));
+            }
+        }
     }
 
     #[test]

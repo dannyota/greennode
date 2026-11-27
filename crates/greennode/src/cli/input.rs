@@ -6,6 +6,7 @@ use clap::{ArgMatches, parser::ValueSource};
 use serde_json::Value;
 
 use super::op::Field;
+use super::render::decode_string;
 
 pub type FlagSetter<T> = fn(&mut T, &ArgMatches) -> Result<(), ()>;
 pub type ProjectSetter<T> = fn(&mut T, &str);
@@ -100,10 +101,11 @@ pub(crate) fn merge_checked<T>(
         let bytes = match checks {
             Some(checks) => {
                 let bytes = read_input(raw).map_err(checks.read_error)?;
+                let bytes = normalized(&bytes)?;
                 (checks.validate)(&bytes)?;
                 bytes
             }
-            None => read_input(raw)?,
+            None => normalized(&read_input(raw)?)?,
         };
         let input: Option<HashMap<String, &serde_json::value::RawValue>> =
             serde_json::from_slice(&bytes)
@@ -247,6 +249,51 @@ fn raw_value_at(
     }
 }
 
+fn normalized(bytes: &[u8]) -> Result<Vec<u8>, InputError> {
+    document_text(bytes)
+        .map(String::into_bytes)
+        .map_err(|()| InputError("--cli-input-json: invalid JSON object"))
+}
+
+pub(crate) fn document_text(bytes: &[u8]) -> Result<String, ()> {
+    let mut text = String::new();
+    for chunk in bytes.utf8_chunks() {
+        text.push_str(chunk.valid());
+        text.extend(std::iter::repeat_n(
+            char::REPLACEMENT_CHARACTER,
+            chunk.invalid().len(),
+        ));
+    }
+    let mut normalized = String::new();
+    let mut copied = 0;
+    let mut quoted = None;
+    let mut escaped = false;
+    for (index, byte) in text.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if quoted.is_some() && byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            if let Some(start) = quoted.take() {
+                let raw = text.get(start..=index).ok_or(())?;
+                if raw.contains("\\u") {
+                    let value = decode_string(raw).map_err(|_| ())?;
+                    normalized.push_str(text.get(copied..start).ok_or(())?);
+                    normalized.push_str(&serde_json::to_string(&value).map_err(|_| ())?);
+                    copied = index + 1;
+                }
+            } else {
+                quoted = Some(index);
+            }
+        }
+    }
+    if copied == 0 {
+        return Ok(text);
+    }
+    normalized.push_str(text.get(copied..).ok_or(())?);
+    Ok(normalized)
+}
+
 fn read_input(raw: &str) -> Result<Vec<u8>, InputError> {
     let Some(path) = raw.strip_prefix("file://") else {
         return Ok(raw.as_bytes().to_vec());
@@ -347,6 +394,27 @@ mod tests {
         assert!(raw_value(raw).is_err());
         let shallow: &serde_json::value::RawValue = serde_json::from_str("[[0]]").unwrap();
         assert!(raw_value(shallow).is_ok());
+    }
+
+    #[test]
+    fn unpaired_surrogates_and_invalid_utf8_become_replacement_characters() {
+        let args = matches(&["toy"]);
+        let parsed = parse(
+            &descriptor(),
+            &args,
+            Some(r#"{"Name":"a\ud800b\udc00c"}"#),
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed.value.name, "a\u{fffd}b\u{fffd}c");
+        let dir = std::env::temp_dir().join(format!("greennode-input-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("input.json");
+        std::fs::write(&path, b"{\"Name\":\"a\xffb\\ud800\"}").unwrap();
+        let raw = format!("file://{}", path.display());
+        let parsed = parse(&descriptor(), &args, Some(&raw), None).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(parsed.value.name, "a\u{fffd}b\u{fffd}");
     }
 
     #[test]

@@ -72,6 +72,20 @@ async fn quote_redacts_dotted_i_client_secret_marker() {
 }
 
 #[tokio::test]
+async fn quote_redacts_superscript_client_secret_marker() {
+    let server = Server::start(vec![response(
+        OK,
+        r#"{"optimumPrice":10,"propertiesPrice":[{"name":"CLIE²NT_SECRET","description":"plain"}]}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let output = client(&server)
+        .get_quote(&ctx, GetQuoteInput::new(RESOURCE_SERVER))
+        .await
+        .unwrap();
+    assert_eq!(output.properties[0].name, "[redacted]");
+}
+
+#[tokio::test]
 async fn quote_redacts_client_secret_marker_in_property_text() {
     let server = Server::start(vec![response(
         OK,

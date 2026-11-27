@@ -136,7 +136,7 @@ impl Redactor {
             return;
         }
         if let Some(forms) = &self.0
-            && !has_credential_key(text)
+            && !response::has_credential_marker(text)
             && let Some(spans) = spans(text, forms)
         {
             if spans.is_empty() {
@@ -195,29 +195,6 @@ fn go_escaped(value: &str) -> Option<String> {
         }
     }
     Some(output)
-}
-
-fn has_credential_key(value: &str) -> bool {
-    const KEY: &[u8] = b"clientsecret";
-    let mut matched = 0;
-    for ch in value
-        .chars()
-        .filter(|ch| ch.is_alphabetic() || ch.is_numeric())
-    {
-        let ch = ch.to_lowercase().next().unwrap_or(ch);
-        if matched == 9 && KEY.get(matched).is_some_and(|&next| ch != char::from(next)) {
-            matched = 1;
-        }
-        if KEY.get(matched).is_some_and(|&next| ch == char::from(next)) {
-            matched += 1;
-            if matched == KEY.len() {
-                return true;
-            }
-        } else {
-            matched = usize::from(ch == 'c');
-        }
-    }
-    false
 }
 
 fn fold(ch: char) -> char {
