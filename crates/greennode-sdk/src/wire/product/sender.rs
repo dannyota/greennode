@@ -464,11 +464,6 @@ async fn run_inner(
         if let Some(token) = &bearer {
             reflection.record_product_credential(&token.token.access_token);
         }
-        if let Some(check) = op.attempt_check
-            && let Some(error) = (check.0)(reflection)
-        {
-            return Err(Error::Provider(error));
-        }
         if let Some(credentials) = bearer
             .as_ref()
             .and_then(|value| value.signin_credentials.as_deref())
@@ -477,6 +472,12 @@ async fn run_inner(
             if route_inputs.reflects(credentials) {
                 return Err(Error::InvalidRequest);
             }
+        }
+        evidence.status = None;
+        if let Some(check) = op.attempt_check
+            && let Some(error) = (check.0)(reflection)
+        {
+            return Err(Error::Provider(error));
         }
         let mut url = request.url.clone();
         let mut visited = std::collections::HashSet::new();

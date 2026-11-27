@@ -231,6 +231,7 @@ async fn write_bearer_matching_a_cached_value_is_refused_before_the_write_is_sen
         message(&refused),
         "iam: iam.GetCallerIdentity: unsafe cached guard response"
     );
+    assert_eq!(refused.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 1);
 }
 
@@ -257,12 +258,20 @@ async fn write_that_used_no_cached_value_is_not_rechecked() {
 
 #[tokio::test]
 async fn create_user_on_a_warm_client_ignores_the_cache() {
+    let user =
+        String::from_utf8(include_bytes!("../../../tests/fixtures/iam/get_user.json").to_vec())
+            .unwrap()
+            .replace("vngcloud-probe-0000aaaa", "worker");
     let server = Server::start(vec![
         response(
             "200 OK",
             br#"{"userId":"usr-1","userType":"iam-user","username":"xtoy-pass-123x","accountId":7}"#,
         ),
-        response("201 Created", br#"{"id":"abc"}"#),
+        response(
+            "201 Created",
+            br#"{"id":"00000000-0000-4000-8000-000000000001"}"#,
+        ),
+        response("200 OK", user.as_bytes()),
     ]);
     let client = client(&server, "toy-bearer");
     let (ctx, _) = RequestContext::new();
@@ -272,9 +281,9 @@ async fn create_user_on_a_warm_client_ignores_the_cache() {
         .unwrap();
     let mut input = CreateUserInput::new("worker");
     input.password = Some(Secret::new("toy-pass-123"));
-    let _ = client.create_user(&ctx, input).await;
-    let heads = server.heads();
-    assert!(heads.len() >= 2 && heads[1].starts_with(b"POST "));
+    let created = client.create_user(&ctx, input).await.unwrap();
+    assert_eq!(created.user.username, "worker");
+    assert_eq!(server.requests(), 3);
 }
 
 #[tokio::test]
@@ -305,17 +314,97 @@ async fn lock_wait_is_bounded_by_the_request_context() {
     let client = client(&server, "toy-bearer");
     let (ctx, cancel) = RequestContext::new();
     let held = client.guard.caller.lock().await;
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut evidence = Evidence::new();
+    let wait = client.require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut evidence);
+    let cancel_after_first_poll = async {
+        tokio::task::yield_now().await;
         cancel.cancel();
-    });
-    let waited = tokio::time::timeout(
-        Duration::from_secs(2),
-        client.require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new()),
-    )
-    .await
-    .expect("lock wait ignored the context");
+    };
+    let (waited, ()) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(5), wait),
+        cancel_after_first_poll
+    );
+    let waited = waited.expect("lock wait ignored the context");
     drop(held);
     assert_eq!(waited.unwrap_err().write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn write_bearer_matching_a_cached_action_name_is_refused_before_the_write_is_sent() {
+    let server = Server::start(vec![response("200 OK", CATALOG), response("200 OK", b"{}")]);
+    let client = provider_client(&server, vec!["toy-first", "iam:createpolicy"]);
+    let (ctx, _) = RequestContext::new();
+    client
+        .guard_write_actions::<()>(&ctx, true, &mut Evidence::new())
+        .await
+        .unwrap();
+    let mut evidence = Evidence::new();
+    client
+        .guard_write_actions::<()>(&ctx, true, &mut evidence)
+        .await
+        .unwrap();
+    let refused = client
+        .write::<bool, ()>(&ctx, Api::Policies, &write_op(), &[], None, &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        message(&refused),
+        "iam: iam.ListActions: unsafe cached guard response"
+    );
+    assert_eq!(refused.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn bearer_refreshed_by_401_recovery_is_compared_before_the_resend() {
+    let server = Server::start(vec![
+        response("200 OK", CALLER),
+        response("401 Unauthorized", b"{}"),
+        response("200 OK", b"true"),
+    ]);
+    let client = provider_client(&server, vec!["toy-first", "toy-second", "usr-1"]);
+    let (ctx, _) = RequestContext::new();
+    client
+        .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut Evidence::new())
+        .await
+        .unwrap();
+    let mut evidence = Evidence::new();
+    client
+        .require_classified_caller::<()>(&ctx, "iam.DeleteGroup", &mut evidence)
+        .await
+        .unwrap();
+    let refused = client
+        .write::<bool, ()>(&ctx, Api::Policies, &write_op(), &[], None, &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        message(&refused),
+        "iam: iam.GetCallerIdentity: unsafe cached guard response"
+    );
+    assert!(
+        refused
+            .error()
+            .api_error()
+            .and_then(|api| api.status())
+            .is_none()
+    );
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn fresh_action_names_that_reflect_use_the_cached_response_text() {
+    let server = Server::start(vec![response("200 OK", CATALOG)]);
+    let client = client(&server, "toy-bearer");
+    let (ctx, _) = RequestContext::new();
+    let mut evidence = Evidence::new();
+    evidence.add_secret(&Secret::new("iam:createpolicy"));
+    let refused = client
+        .guard_write_actions::<()>(&ctx, true, &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        message(&refused),
+        "iam: iam.ListActions: unsafe cached guard response"
+    );
 }

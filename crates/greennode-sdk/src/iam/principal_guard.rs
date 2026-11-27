@@ -152,7 +152,12 @@ impl Client {
                     None,
                 )
             })?;
-        require_safe(&names, unsafe_text, evidence)?;
+        let derived_text = if sensitive {
+            "iam: iam.ListActions: unsafe cached guard response"
+        } else {
+            unsafe_text
+        };
+        require_safe(&names, derived_text, evidence)?;
         keep_actions_check(&names, evidence);
         slot.clone_from(&names);
         Ok(names)

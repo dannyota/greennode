@@ -213,6 +213,14 @@ Where Go itself refuses any lone case variant, as the network NAT family's
 field-name check does, refuse it too. A refused case variant is
 `InvalidResponse`.
 
+Guard values Go caches per client, the IAM caller identity and write-action
+names and the vNetwork endpoint zone, are cached per client and shared by its
+clones. Fill a cache only from a verified read, fetch it once under a lock
+bounded by the request context, and recheck a cached value against the
+operation's credentials at every send attempt, after that attempt's bearer and
+sign-in credentials are recorded. An operation that did not use a cached value
+never consults it.
+
 ### Signed S3
 
 `ObjectConfig` is independent of `Config`: explicit `ObjectCredentials` (two
