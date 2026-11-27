@@ -6,6 +6,7 @@ use zeroize::Zeroizing;
 
 const LITERAL: u8 = 1;
 const DECODED_LITERAL: u8 = 1 << 1;
+const MAX_COMPILED_BYTES: usize = 4 << 20;
 
 pub(in crate::wire::product) struct Patterns {
     folded: Automaton,
@@ -113,7 +114,7 @@ impl Patterns {
         let base64 = encoded_needles
             .iter()
             .map(|needle| (needle.value.as_bytes(), needle.flags));
-        let mut compiled_bytes = 4 << 20;
+        let mut compiled_bytes = MAX_COMPILED_BYTES;
         let mut compile_work = 32 << 20;
         Some(Self {
             folded: Automaton::build(literal.chain(hex), &mut compiled_bytes, &mut compile_work)?,
@@ -198,5 +199,18 @@ impl Patterns {
             }
         }
         Some(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compiler_refuses_when_automaton_storage_exceeds_four_mib() {
+        let small = crate::Secret::new("x".repeat(8 << 10));
+        let large = crate::Secret::new("x".repeat(64 << 10));
+        assert!(Patterns::compile(&[small]).is_some());
+        assert!(Patterns::compile(&[large]).is_none());
     }
 }

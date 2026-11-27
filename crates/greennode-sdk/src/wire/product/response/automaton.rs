@@ -40,13 +40,20 @@ impl Automaton {
         bytes: &mut usize,
         work: &mut usize,
     ) -> Option<Self> {
-        let capacity = patterns.clone().try_fold(1usize, |total, (value, _)| {
-            charge(bytes, value.len())?;
-            total.checked_add(value.len())
-        })?;
+        let capacity = patterns
+            .clone()
+            .try_fold(1usize, |total, (value, _)| total.checked_add(value.len()))?;
+        charge(bytes, size_of::<[u32; 256]>())?;
+        charge(bytes, capacity.checked_mul(size_of::<Node>())?)?;
+        let mut nodes = Vec::new();
+        nodes.try_reserve_exact(capacity).ok()?;
+        charge(
+            bytes,
+            (nodes.capacity() - capacity).checked_mul(size_of::<Node>())?,
+        )?;
         let mut matcher = Self {
             roots: Zeroizing::new([0; 256]),
-            nodes: Zeroizing::new(Vec::with_capacity(capacity)),
+            nodes: Zeroizing::new(nodes),
         };
         matcher.nodes.push(Node::default());
         for (pattern, flags) in patterns {
@@ -75,7 +82,7 @@ impl Automaton {
             terminal.length = u32::try_from(pattern.len()).ok()?;
             terminal.flags |= flags;
         }
-        matcher.link_suffixes(work)?;
+        matcher.link_suffixes(bytes, work)?;
         Some(matcher)
     }
 
@@ -101,13 +108,16 @@ impl Automaton {
         Some(0)
     }
 
-    fn link_suffixes(&mut self, work: &mut usize) -> Option<()> {
-        let mut queue: VecDeque<_> = self
-            .roots
-            .iter()
-            .copied()
-            .filter(|node| *node != 0)
-            .collect();
+    fn link_suffixes(&mut self, bytes: &mut usize, work: &mut usize) -> Option<()> {
+        let capacity = self.nodes.len() - 1;
+        charge(bytes, capacity.checked_mul(size_of::<u32>())?)?;
+        let mut queue = VecDeque::new();
+        queue.try_reserve_exact(capacity).ok()?;
+        charge(
+            bytes,
+            (queue.capacity() - capacity).checked_mul(size_of::<u32>())?,
+        )?;
+        queue.extend(self.roots.iter().copied().filter(|node| *node != 0));
         while let Some(parent) = queue.pop_front() {
             let mut child = self.nodes[parent as usize].child;
             let failure = self.nodes[parent as usize].failure;
@@ -171,10 +181,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn storage_budget_covers_reserved_nodes_root_transitions_and_suffix_queue() {
+        let pattern = b"abcd".as_slice();
+        let node_capacity = pattern.len() + 1;
+        let root_bytes = size_of::<[u32; 256]>();
+        let node_bytes = node_capacity * size_of::<Node>();
+        let queue_bytes = pattern.len() * size_of::<u32>();
+        let total = root_bytes + node_bytes + queue_bytes;
+        assert!(Automaton::build([(pattern, 1)].into_iter(), &mut (total - 1), &mut 128).is_none());
+        let mut budget = total;
+        let matcher = Automaton::build([(pattern, 1)].into_iter(), &mut budget, &mut 128).unwrap();
+        assert_eq!(matcher.nodes.capacity(), node_capacity);
+        assert_eq!(budget, 0);
+    }
+
+    #[test]
     fn overlapping_matches_keep_suffix_candidates_and_follow_fallbacks() {
         let patterns = [(b"she".as_slice(), 1), (b"he", 2), (b"hers", 4)];
         let mut work = 128;
-        let matcher = Automaton::build(patterns.into_iter(), &mut 64, &mut work).unwrap();
+        let matcher = Automaton::build(patterns.into_iter(), &mut (4 << 10), &mut work).unwrap();
         let state = b"she".iter().fold(0, |state, byte| {
             matcher.advance(state, *byte, &mut work).unwrap()
         });

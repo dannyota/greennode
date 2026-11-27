@@ -1,11 +1,6 @@
 use super::SentCredentials;
-use crate::Secret;
 use url::Url;
 
-pub(super) fn contains_secret(data: &[u8], secret: &Secret) -> bool {
-    let value = secret.expose_secret().as_bytes();
-    !value.is_empty() && data.windows(value.len()).any(|part| part == value)
-}
 fn hex(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -14,9 +9,9 @@ fn hex(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-fn contains_in_component(component: &str, prior: &SentCredentials, pending: &[&Secret]) -> bool {
+fn contains_in_component(component: &str, credentials: &SentCredentials) -> bool {
     let raw = component.as_bytes();
-    if prior.reflects(raw) || pending.iter().any(|secret| contains_secret(raw, secret)) {
+    if credentials.reflects(raw) {
         return true;
     }
     let mut decoded = zeroize::Zeroizing::new(Vec::with_capacity(raw.len()));
@@ -35,20 +30,13 @@ fn contains_in_component(component: &str, prior: &SentCredentials, pending: &[&S
             cursor += 1;
         }
     }
-    prior.reflects(&decoded)
-        || pending
-            .iter()
-            .any(|secret| contains_secret(&decoded, secret))
+    credentials.reflects(&decoded)
 }
-pub(super) fn uri_contains_credential(
-    url: &Url,
-    prior: &SentCredentials,
-    pending: &[&Secret],
-) -> bool {
-    contains_in_component(url.path(), prior, pending)
+pub(super) fn uri_contains_credential(url: &Url, credentials: &SentCredentials) -> bool {
+    contains_in_component(url.path(), credentials)
         || url
             .query()
-            .is_some_and(|query| contains_in_component(query, prior, pending))
+            .is_some_and(|query| contains_in_component(query, credentials))
 }
 pub(in crate::wire::product) fn uri_reflects_credential_forms(
     url: &Url,

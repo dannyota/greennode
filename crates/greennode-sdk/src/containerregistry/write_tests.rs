@@ -255,7 +255,16 @@ async fn user_preflight_rejects_reflection_of_bearer_from_permission_read() {
 
 #[tokio::test]
 async fn create_user_rechecks_policy_and_repository_ids_against_write_bearer() {
-    for (policy, repository) in [("pre6A6B6Cpost", "repo-1"), ("policy-1", "pre6A6B6Cpost")] {
+    let header_id = format!(
+        "pre{}post",
+        data_encoding::BASE64URL_NOPAD.encode(b"Bearer jkl")
+    );
+    for (policy, repository) in [
+        ("pre6A6B6Cpost", "repo-1"),
+        ("policy-1", "pre6A6B6Cpost"),
+        (header_id.as_str(), "repo-1"),
+        ("policy-1", header_id.as_str()),
+    ] {
         let server = Server::start(vec![
             response(
                 "200 OK",

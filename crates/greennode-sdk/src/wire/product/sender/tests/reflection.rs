@@ -96,6 +96,59 @@ async fn typed_key_header_is_attached_and_recorded() {
 }
 
 #[tokio::test]
+async fn write_route_and_body_cannot_reflect_the_full_credential_header() {
+    let encoded_header = format!(
+        "pre{}post",
+        data_encoding::BASE64URL_NOPAD.encode(b"Bearer jkl")
+    );
+    for in_route in [true, false] {
+        let server = Server::start(vec![response("200 OK", &[])]);
+        let clients = client(&server);
+        let (ctx, clock, deadline) = ctx();
+        let sleeper = Immediate::default();
+        let mut req = request(&server.origin);
+        req.credentials.push(CredentialHeader {
+            name: http::header::AUTHORIZATION,
+            value: Secret::new("jkl"),
+            bearer: true,
+        });
+        let route = [encoded_header.as_str()];
+        let mut inputs = RouteInputs::default();
+        if in_route {
+            req.url = req.url.join(&encoded_header).unwrap();
+            inputs.path = &route;
+        } else {
+            req.body = Bytes::from(serde_json::json!({"value": &encoded_header}).to_string());
+        }
+        let write = Operation {
+            class: redirect::Classification::Write,
+            ..operation(Method::POST, redirect::Retry::Once)
+        };
+        let failure = super::super::run(
+            Runtime {
+                configured_credentials: None,
+                client: &clients,
+                ctx: &ctx,
+                clock: &clock,
+                deadline,
+                sleeper: &sleeper,
+                jitter: &mut || 0,
+            },
+            &write,
+            Auth::Key,
+            &req,
+            inputs,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(failure.error, Error::Provider(_)));
+        assert_eq!(failure.dispatch, crate::WriteDispatch::NotSent);
+        assert_eq!(server.requests(), 0);
+    }
+}
+
+#[tokio::test]
 async fn plain_headers_reject_credentials() {
     for name in ["authorization", "x-api-key"] {
         let server = Server::start(vec![response("200 OK", &[])]);

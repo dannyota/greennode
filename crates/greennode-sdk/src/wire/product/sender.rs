@@ -12,8 +12,8 @@ use tokio::time::Instant;
 use url::Url;
 
 mod uri;
+use uri::uri_contains_credential;
 pub(super) use uri::uri_reflects_credential_forms;
-use uri::{contains_secret, uri_contains_credential};
 
 pub(crate) struct BearerToken {
     pub(crate) token: Token,
@@ -123,6 +123,39 @@ fn credential_value(secret: &Secret, bearer: bool) -> Result<http::HeaderValue, 
     let mut header = http::HeaderValue::from_str(&text).map_err(|_| Error::InvalidRequest)?;
     header.set_sensitive(true);
     Ok(header)
+}
+
+fn attempt_headers(
+    request: &Request,
+    bearer: Option<&BearerToken>,
+) -> Result<(HeaderMap, SentCredentials), Error> {
+    let mut headers = request.headers.clone();
+    let mut credentials = SentCredentials::default();
+    let declared = request.credentials.iter().map(|credential| {
+        (
+            credential.name.clone(),
+            &credential.value,
+            credential.bearer,
+        )
+    });
+    let authorization = bearer.map(|bearer| {
+        (
+            http::header::AUTHORIZATION,
+            &bearer.token.access_token,
+            true,
+        )
+    });
+    for (name, secret, bearer) in declared.chain(authorization) {
+        if headers.contains_key(&name) {
+            return Err(Error::InvalidRequest);
+        }
+        let value = credential_value(secret, bearer)?;
+        let wire = std::str::from_utf8(value.as_bytes()).map_err(|_| Error::InvalidRequest)?;
+        credentials.record_product_credential(secret);
+        credentials.record(&Secret::new(wire));
+        headers.insert(name, value);
+    }
+    Ok((headers, credentials))
 }
 
 pub(crate) struct Response {
@@ -404,7 +437,6 @@ async fn run_inner(
         })
         || (matches!(auth, Auth::None) && !request.credentials.is_empty())
         || (matches!(auth, Auth::Key) && request.credentials.is_empty())
-        || route_inputs.reflects(&reflection.transport_only())
     {
         return Err(Error::InvalidRequest);
     }
@@ -434,15 +466,40 @@ async fn run_inner(
         {
             reflection.extend(credentials);
             sent.extend(credentials);
-            if route_inputs.reflects(credentials) {
-                return Err(Error::InvalidRequest);
-            }
         }
         evidence.status = None;
+        let (headers, header_credentials) = attempt_headers(request, bearer.as_ref())?;
+        let mut outgoing_credentials = sent.clone();
+        outgoing_credentials.extend(&header_credentials);
+        reflection.extend(&header_credentials);
+        let mut credentials = reflection.clone();
+        credentials.extend(&outgoing_credentials);
         if let Some(check) = op.attempt_check
-            && let Some(error) = (check.0)(reflection)
+            && let Some(error) = (check.0)(&credentials)
         {
             return Err(Error::Provider(error));
+        }
+        if request.headers.iter().any(|(name, value)| {
+            let fixed_json = (name == http::header::ACCEPT || name == http::header::CONTENT_TYPE)
+                && value.as_bytes() == b"application/json";
+            let fixed_html = matches!(auth, Auth::None)
+                && name == http::header::ACCEPT
+                && value.as_bytes() == b"text/html";
+            !(fixed_json || fixed_html)
+                && (std::str::from_utf8(value.as_bytes()).is_ok_and(|text| {
+                    super::response::reflects_credential_forms(text, &credentials)
+                }) || credentials.reflects(value.as_bytes()))
+        }) || uri_contains_credential(&request.url, &outgoing_credentials)
+        {
+            return Err(Error::InvalidRequest);
+        }
+        let transport = credentials.transport_only();
+        if route_inputs.reflects(&transport)
+            || super::evidence::body_reflects(&request.body, &transport, route_inputs.password_slot)
+        {
+            return Err(Error::Provider(Box::new(crate::Error::new(
+                crate::ErrorClass::InvalidInput,
+            ))));
         }
         let mut url = request.url.clone();
         let mut visited = std::collections::HashSet::new();
@@ -450,95 +507,24 @@ async fn run_inner(
         let mut hops = 0usize;
         loop {
             evidence.status = None;
-            let mut headers = request.headers.clone();
-            let mut pending = Vec::new();
-            for credential in &request.credentials {
-                if headers.contains_key(&credential.name) {
-                    return Err(Error::InvalidRequest);
-                }
-                let value = credential_value(&credential.value, credential.bearer)?;
-                headers.insert(credential.name.clone(), value);
-                pending.push(&credential.value);
-            }
-            if let Some(token) = &bearer {
-                if headers.contains_key(http::header::AUTHORIZATION) {
-                    return Err(Error::InvalidRequest);
-                }
-                let secret = &token.token.access_token;
-                headers.insert(http::header::AUTHORIZATION, credential_value(secret, true)?);
-                pending.push(secret);
-            }
-            if request.headers.iter().any(|(name, value)| {
-                let fixed_json = (name == http::header::ACCEPT
-                    || name == http::header::CONTENT_TYPE)
-                    && value.as_bytes() == b"application/json";
-                let fixed_html = matches!(auth, Auth::None)
-                    && name == http::header::ACCEPT
-                    && value.as_bytes() == b"text/html";
-                !(fixed_json || fixed_html)
-                    && (std::str::from_utf8(value.as_bytes()).is_ok_and(|text| {
-                        super::response::reflects_credential_forms(text, reflection)
-                            || super::response::reflects_credential_forms(text, sent)
-                    }) || reflection.reflects(value.as_bytes())
-                        || sent.reflects(value.as_bytes())
-                        || pending
-                            .iter()
-                            .any(|secret| contains_secret(value.as_bytes(), secret)))
-            }) {
-                return Err(Error::InvalidRequest);
-            }
-            if hops == 0 && uri_contains_credential(&url, sent, &pending) {
-                return Err(Error::InvalidRequest);
-            }
-            let mut credentials = reflection.transport_only();
-            credentials.extend(sent);
-            for secret in &pending {
-                credentials.record(secret);
-            }
-            let reflected_route = route_inputs.reflects(&credentials);
-            if reflected_route {
-                reflection.extend(&credentials);
-            }
-            if reflected_route
-                || super::evidence::body_reflects(
-                    &request.body,
-                    &credentials,
-                    route_inputs.password_slot,
-                )
-            {
-                return Err(Error::Provider(Box::new(crate::Error::new(
-                    crate::ErrorClass::InvalidInput,
-                ))));
-            }
             if let Some(pacing) = op.pacing {
                 bounded(&ctx, clock, || pacing.before_send(&ctx, clock))
                     .await?
                     .map_err(Error::Context)?;
-            }
-            for secret in pending {
-                sent.record_product_credential(secret);
             }
             let mut outgoing = http::Request::builder()
                 .method(op.method.clone())
                 .uri(url.as_str())
                 .body(http_body_util::Full::new(request.body.clone()))
                 .map_err(|_| Error::InvalidRequest)?;
-            *outgoing.headers_mut() = headers;
-            for value in outgoing
-                .headers()
-                .values()
-                .filter(|value| value.is_sensitive())
-            {
-                sent.record(&Secret::new(
-                    std::str::from_utf8(value.as_bytes()).map_err(|_| Error::InvalidRequest)?,
-                ));
-            }
+            *outgoing.headers_mut() = headers.clone();
             let mut observed = send::Evidence::default();
             #[cfg(test)]
             if matches!(op.class, redirect::Classification::Write) {
                 observed.attempt_counter = Some(sleeper);
             }
             let result = bounded(&ctx, clock, || {
+                sent.extend(&header_credentials);
                 if let Some(slot) = route_inputs.password_slot {
                     super::exit::observe_operation_password(slot);
                 }
@@ -635,7 +621,6 @@ async fn run_inner(
                                 return Err(Error::Redirect(refusal));
                             }
                         };
-                        credentials.extend(reflection);
                         let reflected = match auth {
                             Auth::Bearer(_) => {
                                 super::response::reflects_credential(location, &credentials)
@@ -657,7 +642,7 @@ async fn run_inner(
                         if reflected
                             || reflected_path
                             || reflected_query
-                            || uri_contains_credential(&next, &credentials, &[])
+                            || uri_contains_credential(&next, &credentials)
                         {
                             return Err(Error::Redirect(redirect::Refusal::Invalid));
                         }

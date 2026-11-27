@@ -343,11 +343,18 @@ mod tests {
 
     #[test]
     fn bounded_output_scan_refuses_an_adversarial_prefix_run() {
-        let credentials =
-            SentCredentials::for_test(vec![crate::Secret::new(format!("{}b", "a".repeat(512)))]);
+        let credentials = super::super::budget_test_credentials();
         let mut output = vec![b'a'; 1 << 16];
         output[0] = b'!';
-        let matcher = BodyMatcher::with_work(&credentials, output.len());
+        let budget = 8 * output.len();
+        let clean = vec![b'!'; output.len()];
+        let matcher = BodyMatcher::with_work(&credentials, budget);
+        assert!(!matcher.reflects(&clean, false));
+        assert!(matcher.remaining() > 0);
+        let matcher = BodyMatcher::with_work(&credentials, budget);
         assert!(matcher.reflects(&output, false));
+        assert_eq!(matcher.remaining(), 0);
+        let matcher = BodyMatcher::with_work(&credentials, 64 * output.len());
+        assert!(!matcher.reflects(&output, false));
     }
 }

@@ -32,7 +32,9 @@ fn refuse_if(
 ) -> impl Fn(&SentCredentials) -> Option<Box<crate::Error>> + Sync {
     move |credentials| {
         credentials
-            .reflects(secret.as_bytes())
+            .values()
+            .iter()
+            .any(|value| value.expose_secret() == secret)
             .then(|| Box::new(crate::Error::new(crate::ErrorClass::Api)))
     }
 }
@@ -80,7 +82,7 @@ async fn bearer_refreshed_after_a_401_is_compared_without_the_401_status() {
     let (ctx, clock, deadline) = ctx();
     let sleeper = Immediate::default();
     let source = Provider::default();
-    let check = refuse_if("toy-next");
+    let check = refuse_if("Bearer toy-next");
     let failure = run!(
         &client(&server),
         &ctx,
