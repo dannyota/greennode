@@ -296,7 +296,7 @@ impl Attempt {
         credentials: &crate::wire::product::evidence::SentCredentials,
     ) {
         if !self.evidence.absorb_bounded(credentials, CREDENTIAL_LIMIT) {
-            self.evidence.withhold_partial();
+            self.evidence.mark_discarded_credentials();
         }
         if !self.evidence.can_retain_partial() {
             self.order_id.clear();
@@ -636,6 +636,14 @@ pub(super) fn result<T: Screen>(
         )),
     }
 }
+pub(super) fn quota_error(error: Error, evidence: &Evidence) -> Error {
+    if evidence.can_retain_partial() {
+        screen_details(error, evidence)
+    } else {
+        without_quota_evidence(error)
+    }
+}
+
 pub(super) fn without_quota_evidence(error: Error) -> Error {
     error
         .without_metadata()

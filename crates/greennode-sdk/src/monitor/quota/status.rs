@@ -25,7 +25,8 @@ pub enum ErrorDetail {
     QuotaChanged,
     /// The provider returned a status without known quota semantics.
     UnexpectedStatus,
-    #[allow(missing_docs)]
+    /// The SDK withheld the partial result and peer metadata. Check
+    /// [`crate::Failure::write_dispatch`] for whether a write may have been sent.
     QuotaEvidenceIncomplete,
 }
 

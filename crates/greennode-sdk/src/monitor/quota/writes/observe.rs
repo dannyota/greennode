@@ -104,6 +104,9 @@ impl Client {
             }
             return Ok(None);
         };
+        if !attempt.evidence.can_retain_partial() {
+            return Err(without_quota_evidence(Error::new(ErrorClass::Api)));
+        }
         if !ready(&attempt.goal, &fresh) {
             return Ok(None);
         }

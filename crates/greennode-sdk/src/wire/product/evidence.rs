@@ -17,6 +17,8 @@ pub(crate) struct SentCredentials {
     sources: Vec<Source>,
     numeric_product_credential: bool,
     incomplete_signin: bool,
+    discarded_credentials: bool,
+    observed_product_credential: bool,
 }
 impl SentCredentials {
     #[cfg(test)]
@@ -76,10 +78,13 @@ impl SentCredentials {
             sources,
             numeric_product_credential: self.numeric_product_credential,
             incomplete_signin: self.incomplete_signin,
+            discarded_credentials: self.discarded_credentials,
+            observed_product_credential: self.observed_product_credential,
         }
     }
 
     pub(super) fn record_product_credential(&mut self, secret: &Secret) {
+        self.observed_product_credential = true;
         static NUMBER: LazyLock<Result<regex_lite::Regex, regex_lite::Error>> =
             LazyLock::new(|| {
                 regex_lite::Regex::new(r"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$")
@@ -105,6 +110,8 @@ impl SentCredentials {
 
     fn extend_bounded(&mut self, credentials: &Self, limit: usize) -> bool {
         self.incomplete_signin |= credentials.incomplete_signin;
+        self.discarded_credentials |= credentials.discarded_credentials;
+        self.observed_product_credential |= credentials.observed_product_credential;
         self.numeric_product_credential |= credentials.numeric_product_credential;
         let mut complete = true;
         for (secret, source) in credentials
@@ -221,8 +228,21 @@ impl Evidence {
         self.credentials.extend_bounded(credentials, limit)
     }
 
-    pub(crate) fn withhold_partial(&mut self) {
-        self.credentials.mark_incomplete_signin();
+    pub(crate) fn mark_discarded_credentials(&mut self) {
+        self.credentials.discarded_credentials = true;
+    }
+
+    pub(crate) fn for_first_login_preflight(&self) -> Option<Self> {
+        let credentials = &self.credentials;
+        if !credentials.incomplete_signin
+            || credentials.discarded_credentials
+            || credentials.observed_product_credential
+        {
+            return None;
+        }
+        let mut credentials = credentials.clone();
+        credentials.incomplete_signin = false;
+        Some(Self { credentials })
     }
 
     pub(crate) fn transport_only(&self) -> Self {
@@ -244,7 +264,7 @@ impl Evidence {
     }
 
     pub(crate) fn can_retain_partial(&self) -> bool {
-        !self.credentials.has_incomplete_signin()
+        !self.credentials.has_incomplete_signin() && !self.credentials.discarded_credentials
     }
 
     #[allow(dead_code)]

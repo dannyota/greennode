@@ -40,7 +40,7 @@ impl CredentialsProvider for SwitchBearer {
 }
 
 #[tokio::test]
-async fn quota_ledger_caps_credentials_and_settles_without_retained_order_data() {
+async fn exhausted_notification_ledger_cannot_confirm_or_start_another_purchase() {
     let body =
         include_bytes!("../../../../../tests/fixtures/monitor/notification_quota_email.json");
     let response = || Response::Http {
@@ -48,7 +48,15 @@ async fn quota_ledger_caps_credentials_and_settles_without_retained_order_data()
         headers: vec![("Content-Length".into(), body.len().to_string())],
         body: body.to_vec(),
     };
-    let server = Server::start(vec![response(), response()]);
+    let server = Server::start(vec![
+        response(),
+        response(),
+        Response::Http {
+            status: "404 Not Found".into(),
+            headers: vec![("Content-Length".into(), "0".into())],
+            body: Vec::new(),
+        },
+    ]);
     let options = ConfigOptions::default()
         .with_region("hcm-3".into())
         .with_credentials_provider(Arc::new(SwitchBearer(
@@ -89,14 +97,18 @@ async fn quota_ledger_caps_credentials_and_settles_without_retained_order_data()
         assert_eq!(retained.evidence.credentials().values().len(), 256);
         assert!(retained.order_id.is_empty());
     }
-    let settled = client
-        .create_notification_quota(&ctx, input)
-        .await
-        .unwrap_err();
-    assert!(settled.partial().is_none());
-    assert!(settled.error().api_error().is_none());
-    assert!(client.quota_ledger.get(Kind::Email).unwrap().is_none());
-    assert_eq!(server.requests(), 2);
+    for _ in 0..2 {
+        let failure = client
+            .create_notification_quota(&ctx, input.clone())
+            .await
+            .unwrap_err();
+        assert!(failure.error().has_class(ErrorClass::NotSettled));
+        assert!(failure.partial().is_none());
+        assert!(failure.error().api_error().is_none());
+        assert!(client.quota_ledger.get(Kind::Email).unwrap().is_some());
+    }
+    assert_eq!(server.requests(), 3);
+    assert!(server.heads().iter().all(|head| head.starts_with(b"GET ")));
 }
 
 #[tokio::test]
@@ -247,4 +259,54 @@ async fn quota_detail_lookup_refuses_if_its_final_bearer_exceeds_the_limit() {
         failure.error().detail::<ErrorDetail>(),
         Some(&ErrorDetail::QuotaEvidenceIncomplete)
     );
+}
+
+#[tokio::test]
+async fn exhausted_delete_with_changed_identity_has_no_partial_after_exact_absence() {
+    use super::super::super::status::decode_quota;
+    const CURRENT: &str =
+        include_str!("../../../../../tests/fixtures/monitor/synthetic_quote_renewal.json");
+    let raw = RawValue::from_string(CURRENT.into()).unwrap();
+    let before = Snapshot {
+        quota: decode_quota(&raw).unwrap().to_model(),
+        details: None,
+    };
+    let body = include_bytes!("../../../../../tests/fixtures/monitor/synthetic_quote_absent.json");
+    let server = Server::start(vec![Response::Http {
+        status: "404 Not Found".into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body: body.to_vec(),
+    }]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_static_token(Secret::new("fixture-retained-0"));
+    let config = Config::new(with_write_loopback(Product::Monitor, options, &server)).unwrap();
+    let client = Client::new(&config);
+    let mut evidence = Evidence::new();
+    evidence.absorb(&SentCredentials::for_test(
+        (0..257)
+            .map(|index| Secret::new(format!("fixture-retained-{index}")))
+            .collect(),
+    ));
+    let attempt = Attempt::new(
+        "monitor.DeleteSyntheticQuota",
+        Kind::Synthetic,
+        Goal::Delete { before },
+        evidence,
+    );
+    client.quota_ledger.put(&attempt).unwrap();
+    let (ctx, _) = RequestContext::new();
+    let input = crate::monitor::DeleteSyntheticQuotaInput::new("different-quota");
+    let failure = client
+        .delete_synthetic_quota(&ctx, input)
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::InvalidInput));
+    assert!(failure.partial().is_none());
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::QuotaEvidenceIncomplete)
+    );
+    assert_eq!(server.requests(), 1);
+    assert!(client.quota_ledger.get(Kind::Synthetic).unwrap().is_none());
 }

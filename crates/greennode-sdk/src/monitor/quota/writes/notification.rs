@@ -5,7 +5,8 @@ use super::super::wire::Reader;
 use super::lifecycle::changed_intent;
 use super::state::{
     Attempt, Goal, Kind, NOTIFICATION_REDIRECT, ORDER_BOUND, Observation, SendState, decode_order,
-    invalid, mutation, order_display, price_guard, result, screen_quota, unsettled, validate_cap,
+    invalid, mutation, order_display, price_guard, quota_error, result, screen_quota, unsettled,
+    validate_cap,
 };
 use crate::monitor::mutation::not_sent;
 use crate::monitor::{Client, CreateNotificationQuotaInput, Quota};
@@ -51,11 +52,18 @@ impl Client {
             let pending = self.reconcile_quota(ctx, &mut attempt, CREATE, bound).await;
             return match pending {
                 Ok(quota) if matched => notification_result(&attempt, quota, Ok(()), false),
-                Ok(_) => Err(not_sent(changed_intent(CREATE))),
+                Ok(_) => Err(not_sent(quota_error(
+                    changed_intent(CREATE),
+                    &attempt.evidence,
+                ))),
                 Err(error) if matched => {
                     notification_result(&attempt, None, Err(error), attempt.payment_pending)
                 }
-                Err(error) => Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent)),
+                Err(error) => Err(Failure::new(
+                    quota_error(error, &attempt.evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )),
             };
         }
         let mut evidence = self

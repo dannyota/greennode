@@ -12,7 +12,7 @@ use super::super::notification::notification_kind;
 use super::super::{Screen, output};
 use super::state::{
     Attempt, Goal, Kind, Observation, SendState, Snapshot, field, invalid, mutation, price_guard,
-    result, screen_quota, unsettled, validate_cap, validate_profile,
+    quota_error, result, screen_quota, unsettled, validate_cap, validate_profile,
 };
 
 const DELETE_NOTIFY: &str = "monitor.DeleteNotificationQuota";
@@ -286,36 +286,29 @@ impl Client {
     ) -> Result<T, Failure<T>> {
         let mut evidence = Evidence::new();
         let initial = |error: Error| {
-            if input.op == DELETE_SYNTH {
-                if let Ok(Some(attempt)) = self.quota_ledger.get(input.kind) {
-                    let error = if !input.expected.is_empty()
-                        && PathIds::Strict.allows(input.expected)
-                        && input.expected != attempt.goal.id()
-                    {
-                        error.with_cause(changed_intent(input.op))
-                    } else {
-                        error
-                    };
-                    return lifecycle_result(
-                        project,
-                        LifecycleResult {
-                            stage: "sent".into(),
-                            ..Default::default()
-                        },
-                        Err(unsettled(input.op, Some(error))),
-                        WriteDispatch::MayHaveBeenSent,
-                        &attempt.evidence,
-                    );
-                }
+            if input.op == DELETE_SYNTH
+                && let Ok(Some(attempt)) = self.quota_ledger.get(input.kind)
+            {
+                let error = if !input.expected.is_empty()
+                    && PathIds::Strict.allows(input.expected)
+                    && input.expected != attempt.goal.id()
+                {
+                    error.with_cause(changed_intent(input.op))
+                } else {
+                    error
+                };
                 return lifecycle_result(
                     project,
-                    LifecycleResult::default(),
-                    Err(error),
-                    WriteDispatch::NotSent,
-                    &Evidence::new(),
+                    LifecycleResult {
+                        stage: "sent".into(),
+                        ..Default::default()
+                    },
+                    Err(unsettled(input.op, Some(error))),
+                    WriteDispatch::MayHaveBeenSent,
+                    &attempt.evidence,
                 );
             }
-            Err(not_sent(error))
+            lifecycle_not_sent(input.op, project, error, &Evidence::new())
         };
         if let Err(error) = validate_profile(self, input.op) {
             return initial(error);
@@ -358,10 +351,12 @@ impl Client {
                 Goal::SyntheticCreate { .. } | Goal::SyntheticChange { .. }
             );
             if mismatch && input.op != DELETE_SYNTH && !was_order {
-                return initial(invalid(
+                return lifecycle_not_sent(
                     input.op,
-                    "ExpectedQuotaID differs from intended quota",
-                ));
+                    project,
+                    invalid(input.op, "ExpectedQuotaID differs from intended quota"),
+                    &attempt.evidence,
+                );
             }
             let mut out = LifecycleResult::from_goal(&attempt.goal);
             let bound = attempt.goal.bound();
@@ -381,10 +376,14 @@ impl Client {
                         &attempt.evidence,
                     );
                 }
-                Ok(_) if mismatch && was_order && input.op != DELETE_SYNTH => {
-                    return initial(super::synthetic::changed(input.op));
+                Ok(_) => {
+                    let error = if mismatch && was_order && input.op != DELETE_SYNTH {
+                        super::synthetic::changed(input.op)
+                    } else {
+                        changed_intent(input.op)
+                    };
+                    return lifecycle_not_sent(input.op, project, error, &attempt.evidence);
                 }
-                Ok(_) => return initial(changed_intent(input.op)),
                 Err(error) if matched || input.op == DELETE_SYNTH => {
                     if !attempt.evidence.can_retain_partial() {
                         out.quota = None;
@@ -408,7 +407,11 @@ impl Client {
                     } else {
                         error
                     };
-                    return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
+                    return Err(Failure::new(
+                        quota_error(error, &attempt.evidence),
+                        None,
+                        WriteDispatch::MayHaveBeenSent,
+                    ));
                 }
             }
         }
@@ -658,6 +661,25 @@ fn prepared_error<T: Screen>(
     }
     Err(not_sent(error))
 }
+fn lifecycle_not_sent<T: Screen>(
+    op: &'static str,
+    project: fn(LifecycleResult) -> T,
+    error: Error,
+    evidence: &Evidence,
+) -> Result<T, Failure<T>> {
+    if op == DELETE_SYNTH {
+        lifecycle_result(
+            project,
+            LifecycleResult::default(),
+            Err(error),
+            WriteDispatch::NotSent,
+            evidence,
+        )
+    } else {
+        Err(not_sent(quota_error(error, evidence)))
+    }
+}
+
 fn lifecycle_result<T: Screen>(
     project: fn(LifecycleResult) -> T,
     mut out: LifecycleResult,
