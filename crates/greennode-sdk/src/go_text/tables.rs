@@ -62,3 +62,19 @@ pub(super) fn is_print(ch: char) -> bool {
         })
         .is_ok()
 }
+
+pub(super) fn ascii_lower(ch: char) -> Option<u8> {
+    static TABLE: OnceLock<Vec<(u32, u8)>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        rows(include_str!("lower_ascii.txt"))
+            .filter_map(|row| {
+                let (rune, lower) = row.split_once(' ')?;
+                Some((scalar(rune), u8::try_from(scalar(lower)).ok()?))
+            })
+            .collect()
+    });
+    table
+        .binary_search_by_key(&u32::from(ch), |&(rune, _)| rune)
+        .ok()
+        .map(|at| table[at].1)
+}

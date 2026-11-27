@@ -206,3 +206,33 @@ async fn unfinished_credential_observation_withholds_project_partial() {
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 5);
 }
+
+#[tokio::test]
+async fn retention_errors_screen_both_day_and_option_counts() {
+    use super::quota_writes::{DispatchBearer, with_dispatch_bearer};
+    let mut classes: serde_json::Value = serde_json::from_str(CLASSES).unwrap();
+    let retention = classes[0]["config"]["retentions"][0].clone();
+    classes[0]["config"]["retentions"] = serde_json::Value::Array(vec![retention; 17]);
+    for (days, catalog) in [(17, CLASSES.to_owned()), (0, classes.to_string())] {
+        let server = Server::start(vec![
+            response("200 OK", EMPTY),
+            response("200 OK", &catalog),
+        ]);
+        let client = with_dispatch_bearer(
+            &server,
+            std::sync::Arc::new(DispatchBearer::changing_at(1, "17")),
+        );
+        let (ctx, _) = RequestContext::new();
+        let mut input = CreateLogProjectInput::new("Logs");
+        input.retention_days = days;
+        let failure = client.create_log_project(&ctx, input).await.unwrap_err();
+        assert!(failure.error().has_class(ErrorClass::InvalidInput));
+        assert!(
+            failure
+                .error()
+                .detail::<String>()
+                .is_none_or(|message| !message.contains("17"))
+        );
+        assert_eq!(server.requests(), 2);
+    }
+}

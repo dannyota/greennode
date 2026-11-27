@@ -143,9 +143,9 @@ fn visit(evidence: &mut Evidence, value: &Value, sensitive: bool) -> Result<(), 
 }
 fn is_credential_key(key: &str) -> bool {
     let key: String = key
-        .to_ascii_lowercase()
         .chars()
         .filter(|ch| !matches!(ch, '-' | '_'))
+        .map(crate::go_text::ascii_lowercase_for_key)
         .collect();
     matches!(
         key.as_str(),

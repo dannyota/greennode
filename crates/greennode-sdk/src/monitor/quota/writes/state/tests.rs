@@ -12,7 +12,7 @@ use crate::{Config, ConfigOptions, CredentialsProvider, Secret, Token};
 
 use super::*;
 
-struct SwitchBearer(AtomicBool);
+struct SwitchBearer(AtomicBool, &'static str);
 impl CredentialsProvider for SwitchBearer {
     fn token<'a>(
         &'a self,
@@ -24,7 +24,7 @@ impl CredentialsProvider for SwitchBearer {
                 Secret::new(if was_used {
                     "fixture-retained-0"
                 } else {
-                    "fixture-unretained"
+                    self.1
                 }),
                 None,
             ))
@@ -51,7 +51,10 @@ async fn quota_ledger_caps_credentials_and_settles_without_retained_order_data()
     let server = Server::start(vec![response(), response()]);
     let options = ConfigOptions::default()
         .with_region("hcm-3".into())
-        .with_credentials_provider(Arc::new(SwitchBearer(AtomicBool::new(false))));
+        .with_credentials_provider(Arc::new(SwitchBearer(
+            AtomicBool::new(false),
+            "fixture-unretained",
+        )));
     let config = Config::new(with_write_loopback(Product::Monitor, options, &server)).unwrap();
     let client = Client::new(&config);
     let mut evidence = Evidence::new();
@@ -91,4 +94,58 @@ async fn quota_ledger_caps_credentials_and_settles_without_retained_order_data()
     assert!(settled.quota.is_none());
     assert!(client.quota_ledger.get(Kind::Email).unwrap().is_none());
     assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn over_budget_bearer_cannot_echo_retained_status_or_fixed_output() {
+    for (first, withhold) in [("200", false), ("unconfirmed", true)] {
+        let response = || Response::Http {
+            status: "403 Forbidden".into(),
+            headers: vec![("Content-Length".into(), "0".into())],
+            body: Vec::new(),
+        };
+        let server = Server::start(vec![response(), response()]);
+        let options = ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_credentials_provider(Arc::new(SwitchBearer(AtomicBool::new(false), first)));
+        let config = Config::new(with_write_loopback(Product::Monitor, options, &server)).unwrap();
+        let client = Client::new(&config);
+        let mut evidence = Evidence::new();
+        evidence.absorb(&SentCredentials::for_test(
+            (0..256)
+                .map(|index| Secret::new(format!("fixture-retained-{index}")))
+                .collect(),
+        ));
+        let mut attempt = Attempt::new(
+            "monitor.CreateSyntheticQuota",
+            Kind::Synthetic,
+            Goal::SyntheticCreate {
+                class_id: "class-1".into(),
+                package: "unit_1".into(),
+                quantity: 10,
+                location: 1,
+                sent_at: QuotaTimestamp(OffsetDateTime::UNIX_EPOCH),
+            },
+            evidence,
+        );
+        attempt.observed_status = 200;
+        client.quota_ledger.put(&attempt).unwrap();
+        let (ctx, _) = RequestContext::new();
+        let input = crate::monitor::CreateSyntheticQuotaInput::new("class-1", "unit_1", 10);
+        for _ in 0..2 {
+            let failure = client
+                .create_synthetic_quota(&ctx, input.clone())
+                .await
+                .unwrap_err();
+            assert!(failure.error().has_class(ErrorClass::NotSettled));
+            if withhold {
+                assert!(failure.partial().is_none());
+            } else {
+                let out = failure.partial().unwrap();
+                assert_eq!(out.outcome.sent, "yes");
+                assert!(out.outcome.error.as_ref().unwrap().status == ResponseField::Redacted);
+            }
+        }
+        assert_eq!(server.requests(), 2);
+    }
 }

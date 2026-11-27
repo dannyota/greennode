@@ -1,3 +1,7 @@
+mod metadata;
+
+pub(super) use metadata::RetainedRedaction;
+
 use std::{
     collections::BTreeMap,
     future::{Future, poll_fn},
@@ -268,6 +272,7 @@ pub(super) struct Attempt {
     pub(super) observed_status: u16,
     pub(super) evidence: Evidence,
     pub(super) credentials_exhausted: bool,
+    pub(super) retained_redaction: RetainedRedaction,
 }
 impl Attempt {
     pub(super) fn new(op: &'static str, kind: Kind, goal: Goal, evidence: Evidence) -> Self {
@@ -280,6 +285,7 @@ impl Attempt {
             observed_status: 0,
             evidence,
             credentials_exhausted: false,
+            retained_redaction: RetainedRedaction::default(),
         }
     }
     pub(super) fn sent(&self) -> &'static str {
@@ -293,7 +299,18 @@ impl Attempt {
         &mut self,
         credentials: &crate::wire::product::evidence::SentCredentials,
     ) {
-        self.credentials_exhausted |= !self.evidence.absorb_bounded(credentials, CREDENTIAL_LIMIT);
+        let mut dropped = Evidence::new();
+        if !self
+            .evidence
+            .absorb_bounded(credentials, CREDENTIAL_LIMIT, |secret| {
+                dropped.add_secret(secret)
+            })
+        {
+            self.credentials_exhausted = true;
+            if !self.retained_redaction.observe(&dropped) {
+                self.evidence.withhold_partial();
+            }
+        }
         if self.credentials_exhausted {
             self.order_id.clear();
         }
@@ -302,6 +319,7 @@ impl Attempt {
     pub(super) fn merge_retained(&mut self, retained: &Self) {
         let evidence = std::mem::take(&mut self.evidence);
         self.credentials_exhausted |= retained.credentials_exhausted;
+        self.retained_redaction.merge(&retained.retained_redaction);
         self.retain_credentials(retained.evidence.credentials());
         self.retain_credentials(evidence.credentials());
     }
@@ -316,6 +334,7 @@ impl Attempt {
             observed_status: self.observed_status,
             evidence: Evidence::new(),
             credentials_exhausted: self.credentials_exhausted,
+            retained_redaction: self.retained_redaction,
         };
         copy.retain_credentials(self.evidence.credentials());
         copy

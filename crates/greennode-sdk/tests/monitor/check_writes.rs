@@ -213,3 +213,21 @@ async fn check_privacy_scans_the_first_json_value_before_trailing_data() {
     assert!(result.is_err());
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn go_unicode_credential_key_folding_screens_check_metadata() {
+    let reflected = CHECK.replace("Probe", "fixture-probe-secret");
+    let server = Server::start(vec![response("201 Created", &reflected)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = greennode_sdk::monitor::CreateCheckInput::new(
+        "Probe",
+        "https://example.test",
+        vec!["loc-1".into()],
+    );
+    input
+        .headers
+        .insert("APİKEY".into(), "fixture-probe-secret".into());
+    let result = client(&server).create_check(&ctx, input).await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 1);
+}

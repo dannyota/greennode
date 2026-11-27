@@ -100,10 +100,15 @@ impl SentCredentials {
     }
 
     pub(crate) fn extend(&mut self, credentials: &Self) {
-        self.extend_bounded(credentials, usize::MAX);
+        self.extend_bounded(credentials, usize::MAX, |_| {});
     }
 
-    fn extend_bounded(&mut self, credentials: &Self, limit: usize) -> bool {
+    fn extend_bounded(
+        &mut self,
+        credentials: &Self,
+        limit: usize,
+        mut discard: impl FnMut(&Secret),
+    ) -> bool {
         self.incomplete_signin |= credentials.incomplete_signin;
         self.numeric_product_credential |= credentials.numeric_product_credential;
         let mut complete = true;
@@ -118,6 +123,7 @@ impl SentCredentials {
                     .iter()
                     .any(|known| known.expose_secret() == secret.expose_secret())
             {
+                discard(secret);
                 complete = false;
             } else {
                 self.record_from(secret, source);
@@ -217,8 +223,17 @@ impl Evidence {
         self.credentials.extend(credentials);
     }
 
-    pub(crate) fn absorb_bounded(&mut self, credentials: &SentCredentials, limit: usize) -> bool {
-        self.credentials.extend_bounded(credentials, limit)
+    pub(crate) fn absorb_bounded(
+        &mut self,
+        credentials: &SentCredentials,
+        limit: usize,
+        discard: impl FnMut(&Secret),
+    ) -> bool {
+        self.credentials.extend_bounded(credentials, limit, discard)
+    }
+
+    pub(crate) fn withhold_partial(&mut self) {
+        self.credentials.mark_incomplete_signin();
     }
 
     pub(crate) fn transport_only(&self) -> Self {

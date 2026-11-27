@@ -1,6 +1,6 @@
 use super::super::super::Screen;
 use super::super::super::output;
-use super::super::state::{Attempt, Goal, order_display, screen_quota};
+use super::super::state::{Attempt, Goal, RetainedRedaction, order_display, screen_quota};
 use super::super::synthetic_settlement::Action;
 use crate::monitor::{Quota, QuotaTimestamp, ResponseField};
 use crate::wire::product::evidence::Evidence;
@@ -160,6 +160,7 @@ pub(super) struct Draft {
     pub(super) sent: &'static str,
     pub(super) stage: &'static str,
     pub(super) status: u16,
+    retained_redaction: RetainedRedaction,
     pub(super) action: Action,
     pub(super) quota: Option<Quota>,
     pub(super) order_id: String,
@@ -173,6 +174,7 @@ impl Default for Draft {
             sent: "no",
             stage: "preflight",
             status: 0,
+            retained_redaction: RetainedRedaction::default(),
             action: Action::None,
             quota: None,
             order_id: String::new(),
@@ -186,7 +188,7 @@ impl Draft {
     pub(super) fn retained(attempt: &Attempt) -> Self {
         let (sent_at, action) = match &attempt.goal {
             Goal::SyntheticCreate { sent_at, .. } => (Some(*sent_at), Action::None),
-            Goal::SyntheticChange { action, .. } => (None, *action),
+            Goal::SyntheticChange { action, .. } if attempt.op == super::ENSURE => (None, *action),
             _ => (None, Action::None),
         };
         let previous = attempt
@@ -194,10 +196,15 @@ impl Draft {
             .before()
             .and_then(super::super::state::Snapshot::end)
             .map(QuotaTimestamp);
+        let (sent, status) = match attempt.goal {
+            Goal::RenewSetting { .. } => ("unknown", 0),
+            _ => (attempt.sent(), attempt.observed_status),
+        };
         Self {
-            sent: attempt.sent(),
+            sent,
             stage: "unconfirmed",
-            status: attempt.observed_status,
+            status,
+            retained_redaction: attempt.retained_redaction,
             action,
             quota: None,
             order_id: attempt.order_id.clone(),
@@ -218,7 +225,15 @@ impl Draft {
         let outcome = QuotaMutationOutcome {
             sent: self.sent.into(),
             stage: self.stage.into(),
-            error: error.map(|error| outcome_error(op, error, self.status)),
+            error: error.map(|error| {
+                let mut outcome = outcome_error(op, error, self.status);
+                if let ResponseField::Value(status) = outcome.status
+                    && self.retained_redaction.hides_status(status)
+                {
+                    outcome.status = ResponseField::Redacted;
+                }
+                outcome
+            }),
         };
         make(std::mem::take(self), outcome)
     }

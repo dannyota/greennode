@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func must(err error) {
@@ -88,6 +89,16 @@ func printable() []string {
 		if !p && start >= 0 {
 			rows = append(rows, fmt.Sprintf("%X %X", start, r-1))
 			start = -1
+		}
+	}
+	return rows
+}
+
+func lowerASCII() []string {
+	var rows []string
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if l := unicode.ToLower(r); l != r && l >= 'a' && l <= 'z' {
+			rows = append(rows, fmt.Sprintf("%X %X", r, l))
 		}
 	}
 	return rows
@@ -174,6 +185,7 @@ func main() {
 	write(filepath.Join(out, "entities.txt"), head+"\n# name codepoint [codepoint]", entities(dir))
 	write(filepath.Join(out, "replacements.txt"), head+"\n# html replacementTable for 0x80 to 0x9F", replacements(dir))
 	write(filepath.Join(out, "printable.txt"), head+"\n# strconv.IsPrint ranges, first last", printable())
+	write(filepath.Join(out, "lower_ascii.txt"), head+"\n# runes whose unicode.ToLower is an ASCII letter, rune ascii", lowerASCII())
 	corpora := []struct {
 		name   string
 		corpus []pair
