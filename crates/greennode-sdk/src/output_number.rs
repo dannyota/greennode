@@ -136,7 +136,7 @@ pub(crate) fn reflects(
 pub(crate) fn any_spelling(
     value: f64,
     include_sdk_json: bool,
-    reflects: impl Fn(&str) -> bool,
+    mut reflects: impl FnMut(&str) -> bool,
 ) -> bool {
     if !value.is_finite() {
         return true;

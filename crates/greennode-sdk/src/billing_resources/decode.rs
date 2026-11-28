@@ -1,11 +1,11 @@
 use crate::model::wire::JsonSource;
-use crate::model::wire::{Field, exact_integer, null_default};
+use crate::model::wire::{exact_integer, null_default};
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 
-use super::{RenewPeriod, ResourceList};
+use super::RenewPeriod;
 
 /// Prepaid resource renewal state and aggregate counts.
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -241,7 +241,7 @@ pub(super) fn envelope(raw: &RawValue) -> Result<&RawValue, ()> {
     Ok(envelope.data)
 }
 
-pub(super) fn list(data: &RawValue) -> Result<ResourceList, ()> {
+pub(super) fn list(data: &RawValue) -> Result<(ListResourcesOutput, Vec<RenewPeriod>), ()> {
     validate(data, &DATA)?;
     let fields: BTreeMap<String, &RawValue> = serde_json::from_str(data.get()).map_err(|_| ())?;
     let rows: Vec<&RawValue> =
@@ -266,10 +266,7 @@ pub(super) fn list(data: &RawValue) -> Result<ResourceList, ()> {
             })
         })
         .collect::<Result<_, ()>>()?;
-    Ok(ResourceList {
-        projection,
-        renew_periods,
-    })
+    Ok((projection, renew_periods))
 }
 
 pub(super) fn restore_raw_fields(
@@ -410,5 +407,12 @@ fn billing_elements<'de, D: Deserializer<'de>>(
 }
 
 fn integer<'de, D: Deserializer<'de>>(decoder: D) -> Result<Option<i64>, D::Error> {
-    Field::<Option<i64>>::deserialize(decoder).map(|field| field.0)
+    let raw = Box::<RawValue>::deserialize(decoder)?;
+    match raw.get() {
+        "null" => Ok(None),
+        "-0" => Ok(Some(0)),
+        value => serde_json::from_str(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }

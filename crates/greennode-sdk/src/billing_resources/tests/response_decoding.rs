@@ -108,3 +108,19 @@ async fn ignored_wire_numbers_are_screened_only_as_received() {
     let error = refusal(list(config.session(), &ctx, &mut evidence).await);
     invalid_at(&error, 200);
 }
+
+#[test]
+fn public_resource_integer_fields_support_owned_deserializers() {
+    let input = r#"{"channel":-0,"renewPeriod":9007199254740993,"dateLeft":null}"#;
+    let from_value: Result<Resource, _> =
+        serde_json::from_value(serde_json::from_str(input).unwrap());
+    let from_reader: Result<Resource, _> = serde_json::from_reader(input.as_bytes());
+    for resource in [from_value, from_reader] {
+        let resource = resource.unwrap();
+        assert_eq!(resource.channel, Some(0));
+        assert_eq!(resource.renew_period, Some(9_007_199_254_740_993));
+        assert!(resource.date_left.is_none());
+    }
+    assert!(serde_json::from_value::<Resource>(json!({"channel":1.5})).is_err());
+    assert!(serde_json::from_reader::<_, Resource>(br#"{"channel":1.0}"#.as_slice()).is_err());
+}

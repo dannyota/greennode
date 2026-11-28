@@ -61,7 +61,7 @@ fn sign_in_errors_screen_typed_reasons_and_statuses() {
     let screened = withheld_error(&op, iam, &evidence);
     let detail = screened.login_error().unwrap();
     assert!(!detail.reason().contains("synthetic-auth-reason"));
-    assert_eq!(detail.status(), None);
+    assert!(detail.status().is_none());
     assert!(detail.captcha_suspected());
 }
 
@@ -140,7 +140,7 @@ async fn get_401_refresh_failure_preserves_the_screened_service_account_detail()
     assert!(screened.http_status().is_none());
     let detail = screened.service_account_login_error().unwrap();
     assert!(!detail.reason().contains("synthetic-auth-reason"));
-    assert_eq!(detail.status(), None);
+    assert!(detail.status().is_none());
     assert_eq!(source.0.load(Ordering::SeqCst), 2);
     let heads = server.heads();
     assert_eq!(heads.len(), 1);
@@ -195,7 +195,147 @@ async fn failed_renewal_dial_preserves_empty_code_and_retry_hint() {
     );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
     let detail = failure.error().api_error().unwrap();
-    assert_eq!(detail.status(), None);
+    assert!(detail.status().is_none());
     assert!(detail.code().is_empty());
     assert!(detail.retryable());
+}
+
+#[tokio::test]
+async fn resource_rows_recheck_ignored_fields_against_a_later_account_bearer() {
+    for (ignored, reflected) in [("ordinary", false), (SECOND, true)] {
+        let body = json!({"code":200,"data":{"data":[{"ignored":ignored}]}}).to_string();
+        let server = Server::start(vec![
+            reply("200 OK", body),
+            reply("200 OK", r#"{"code":200,"data":{"accountId":123456}}"#),
+        ]);
+        let config = rotating_config(&server, [FIRST, SECOND]);
+        let (ctx, _) = RequestContext::new();
+        let mut evidence = Evidence::for_write();
+        let resources = list(config.session(), &ctx, &mut evidence).await.unwrap();
+        assert!(resources.rows(&evidence).is_ok());
+        account(config.session(), &ctx, &mut evidence)
+            .await
+            .unwrap();
+        assert!(evidence.text_reflects(SECOND));
+        if reflected {
+            let error = refusal(resources.rows(&evidence));
+            assert_no_echo(&error, &[SECOND]);
+        } else {
+            assert_eq!(resources.rows(&evidence).unwrap().count(), 1);
+        }
+        assert_eq!(server.requests(), 2);
+    }
+}
+
+#[tokio::test]
+async fn rendered_raw_number_matching_a_late_bearer_prevents_put() {
+    for (number, reflected) in [("7.8e1", true), ("7.9e1", false)] {
+        let body =
+            format!(r#"{{"code":200,"data":{{"data":[{{"status":{{"value":{number}}}}}]}}}}"#);
+        let acknowledgement =
+            r#"{"code":200,"data":{"successAll":true,"errorAutoRenewResources":[]}}"#;
+        let server = Server::start(vec![
+            reply("200 OK", body),
+            reply("200 OK", acknowledgement),
+        ]);
+        let config = rotating_config(&server, [FIRST, "x"]);
+        let (ctx, _) = RequestContext::new();
+        let mut evidence = Evidence::for_write();
+        let resources = list(config.session(), &ctx, &mut evidence).await.unwrap();
+        assert!(resources.rows(&evidence).is_ok());
+        let result = put(
+            config.session(),
+            &ctx,
+            "put-test",
+            &AccountId(Secret::new("123456")),
+            setting(),
+            &mut evidence,
+        )
+        .await;
+        if reflected {
+            assert_eq!(
+                server.requests(),
+                1,
+                "the rotated bearer must prevent the PUT"
+            );
+            let failure = refusal(result);
+            assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+            assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+        } else {
+            result.unwrap();
+            assert_eq!(server.requests(), 2);
+            assert!(server.heads()[1].starts_with(b"PUT /gateway/api/v1/resources/autoRenew "));
+        }
+    }
+}
+
+#[tokio::test]
+async fn reflected_successful_renewal_acknowledgement_is_not_settled() {
+    let body =
+        json!({"code":200,"data":{"successAll":true,"errorAutoRenewResources":[],"ignored":FIRST}})
+            .to_string();
+    let server = Server::start(vec![reply("200 OK", body)]);
+    let config = static_config(&server);
+    let (ctx, _) = RequestContext::new();
+    let failure = refusal(
+        put(
+            config.session(),
+            &ctx,
+            "put-test",
+            &AccountId(Secret::new("123456")),
+            setting(),
+            &mut Evidence::for_write(),
+        )
+        .await,
+    );
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_no_echo(failure.error(), &[FIRST]);
+    assert_eq!(server.requests(), 1);
+}
+
+struct RejectInvalidation(AtomicUsize);
+
+impl CredentialsProvider for RejectInvalidation {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+        Box::pin(async { Ok(Token::new(Secret::new(FIRST), None)) })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        Box::pin(async move {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(Error::provider_failed())
+        })
+    }
+}
+
+#[tokio::test]
+async fn billing_recovery_invalidation_failure_has_no_product_status() {
+    let server = Server::start(vec![
+        reply("401 Unauthorized", ""),
+        reply("401 Unauthorized", ""),
+    ]);
+    let provider = Arc::new(RejectInvalidation(AtomicUsize::new(0)));
+    let config = config(
+        &server,
+        ConfigOptions::default().with_credentials_provider(provider.clone()),
+    );
+    let (ctx, _) = RequestContext::new();
+    for error in [
+        refusal(list(config.session(), &ctx, &mut Evidence::new()).await),
+        refusal(account(config.session(), &ctx, &mut Evidence::new()).await),
+    ] {
+        assert!(error.has_identity(ErrorClass::Auth));
+        assert!(error.api_error().is_none());
+        assert!(error.http_status().is_none());
+    }
+    assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+    assert_eq!(server.requests(), 2);
 }

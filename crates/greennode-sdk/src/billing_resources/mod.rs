@@ -11,6 +11,7 @@ use crate::error::SafeText;
 use crate::model::wire::{JsonSource, go_json};
 use crate::wire::product::{
     evidence::Evidence,
+    guard::Guarded,
     operation::{self, Operation, Reflection, RouteAuth},
     options::{AttemptCheck, Options},
     redirect::{Classification, Retry},
@@ -30,14 +31,14 @@ const WITHHELD: &str = "billing response withheld";
 const INVALID: &str = "billing response had invalid structure";
 const CAP: usize = 4 << 20;
 
-/// Validated resource rows and their public billing projection.
-#[derive(Debug)]
 pub(crate) struct ResourceList {
     projection: ListResourcesOutput,
     renew_periods: Vec<RenewPeriod>,
+    receipt: Guarded<()>,
 }
 
-/// The provider's field presence and value for `renewPeriod`.
+crate::error::debug_record!(ResourceList unit);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RenewPeriod {
     Omitted,
@@ -46,18 +47,17 @@ pub(crate) enum RenewPeriod {
 }
 
 impl ResourceList {
-    /// Consumes the validated list and returns the public billing projection.
     pub(crate) fn into_projection(self) -> ListResourcesOutput {
         self.projection
     }
 
-    /// Rechecks retained rows with the current credential evidence and pairs them with renewal periods.
     #[allow(dead_code, reason = "Used by the NAT auto-renew port")]
     pub(crate) fn rows<'a>(
         &'a self,
         evidence: &'a Evidence,
     ) -> Result<impl Iterator<Item = (&'a Resource, RenewPeriod)> + 'a, Box<Error>> {
         if !evidence.can_retain_partial()
+            || self.receipt.recheck(evidence).is_err()
             || credentials::resources_reflect(&self.projection, evidence)
         {
             return Err(invalid(
@@ -73,7 +73,6 @@ impl ResourceList {
     }
 }
 
-/// Reads the unfiltered, account-wide billing resource inventory.
 pub(crate) async fn list(
     session: &Session,
     ctx: &RequestContext,
@@ -83,30 +82,36 @@ pub(crate) async fn list(
     let reply = exchange(session, ctx, &op, &Options::DEFAULT, Bytes::new(), evidence)
         .await
         .map_err(|failure| Box::new(failure.into_parts().0))?;
-    let output = reply.decode_projection(|body| {
-        let source = JsonSource::new(body);
-        let data = decode_data(&op, source.text(), evidence)?;
-        let mut output = decode::list(data).map_err(|()| invalid(&op, evidence))?;
-        if source.has_replacements() {
-            decode::restore_raw_fields(&source, data, &mut output.projection)
-                .map_err(|()| invalid(&op, evidence))?;
-        }
-        if credentials::resources_reflect(&output.projection, evidence) {
-            return Err(invalid(&op, evidence));
-        }
-        Ok(output)
-    })?;
-    if evidence.guards_reads() {
-        evidence.keep_decoded_operands(op.id, &output.projection)?;
+    let receipt = reply
+        .clean_receipt()
+        .ok_or_else(|| invalid(&op, evidence))?;
+    let source = JsonSource::new(receipt.body());
+    let data = decode_data(&op, source.text(), evidence)?;
+    let (mut projection, renew_periods) =
+        decode::list(data).map_err(|()| invalid(&op, evidence))?;
+    if source.has_replacements() {
+        decode::restore_raw_fields(&source, data, &mut projection)
+            .map_err(|()| invalid(&op, evidence))?;
     }
-    Ok(output)
+    if credentials::resources_reflect(&projection, evidence) {
+        return Err(invalid(&op, evidence));
+    }
+    let receipt = if evidence.guards_reads() {
+        evidence.keep_decoded_operands(op.id, &projection)?;
+        Guarded::latest_direct((), evidence, op.id)?
+    } else {
+        receipt.guard(())
+    };
+    Ok(ResourceList {
+        projection,
+        renew_periods,
+        receipt,
+    })
 }
 
-/// Validated billing account identity for the auto-renew header.
 #[allow(dead_code, reason = "Used by the storage and NAT auto-renew ports")]
 pub(crate) struct AccountId(Secret);
 
-/// Resolves a positive integral account ID for the current operation.
 #[allow(dead_code, reason = "Used by the storage and NAT auto-renew ports")]
 pub(crate) async fn account(
     session: &Session,
@@ -129,7 +134,6 @@ pub(crate) async fn account(
     })
 }
 
-/// Identifies one resource and its requested renewal setting.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code, reason = "Used by the storage and NAT auto-renew ports")]
@@ -141,7 +145,6 @@ pub(crate) struct Setting<'a> {
     pub(crate) auto_renew_info: AutoRenewInfo,
 }
 
-/// The provider's enabled flag and renewal period in minutes.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AutoRenewInfo {
@@ -149,7 +152,6 @@ pub(crate) struct AutoRenewInfo {
     pub(crate) period: i64,
 }
 
-/// Sends one auto-renew setting without retry or redirect and retains dispatch evidence.
 #[expect(
     clippy::result_large_err,
     reason = "SDK failures are returned by value"
@@ -225,7 +227,7 @@ pub(crate) async fn put(
                 evidence,
             )))
         })
-        .map_err(|error| rejected(*error))
+        .map_err(|error| rejected(evidence.screen_error(*error)))
 }
 
 fn screen_account_error(error: Error, account_redaction: &Evidence) -> Error {
@@ -350,7 +352,15 @@ async fn exchange(
             dispatch,
         ));
     }
-    if evidence.credentials().has_numeric_product_credential() || !reply.reflection.is_clean() {
+    let numeric_credential = evidence.credentials().has_numeric_product_credential();
+    if op.method == Method::PUT {
+        if numeric_credential {
+            let error = Error::new(ErrorClass::NotSettled).with_cause(*invalid(op, evidence));
+            return Err(Failure::new(evidence.screen_error(error), None, dispatch));
+        }
+        return Ok(reply);
+    }
+    if numeric_credential || !reply.reflection.is_clean() {
         let error = if reply.malformed_json() {
             api(
                 op,

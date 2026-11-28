@@ -101,10 +101,28 @@ impl<'a> FieldScan<'a> {
     }
 
     fn text(&self, text: &str, identifier: bool) -> bool {
+        !self.check(text, identifier).is_clean()
+    }
+
+    fn check(&self, text: &str, identifier: bool) -> Screen {
         match &self.0 {
-            Scan::Screen(matcher) => matcher.reflects(text.as_bytes(), identifier),
-            Scan::Record(operands, limit) => operands.borrow_mut().record(text, identifier, *limit),
+            Scan::Screen(matcher) => matcher.scan(text.as_bytes(), identifier),
+            Scan::Record(operands, limit) => {
+                if operands.borrow_mut().record(text, identifier, *limit) {
+                    Screen::Indeterminate
+                } else {
+                    Screen::Clean
+                }
+            }
         }
+    }
+
+    fn number(&self, number: f64, text: &str, identifier: bool) -> bool {
+        self.text(text, identifier)
+            || (number.is_finite()
+                && crate::output_number::any_spelling(number, true, |spelling| {
+                    spelling != text && self.text(spelling, identifier)
+                }))
     }
 }
 
@@ -191,16 +209,26 @@ macro_rules! display_values {
 display_values!(
     bool,
     i32,
-    i64,
     u16,
     u32,
     u64,
     usize,
     f32,
-    f64,
     serde_json::Number,
     time::OffsetDateTime
 );
+
+impl PublicOutput for i64 {
+    fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        scan.number(*self as f64, &self.to_string(), identifier)
+    }
+}
+
+impl PublicOutput for f64 {
+    fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+        scan.number(*self, &self.to_string(), identifier)
+    }
+}
 
 impl PublicOutput for Value {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
@@ -226,14 +254,10 @@ impl<T: PublicOutput + ?Sized> PublicOutput for Box<T> {
 
 impl PublicOutput for serde_json::value::RawValue {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
-        let body = self.get().as_bytes();
-        match &scan.0 {
-            Scan::Screen(matcher) => {
-                !super::evidence::raw_output_reflects(matcher, body, identifier).is_clean()
-            }
-            Scan::Record(_, _) => serde_json::from_str::<Value>(&crate::model::wire::go_json(body))
-                .map_or(true, |value| value.public_reflects(scan, identifier)),
-        }
+        !super::evidence::raw_output_with(self.get(), identifier, &|text, identifier| {
+            scan.check(text, identifier)
+        })
+        .is_clean()
     }
 }
 
