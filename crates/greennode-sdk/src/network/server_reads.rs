@@ -131,6 +131,42 @@ impl Client {
         })
     }
 
+    pub(super) async fn guard_servers_by_security_group(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<ListServersBySecurityGroupOutput, Error> {
+        let ctx =
+            ctx.child_with_deadline(self.session.clock().monotonic_now() + Duration::from_secs(30));
+        let read = InventoryRead {
+            style: InventoryStyle::ServerGuard,
+            ..BY_GROUP
+        };
+        let body = self.server_inventory(&ctx, read, id, evidence).await?;
+        let text = go_json(&body);
+        let fields: Fields<'_> = read.decode(&text, evidence)?;
+        let items = fields
+            .optional::<Field<Vec<Server>>>("data")
+            .map_err(|()| read.shape(evidence))?
+            .map_or_else(Vec::new, |field| field.0);
+        finish(read, items, evidence).map_err(|failure| failure.into_parts().0)
+    }
+
+    #[allow(dead_code)]
+    pub(super) async fn guard_servers_by_subnet(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<ListServersBySubnetOutput, Error> {
+        let body = self.server_inventory(ctx, BY_SUBNET, id, evidence).await?;
+        let text = go_json(&body);
+        let items: Field<Vec<Server>> =
+            BY_SUBNET.decode(if text.is_empty() { "null" } else { &text }, evidence)?;
+        finish(BY_SUBNET, items.0, evidence).map_err(|failure| failure.into_parts().0)
+    }
+
     async fn server_inventory(
         &self,
         ctx: &RequestContext,

@@ -1,0 +1,32 @@
+{
+  "VPC": {
+    "UUID": "vpc-1",
+    "Status": "ACTIVE",
+    "ElasticIPs": [],
+    "Name": "\u003cname\u003e",
+    "CreatedAt": "",
+    "CIDR": "\u003ccidr\u003e",
+    "DHCPOptionName": "",
+    "DHCPOptionID": "",
+    "RouteTableName": "\u003cname\u003e",
+    "RouteTableID": "rt-1",
+    "Zone": {
+      "UUID": "zone-a",
+      "Name": "",
+      "ZoneType": "",
+      "IsDefault": false,
+      "Description": "",
+      "IsEnabled": false,
+      "OpenStackZone": "",
+      "IPRanges": [],
+      "ServerCount": 0,
+      "VolumeCount": 0
+    },
+    "DNSStatus": "DISABLED",
+    "DNSID": "dns-vpc-1",
+    "MTU": 1450,
+    "ServerCount": 0,
+    "VolumeCount": 0
+  },
+  "Changed": true
+}

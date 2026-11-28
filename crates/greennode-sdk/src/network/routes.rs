@@ -9,7 +9,7 @@ use super::route_inventory::{
 };
 use super::{Client, failure};
 
-const ROUTE_TABLE: InventoryRead = InventoryRead::new(
+pub(super) const ROUTE_TABLE: InventoryRead = InventoryRead::new(
     "network.GetRouteTable",
     "v2/{}/route-table/{}",
     ResponseKind::RouteTable,

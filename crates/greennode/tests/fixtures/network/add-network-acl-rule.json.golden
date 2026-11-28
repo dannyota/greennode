@@ -1,0 +1,81 @@
+{
+  "ACL": {
+    "UUID": "acl-1",
+    "ID": "",
+    "Name": "\u003cname\u003e",
+    "Description": "",
+    "Status": "ACTIVE",
+    "NetworkID": "",
+    "SubnetID": "",
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "DefaultACL": false,
+    "VPCID": "vpc-1",
+    "Rules": [
+      {
+        "UUID": "",
+        "Direction": "inbound",
+        "Priority": 0,
+        "Protocol": "ANY",
+        "Port": "0-65535",
+        "CIDR": "0.0.0.0/0",
+        "Action": "pass",
+        "System": false
+      },
+      {
+        "UUID": "",
+        "Direction": "outbound",
+        "Priority": 0,
+        "Protocol": "ANY",
+        "Port": "0-65535",
+        "CIDR": "0.0.0.0/0",
+        "Action": "pass",
+        "System": false
+      },
+      {
+        "UUID": "",
+        "Direction": "inbound",
+        "Priority": 100,
+        "Protocol": "tcp",
+        "Port": "443",
+        "CIDR": "\u003ccidr\u003e",
+        "Action": "pass",
+        "System": false
+      },
+      {
+        "UUID": "",
+        "Direction": "inbound",
+        "Priority": 2000,
+        "Protocol": "ANY",
+        "Port": "0-65535",
+        "CIDR": "0.0.0.0/0",
+        "Action": "deny",
+        "System": false
+      },
+      {
+        "UUID": "",
+        "Direction": "outbound",
+        "Priority": 2000,
+        "Protocol": "ANY",
+        "Port": "0-65535",
+        "CIDR": "0.0.0.0/0",
+        "Action": "deny",
+        "System": false
+      },
+      {
+        "UUID": "",
+        "Direction": "inbound",
+        "Priority": 123,
+        "Protocol": "tcp",
+        "Port": "22",
+        "CIDR": "10.3.0.0/24",
+        "Action": "pass",
+        "System": false
+      }
+    ],
+    "SubnetIDs": [
+      "subnet-1",
+      "subnet-2"
+    ]
+  },
+  "Changed": true
+}

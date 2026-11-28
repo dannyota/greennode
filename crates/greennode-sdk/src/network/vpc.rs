@@ -2,6 +2,9 @@ mod models;
 mod policy;
 mod subnets;
 mod wire;
+mod writes;
+
+pub use writes::*;
 
 #[cfg(test)]
 mod deadlines;

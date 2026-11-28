@@ -2,6 +2,660 @@
 
 # CLI: Network
 
+## add-network-acl-rule
+
+Kind: Write.
+
+Needs --yes on every call: add-network-acl-rule can pass or drop traffic for
+every subnet this ACL covers, and the CLI cannot tell cheaply whether the ACL is
+in active use. Waits for the ACL to reach ACTIVE before sending; past that wait,
+error code ResourceBusy, nothing sent. Resends every rule read, including the
+server's own default rules (priority 2000 or above, or a rule marked System),
+which are never sent changed. For --protocol tcp or udp, needs an explicit port
+or range: --port-range-min and --port-range-max must not both be left at 0,
+refused with InvalidUsage before any request; for every port pass
+--port-range-min 0 --port-range-max 65535. Protocol ANY always requires that
+same full range; icmp accepts it or 0 and 0 together, for every ICMP type.
+Adding a rule already present at the same --direction and --priority with every
+other field equal is a no-op: Changed is false and nothing is sent. The same
+--direction and --priority already there with a different field is refused with
+InvalidUsage; remove-network-acl-rule the old one first. Reads the ACL again
+right before sending and refuses with ResourceBusy, nothing sent, if its rules
+changed since that first read; a write that lands in the moment between this
+re-read and the send can still be overwritten. The rules PUT itself is sent once
+and never retried: landing in the ACL's own busy window (confirmed live, roughly
+18 seconds after an earlier write) gets the server's own busy 400 back, mapped
+to ResourceBusy, and changes nothing, so it can be run again; any other failure
+that may already have reached the server, a 5xx, a network error, or a timeout,
+is NotSettled instead, and is not resent automatically, so read the ACL first
+before trying again. Without --no-wait, a successful send waits once more and
+confirms that a fresh read names exactly the rules just sent; a mismatch, such
+as from another writer changing the ACL at the same time, is also NotSettled.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+| `--direction`      | `string` | yes      |
+| `--priority`       | `int`    | yes      |
+| `--protocol`       | `string` | yes      |
+| `--cidr`           | `string` | yes      |
+| `--action`         | `string` | yes      |
+| `--port-range-min` | `int`    |          |
+| `--port-range-max` | `int`    |          |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode network add-network-acl-rule --network-acl-id <network-acl-id> --direction <direction> --priority <priority> --protocol tcp --cidr <cidr> --action <action> --port-range-min 22 --port-range-max 22 --yes
+```
+
+## add-route
+
+Kind: Write.
+
+Needs --yes on every call: add-route changes routing for every server behind the
+table, and the CLI cannot tell cheaply whether that table is in use. Waits for
+the table to reach ACTIVE before sending; past that wait, error code
+ResourceBusy, nothing sent. Matches --destination-cidr as a parsed prefix, not
+by its exact text. Adding a route to --destination-cidr that is already there
+with the same --target is a no-op: Changed is false and nothing is sent. The
+same --destination-cidr with a different --target already there is refused with
+InvalidUsage, naming the current target; remove-route the old one first. Reads
+the table again right before sending and refuses with ResourceBusy, nothing
+sent, if its routes changed since that first read; a write that lands in the
+moment between this re-read and the send can still be overwritten. Without
+--no-wait, waits again after sending and confirms that a fresh read names
+exactly the routes just sent, which only catches a write that lands after this
+command's own send, not one from before it; a mismatch there is NotSettled.
+
+Sends one replacement PUT without retries, authentication replay, or redirects.
+An ambiguous send reconciles by reading and remains NotSettled; read the table
+before another write.
+
+All requests share one credential history. Responses suppress captures; outputs
+and errors are checked against every observed operation credential.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--route-table-id`   | `string` | yes      |
+| `--destination-cidr` | `string` | yes      |
+| `--target`           | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode network add-route --route-table-id <route-table-id> --destination-cidr <destination-cidr> --target <target> --yes
+```
+
+## associate-network-acl-subnet
+
+Kind: Write.
+
+Needs --yes on every call: associate-network-acl-subnet can change which ACL's
+rules apply to a subnet's traffic at once, and the CLI cannot tell cheaply
+whether the ACL is in active use. Waits for the ACL to reach ACTIVE before
+sending; past that wait, error code ResourceBusy, nothing sent. A subnet belongs
+to at most one ACL, so associating one already associated with a different ACL
+moves it there, and this ACL's rules apply to its traffic at once. Associating a
+subnet already in this ACL's list is a no-op: Changed is false and nothing is
+sent, including no read of the subnet itself. Otherwise reads the subnet under
+this ACL's own VPC first, so a subnet of a different VPC is refused with
+NotFound before anything is sent. The output's PreviousNetworkACLID names the
+ACL the subnet moved from, if any, read from the subnet just before the move; it
+is set only when Changed is true. Reads the ACL again right before sending and
+refuses with ResourceBusy, nothing sent, if its subnet list changed since that
+first read; a write that lands in the moment between this re-read and the send
+can still be overwritten. The subnets PUT itself is sent once and never retried:
+landing in the ACL's own busy window gets the server's own busy 400 back, mapped
+to ResourceBusy, and changes nothing, so it can be run again; any other failure
+that may already have reached the server, a 5xx, a network error, or a timeout,
+is NotSettled instead, and is not resent automatically, so read the ACL first
+before trying again. Without --no-wait, a successful send waits once more and
+confirms that a fresh read names exactly the subnets just sent; a mismatch, such
+as from another writer changing the ACL at the same time, is also NotSettled.
+Confirmed live, a successful call still leaves the ACL busy for about 20 more
+seconds, and, unlike after a rules write, the ACL's own status reads ACTIVE
+throughout, so nothing in a read marks the window: the very next write to this
+ACL, of any kind, can still get ResourceBusy during that time, which is safe to
+wait out and retry. See
+[Limitations](Limitations.md#a-network-acls-busy-window).
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+| `--subnet-id`      | `string` | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode network associate-network-acl-subnet --network-acl-id <network-acl-id> --subnet-id <subnet-id> --yes
+```
+
+## clear-vpc-dhcp-options
+
+Kind: Write.
+
+Needs --yes on every call: clearing a VPC's set changes DNS for every server
+already in it, which only picks up the change after its own next DHCP renew or
+reboot. Running set-vpc-dhcp-options with the VPC's previous set id restores it
+while that set still exists. Refuses, before any write, with error code
+DefaultResource, a VPC whose Private DNS is enabled or whose current set already
+is one Private DNS created: clearing it would cut every server in the VPC off
+from its private zone lookups, and there is no call to put it back. Clearing a
+VPC that already has no set is a no-op: Changed is false and nothing is sent,
+even though --yes is still required. Once the PATCH is sent, waits up to 60
+seconds for a read to show an empty set: a VPC that reaches ERROR is
+WriteFailed, and the wait running out is NotSettled, but either way the PATCH
+already landed and is safe to send again. What DNS a VPC with no set uses is not
+confirmed.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--vpc-id` | `string` | yes      |
+
+```sh
+greennode network clear-vpc-dhcp-options --vpc-id <vpc-id> --yes
+```
+
+## create-dhcp-options
+
+Kind: Write.
+
+--dns-servers must be given at least once, each an IPv4 address; the
+four-address limit stays on the server. Name must not start with
+dhcp-option-dns-, reserved for the set VPC Private DNS creates; either problem
+is refused with InvalidUsage before any request. MTU is sent only when set; the
+server's own default is 1450. Never retried after a failure that may have
+already reached the server; list-dhcp-options --name and match the name exactly
+before creating it again rather than retrying blind.
+
+| Flag            | Type       | Required |
+| --------------- | ---------- | -------- |
+| `--name`        | `string`   | yes      |
+| `--dns-servers` | `[]string` | yes      |
+| `--mtu`         | `*int`     |          |
+
+```sh
+greennode network create-dhcp-options --name <name> --dns-servers <dns-servers>
+```
+
+## create-endpoint
+
+Kind: Write.
+
+Buys one Gateway endpoint with one request and waits for ACTIVE. The body sets
+isEnableAutoRenew false to request auto-renew off, and private DNS stays off; No
+endpoint read returns the renewal setting, and billing list-resources reported a
+created endpoint's RenewType as AUTO-RENEW despite that request. Check billing
+list-resources after create. Use a fresh, unique name for each create.
+
+Supports Gateway endpoints in hcm-3 on an existing VPC and subnet, with private
+DNS off. It needs SDK IAM-user login and default endpoints; anything else
+returns InvalidConfig (exit 2). An endpoint changes network reachability; it
+does not grant bucket access and does not prove S3 connectivity.
+
+Select catalog UUIDs with --availability-zone-id, --category-id, --service-id,
+and --package-id. Omitted selectors default to HCM03-1C, the sole default
+category, vstorage.hcm03, and Standard. The catalog and placement must offer the
+selection; lifecycle behavior for other offers remains unverified.
+
+Requires --yes and --max-price (VND per month, or non-null JSON MaxPrice) before
+any request. Read-only profiles refuse this command. The cap is compared to a
+fresh quote taken just before create; it is not a server price lock. Quote and
+debit can differ. Unpriced or PriceAboveMax stops before purchase. A name that
+already exists in the VPC is refused.
+
+Waits up to 15 minutes after the request, polling every 5 seconds; a shorter
+context deadline wins. There is no --no-wait, DNS, renewal, tag, or raw request
+option.
+
+NotSettled prints safe partial output on stdout, ignoring --query. After it, run
+network list-endpoints and network get-endpoint in the same scope, then inspect
+billing. Do not repeat create while the outcome is unresolved. See Network
+endpoints documentation.
+
+| Flag                     | Type       | Required |
+| ------------------------ | ---------- | -------- |
+| `--name`                 | `string`   | yes      |
+| `--vpc-id`               | `string`   | yes      |
+| `--subnet-id`            | `string`   | yes      |
+| `--availability-zone-id` | `string`   |          |
+| `--category-id`          | `string`   |          |
+| `--service-id`           | `string`   |          |
+| `--package-id`           | `string`   |          |
+| `--max-price`            | `*float64` | yes      |
+
+```sh
+greennode network create-endpoint --region hcm-3 --name demo --vpc-id <net-id> --subnet-id <sub-id> --max-price <VND-per-month> --yes
+```
+
+## create-network-acl
+
+Kind: Write.
+
+Confirmed live: the new ACL is already ACTIVE in the create response and starts
+with an inbound and outbound pass-all rule at priority 0, ordinary and
+removable, plus an inbound and outbound deny-all rule at priority 2000,
+server-protected. A rule is default, and never removed by add-network-acl-rule
+or remove-network-acl-rule, when its priority is 2000 or above or it decodes
+System true; the priority-0 pass-all rules are neither. Whether a deny rule at a
+caller priority takes effect while those pass-all rules are still in the list
+has not been shown live; do not rely on a deny rule alone to block traffic. A
+duplicate --name fails with the server's own message.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--vpc-id` | `string` | yes      |
+| `--name`   | `string` | yes      |
+
+```sh
+greennode network create-network-acl --vpc-id <vpc-id> --name <name>
+```
+
+## create-route-table
+
+Kind: Write.
+
+Confirmed live: the new table reaches ACTIVE about 5 seconds after the create
+response, with no routes. A duplicate --name is refused with the server's own
+message at status 400. If --vpc-id names a VPC with no main route table yet, the
+new table becomes it; see delete-route-table for what that means for a later
+delete.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--vpc-id`  | `string` | yes      |
+| `--name`    | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network create-route-table --vpc-id <vpc-id> --name <name>
+```
+
+## create-security-group
+
+Kind: Write.
+
+Confirmed live: the new group is already ACTIVE in the create response itself,
+so the wait this command runs afterward settles on its first read. A duplicate
+--name fails with the server's own message at status 400.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--name`        | `string` | yes      |
+| `--description` | `string` |          |
+| `--no-wait`     | `bool`   |          |
+
+```sh
+greennode network create-security-group --name <name>
+```
+
+## create-security-group-rule
+
+Kind: Write.
+
+Confirmed live: the new rule is already ACTIVE in the create response, so this
+command takes no wait. A rule that exactly duplicates an existing one fails with
+status 409; a rule that overlaps an existing one without duplicating it fails
+with status 400. --remote-ip-prefix is stored exactly as sent, host bits
+included: 203.0.113.5/24 is not masked to 203.0.113.0/24. A rule whose
+--direction is not egress and whose --remote-ip-prefix has prefix length 0, such
+as 0.0.0.0/0 or ::/0, needs --yes: it opens every port the rule names to the
+entire internet.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--security-group-id` | `string` | yes      |
+| `--direction`         | `string` | yes      |
+| `--protocol`          | `string` | yes      |
+| `--remote-ip-prefix`  | `string` | yes      |
+| `--ether-type`        | `string` |          |
+| `--port-range-min`    | `int`    |          |
+| `--port-range-max`    | `int`    |          |
+| `--description`       | `string` |          |
+
+```sh
+greennode network create-security-group-rule --security-group-id <security-group-id> --direction <direction> --protocol <protocol> --remote-ip-prefix <remote-ip-prefix>
+```
+
+## create-subnet
+
+Kind: Write.
+
+--zone-id must name a zone enabled for the account; the SDK picks no default,
+since a guess would place the subnet, and any server later created in it, in a
+zone the caller did not choose. Run portal list-zones to find an enabled zone.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--vpc-id`  | `string` | yes      |
+| `--zone-id` | `string` | yes      |
+| `--name`    | `string` | yes      |
+| `--cidr`    | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network create-subnet --vpc-id <vpc-id> --zone-id <zone-id> --name <name> --cidr <cidr>
+```
+
+## create-virtual-ip-address
+
+Kind: Write.
+
+Never resent after a failure that may have already reached the server:
+list-virtual-ip-addresses and match --name exactly, or --ip-address if one was
+given, before creating again, rather than retrying blind. Waits up to 60 seconds
+for ACTIVE only when the create response itself is not already there; whether
+the server ever actually returns an intermediate status, so this wait ever runs
+at all, has not been confirmed live.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--subnet-id`   | `string` | yes      |
+| `--name`        | `string` | yes      |
+| `--mode`        | `string` | yes      |
+| `--ip-address`  | `string` |          |
+| `--description` | `string` |          |
+
+```sh
+greennode network create-virtual-ip-address --subnet-id <subnet-id> --name <name> --mode <mode>
+```
+
+## create-vpc
+
+Kind: Write.
+
+Takes no zone: the server ignores a VPC's zone and always places it in the
+region's first zone, which can be disabled for the account. The zone that
+matters is a subnet's own --zone-id.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--name`    | `string` | yes      |
+| `--cidr`    | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network create-vpc --name <name> --cidr <cidr>
+```
+
+## delete-dhcp-options
+
+Kind: Write, destructive.
+
+Refuses, before any write, with error code ResourceInUse, a set still attached
+to any VPC, naming them; detach it from every VPC first. A set left behind
+unattached by a deleted Private DNS VPC deletes like any other set. A repeat
+delete of an already-deleted set returns NotFound.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--dhcp-options-id` | `string` | yes      |
+
+```sh
+greennode network delete-dhcp-options --dhcp-options-id <dhcp-options-id> --yes
+```
+
+## delete-endpoint
+
+Kind: Write, destructive.
+
+Requires --yes. Deleting an endpoint that a cluster uses breaks that cluster's
+private access. The command refuses an endpoint with an attached resource or
+domain, but those fields do not prove that no cluster uses it.
+
+Supports Gateway endpoints in hcm-3 on an existing VPC and subnet, with private
+DNS off. It needs SDK IAM-user login and default endpoints; anything else
+returns InvalidConfig (exit 2). An endpoint changes network reachability; it
+does not grant bucket access and does not prove S3 connectivity.
+
+Requires explicit --endpoint-id and --vpc-id, refuses read-only profiles before
+any request, and sends one delete for an ACTIVE endpoint of the named VPC. Waits
+up to 10 minutes, polling every 5 seconds, until a complete list omits the ID.
+There is no --no-wait or --force. Deletion promises no refund, and a refund can
+stay pending after delete. In one probe, an endpoint that reused a just-deleted
+endpoint's name was deleted but had not been refunded hours after delete, and
+billing still listed it as active. Check billing list-transactions for the
+refund after delete. NotFound exits 4. After NotSettled, run network
+list-endpoints in the same scope before another action. See Network endpoints
+documentation.
+
+| Flag            | Type     | Required |
+| --------------- | -------- | -------- |
+| `--endpoint-id` | `string` | yes      |
+| `--vpc-id`      | `string` | yes      |
+
+```sh
+greennode network delete-endpoint --region hcm-3 --endpoint-id <enp-id> --vpc-id <net-id> --yes
+```
+
+## delete-nat-instance
+
+Kind: Write, destructive.
+
+Requires --yes: egress can stop for every VM in the named VPC, and prior routes
+are not restored by the CLI.
+
+--zone-id is the required region-level vNetwork ID. greennode network
+list-v-network-regions lists it: use the uuid of the selected region's row.
+
+NAT writes support HCM (hcm-3) and HAN (han-1) with IAM-user login only; The
+Rust port uses hermetic verification. Unsupported auth or region returns
+InvalidConfig (exit 2); create also returns it when the account's NAT V3 mode is
+not enabled for all users.
+
+Requires explicit --vpc-id and --nat-id and refuses read-only profiles before
+any request. Confirms the NAT belongs to the named VPC, then sends one delete.
+Waits for absence, polling every 5 seconds for up to 10 minutes; a shorter
+context deadline wins. --no-wait confirms acceptance only, not absence, refund,
+or route restoration. NotFound exits 4. After NotSettled, inspect network
+list-nat-instances in the same scope before taking another action.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--zone-id` | `string` | yes      |
+| `--vpc-id`  | `string` | yes      |
+| `--nat-id`  | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network delete-nat-instance --region han-1 --zone-id <region-uuid> --vpc-id <disposable-vpc-id> --nat-id <nat-id> --yes
+```
+
+## delete-network-acl
+
+Kind: Write, destructive.
+
+Refuses, before any write, with error code DefaultResource for a project's
+default ACL, and ResourceInUse when any subnet is still associated; disassociate
+every subnet first. Confirmed live: a deleted ACL's own GET returns 500, not
+404, so this command, and a repeat delete, confirm through the ACL list instead
+of trusting that status alone; a plain 404 for an id that was never valid still
+returns NotFound directly. A DELETE sent while the ACL is still settling an
+earlier write gets the server's own busy 400 back, mapped to error code
+ResourceBusy rather than a plain API error; nothing changed, so the command can
+be run again. After a subnet associate or disassociate, a DELETE inside the
+ACL's own busy window (about 20-30 seconds after the change) gets a 500 back
+instead; nothing changed, so the command can be run again. If a 500 is returned,
+the command then checks the ACL list for up to 60 seconds and, if the ACL is
+still listed, exits with that 500 as a plain API error; wait and run the command
+again.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+
+```sh
+greennode network delete-network-acl --network-acl-id <network-acl-id> --yes
+```
+
+## delete-route-table
+
+Kind: Write, destructive.
+
+Reads the table, its VPC, and every subnet of that VPC first. Refuses, before
+any write, with error code ResourceInUse when a subnet names this table, and
+with DefaultResource when this is the VPC's main route table and some subnet
+names no table at all, so it relies on this one; a main table no subnet relies
+on, including one with no subnets at all, deletes normally. Confirmed live: the
+DELETE settles on a 404 read about 5 seconds later. A repeat delete of an
+already-deleted table also returns NotFound.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--route-table-id` | `string` | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode network delete-route-table --route-table-id <route-table-id> --yes
+```
+
+## delete-security-group
+
+Kind: Write, destructive.
+
+Refuses, before any write, a system group or a group with any server attached. A
+repeat delete of an already-deleted group returns NotFound. The status of a
+delete the server itself refuses as in use for some other reason has not been
+confirmed live.
+
+| Flag                  | Type     | Required |
+| --------------------- | -------- | -------- |
+| `--security-group-id` | `string` | yes      |
+
+```sh
+greennode network delete-security-group --security-group-id <security-group-id> --yes
+```
+
+## delete-security-group-rule
+
+Kind: Write, destructive.
+
+Refuses, before any write, a rule that does not belong to the named group. A
+repeat delete of an already-deleted rule also returns NotFound.
+
+| Flag                       | Type     | Required |
+| -------------------------- | -------- | -------- |
+| `--security-group-id`      | `string` | yes      |
+| `--security-group-rule-id` | `string` | yes      |
+
+```sh
+greennode network delete-security-group-rule --security-group-id <security-group-id> --security-group-rule-id <security-group-rule-id> --yes
+```
+
+## delete-subnet
+
+Kind: Write, destructive.
+
+Refuses, before any write, with error code ResourceInUse when a network ACL in
+the subnet's own VPC still lists it; disassociate the subnet from that ACL
+first. Also refuses with error code InvalidInput if the subnet read names a VPC
+other than --vpc-id. After disassociating the subnet from a network ACL, wait
+about 30 seconds before deleting it, since this command cannot see the ACL's own
+busy window.
+
+ACL associations require explicit, nonempty, valid, unique subnet IDs. Null or
+invalid association elements cannot authorize subnet deletion.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--vpc-id`    | `string` | yes      |
+| `--subnet-id` | `string` | yes      |
+| `--no-wait`   | `bool`   |          |
+
+```sh
+greennode network delete-subnet --vpc-id <vpc-id> --subnet-id <subnet-id> --yes
+```
+
+## delete-virtual-ip-address
+
+Kind: Write, destructive.
+
+After its read and before any DELETE, refuses with error code InvalidUsage a
+virtual IP whose type is not "private" (a public virtual IP has its own delete
+call), and with error code ResourceInUse, one that still has an address pair,
+found either on its own read or by list-address-pairs-by-virtual-ip-address,
+since a pair binds the address to a server interface and deleting it would move
+traffic.
+
+| Flag                      | Type     | Required |
+| ------------------------- | -------- | -------- |
+| `--virtual-ip-address-id` | `string` | yes      |
+
+```sh
+greennode network delete-virtual-ip-address --virtual-ip-address-id <virtual-ip-address-id> --yes
+```
+
+## delete-vpc
+
+Kind: Write, destructive.
+
+Refuses, before any write, a VPC that still has a server, a volume, or a subnet;
+delete the subnets first. Even once every subnet is gone, the server keeps
+refusing the VPC's own delete with error code ResourceInUse for several minutes
+afterward; this command reads first every time, so a rerun once that window
+passes is safe.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--vpc-id`  | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network delete-vpc --vpc-id <vpc-id> --yes
+```
+
+## disassociate-network-acl-subnet
+
+Kind: Write.
+
+Needs --yes on every call: disassociate-network-acl-subnet can change which
+ACL's rules apply to a subnet's traffic at once, and the CLI cannot tell cheaply
+whether the ACL is in active use. Waits for the ACL to reach ACTIVE before
+sending; past that wait, error code ResourceBusy, nothing sent. Disassociating a
+subnet not in this ACL's list is a no-op: Changed is false and nothing is sent.
+What a subnet falls back to once disassociated is not yet confirmed live. Reads
+the ACL again right before sending and refuses with ResourceBusy, nothing sent,
+if its subnet list changed since that first read; a write that lands in the
+moment between this re-read and the send can still be overwritten. The subnets
+PUT itself is sent once and never retried: landing in the ACL's own busy window
+gets the server's own busy 400 back, mapped to ResourceBusy, and changes
+nothing, so it can be run again; any other failure that may already have reached
+the server, a 5xx, a network error, or a timeout, is NotSettled instead, and is
+not resent automatically, so read the ACL first before trying again. Without
+--no-wait, a successful send waits once more and confirms that a fresh read
+names exactly the subnets just sent; a mismatch, such as from another writer
+changing the ACL at the same time, is also NotSettled. Confirmed live, a
+successful call still leaves the ACL busy for about 20 more seconds, and, unlike
+after a rules write, the ACL's own status reads ACTIVE throughout, so nothing in
+a read marks the window: the very next write to this ACL, of any kind, can still
+get ResourceBusy during that time, which is safe to wait out and retry. See
+[Limitations](Limitations.md#a-network-acls-busy-window).
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+| `--subnet-id`      | `string` | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode network disassociate-network-acl-subnet --network-acl-id <network-acl-id> --subnet-id <subnet-id> --yes
+```
+
+## enable-vpc-private-dns
+
+Kind: Write, destructive.
+
+One-way: the API has no call that disables Private DNS again, so this command
+needs --yes. Takes about 6 minutes to settle; a server already on the VPC only
+picks up the new resolver after its own DHCP renew.
+
+| Flag        | Type     | Required |
+| ----------- | -------- | -------- |
+| `--vpc-id`  | `string` | yes      |
+| `--no-wait` | `bool`   |          |
+
+```sh
+greennode network enable-vpc-private-dns --vpc-id <vpc-id> --yes
+```
+
 ## get-dhcp-options
 
 Kind: Read.
@@ -616,4 +1270,168 @@ quote.
 
 ```sh
 greennode network quote-create-nat-instance --name <name> --zone-id <zone-id> --availability-zone-id <availability-zone-id> --package-id <package-id> --vpc-id <vpc-id>
+```
+
+## remove-network-acl-rule
+
+Kind: Write.
+
+Needs --yes on every call: remove-network-acl-rule can pass or drop traffic for
+every subnet this ACL covers, and the CLI cannot tell cheaply whether the ACL is
+in active use. Waits for the ACL to reach ACTIVE before sending; past that wait,
+error code ResourceBusy, nothing sent. Resends every rule read, including the
+server's own default rules (priority 2000 or above, or a rule marked System),
+which are never sent changed. Needs --priority even to name priority 0: it
+carries no vngcloud:"required" tag on the SDK's own Input, since 0 is also the
+priority of the ACL's own ordinary pass-all rule, which a caller may want to
+remove, so this command requires the flag (or a --cli-input-json Priority,
+inline or file://) so a caller who simply forgot it is never mistaken for one
+naming that rule on purpose. Removing a --direction and --priority the ACL does
+not have returns NotFound, nothing sent; removing a default rule (priority 2000
+or above, or a rule marked System) is refused with DefaultResource, nothing
+sent. Reads the ACL again right before sending and refuses with ResourceBusy,
+nothing sent, if its rules changed since that first read; a write that lands in
+the moment between this re-read and the send can still be overwritten. The rules
+PUT itself is sent once and never retried: landing in the ACL's own busy window
+(confirmed live, roughly 18 seconds after an earlier write) gets the server's
+own busy 400 back, mapped to ResourceBusy, and changes nothing, so it can be run
+again; any other failure that may already have reached the server, a 5xx, a
+network error, or a timeout, is NotSettled instead, and is not resent
+automatically, so read the ACL first before trying again. Without --no-wait, a
+successful send waits once more and confirms that a fresh read names exactly the
+rules just sent; a mismatch, such as from another writer changing the ACL at the
+same time, is also NotSettled.
+
+| Flag               | Type     | Required |
+| ------------------ | -------- | -------- |
+| `--network-acl-id` | `string` | yes      |
+| `--direction`      | `string` | yes      |
+| `--priority`       | `int`    | yes      |
+| `--no-wait`        | `bool`   |          |
+
+```sh
+greennode network remove-network-acl-rule --network-acl-id <network-acl-id> --direction <direction> --priority <priority> --yes
+```
+
+## remove-route
+
+Kind: Write.
+
+Needs --yes on every call: remove-route changes routing for every server behind
+the table, and the CLI cannot tell cheaply whether that table is in use. Waits
+for the table to reach ACTIVE before sending; past that wait, error code
+ResourceBusy, nothing sent. Matches --destination-cidr as a parsed prefix, not
+by its exact text. Removing a --destination-cidr the table does not have returns
+NotFound, nothing sent. A --destination-cidr matching more than one route by its
+parsed prefix is refused, nothing sent. Reads the table again right before
+sending and refuses with ResourceBusy, nothing sent, if its routes changed since
+that first read; a write that lands in the moment between this re-read and the
+send can still be overwritten. Without --no-wait, waits again after sending and
+confirms that a fresh read names exactly the routes just sent, which only
+catches a write that lands after this command's own send, not one from before
+it; a mismatch there is NotSettled.
+
+Sends one replacement PUT without retries, authentication replay, or redirects.
+An ambiguous send reconciles by reading and remains NotSettled; read the table
+before another write.
+
+All requests share one credential history. Responses suppress captures; outputs
+and errors are checked against every observed operation credential.
+
+| Flag                 | Type     | Required |
+| -------------------- | -------- | -------- |
+| `--route-table-id`   | `string` | yes      |
+| `--destination-cidr` | `string` | yes      |
+| `--no-wait`          | `bool`   |          |
+
+```sh
+greennode network remove-route --route-table-id <route-table-id> --destination-cidr <destination-cidr> --yes
+```
+
+## set-vpc-dhcp-options
+
+Kind: Write.
+
+Needs --yes on every call: moving a VPC's set changes DNS for every server
+already in it, which only picks up the new resolvers after its own next DHCP
+renew or reboot. Running the command again with the VPC's previous set id
+restores it while that set still exists; clear-vpc-dhcp-options moves the VPC to
+no set instead. Refuses, before any write, with error code DefaultResource, a
+VPC whose Private DNS is enabled or whose current set already is one Private DNS
+created, or a target set that is itself one Private DNS created: replacing it
+would cut every server in the VPC off from its private zone lookups, and there
+is no call to put it back. Refuses, before any write, with error code
+ResourceBusy, a target set that is not yet ACTIVE. Setting the VPC's current set
+again is a no-op: Changed is false and nothing is sent, even though --yes is
+still required. Once the PATCH is sent, waits up to 60 seconds for a read to
+show the new set: a VPC that reaches ERROR is WriteFailed, and the wait running
+out is NotSettled, but either way the PATCH already landed and is safe to send
+again with the same --dhcp-options-id.
+
+| Flag                | Type     | Required |
+| ------------------- | -------- | -------- |
+| `--vpc-id`          | `string` | yes      |
+| `--dhcp-options-id` | `string` | yes      |
+
+```sh
+greennode network set-vpc-dhcp-options --vpc-id <vpc-id> --dhcp-options-id <dhcp-options-id> --yes
+```
+
+## update-security-group
+
+Kind: Write.
+
+| Flag                  | Type      | Required |
+| --------------------- | --------- | -------- |
+| `--security-group-id` | `string`  | yes      |
+| `--name`              | `*string` |          |
+| `--description`       | `*string` |          |
+
+```sh
+greennode network update-security-group --security-group-id <security-group-id>
+```
+
+## update-subnet
+
+Kind: Write.
+
+| Flag          | Type     | Required |
+| ------------- | -------- | -------- |
+| `--vpc-id`    | `string` | yes      |
+| `--subnet-id` | `string` | yes      |
+| `--name`      | `string` | yes      |
+
+```sh
+greennode network update-subnet --vpc-id <vpc-id> --subnet-id <subnet-id> --name <name>
+```
+
+## update-virtual-ip-address
+
+Kind: Write.
+
+| Flag                      | Type      | Required |
+| ------------------------- | --------- | -------- |
+| `--virtual-ip-address-id` | `string`  | yes      |
+| `--name`                  | `*string` |          |
+| `--description`           | `*string` |          |
+| `--mode`                  | `*string` |          |
+
+```sh
+greennode network update-virtual-ip-address --virtual-ip-address-id <virtual-ip-address-id> --name <name>
+```
+
+## update-vpc
+
+Kind: Write.
+
+The SDK refuses write redirects, including a same-origin redirect of the rename
+request.
+
+| Flag       | Type     | Required |
+| ---------- | -------- | -------- |
+| `--vpc-id` | `string` | yes      |
+| `--name`   | `string` | yes      |
+
+```sh
+greennode network update-vpc --vpc-id <vpc-id> --name <name>
 ```

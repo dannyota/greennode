@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
+use super::super::{mutations::strict_field, wire::Fields};
 use crate::error::SafeText;
+use crate::model::wire::decode_lenient;
+use crate::wire::product::evidence::Evidence;
 use crate::wire::product::options::PathIds;
 use crate::{ApiError, Error, ErrorClass, Failure, List, RequestContext};
 
@@ -8,12 +11,12 @@ use super::super::{Client, failure};
 use super::models::*;
 use super::wire::{Read, Reads, Style, field, objects};
 
-const LIST_ACLS: Read = Read::new(
+pub(super) const LIST_ACLS: Read = Read::new(
     "network.ListNetworkACLs",
     "v2/{}/network-acl/list",
     Style::Inventory,
 );
-const GET_ACL: Read = Read::new(
+pub(super) const GET_ACL: Read = Read::new(
     "network.GetNetworkACL",
     "v2/{}/network-acl/{}",
     Style::Protected,
@@ -166,6 +169,53 @@ impl Client {
         })
     }
 
+    pub(in crate::network) async fn guard_security_group(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<SecurityGroup, Error> {
+        let mut reads = Reads::with_evidence(self, ctx, std::mem::take(evidence));
+        let result = reads
+            .decode(GET_GROUP, &[id], |raw| {
+                let group: SecurityGroup =
+                    strict_field(&Fields::decode_with_limit(raw, 8 << 20)?, "data")?;
+                if group.id != id {
+                    return Err(());
+                }
+                Ok(group)
+            })
+            .await
+            .and_then(|group| reads.sanitize(GET_GROUP, group));
+        *evidence = reads.into_evidence();
+        result
+    }
+
+    pub(in crate::network) async fn guard_security_group_rules(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<Vec<SecurityGroupRule>, Error> {
+        let mut reads = Reads::with_evidence(self, ctx, std::mem::take(evidence));
+        let result = reads
+            .decode(LIST_RULES, &[id], |raw| {
+                let rows: Vec<SecurityGroupRule> =
+                    strict_field(&Fields::decode_with_limit(raw, 8 << 20)?, "data")?;
+                if !unique_ids(
+                    rows.iter().map(|rule| rule.id.as_str()),
+                    PathIds::WithUnderscore,
+                ) {
+                    return Err(());
+                }
+                Ok(rows)
+            })
+            .await
+            .and_then(|rows| reads.sanitize(LIST_RULES, rows));
+        *evidence = reads.into_evidence();
+        result
+    }
+
     /// Lists rules across the project's complete security group inventory.
     pub async fn list_all_security_group_rules(
         &self,
@@ -191,7 +241,9 @@ impl Client {
                 }
                 let rows = read_rules(&mut reads, &group.id).await.map_err(failure)?;
                 let rows = rows
-                    .filter(|rows| unique_type_ids(rows.iter().map(|rule| rule.id.as_str())))
+                    .filter(|rows| {
+                        unique_ids(rows.iter().map(|rule| rule.id.as_str()), PathIds::Strict)
+                    })
                     .ok_or_else(|| failure(reads.invalid(ALL_RULES)))?;
                 reads
                     .append_bounded(ALL_RULES, &mut retained, &mut items, rows)
@@ -211,7 +263,8 @@ async fn read_rules(
 ) -> Result<Option<Vec<SecurityGroupRule>>, Error> {
     reads
         .decode(LIST_RULES, &[id], |raw| {
-            let mut rows: Option<Vec<SecurityGroupRule>> = field(&objects(raw)?, "data")?;
+            let mut rows: Option<Vec<SecurityGroupRule>> =
+                decode_lenient(|| field(&objects(raw)?, "data"))?;
             if let Some(rows) = &mut rows {
                 for rule in rows {
                     rule.security_group_id = id.to_owned();
@@ -247,14 +300,14 @@ pub(super) fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
         || acl.uuid != id
         || acl.status.is_empty()
         || acl.vpc_id.is_empty()
-        || !unique_type_ids(acl.subnet_ids.iter().map(String::as_str))
+        || !unique_ids(acl.subnet_ids.iter().map(String::as_str), PathIds::Strict)
     {
         return Ok(None);
     }
     Ok(Some(acl))
 }
 
-fn unique_type_ids<'a>(mut ids: impl Iterator<Item = &'a str>) -> bool {
+fn unique_ids<'a>(mut ids: impl Iterator<Item = &'a str>, charset: PathIds) -> bool {
     let mut seen = HashSet::new();
-    ids.all(|id| PathIds::Strict.allows(id) && seen.insert(id))
+    ids.all(|id| charset.allows(id) && seen.insert(id))
 }

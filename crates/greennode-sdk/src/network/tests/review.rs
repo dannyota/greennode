@@ -423,7 +423,7 @@ async fn nat_quote_allows_catalog_zone_outside_vpc_home_zones() {
 async fn nat_quote_rejects_malformed_vpc_zones_before_posting() {
     for zones in [
         r#""zones":null"#,
-        r#""other":1"#,
+        r#""Zones":[{"uuid":"az-1"}]"#,
         r#""zones":"unexpected""#,
         r#""zones":[{"uuid":"az-1","UUID":"other"}]"#,
         r#""zones":[{"uuid":"az-1"},{"uuid":"az-1"}]"#,

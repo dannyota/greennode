@@ -65,6 +65,17 @@ fn invoke_in_project(
     command: &str,
     args: &[&str],
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_in_mode(options, project_id, format, command, args, true)
+}
+
+fn invoke_in_mode(
+    options: ConfigOptions,
+    project_id: &str,
+    format: &str,
+    command: &str,
+    args: &[&str],
+    read_only: bool,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let status = tokio::runtime::Builder::new_current_thread()
@@ -72,22 +83,13 @@ fn invoke_in_project(
         .build()
         .unwrap()
         .block_on(run_invocation(Invocation {
-            args: [
-                "greennode",
-                "--region",
-                "hcm-3",
-                "--project-id",
-                project_id,
-                "--read-only",
-                "--output",
-                format,
-                "network",
-                command,
-            ]
-            .into_iter()
-            .chain(args.iter().copied())
-            .map(OsString::from)
-            .collect(),
+            args: ["greennode", "--region", "hcm-3", "--project-id", project_id]
+                .into_iter()
+                .chain(read_only.then_some("--read-only"))
+                .chain(["--output", format, "network", command])
+                .chain(args.iter().copied())
+                .map(OsString::from)
+                .collect(),
             source: &Source,
             config_options: options,
             stdin: &mut std::io::empty(),
@@ -460,3 +462,6 @@ fn network_purchase_quotes_match_go_goldens_on_read_only_profiles() {
         }
     }
 }
+
+#[path = "network/vpc_writes.rs"]
+mod vpc_writes;

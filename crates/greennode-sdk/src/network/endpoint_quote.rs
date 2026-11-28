@@ -94,7 +94,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
             check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
-            let mut quote = EndpointQuote::new(self, ctx, &mut evidence)
+            let mut quote = EndpointQuote::new(self, ctx, &mut evidence, false)
                 .await
                 .map_err(failure)?;
             let offer = quote
@@ -115,17 +115,25 @@ impl Client {
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl EndpointQuote<'_> {
-    async fn endpoint_price(
-        &mut self,
+    pub(super) fn purchase_body(
+        &self,
         input: &QuoteCreateEndpointInput,
         offer: &Offer,
-    ) -> Result<QuoteCreateEndpointOutput, Error> {
-        let body = json!({"resourceType":"endpoint","action":"create","resourceInfo":{
+    ) -> serde_json::Value {
+        json!({"resourceType":"endpoint","action":"create","resourceInfo":{
             "isBuyMorePoc": false, "isPoc": false, "isEnableAutoRenew": false,
             "endpointName": input.name, "categoryUuid": offer.category, "serviceUuid": offer.service,
             "packageUuid": offer.package, "vpcUuid": input.vpc_id, "subnetUuid": input.subnet_id,
             "regionUuid": self.zone, "projectUuid": self.project, "enableAZ": true, "enableDnsName": false,
-        }});
+        }})
+    }
+
+    pub(super) async fn endpoint_price(
+        &mut self,
+        input: &QuoteCreateEndpointInput,
+        offer: &Offer,
+    ) -> Result<QuoteCreateEndpointOutput, Error> {
+        let body = self.purchase_body(input, offer);
         if self.evidence.output_reflects(&body) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
@@ -185,7 +193,10 @@ impl EndpointQuote<'_> {
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
-fn check_input(input: &QuoteCreateEndpointInput, evidence: &Evidence) -> Result<(), Error> {
+pub(super) fn check_input(
+    input: &QuoteCreateEndpointInput,
+    evidence: &Evidence,
+) -> Result<(), Error> {
     for (field, value) in [
         ("Name", &input.name),
         ("VPCID", &input.vpc_id),

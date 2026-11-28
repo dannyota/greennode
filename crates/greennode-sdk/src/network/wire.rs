@@ -597,7 +597,11 @@ pub(super) struct Fields<'a>(#[serde(borrow)] BTreeMap<String, &'a RawValue>);
 
 impl<'a> Fields<'a> {
     pub(super) fn decode(text: &'a str) -> Result<Self, ()> {
-        strict_json::validate(text.as_bytes(), &[], text.len()).map_err(|_| ())?;
+        Self::decode_with_limit(text, text.len())
+    }
+
+    pub(super) fn decode_with_limit(text: &'a str, limit: usize) -> Result<Self, ()> {
+        strict_json::validate(text.as_bytes(), &[], limit).map_err(|_| ())?;
         serde_json::from_str(text).map_err(|_| ())
     }
 
@@ -610,6 +614,14 @@ impl<'a> Fields<'a> {
             return Err(());
         }
         Ok(self.0.get(name).copied())
+    }
+
+    pub(super) fn check_ack_paging(&self) -> Result<(), ()> {
+        for key in ["page", "size", "total", "totalPage"] {
+            self.optional::<crate::model::wire::Field<Option<i64>>>(key)?;
+        }
+        self.raw("data")?;
+        Ok(())
     }
 
     pub(super) fn output_raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {

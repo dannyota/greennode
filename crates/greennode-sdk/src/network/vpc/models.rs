@@ -178,7 +178,6 @@ model! {
 }
 
 model! {
-    @ true;
     /// A security group in the project.
     pub struct SecurityGroup {
         /// Provider identifier.
@@ -199,7 +198,6 @@ model! {
 }
 
 model! {
-    @ true;
     /// A rule and its parent security group.
     pub struct SecurityGroupRule {
         /// Provider identifier.

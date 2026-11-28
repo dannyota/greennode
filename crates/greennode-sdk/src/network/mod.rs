@@ -5,17 +5,22 @@ mod connectivity;
 mod endpoint_models;
 mod endpoint_quote;
 mod endpoint_quote_scope;
+mod endpoint_writes;
 mod endpoints;
 mod inventory;
+mod mutations;
 mod nat;
 mod nat_catalog;
 mod nat_models;
 mod nat_quote;
+mod nat_writes;
 mod prices;
 mod route_inventory;
 mod routes;
+mod security_group_writes;
 mod server_reads;
 mod virtual_ip;
+mod virtual_ip_writes;
 mod vpc;
 mod vpn;
 mod wire;
@@ -29,6 +34,7 @@ pub use connectivity::{
 };
 pub use endpoint_models::{Endpoint, EndpointTag, VNetworkRegion};
 pub use endpoint_quote::*;
+pub use endpoint_writes::*;
 pub use endpoints::*;
 pub use nat::{
     GetNatInstanceInput, GetNatInstanceOutput, ListNatInboundRulesInput, ListNatInboundRulesOutput,
@@ -53,8 +59,11 @@ pub use vpn::{
 pub use nat_catalog::*;
 pub use nat_models::*;
 pub use nat_quote::*;
+pub use nat_writes::*;
 pub use prices::*;
+pub use security_group_writes::*;
 pub use server_reads::*;
+pub use virtual_ip_writes::*;
 
 pub use vpc::*;
 
@@ -69,6 +78,7 @@ pub struct Client {
     session: Arc<Session>,
     region: String,
     endpoint_zone: Arc<OnceLock<String>>,
+    endpoint_verified_zone: Arc<OnceLock<String>>,
 }
 
 impl Client {
@@ -78,6 +88,7 @@ impl Client {
             session: Arc::clone(config.session()),
             region: config.region().to_owned(),
             endpoint_zone: Arc::new(OnceLock::new()),
+            endpoint_verified_zone: Arc::new(OnceLock::new()),
         }
     }
 }

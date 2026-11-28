@@ -52,7 +52,8 @@ pub(super) struct Offer {
     pub(super) service: String,
     pub(super) package: String,
     pub(super) package_name: String,
-    zone: String,
+    pub(super) zone: String,
+    pub(super) service_name: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -96,6 +97,7 @@ impl<'a> EndpointQuote<'a> {
         client: &'a Client,
         ctx: &'a RequestContext,
         evidence: &'a mut Evidence,
+        write: bool,
     ) -> Result<Self, Error> {
         let session = &client.session;
         let endpoints = session.endpoints();
@@ -110,11 +112,19 @@ impl<'a> EndpointQuote<'a> {
         let trusted_fixture = {
             #[cfg(any(test, feature = "test-support"))]
             {
-                session.has_product_fixture(crate::testing::Product::Vserver)
-                    && session.has_product_fixture(crate::testing::Product::Vnetwork)
+                use crate::testing::Product;
+                let fixture = |product| {
+                    if write {
+                        session.is_write_fixture(product)
+                    } else {
+                        session.has_product_fixture(product)
+                    }
+                };
+                fixture(Product::Vserver) && fixture(Product::Vnetwork)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
+                let _ = write;
                 false
             }
         };
@@ -147,8 +157,20 @@ impl<'a> EndpointQuote<'a> {
         }
         let project_body = client.read(ctx, vserver, PROJECTS, &[], evidence).await?;
         let project = project(&go_json(&project_body), configured, evidence)?;
-        let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
-        let zone = region(&go_json(&zone_body), evidence)?;
+        let zone = if write {
+            let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
+            region(&go_json(&zone_body), evidence)?
+        } else if let Some(zone) = client.endpoint_verified_zone.get() {
+            zone.clone()
+        } else {
+            let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
+            let zone = region(&go_json(&zone_body), evidence)?;
+            if client.endpoint_verified_zone.get_or_init(|| zone.clone()) != &zone {
+                return Err(REGIONS.invalid(evidence));
+            }
+            let _ = client.endpoint_zone.set(zone.clone());
+            zone
+        };
         if evidence.id_reflects(&project) || evidence.id_reflects(&zone) {
             return Err(PROJECTS.invalid(evidence));
         }
@@ -262,6 +284,7 @@ impl<'a> EndpointQuote<'a> {
             package,
             package_name,
             zone: zone.into(),
+            service_name,
         })
     }
 
@@ -335,6 +358,24 @@ impl<'a> EndpointQuote<'a> {
             ));
         }
         Ok(())
+    }
+
+    pub(super) async fn endpoint_inventory(
+        &mut self,
+        operation: &'static str,
+    ) -> Result<Vec<Box<RawValue>>, Error> {
+        self.scan(Scan {
+            require_paging: true,
+            ..Scan::new(
+                Read::new(
+                    operation,
+                    "vnetwork/v1/{}/{}/endpoints",
+                    Style::EndpointQuote,
+                ),
+                &[],
+            )
+        })
+        .await
     }
 
     async fn scan(&mut self, spec: Scan<'_>) -> Result<Vec<Box<RawValue>>, Error> {

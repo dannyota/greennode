@@ -1,0 +1,10 @@
+{
+  "RouteTable": {
+    "UUID": "rt-2",
+    "Name": "sample",
+    "Status": "",
+    "NetworkID": "vpc-1",
+    "CreatedAt": "",
+    "Routes": []
+  }
+}

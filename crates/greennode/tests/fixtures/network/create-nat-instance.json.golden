@@ -1,0 +1,51 @@
+{
+  "NATInstance": {
+    "UUID": "nat-1",
+    "NATName": "example",
+    "Status": "ACTIVE",
+    "CreatedAt": "",
+    "UpdatedAt": "",
+    "ProjectUUID": "pro-00000000-0000-0000-0000-000000000001",
+    "ZoneUUID": "HAN01-1B",
+    "NATGatewayIP": null,
+    "PublicIP": null,
+    "DeletedAt": null,
+    "BillingStatus": null,
+    "NATPackage": {
+      "ID": "",
+      "UUID": "package-1",
+      "Name": "",
+      "CreatedAt": "",
+      "PackageID": "",
+      "Default": false,
+      "Image": {
+        "ID": "",
+        "UUID": "",
+        "ImageType": "",
+        "ImageVersion": "",
+        "Licence": "",
+        "FlavorZoneIDs": [],
+        "PackageLimit": {
+          "CPU": 0,
+          "Memory": 0,
+          "DiskSize": 0
+        }
+      }
+    },
+    "VPC": {
+      "UUID": "vpc-1",
+      "Name": "",
+      "CIDR": "",
+      "Status": "",
+      "RegionID": "66b500000000000000000001",
+      "ProjectID": "66b500000000000000000002",
+      "LastSyncTime": "",
+      "DNSStatus": ""
+    }
+  },
+  "OrderID": "",
+  "MonthlyPrice": 712400,
+  "TotalPrice": 712400,
+  "Currency": "VND",
+  "AutoRenew": false
+}

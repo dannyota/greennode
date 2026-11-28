@@ -11,3 +11,17 @@ from the archived module:
 
 The generator runs the Go CLI in process. An injected transport checks each
 product origin and request path and serves the archived synthetic fixture.
+
+Copy resource_write_goldens_test.go alongside the baseline CLI tests.
+Run `go test ./internal/cli -run '^TestNetworkResourceWriteGoldens$' -count=1`
+with the same NETWORK_GOLDEN_DIR and isolated environment. The write generator
+uses the Go CLI operation handlers with synthetic SDK outputs. Rust tests
+exercise the network requests against separate loopback product origins.
+
+For VPC, DHCP, subnet, route table, route and ACL writes, copy
+network_vpc_write_goldens_test.go into internal/cli and run:
+
+  go test ./internal/cli -run '^TestNetworkVPCWriteGoldens$' -count=1
+
+This generator reads vpc-writes.json from NETWORK_GOLDEN_DIR. The Rust CLI
+tests use the same sequence of synthetic responses and expected requests.

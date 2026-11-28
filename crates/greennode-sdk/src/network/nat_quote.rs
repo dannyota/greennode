@@ -13,7 +13,7 @@ use super::nat::failure;
 use super::nat_catalog::{NatScope, catalog_data, catalog_invalid, decode_rows, params, reflects};
 use super::wire::{Fields, Read, Style};
 
-const OP: &str = "network.QuoteCreateNATInstance";
+pub(super) const OP: &str = "network.QuoteCreateNATInstance";
 const PRICE: Read = Read::new(OP, "vnetwork/billing/v1/{}/{}/price", Style::NatCatalog);
 const WHITELIST: Read = PRICE.at("vnetwork/v1/{}/{}/nats/v3-whitelist", Style::NatCatalog);
 const VPCS: Read = PRICE.at("vnetwork/v1/{}/{}/nats/vpcs", Style::NatCatalog);
@@ -134,7 +134,8 @@ struct PickerVpc {
     region: String,
     #[serde(rename = "regionUuid")]
     region_uuid: Option<String>,
-    zones: Vec<PickerZone>,
+    #[serde(default)]
+    zones: Option<Vec<PickerZone>>,
 }
 
 #[derive(Deserialize)]
@@ -164,14 +165,10 @@ impl Client {
                 .nat_scope(ctx, PRICE, input.zone_id.clone(), &mut evidence, false)
                 .await
                 .map_err(|error| failure(screen(error, &evidence)))?;
-            self.check_nat_placement(ctx, &scope, &input, &mut evidence)
+            self.check_nat_placement(ctx, &scope, &input, OP, &mut evidence)
                 .await
                 .map_err(|error| failure(screen(error, &evidence)))?;
-            let body = json!({"resourceType":"nat","action":"create","resourceInfo":{
-                "isPoc": false, "isEnableAutoRenew": false, "isBuyMorePoc": false,
-                "natName": input.name, "packageUuid": input.package_id, "vpcUuid": input.vpc_id,
-                "regionUuid": scope.zone, "projectUuid": scope.project,
-            }});
+            let body = nat_purchase_body(&scope, &input);
             if evidence.output_reflects(&body) {
                 return Err(failure(Error::new(ErrorClass::InvalidInput)));
             }
@@ -193,15 +190,25 @@ impl Client {
         })
     }
 
-    async fn check_nat_placement(
+    pub(super) async fn check_nat_placement(
         &self,
         ctx: &RequestContext,
         scope: &NatScope,
         input: &QuoteCreateNatInstanceInput,
+        operation: &'static str,
         evidence: &mut Evidence,
-    ) -> Result<(), Error> {
+    ) -> Result<super::NatPackageOffer, Error> {
         let body = self
-            .nat_catalog_request(ctx, WHITELIST, scope, &[], evidence)
+            .nat_catalog_request(
+                ctx,
+                Read {
+                    id: operation,
+                    ..WHITELIST
+                },
+                scope,
+                &[],
+                evidence,
+            )
             .await?;
         let invalid = || catalog_invalid(PRICE, evidence);
         let text = go_json(&body);
@@ -217,7 +224,7 @@ impl Client {
                 evidence,
             ));
         }
-        let zones = self.nat_zones(ctx, OP, scope, evidence).await?;
+        let zones = self.nat_zones(ctx, operation, scope, evidence).await?;
         let mut matching = zones
             .iter()
             .filter(|zone| zone.uuid == input.availability_zone_id);
@@ -243,28 +250,39 @@ impl Client {
             ));
         }
         let offers = self
-            .nat_packages(ctx, OP, scope, &input.availability_zone_id, evidence)
+            .nat_packages(ctx, operation, scope, &input.availability_zone_id, evidence)
             .await?;
-        let mut matching = offers.iter().filter(|offer| offer.uuid == input.package_id);
-        if !matching
+        let mut matching = offers
+            .into_iter()
+            .filter(|offer| offer.uuid == input.package_id);
+        let offer = matching
             .next()
-            .is_some_and(|offer| offer.currency_unit == "VND")
-            || matching.next().is_some()
-        {
+            .filter(|offer| offer.currency_unit == "VND")
+            .ok_or_else(|| {
+                local_error(
+                    ErrorClass::InvalidInput,
+                    "requires one exact VND package in the availability zone",
+                    evidence,
+                )
+            })?;
+        if matching.next().is_some() {
             return Err(local_error(
                 ErrorClass::InvalidInput,
                 "requires one exact VND package in the availability zone",
                 evidence,
             ));
         }
-        self.check_nat_vpc(ctx, scope, input, evidence).await
+        self.check_nat_vpc(ctx, scope, &input.vpc_id, operation, evidence)
+            .await?;
+        Ok(offer)
     }
 
-    async fn check_nat_vpc(
+    pub(super) async fn check_nat_vpc(
         &self,
         ctx: &RequestContext,
         scope: &NatScope,
-        input: &QuoteCreateNatInstanceInput,
+        vpc_id: &str,
+        operation: &'static str,
         evidence: &mut Evidence,
     ) -> Result<(), Error> {
         let mut seen = HashSet::new();
@@ -273,7 +291,16 @@ impl Client {
         for page in 1..=50 {
             let query = params(page, 1000);
             let body = self
-                .nat_catalog_request(ctx, VPCS, scope, &[("params", &query)], evidence)
+                .nat_catalog_request(
+                    ctx,
+                    Read {
+                        id: operation,
+                        ..VPCS
+                    },
+                    scope,
+                    &[("params", &query)],
+                    evidence,
+                )
                 .await?;
             let text = go_json(&body);
             let invalid = || catalog_invalid(PRICE, evidence);
@@ -315,9 +342,9 @@ impl Client {
                 for name in ["uuid", "projectUuid", "regionId", "regionUuid", "zones"] {
                     fields.raw(name).map_err(|()| invalid())?;
                 }
-                let zone_rows: Vec<Fields<'_>> =
-                    fields.required("zones").map_err(|()| invalid())?;
-                for zone in zone_rows {
+                let zone_rows: Option<Vec<Fields<'_>>> =
+                    fields.optional("zones").map_err(|()| invalid())?;
+                for zone in zone_rows.into_iter().flatten() {
                     zone.raw("uuid").map_err(|()| invalid())?;
                 }
                 let vpc: PickerVpc = serde_json::from_str(row.get()).map_err(|_| invalid())?;
@@ -334,7 +361,7 @@ impl Client {
                     return Err(invalid());
                 }
                 let mut zones = HashSet::new();
-                for zone in vpc.zones {
+                for zone in vpc.zones.into_iter().flatten() {
                     if !PathIds::Strict.allows(&zone.uuid)
                         || evidence.id_reflects(&zone.uuid)
                         || !zones.insert(zone.uuid)
@@ -342,7 +369,7 @@ impl Client {
                         return Err(invalid());
                     }
                 }
-                if vpc.uuid == input.vpc_id {
+                if vpc.uuid == vpc_id {
                     selected = Some(());
                 }
             }
@@ -368,8 +395,22 @@ impl Client {
     }
 }
 
+pub(super) fn nat_purchase_body(
+    scope: &NatScope,
+    input: &QuoteCreateNatInstanceInput,
+) -> serde_json::Value {
+    json!({"resourceType":"nat","action":"create","resourceInfo":{
+        "isPoc": false, "isEnableAutoRenew": false, "isBuyMorePoc": false,
+        "natName": input.name, "packageUuid": input.package_id, "vpcUuid": input.vpc_id,
+        "regionUuid": scope.zone, "projectUuid": scope.project,
+    }})
+}
+
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
-fn check_input(input: &QuoteCreateNatInstanceInput, evidence: &Evidence) -> Result<(), Error> {
+pub(super) fn check_input(
+    input: &QuoteCreateNatInstanceInput,
+    evidence: &Evidence,
+) -> Result<(), Error> {
     let path_ids = [
         ("ZoneID", &input.zone_id),
         ("AvailabilityZoneID", &input.availability_zone_id),

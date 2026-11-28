@@ -2,18 +2,21 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::model::wire::{WireField, go_json, model};
+use crate::model::wire::{WireField, decode_lenient, go_json, model};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, Failure, List, PagedList, RequestContext, model};
 
 use super::route_inventory::{
     CAP, InventoryRead, field, ids_reflect, paged_input, required_id_input,
 };
-use super::{Client, Zone, failure};
+use super::{
+    Client, Zone, failure,
+    mutations::{retain, strict_field},
+};
 
 const VIRTUAL_IP: InventoryRead =
     InventoryRead::standard("network.GetVirtualIPAddress", "v2/{}/virtualIpAddress/{}");
-const VIRTUAL_IPS: InventoryRead =
+pub(super) const VIRTUAL_IPS: InventoryRead =
     InventoryRead::standard("network.ListVirtualIPAddresses", "v2/{}/virtualIpAddress");
 const VIP_PAIRS: InventoryRead = InventoryRead::standard(
     "network.ListAddressPairsByVirtualIPAddress",
@@ -115,26 +118,60 @@ impl Client {
             VIRTUAL_IP
                 .check_id("VirtualIPAddressID", id, PathIds::Strict, &evidence)
                 .map_err(failure)?;
-            let project = self
-                .inventory_project(ctx, &[id], &mut evidence)
+            let virtual_ip_address = self
+                .virtual_ip_detail(ctx, id, false, &mut evidence)
                 .await
                 .map_err(failure)?;
-            let base = self.vserver_inventory_base().map_err(failure)?;
-            let raw = self
-                .read_route_inventory(ctx, base, VIRTUAL_IP, &[&project, id], &[], &mut evidence)
-                .await
-                .map_err(failure)?;
-            let text = go_json(&raw);
-            let envelope = VIRTUAL_IP.fields(&text, &evidence).map_err(failure)?;
-            let invalid = |()| failure(VIRTUAL_IP.invalid(&evidence));
-            let mut virtual_ip_address: VirtualIpAddress =
-                field(&envelope, "data").map_err(invalid)?;
-            if ids_reflect(&virtual_ip_address, &evidence) || !virtual_ip_address.redact(&evidence)
-            {
-                return Err(invalid(()));
-            }
             Ok(GetVirtualIpAddressOutput { virtual_ip_address })
         })
+    }
+
+    pub(super) async fn virtual_ip_detail(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        guarded: bool,
+        evidence: &mut Evidence,
+    ) -> Result<VirtualIpAddress, Error> {
+        let _guard_reads = guarded.then(|| evidence.guard_reads());
+        let project = self.inventory_project(ctx, &[id], evidence).await?;
+        let base = self.vserver_inventory_base()?;
+        let raw = self
+            .read_route_inventory(ctx, base, VIRTUAL_IP, &[&project, id], &[], evidence)
+            .await?;
+        let text = go_json(&raw);
+        let envelope = VIRTUAL_IP.fields(&text, evidence)?;
+        let invalid = |()| {
+            if guarded {
+                VIRTUAL_IP.incomplete(evidence)
+            } else {
+                VIRTUAL_IP.invalid(evidence)
+            }
+        };
+        let row: VirtualIpAddress = if guarded {
+            strict_field(&envelope, "data")
+        } else {
+            decode_lenient(|| field(&envelope, "data"))
+        }
+        .map_err(invalid)?;
+        if guarded && row.uuid != id {
+            return Err(invalid(()));
+        }
+        retain(row, evidence).ok_or_else(|| invalid(()))
+    }
+
+    pub(super) async fn guard_vip_pairs(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+    ) -> Result<Vec<AddressPair>, Error> {
+        let _guard_reads = evidence.guard_reads();
+        let project = self.inventory_project(ctx, &[id], evidence).await?;
+        let (items, _) = self
+            .read_address_pairs(ctx, &project, Parent::VirtualIp(id), true, evidence)
+            .await?;
+        retain(items, evidence).ok_or_else(|| VIP_PAIRS.invalid(evidence))
     }
 
     /// Lists one page of virtual IP addresses for the selected project.
@@ -222,7 +259,7 @@ impl Client {
                     return Err(failure(ALL_PAIRS.incomplete(&evidence)));
                 }
                 let (pairs, size) = self
-                    .read_address_pairs(ctx, &project, Parent::VirtualIp(id), &mut evidence)
+                    .read_address_pairs(ctx, &project, Parent::VirtualIp(id), false, &mut evidence)
                     .await
                     .map_err(failure)?;
                 bytes = bytes.saturating_add(size);
@@ -248,7 +285,7 @@ impl Client {
         read.check_id(field, id, charset, &evidence)?;
         let project = self.inventory_project(ctx, &[id], &mut evidence).await?;
         let (mut items, _) = self
-            .read_address_pairs(ctx, &project, parent, &mut evidence)
+            .read_address_pairs(ctx, &project, parent, false, &mut evidence)
             .await?;
         if ids_reflect(&items, &evidence) || !items.redact(&evidence) {
             return Err(read.invalid(&evidence));
@@ -261,6 +298,7 @@ impl Client {
         ctx: &RequestContext,
         project: &str,
         parent: Parent<'_>,
+        guarded: bool,
         evidence: &mut Evidence,
     ) -> Result<(Vec<AddressPair>, usize), Error> {
         let (read, _, id, _) = parent.route();
@@ -276,8 +314,18 @@ impl Client {
             .await?;
         let text = go_json(&raw);
         let envelope = read.fields(&text, evidence)?;
-        let mut items: Vec<AddressPair> =
-            field(&envelope, "data").map_err(|()| read.invalid(evidence))?;
+        let mut items: Vec<AddressPair> = if guarded {
+            strict_field(&envelope, "data")
+        } else {
+            decode_lenient(|| field(&envelope, "data"))
+        }
+        .map_err(|()| {
+            if guarded {
+                read.incomplete(evidence)
+            } else {
+                read.invalid(evidence)
+            }
+        })?;
         let bytes = raw
             .len()
             .saturating_add(id.len().saturating_mul(items.len()));
@@ -292,7 +340,6 @@ impl Client {
 }
 
 model! {
-    @ true;
     /// A virtual IP address and its network placement.
     pub struct VirtualIpAddress {
         /// Provider resource identifier.
@@ -333,7 +380,6 @@ model! {
 }
 
 model! {
-    @ true;
     /// A virtual IP or subnet assignment to a network interface.
     pub struct AddressPair {
         /// Provider resource identifier.
