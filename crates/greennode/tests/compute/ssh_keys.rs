@@ -132,6 +132,7 @@ async fn ssh_guards_refuse_existing_destinations_and_unconfirmed_deletes() {
 struct RaceDestination {
     path: PathBuf,
     wrote: AtomicBool,
+    bearer: &'static str,
 }
 
 impl CredentialsProvider for RaceDestination {
@@ -143,7 +144,7 @@ impl CredentialsProvider for RaceDestination {
             if !self.wrote.swap(true, Ordering::SeqCst) {
                 std::fs::write(&self.path, "keep").unwrap();
             }
-            Ok(Token::new(Secret::new(BEARER), None))
+            Ok(Token::new(Secret::new(self.bearer), None))
         })
     }
 
@@ -167,6 +168,7 @@ async fn failed_secret_delivery_cleans_up_only_the_issued_key_without_printing_i
     let options = ConfigOptions::default().with_credentials_provider(Arc::new(RaceDestination {
         path: path.clone(),
         wrote: AtomicBool::new(false),
+        bearer: BEARER,
     }));
     let args = [
         "create-ssh-key",
@@ -263,6 +265,7 @@ async fn issued_key_hex_reflection_is_never_used_for_cleanup() {
     let options = ConfigOptions::default().with_credentials_provider(Arc::new(RaceDestination {
         path: path.clone(),
         wrote: AtomicBool::new(false),
+        bearer: BEARER,
     }));
     let args = [
         "create-ssh-key",
@@ -280,4 +283,46 @@ async fn issued_key_hex_reflection_is_never_used_for_cleanup() {
     assert!(!String::from_utf8_lossy(&stderr).contains(ISSUED));
     assert_eq!(server.requests(), 1);
     assert!(std::fs::read_to_string(path).unwrap() == "keep");
+}
+
+#[tokio::test]
+async fn ssh_file_cleanup_requires_clean_absence_even_when_delete_operation_is_withheld() {
+    for (body, removed) in [("{}", true), (r#"{"unknown":"DeleteSSHKey"}"#, false)] {
+        let directory = TestDirectory::new();
+        let path = directory.0.join("toy.key");
+        let server = Server::start(vec![
+            response("201 Created", CREATED),
+            response("404 Not Found", body),
+        ]);
+        let bearer = "DeleteSSHKey";
+        let options =
+            ConfigOptions::default().with_credentials_provider(Arc::new(RaceDestination {
+                path: path.clone(),
+                wrote: AtomicBool::new(false),
+                bearer,
+            }));
+        let args = [
+            "create-ssh-key",
+            "--project-id",
+            "proj-1",
+            "--name",
+            "example",
+            "--secret-file",
+            path.to_str().unwrap(),
+        ];
+        let (exit, stdout, stderr) = invoke_with_options(&server, &args, false, options).await;
+        assert_eq!(exit, ExitCode::FAILURE);
+        assert!(stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&stderr).contains(bearer));
+        let diagnostic: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(diagnostic["error"]["code"], "SecretFileFailed");
+        assert_eq!(
+            diagnostic["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("key-1 was deleted"),
+            removed
+        );
+        assert_eq!(server.requests(), 2);
+    }
 }

@@ -3,6 +3,7 @@ use super::{
     operation::unsafe_guard_response,
     response::{BodyMatcher, Clean},
 };
+use crate::wire::strict_json::Shape;
 use crate::{Error, ErrorClass};
 use bytes::Bytes;
 use http::StatusCode;
@@ -82,15 +83,21 @@ impl DecisionPrice {
 pub(super) struct Proof {
     id: &'static str,
     body: Bytes,
+    not_found_stream: bool,
+    request: Option<super::absence::CleanRequest>,
+    policy: ReceiptPolicy,
     price: Option<DecisionPrice>,
     operands: Option<std::sync::Arc<super::output::Operands>>,
 }
 
 impl Proof {
-    pub(super) fn new(id: &'static str, body: &[u8], _: Clean) -> Self {
+    pub(super) fn new(id: &'static str, body: &[u8], clean: Clean) -> Self {
         Self {
             id,
-            body: Bytes::copy_from_slice(body),
+            body: Bytes::from_owner(zeroize::Zeroizing::new(body.to_vec())),
+            not_found_stream: clean.not_found_stream,
+            request: None,
+            policy: ReceiptPolicy::Guard,
             price: None,
             operands: None,
         }
@@ -121,8 +128,18 @@ impl Proof {
     }
 
     pub(super) fn check(&self, matcher: &BodyMatcher<'_>) -> Option<Box<Error>> {
-        ((!self.body.is_empty()
-            && !Evidence::screen_peer_with(matcher, &self.body, true).is_clean())
+        let screen = if self.not_found_stream {
+            Evidence::screen_not_found_with(matcher, &self.body)
+        } else if self.body.is_empty() {
+            super::response::Screen::Clean
+        } else {
+            Evidence::screen_peer_with(matcher, &self.body, true)
+        };
+        (!screen.is_clean()
+            || self
+                .request
+                .as_ref()
+                .is_some_and(|request| !request.is_direct())
             || self.price.is_some_and(|price| price.reflects(matcher))
             || self
                 .operands
@@ -134,6 +151,26 @@ impl Proof {
             )
         })
     }
+}
+
+pub(super) fn check_proofs(
+    proofs: &[Proof],
+    credentials: &super::evidence::SentCredentials,
+) -> Option<Box<Error>> {
+    let transport = credentials.transport_only();
+    let guard = credentials.guard_credentials();
+    let mut remaining = 192 << 20;
+    proofs.iter().find_map(|proof| {
+        let credentials = match proof.policy {
+            ReceiptPolicy::All => credentials,
+            ReceiptPolicy::Guard => &guard,
+            ReceiptPolicy::Transport | ReceiptPolicy::PrivateIssuance(_) => &transport,
+        };
+        let matcher = BodyMatcher::with_work(credentials, remaining);
+        let error = proof.check(&matcher);
+        remaining = matcher.remaining();
+        error
+    })
 }
 
 pub(crate) struct Decision<'a>(&'a Evidence);
@@ -152,12 +189,195 @@ pub(crate) fn decide<T>(
     Ok(evaluate(Decision(proofs)))
 }
 
+#[derive(Clone)]
 pub(crate) struct Guarded<T> {
     value: T,
     proofs: Vec<Proof>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum ReceiptPolicy {
+    #[default]
+    All,
+    Transport,
+    Guard,
+    PrivateIssuance(&'static str),
+}
+
+pub(crate) struct CleanReceipt<'a> {
+    body: &'a [u8],
+    clean: Clean,
+    request: super::absence::CleanRequest,
+    policy: ReceiptPolicy,
+}
+
+impl<'a> CleanReceipt<'a> {
+    pub(super) fn new(
+        body: &'a [u8],
+        clean: Clean,
+        request: super::absence::CleanRequest,
+        policy: ReceiptPolicy,
+    ) -> Self {
+        Self {
+            body,
+            clean,
+            request,
+            policy,
+        }
+    }
+
+    pub(crate) fn body(&self) -> &[u8] {
+        self.body
+    }
+
+    pub(super) fn into_proof(self) -> Proof {
+        let mut proof = Proof::new(self.request.operation(), self.body, self.clean);
+        proof.request = Some(self.request);
+        proof.policy = self.policy;
+        proof
+    }
+
+    pub(crate) fn guard<T>(self, value: T) -> Guarded<T> {
+        Guarded {
+            value,
+            proofs: vec![self.into_proof()],
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct AcknowledgedId {
+    id: String,
+    proof: Proof,
+    revoked: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+crate::error::debug_record!(AcknowledgedId unit);
+
+impl CleanReceipt<'_> {
+    pub(crate) fn bind_id(self, id: String) -> AcknowledgedId {
+        AcknowledgedId::new(id, self.into_proof())
+    }
+}
+
+impl AcknowledgedId {
+    fn new(id: String, proof: Proof) -> Self {
+        Self {
+            id,
+            proof,
+            revoked: std::sync::Arc::default(),
+        }
+    }
+
+    pub(crate) fn recheck<'a>(&'a self, evidence: &Evidence) -> Result<&'a str, Box<Error>> {
+        match self.refusal(evidence.credentials()) {
+            Some(error) => Err(error),
+            None => Ok(&self.id),
+        }
+    }
+
+    pub(super) fn refusal(
+        &self,
+        credentials: &super::evidence::SentCredentials,
+    ) -> Option<Box<Error>> {
+        use std::sync::atomic::Ordering;
+        if self.revoked.load(Ordering::Relaxed) {
+            return Some(Box::new(unsafe_guard_response(self.proof.id)));
+        }
+        let refusal = check_proofs(std::slice::from_ref(&self.proof), credentials).or_else(|| {
+            credentials
+                .id_reflects(&self.id)
+                .then(|| Box::new(unsafe_guard_response(self.proof.id)))
+        });
+        if refusal.is_some() {
+            self.revoked.store(true, Ordering::Relaxed);
+        }
+        refusal
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ConfirmationTarget<'a> {
+    Explicit(&'a str),
+    Acknowledged(&'a AcknowledgedId),
+}
+
+impl<'a> ConfirmationTarget<'a> {
+    pub(crate) fn checked(self, evidence: &Evidence) -> Result<&'a str, Box<Error>> {
+        match self {
+            Self::Explicit(id) => Ok(id),
+            Self::Acknowledged(id) => id.recheck(evidence),
+        }
+    }
+}
+
+#[derive(Default, serde::Deserialize)]
+pub(crate) struct Acknowledgement<T> {
+    #[serde(skip)]
+    received: Option<Guarded<T>>,
+}
+
+impl<T: Output> Output for Acknowledgement<T> {
+    const SCHEMA: Shape<'static> = T::SCHEMA;
+    const RESPONSE_GUARD: Option<super::sender::ResponseGuard> = T::RESPONSE_GUARD;
+
+    fn decode_response(
+        operation: &Operation,
+        response: &super::sender::Response,
+    ) -> Result<Self, Box<Error>> {
+        let value = T::decode_response(operation, response)?;
+        let received = response
+            .clean_receipt()
+            .ok_or_else(|| {
+                Box::new(
+                    Error::new(ErrorClass::NotSettled)
+                        .with_cause(unsafe_guard_response(operation.id)),
+                )
+            })?
+            .guard(value);
+        Ok(Self {
+            received: Some(received),
+        })
+    }
+}
+
+impl<T> Acknowledgement<T> {
+    pub(crate) fn into_id(
+        self,
+        select: impl FnOnce(&T) -> Option<&str>,
+    ) -> Option<(T, AcknowledgedId)> {
+        let Guarded { value, mut proofs } = self.received?;
+        let id = select(&value)?.to_owned();
+        Some((value, AcknowledgedId::new(id, proofs.pop()?)))
+    }
+}
+
 impl<T> Guarded<T> {
+    pub(crate) fn acknowledged_id(
+        &self,
+        select: impl FnOnce(&T) -> Option<&str>,
+    ) -> Option<AcknowledgedId> {
+        let [proof] = self.proofs.as_slice() else {
+            return None;
+        };
+        proof.request.as_ref()?;
+        Some(AcknowledgedId::new(
+            select(&self.value)?.to_owned(),
+            proof.clone(),
+        ))
+    }
+
+    pub(crate) fn register_acknowledgement(
+        &self,
+        evidence: &mut Evidence,
+        select: impl FnOnce(&T) -> Option<&str>,
+    ) -> Result<(), Box<Error>> {
+        let id = self
+            .acknowledged_id(select)
+            .ok_or_else(|| Box::new(unsafe_guard_response("")))?;
+        evidence.keep_acknowledgement(&id)
+    }
+
     pub(crate) async fn read_preflight<E>(
         evidence: &mut Evidence,
         read: impl AsyncFnOnce(&mut Evidence) -> Result<T, E>,
@@ -175,23 +395,35 @@ impl<T> Guarded<T> {
         Self::from_checkpoint(result?, evidence, checkpoint).map_err(invalid)
     }
 
-    pub(crate) fn acknowledgement(
-        value: T,
-        evidence: &mut Evidence,
-        id: &'static str,
-        body: &[u8],
-        clean: Clean,
-    ) -> Result<Self, Box<Error>> {
-        if !evidence.keep_guard(id, body, clean) {
-            return Err(Box::new(unsafe_guard_response(id)));
+    pub(crate) fn retain(&self, evidence: &mut Evidence) -> Result<(), Box<Error>> {
+        self.recheck(evidence)?;
+        for proof in &self.proofs {
+            if !evidence.keep_proof(proof.clone()) {
+                return Err(Box::new(unsafe_guard_response(proof.id)));
+            }
         }
-        Self::latest(value, evidence)
+        Ok(())
     }
 
     pub(crate) fn latest(value: T, evidence: &Evidence) -> Result<Self, Box<Error>> {
         let proof = evidence
             .last_guard()
             .ok_or_else(|| Box::new(unsafe_guard_response("")))?;
+        Ok(Self {
+            value,
+            proofs: vec![proof],
+        })
+    }
+
+    pub(crate) fn latest_direct(
+        value: T,
+        evidence: &Evidence,
+        id: &'static str,
+    ) -> Result<Self, Box<Error>> {
+        let proof = evidence
+            .last_guard()
+            .filter(|proof| proof.id == id && proof.request.is_some())
+            .ok_or_else(|| Box::new(unsafe_guard_response(id)))?;
         Ok(Self {
             value,
             proofs: vec![proof],
@@ -234,9 +466,7 @@ impl<T> Guarded<T> {
     }
 
     pub(crate) fn recheck(&self, evidence: &Evidence) -> Result<&T, Box<Error>> {
-        let transport = evidence.credentials().transport_only();
-        let matcher = BodyMatcher::with_work(&transport, 192 << 20);
-        match self.proofs.iter().find_map(|proof| proof.check(&matcher)) {
+        match check_proofs(&self.proofs, evidence.credentials()) {
             Some(error) => Err(error),
             None => Ok(&self.value),
         }
@@ -438,7 +668,7 @@ fn third() {}
             ),
             (
                 "network/wire.rs",
-                "read_query",
+                "exchange",
                 "project_discovery: read.style == Style::BandwidthProject",
             ),
         ] {
@@ -460,7 +690,9 @@ fn third() {}
         ))
         .unwrap();
         production_files(&root, |path, source| {
-            assert!(!reflected_only.is_match(source), "{}", path.display());
+            if source.contains("Screen::Reflected") {
+                assert!(!reflected_only.is_match(source), "{}", path.display());
+            }
         });
     }
 
@@ -572,7 +804,7 @@ fn third() {}
             (
                 "cdn/wire.rs",
                 "call_with_policy",
-                ".validate(&reply.body, &ENVELOPE",
+                ".validate(body, &ENVELOPE",
             ),
             ("cdn/reads.rs", "read_guard_detail", "FieldNames::Canonical"),
             (
@@ -696,7 +928,7 @@ fn third() {}
             (
                 "iam/groups.rs",
                 "create_group",
-                ".fetch_group(ctx, &id, false, &mut evidence)",
+                ".fetch_group(ctx, id, false, &mut evidence)",
             ),
             (
                 "iam/groups.rs",
@@ -819,6 +1051,9 @@ fn third() {}
         ];
         let mut checked = 0;
         production_files(&root, |relative, text| {
+            if !text.contains("pub async fn ") {
+                return;
+            }
             for entry in writes.captures_iter(text) {
                 let from = entry.get(0).unwrap().end();
                 let end = format!("\n{}}}", &entry[1]);
@@ -870,7 +1105,8 @@ fn third() {}
             ("loadbalancer/child_writes.rs", 2),
             ("loadbalancer/deletes.rs", 1),
             ("loadbalancer/member_writes.rs", 1),
-            ("loadbalancer/paid.rs", 2),
+            ("loadbalancer/paid.rs", 1),
+            ("loadbalancer/paid/settlement.rs", 1),
             ("vks/write.rs", 1),
             ("volume/write.rs", 1),
         ] {

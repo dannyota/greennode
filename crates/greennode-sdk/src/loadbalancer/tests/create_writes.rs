@@ -513,3 +513,125 @@ async fn resize_ignores_busy_text_that_reflects_a_bearer() {
     assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
     assert_eq!(server.requests(), 4);
 }
+
+#[tokio::test]
+async fn load_balancer_creation_reports_oversized_404_as_unconfirmed() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response("202 Accepted", r#"{"uuid":"lb-1"}"#),
+        Server::oversized("404 Not Found"),
+        lb_status("CREATED"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let interval = std::time::Duration::from_secs(10);
+    let clock = crate::testing::clock_advancing_on_sleep(
+        crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+        interval,
+    );
+    let client = client_with_options(
+        &server,
+        CANARY,
+        ConfigOptions::default().with_clock(std::sync::Arc::new(clock)),
+    );
+    let result = client
+        .create_load_balancer(
+            &ctx,
+            CreateLoadBalancerInput {
+                no_wait: false,
+                ..create()
+            },
+        )
+        .await;
+    let failure = result.unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(
+        failure.error().http_status(),
+        Some(http::StatusCode::NOT_FOUND)
+    );
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn paid_create_checks_the_whole_acknowledgement_before_using_uuid() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response("202 Accepted", r#"{"uuid":"lb-1","ignored":"toy-secret"}"#),
+    ]);
+    let failure = client(&server, CANARY)
+        .create_load_balancer(&RequestContext::new().0, create())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn paid_create_rechecks_the_acknowledgement_before_confirming() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response(
+            "202 Accepted",
+            r#"{"uuid":"lb-1","unknown":"confirmation-bearer"}"#,
+        ),
+        lb_status("CREATED"),
+    ]);
+    let mut input = create();
+    input.no_wait = false;
+    let failure = super::receipt_fixtures::rotating_client(&server, 2)
+        .create_load_balancer(&RequestContext::new().0, input)
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn certificate_import_withholds_short_encoded_bearer_in_id() {
+    let server = Server::start(vec![response(
+        "201 Created",
+        r#"{"data":{"uuid":"prefixYWJjsuffix","name":"ordinary"}}"#,
+    )]);
+    let failure = client(&server, "abc")
+        .import_certificate(&RequestContext::new().0, tls_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn certificate_import_refuses_transport_credential_in_acknowledgement() {
+    let server = Server::start(vec![response(
+        "201 Created",
+        r#"{"data":{"uuid":"cert-1","name":"toy-secret"}}"#,
+    )]);
+    let failure = client(&server, CANARY)
+        .import_certificate(&RequestContext::new().0, tls_input())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn paid_lb_malformed_acknowledgement_keeps_decode_detail() {
+    let server = Server::start(vec![
+        response("200 OK", r#"{"optimumPrice":9}"#),
+        response("202 Accepted", "{"),
+    ]);
+    let failure = client(&server, CANARY)
+        .create_load_balancer(&RequestContext::new().0, create())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+    assert_eq!(
+        failure.error().detail::<crate::loadbalancer::DecodeError>(),
+        Some(&crate::loadbalancer::DecodeError::MalformedJson)
+    );
+}

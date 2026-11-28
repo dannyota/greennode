@@ -1,7 +1,10 @@
 use super::deletes::resource_in_use;
 use crate::wire::product::guard::decide;
 use crate::wire::product::guard::{Guarded, guarded_poll};
+#[path = "child_deletes/response.rs"]
+mod reply;
 mod timing;
+use reply::{busy, canonical_field, message_has_phrase};
 
 use timing::{check_confirm_time, check_ready_time};
 
@@ -18,15 +21,14 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::deletes::{context_error, local, safe_text};
 use super::wire::{
-    CompleteNotFound, DecodeError, Envelope, PoolInUseRefusal, Read, pool_in_use_refusal,
-    screen_input, validate_ids,
+    DecodeError, Envelope, PoolInUseRefusal, Read, pool_in_use_refusal, screen_input, validate_ids,
 };
 use super::{Client, Listener, Policy, Pool, WriteError, ZonedLoadBalancer, guard};
 
@@ -70,8 +72,7 @@ const POLICY: Shape<'_> = shape!("uuid", "name", "description", "redirectPoolId"
     "action", "redirectUrl", "redirectHttpCode", "keepQueryString", "position", "displayStatus",
     "createdAt", "updatedAt", "progressStatus"; "l7Rules" => Shape::Array(&RULE));
 
-#[derive(Debug)]
-struct BusyRefusal;
+use super::write::BusyRefusal;
 
 /// Identifies a pool to delete and controls confirmation.
 #[derive(Clone, Default)]
@@ -283,7 +284,9 @@ impl Client {
 
         let first = self.send_child_delete(ctx, &child, &mut evidence).await;
         match first {
-            Err(failure) if failure.error().detail::<BusyRefusal>().is_some() => {
+            Err(failure)
+                if let Some(busy) = failure.error().internal_detail::<BusyRefusal>().cloned() =>
+            {
                 self.wait_child_ready(ctx, &child, &mut evidence)
                     .await
                     .map_err(|error| {
@@ -293,6 +296,8 @@ impl Client {
                             failure.write_dispatch(),
                         )
                     })?;
+                busy.retain(&mut evidence)
+                    .map_err(|error| Failure::new(*error, None, failure.write_dispatch()))?;
                 self.send_child_delete(ctx, &child, &mut evidence)
                     .await
                     .map_err(|failure| {
@@ -301,6 +306,7 @@ impl Client {
             }
             first => first,
         }
+        .map(drop)
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(error, None, dispatch)
@@ -427,7 +433,9 @@ impl Client {
                 .await;
             check_confirm_time(ctx, &wait, clock, child, evidence)?;
             match status {
-                Err(error) if error.detail::<CompleteNotFound>().is_some() => {
+                Err(error)
+                    if crate::confirms_absence(&error, child.read.id, "GET", child.read.route) =>
+                {
                     let absence = Guarded::from_checkpoint((), evidence, checkpoint)
                         .map_err(|error| child.unconfirmed(evidence, *error))?;
                     let lb = self
@@ -507,7 +515,7 @@ impl Client {
         ctx: &RequestContext,
         child: &Child<'_>,
         evidence: &mut Evidence,
-    ) -> ChildFailure<()> {
+    ) -> Result<crate::wire::product::sender::Response, Failure<()>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -538,10 +546,12 @@ impl Client {
             allow_empty: true,
             no_output: true,
             keep_status: false,
-            overflow_overrides_status: true,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: false,
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: true,
+            no_redirect: false,
+            report_redirect: false,
             retry_config: retry::Config::default(),
         };
         let result = operation::execute_raw(
@@ -562,47 +572,54 @@ impl Client {
             Failure::new(screen(error), None, dispatch)
         })?;
         let status = reply.status;
-        let body = Bytes::from(reply.reply.body);
-        let busy = status.is_client_error()
-            && response::inspect_error_message(&body, evidence.credentials(), |message| {
-                message_has_phrase(
-                    message,
-                    &[
-                        b"is not ready",
-                        b"is updating",
-                        b"is creating",
-                        b"is deleting",
-                    ],
-                )
+        if operation.success.contains(&status) {
+            reply
+                .check_discarded_acknowledgement(operation.id)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
+            return Ok(reply);
+        }
+        let busy = if status.is_client_error() {
+            reply.clean_receipt().and_then(|receipt| {
+                BusyRefusal::from_receipt(receipt, evidence.credentials(), |message| {
+                    message_has_phrase(
+                        message,
+                        &[
+                            b"is not ready",
+                            b"is updating",
+                            b"is creating",
+                            b"is deleting",
+                        ],
+                    )
+                })
             })
-            .unwrap_or(false);
-        let in_use = (child.kind == "pool" && !operation.success.contains(&status))
-            .then(|| pool_in_use_refusal(&body, evidence))
-            .flatten();
-        let classify = if evidence.credentials().values().is_empty() {
-            response::classify_full
         } else {
-            response::classify
+            None
         };
-        classify(
-            operation.id,
-            status,
-            body,
-            operation.success,
-            (true, false, operation.retry),
-            evidence.credentials(),
-        )
-        .map(|_| ())
-        .map_err(|error| {
-            let mut error = screen(*error);
-            if let Some(in_use) = in_use {
-                error = child.in_use_refusal(error.with_outer_detail(in_use), evidence);
-            }
-            if busy {
-                error = error.with_outer_detail(BusyRefusal);
-            }
-            Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
-        })
+        let in_use = if child.kind == "pool" && !operation.success.contains(&status) {
+            reply
+                .clean_receipt()
+                .and_then(|receipt| pool_in_use_refusal(&receipt, evidence))
+        } else {
+            None
+        };
+        reply
+            .classify(
+                operation.id,
+                operation.success,
+                (true, false, operation.retry),
+                evidence.credentials().values().is_empty(),
+            )
+            .map_err(|error| {
+                let mut error = screen(error.with_clean_absence(reply.clean_absence()));
+                if let Some(in_use) = in_use {
+                    error = child.in_use_refusal(error.with_outer_detail(in_use), evidence);
+                }
+                if let Some(busy) = busy {
+                    error = error.with_outer_detail(busy);
+                }
+                Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+            })?;
+        Ok(reply)
     }
 }
 
@@ -617,7 +634,7 @@ impl Child<'_> {
         let id = safe_text(self.id, evidence);
         let reason = error
             .api_error()
-            .map_or_else(String::new, |api| format!(": {}", api_error_text(api)));
+            .map_or_else(String::new, |api| format!(": {}", api.go_text()));
         let message = format!(
             "loadbalancer: resource in use: {}: pool {id}{reason}",
             self.operation
@@ -646,7 +663,7 @@ impl Child<'_> {
             Some(api) if cause.detail::<DecodeError>().is_some() && !api.message().is_empty() => {
                 api.message().to_owned()
             }
-            Some(api) => api_error_text(api),
+            Some(api) => api.go_text(),
             None => "confirmation read failed".into(),
         };
         let message = format!(
@@ -655,44 +672,6 @@ impl Child<'_> {
         );
         Box::new(local(ErrorClass::NotSettled, &message, evidence).with_cause(cause))
     }
-}
-
-fn api_error_text(api: &crate::ApiError) -> String {
-    let message = api.message();
-    let message = if message.is_empty() {
-        "request failed"
-    } else {
-        message
-    };
-    match (api.operation(), api.status()) {
-        ("", None) => message.into(),
-        ("", Some(status)) => format!("{message} (status {status})"),
-        (operation, None) => format!("{operation}: {message}"),
-        (operation, Some(status)) => format!("{operation}: {message} (status {status})"),
-    }
-}
-
-fn busy(progress: &str, parent: bool) -> bool {
-    matches!(progress, "CREATING" | "UPDATING" | "DELETING")
-        || (parent && progress == "CREATING-BILLING")
-}
-
-fn message_has_phrase(message: &str, phrases: &[&[u8]]) -> bool {
-    phrases.iter().any(|phrase| {
-        message
-            .as_bytes()
-            .windows(phrase.len())
-            .any(|part| part.eq_ignore_ascii_case(phrase))
-    })
-}
-
-fn canonical_field<T: WireField>(
-    fields: &Envelope<'_>,
-    read: &Read,
-    evidence: &Evidence,
-    name: &str,
-) -> Result<T, Box<Error>> {
-    read.parse(fields.canonical_raw(read, evidence, name)?, evidence)
 }
 
 fn not_sent<T>(error: Error) -> Failure<T> {

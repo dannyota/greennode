@@ -21,7 +21,7 @@ use crate::wire::{
         operation::{self, Operation, Output},
         sender::{Response, SentCredentials},
     },
-    strict_json::{self, Shape, ShapeField},
+    strict_json::{self, Shape},
 };
 use crate::{Clock, Error, ErrorClass, Failure, PagedList, RequestContext, WriteDispatch};
 use http::StatusCode;
@@ -185,6 +185,7 @@ impl Client {
         let mut credentials = SentCredentials::default();
         let mut frozen = None;
         let mut bytes = 0;
+        let byte_limit = self.session.retained_byte_limit(MAX_BYTES);
         let incomplete = || {
             Box::new(
                 Error::new(ErrorClass::HistoryIncomplete).with_cause(response_error(
@@ -216,15 +217,12 @@ impl Client {
                 )
                 .await?;
             bytes += reply.bytes;
-            if input.all && bytes > MAX_BYTES {
+            if input.all && bytes > byte_limit {
                 return Err(incomplete());
             }
             check_context()?;
             let data = reply.data.as_deref().ok_or_else(invalid)?;
-            strict_json::validate_shape(data.get().as_bytes(), &PAGE_SCHEMA, operation.cap)
-                .map_err(|_| invalid())?;
-            let decoded: HistoryPage<'_> =
-                serde_json::from_str(data.get()).map_err(|_| invalid())?;
+            let decoded = decode_history_page(data).map_err(|_| invalid())?;
             let meta = decoded.pageable;
             let count = decoded.content.len() as i64;
             let expected_pages = if meta.total > 0 {
@@ -257,8 +255,6 @@ impl Client {
             let mut local = HashSet::new();
             for row in decoded.content {
                 check_context()?;
-                strict_json::validate_shape(row.get().as_bytes(), &W::SCHEMA, operation.cap)
-                    .map_err(|_| invalid())?;
                 let row: W = serde_json::from_str(row.get()).map_err(|_| invalid())?;
                 if !local.insert(row.id()) {
                     return Err(invalid());
@@ -360,6 +356,7 @@ fn history_operation(id: &'static str, route: &'static str) -> Operation {
     Operation {
         sensitive: true,
         no_redirect: true,
+        report_redirect: true,
         reflection: crate::wire::product::operation::Reflection::Redact,
         ..read_operation(id, route)
     }
@@ -410,38 +407,105 @@ fn parse_date(text: &str) -> Option<Date> {
     .ok()
 }
 
-#[derive(Deserialize)]
 struct Metadata {
     number: i64,
     size: i64,
-    #[serde(rename = "totalPages")]
     pages: i64,
-    #[serde(rename = "totalElements")]
     total: i64,
 }
 
-#[derive(Deserialize)]
 struct HistoryPage<'a> {
-    #[serde(borrow)]
     content: Vec<&'a RawValue>,
     pageable: Metadata,
 }
 
-const PAGE_SCHEMA: Shape<'static> = Shape::Object(&[
-    ShapeField {
-        name: "content",
-        shape: Shape::Array(&Shape::Any),
-    },
-    ShapeField {
-        name: "pageable",
-        shape: Shape::Object(&[
-            field("number"),
-            field("size"),
-            field("totalPages"),
-            field("totalElements"),
-        ]),
-    },
-]);
+fn decode_history_page(data: &RawValue) -> Result<HistoryPage<'_>, serde_json::Error> {
+    let mut content = None;
+    let mut metadata = None;
+    visit_history_fields(
+        &mut serde_json::Deserializer::from_str(data.get()),
+        &["content", "pageable"],
+        |name, _, raw| {
+            match name {
+                "content" => content = serde_json::from_str(raw.get())?,
+                "pageable" if raw.get() == "null" => metadata = None,
+                "pageable" => {
+                    const NAMES: &[&str] = &["number", "size", "totalPages", "totalElements"];
+                    let fields = metadata.get_or_insert([None; 4]);
+                    visit_history_fields(
+                        &mut serde_json::Deserializer::from_str(raw.get()),
+                        NAMES,
+                        |name, _, raw| {
+                            let index = NAMES.iter().position(|field| *field == name).unwrap();
+                            fields[index] = serde_json::from_str(raw.get())?;
+                            Ok(())
+                        },
+                    )?;
+                }
+                _ => unreachable!(),
+            }
+            Ok(())
+        },
+    )?;
+    let missing = || serde::de::Error::custom("missing history field");
+    let [number, size, pages, total] = metadata.ok_or_else(missing)?;
+    Ok(HistoryPage {
+        content: content.ok_or_else(missing)?,
+        pageable: Metadata {
+            number: number.ok_or_else(missing)?,
+            size: size.ok_or_else(missing)?,
+            pages: pages.ok_or_else(missing)?,
+            total: total.ok_or_else(missing)?,
+        },
+    })
+}
+
+fn visit_history_fields<'de, D, F>(
+    deserializer: D,
+    names: &[&str],
+    visit: F,
+) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+    F: FnMut(&str, bool, &'de RawValue) -> Result<(), serde_json::Error>,
+{
+    struct Fields<'a, F> {
+        names: &'a [&'a str],
+        visit: F,
+    }
+
+    impl<'de, F> serde::de::Visitor<'de> for Fields<'_, F>
+    where
+        F: FnMut(&str, bool, &'de RawValue) -> Result<(), serde_json::Error>,
+    {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a billing history object")
+        }
+
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            mut self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
+            while let Some(key) = map.next_key::<String>()? {
+                if let Some(name) = self
+                    .names
+                    .iter()
+                    .copied()
+                    .find(|name| strict_json::field_matches(name, &key))
+                {
+                    (self.visit)(name, name == key, map.next_value::<&RawValue>()?)
+                        .map_err(serde::de::Error::custom)?;
+                } else {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+            Ok(())
+        }
+    }
+    deserializer.deserialize_map(Fields { names, visit })
+}
 
 #[derive(Default, Deserialize)]
 struct HistoryEnvelope {
@@ -450,14 +514,6 @@ struct HistoryEnvelope {
     bytes: usize,
     #[serde(skip)]
     credentials: SentCredentials,
-}
-
-#[derive(Deserialize)]
-struct Envelope<'a> {
-    #[serde(borrow)]
-    code: &'a RawValue,
-    #[serde(borrow)]
-    data: Option<&'a RawValue>,
 }
 
 const ENVELOPE_SCHEMA: Shape<'static> = Shape::Object(&[field("code"), field("data")]);
@@ -492,27 +548,42 @@ impl Output for HistoryEnvelope {
                 security::HISTORY_WITHHELD,
             )));
         }
-        let body = &response.body;
-        let envelope: Envelope<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
-        let code = envelope_code(envelope.code).ok_or_else(invalid)?;
-        strict_json::validate_shape(body, &Self::SCHEMA, operation.cap).map_err(|_| invalid())?;
-        if !(200..=299).contains(&code) {
-            if reflects_integer(code, &response.credentials) {
-                return Err(invalid());
+        response.decode_projection(|body| {
+            let raw: &RawValue = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let (mut code, mut data) = (None, None);
+            visit_history_fields(
+                &mut serde_json::Deserializer::from_str(raw.get()),
+                &["code", "data"],
+                |name, _, raw| {
+                    match name {
+                        "code" => code = Some(raw),
+                        "data" => data = Some(raw),
+                        _ => unreachable!(),
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|_| invalid())?;
+            let code = code.and_then(envelope_code).ok_or_else(invalid)?;
+            if !(200..=299).contains(&code) {
+                if reflects_integer(code, &response.credentials) {
+                    return Err(invalid());
+                }
+                return Err(Box::new(response_error(
+                    operation,
+                    Some(status),
+                    &code.to_string(),
+                    security::HISTORY_WITHHELD,
+                    false,
+                )));
             }
-            return Err(Box::new(response_error(
-                operation,
-                Some(status),
-                &code.to_string(),
-                security::HISTORY_WITHHELD,
-                false,
-            )));
-        }
-        let raw: &RawValue = serde_json::from_slice(body).map_err(|_| invalid())?;
-        Ok(Self {
-            data: envelope.data.map(ToOwned::to_owned),
-            bytes: raw.get().len(),
-            credentials: response.credentials.clone(),
+            Ok(Self {
+                data: data
+                    .filter(|data| data.get() != "null")
+                    .map(ToOwned::to_owned),
+                bytes: raw.get().len(),
+                credentials: response.credentials.clone(),
+            })
         })
     }
 }

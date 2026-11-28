@@ -10,6 +10,7 @@ mod dashboards;
 mod quota;
 mod response_times;
 mod wire;
+pub(crate) use wire::response_read_failure;
 
 use std::sync::Arc;
 

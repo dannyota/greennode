@@ -46,9 +46,14 @@ fn client(server: &Server) -> Client {
 }
 
 fn client_with_token(server: &Server, token: &str) -> Client {
+    client_with_clock(server, token, greennode_sdk::testing::retry_clock())
+}
+
+fn client_with_clock(server: &Server, token: &str, clock: Arc<dyn greennode_sdk::Clock>) -> Client {
     let options = ConfigOptions::default()
         .with_region("hcm-3".into())
         .with_static_token(Secret::new(token));
+    let options = greennode_sdk::testing::with_clock(options, clock);
     Client::new(&Config::new(with_product_loopback(Product::Monitor, options, server)).unwrap())
 }
 
@@ -61,14 +66,7 @@ fn client_with_cdn_key(server: &Server, token: &str, key: &str) -> Client {
 }
 
 fn client_at(server: &Server, token: &str, now: time::OffsetDateTime) -> Client {
-    let options = ConfigOptions::default()
-        .with_region("hcm-3".into())
-        .with_static_token(Secret::new(token));
-    let options = greennode_sdk::testing::with_clock(
-        options,
-        std::sync::Arc::new(greennode_sdk::TestClock::new(now)),
-    );
-    Client::new(&Config::new(with_product_loopback(Product::Monitor, options, server)).unwrap())
+    client_with_clock(server, token, Arc::new(greennode_sdk::TestClock::new(now)))
 }
 
 fn target(head: &[u8]) -> url::Url {
@@ -534,4 +532,22 @@ async fn path_id_refusals_carry_go_messages_for_every_monitor_read() {
         Some("vngcloud: invalid input: monitor.ListDashboards: invalid page or size".to_owned())
     );
     assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn dashboard_body_failure_keeps_no_provider_message() {
+    let server = Server::start(vec![Response::RawClose(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n{}".to_vec(),
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_dashboard(&ctx, GetDashboardInput::new("dash-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!((api.status(), api.code(), api.message()), (None, "", ""));
+    assert_eq!(
+        api.to_string(),
+        "monitor.GetDashboard: request failed: network request failed"
+    );
 }

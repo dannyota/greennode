@@ -306,7 +306,7 @@ impl Client {
             &mut evidence,
         )
         .await;
-        let mut output = match reply {
+        let (mut output, acknowledged) = match reply {
             Err(failure) => {
                 let (error, _, dispatch) = failure.into_parts();
                 if dispatch == WriteDispatch::NotSent {
@@ -322,6 +322,7 @@ impl Client {
                 status,
                 CreateReply {
                     outcome: Outcome::Refused(reason),
+                    ..
                 },
             )) => {
                 return Err(Failure::new(
@@ -333,15 +334,24 @@ impl Client {
             Ok((
                 _,
                 CreateReply {
-                    outcome: Outcome::Unconfirmed(output),
+                    outcome: Outcome::Unconfirmed(mut output),
+                    acknowledged,
                 },
             )) => {
+                if acknowledged
+                    .as_ref()
+                    .and_then(|id| id.recheck(&evidence).ok())
+                    .is_none()
+                {
+                    output.id.clear();
+                }
                 return Err(partial_failure(unsettled(None), output, &evidence));
             }
             Ok((
                 _,
                 CreateReply {
                     outcome: Outcome::Unknown,
+                    ..
                 },
             )) => {
                 return Err(partial_failure(
@@ -354,23 +364,41 @@ impl Client {
                 _,
                 CreateReply {
                     outcome: Outcome::Accepted(output),
+                    acknowledged: Some(acknowledged),
                 },
-            )) => output,
-        };
-        if !input.no_wait {
-            if evidence.id_reflects(&output.id) {
-                return Err(partial_failure(unsettled(None), output, &evidence));
+            )) => (output, acknowledged),
+            Ok(_) => {
+                return Err(partial_failure(
+                    unsettled(None),
+                    CreateClusterOutput::default(),
+                    &evidence,
+                ));
             }
+        };
+        let receipt_refused = |error: Box<Error>| {
+            Failure::new(
+                unsettled(Some(*error)),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            )
+        };
+        acknowledged.recheck(&evidence).map_err(receipt_refused)?;
+        evidence
+            .keep_acknowledgement(&acknowledged)
+            .map_err(receipt_refused)?;
+        if !input.no_wait {
             let result = wait_cluster(
                 ctx,
                 self.session.clock(),
                 &mut evidence,
                 async |wait, evidence| {
-                    let status = self.cluster_state(wait, &output.id, evidence).await?;
+                    let id = acknowledged.recheck(evidence)?;
+                    let status = self.cluster_state(wait, id, evidence).await?;
                     observe_status(&mut output, status.into_checked(evidence)?)
                 },
             )
             .await;
+            acknowledged.recheck(&evidence).map_err(receipt_refused)?;
             if let Err(error) = result {
                 let error = if error.class() == ErrorClass::Failed {
                     *error
@@ -422,7 +450,7 @@ fn partial_failure(
 }
 
 fn unsettled_send(error: Error) -> Error {
-    let status = error.api_error().and_then(ApiError::status);
+    let status = error.api_error().and_then(ApiError::observed_status);
     let cause = if status.is_some_and(|status| (300..400).contains(&status)) {
         None
     } else {
@@ -441,10 +469,7 @@ fn unsettled(cause: Option<Error>) -> Error {
     };
     use std::fmt::Write as _;
     if let Some(api) = cause.api_error() {
-        let _ = write!(message, "\n{}: {}", api.operation(), api.message());
-        if let Some(status) = api.status() {
-            let _ = write!(message, " (status {status})");
-        }
+        let _ = write!(message, "\n{}", api.go_text());
     } else {
         let reason = match cause.class() {
             ErrorClass::Cancelled => "context canceled",
@@ -468,11 +493,13 @@ fn create_operation() -> Operation {
         allow_recovery: false,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
-        overflow_overrides_status: true,
+        keep_status: false,
+        raw_body: true,
+        overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }
@@ -503,7 +530,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vks_no_wait_exit_redacts_a_short_encoding_in_the_cluster_id() {
+    async fn vks_no_wait_refuses_a_short_encoding_in_the_cluster_id() {
         use crate::wire::test_server::{Response, Server};
         let body = br#"{"id":"pre6A6B6Cpost","status":"CREATING"}"#.to_vec();
         let server = Server::start(vec![Response::Http {
@@ -528,9 +555,10 @@ mod tests {
         let result =
             crate::wire::product::exit::finish!(client.create_cluster_inner(&ctx, order, &base));
         assert_eq!(server.requests(), 1);
-        let output = result.unwrap();
-        assert!(output.id == "<redacted>");
-        assert_eq!(output.status, "CREATING");
+        let failure = result.unwrap_err();
+        assert!(failure.error().has_identity(ErrorClass::NotSettled));
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert!(failure.partial().is_none_or(|output| output.id.is_empty()));
     }
 
     #[test]

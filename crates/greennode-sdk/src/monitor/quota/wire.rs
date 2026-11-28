@@ -50,7 +50,7 @@ impl<'a> Reader<'a> {
     ) -> Result<Box<RawValue>, Error> {
         self.get_status(route, segments, false)
             .await
-            .map(|(_, raw)| raw)
+            .map(|(_, raw, _)| raw)
     }
 
     pub(super) async fn get_status(
@@ -58,7 +58,14 @@ impl<'a> Reader<'a> {
         route: &'static str,
         segments: &[&str],
         accept_not_found: bool,
-    ) -> Result<(http::StatusCode, Box<RawValue>), Error> {
+    ) -> Result<
+        (
+            http::StatusCode,
+            Box<RawValue>,
+            Option<crate::wire::product::absence::CleanAbsence>,
+        ),
+        Error,
+    > {
         if self.exhausted {
             return Err(self
                 .read
@@ -88,7 +95,7 @@ impl<'a> Reader<'a> {
             return Err(read.error(
                 response.as_ref().map_or_else(
                     |error| error.api_error().and_then(crate::ApiError::status),
-                    |(status, _)| Some(status.as_u16()),
+                    |(status, _, _)| Some(status.as_u16()),
                 ),
                 "InvalidResponse",
                 "quota credential safety limit exceeded",
@@ -96,9 +103,9 @@ impl<'a> Reader<'a> {
                 &self.evidence,
             ));
         }
-        let (status, raw) = response?;
+        let (status, raw, absence) = response?;
         let body = ValidBody::check(raw.get()).map_err(|()| {
-            if status == http::StatusCode::NOT_FOUND {
+            if absence.is_some() {
                 read.error(
                     Some(404),
                     "NotFound",
@@ -106,6 +113,7 @@ impl<'a> Reader<'a> {
                     false,
                     &self.evidence,
                 )
+                .with_clean_absence(absence.clone())
             } else {
                 self.invalid()
             }
@@ -125,7 +133,7 @@ impl<'a> Reader<'a> {
                 .with_body_too_large());
         }
         self.retained += length;
-        Ok((status, raw))
+        Ok((status, raw, absence))
     }
 
     pub(super) fn invalid(&self) -> Error {

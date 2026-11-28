@@ -7,8 +7,9 @@ use crate::wire::product::{evidence::Evidence, options::PathIds, response};
 use crate::{ApiError, Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
 use super::inventory::{Selection, screen};
+use super::nat::failure;
 use super::wire::{Fields, Read, Style};
-use super::{Client, NatAvailabilityZone, NatInstance, NatPackageOffer, failure};
+use super::{Client, NatAvailabilityZone, NatInstance, NatPackageOffer};
 
 const INSTANCES: Read = Read::new(
     "network.ListNATInstances",
@@ -104,10 +105,15 @@ impl Client {
         input: ListNatInstancesInput,
     ) -> Result<ListNatInstancesOutput, Failure<ListNatInstancesOutput>> {
         crate::wire::product::exit::finish!(async {
-            if input.page < 0 || input.size < 0 {
-                return Err(failure(Error::new(ErrorClass::InvalidInput).with_cause(crate::quote::request::api("", None, "InvalidUsage", "vngcloud: invalid input: network.ListNATInstances requires nonnegative Page and Size", false))));
-            }
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            INSTANCES
+                .nat_catalog_zone(&input.zone_id, &evidence)
+                .map_err(failure)?;
+            if input.page < 0 || input.size < 0 {
+                return Err(failure(
+                    INSTANCES.nat_input_error("requires nonnegative Page and Size", &evidence),
+                ));
+            }
             let scope = self
                 .nat_scope(ctx, INSTANCES, input.zone_id, &mut evidence, true)
                 .await
@@ -139,6 +145,9 @@ impl Client {
     ) -> Result<ListNatZonesOutput, Failure<ListNatZonesOutput>> {
         crate::wire::product::exit::finish!(async {
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            ZONES
+                .nat_catalog_zone(&input.zone_id, &evidence)
+                .map_err(failure)?;
             let scope = self
                 .nat_scope(ctx, ZONES, input.zone_id, &mut evidence, false)
                 .await
@@ -158,13 +167,21 @@ impl Client {
         input: ListNatPackagesInput,
     ) -> Result<ListNatPackagesOutput, Failure<ListNatPackagesOutput>> {
         crate::wire::product::exit::finish!(async {
-            PACKAGES
-                .path("AvailabilityZoneID", &input.availability_zone_id)
-                .map_err(failure)?;
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
+            if input.availability_zone_id.is_empty() {
+                return Err(failure(
+                    PACKAGES.nat_input_error("requires AvailabilityZoneID", &evidence),
+                ));
+            }
+            PACKAGES
+                .nat_path("AvailabilityZoneID", &input.availability_zone_id, &evidence)
+                .map_err(failure)?;
             if evidence.id_reflects(&input.availability_zone_id) {
                 return Err(failure(Error::new(ErrorClass::InvalidInput)));
             }
+            PACKAGES
+                .nat_catalog_zone(&input.zone_id, &evidence)
+                .map_err(failure)?;
             let scope = self
                 .nat_scope(ctx, PACKAGES, input.zone_id, &mut evidence, false)
                 .await
@@ -191,31 +208,30 @@ impl Client {
         evidence: &mut Evidence,
         use_shared_project: bool,
     ) -> Result<NatScope, Error> {
-        if !zone.is_empty() {
-            read.path("ZoneID", &zone)?;
-            if evidence.id_reflects(&zone) {
-                return Err(Error::new(ErrorClass::InvalidInput));
-            }
-        }
         let configured = self
             .session
             .project_id_context(ctx)
             .await
             .map_err(|error| *error)?;
         if let Some(project) = &configured {
-            read.path("ProjectID", project)?;
+            read.nat_path("ProjectID", project, evidence)?;
             if evidence.id_reflects(project) {
                 return Err(Error::new(ErrorClass::InvalidInput));
             }
         }
-        let base = self.nat_base()?;
+        let base = self.nat_base(evidence)?;
         let project = match configured {
             Some(project) => project,
             None if use_shared_project => self
                 .session
                 .require_project_id_with_evidence(ctx, evidence)
                 .await
-                .map_err(|error| screen(*error, evidence))?,
+                .map_err(|error| {
+                    screen(
+                        super::wire::shared_nat_project_error(*error, &self.region, evidence),
+                        evidence,
+                    )
+                })?,
             None => {
                 let vserver = self
                     .session
@@ -223,13 +239,28 @@ impl Client {
                     .vserver
                     .as_ref()
                     .ok_or_else(|| Error::new(ErrorClass::InvalidConfig))?;
-                self.discover_project(ctx, vserver, read.at("v1/projects", Style::Nat), evidence)
-                    .await?
+                self.discover_project(
+                    ctx,
+                    vserver,
+                    read.at("v1/projects", Style::NatCatalogProject),
+                    evidence,
+                )
+                .await
+                .map_err(|error| read.nat_safe_error(error, evidence))?
             }
         };
-        read.path("ProjectID", &project)?;
+        read.nat_path("ProjectID", &project, evidence)?;
         if zone.is_empty() {
-            zone = self.nat_zone(ctx, &base, evidence).await?;
+            zone = self
+                .nat_zone(ctx, &base, Style::NatCatalogRegion, evidence)
+                .await
+                .map_err(|error| {
+                    if use_shared_project {
+                        error
+                    } else {
+                        read.nat_safe_error(error, evidence)
+                    }
+                })?;
         }
         if evidence.id_reflects(&project) || evidence.id_reflects(&zone) {
             return Err(catalog_invalid(read, evidence));

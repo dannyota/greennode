@@ -22,6 +22,10 @@ pub enum Response {
     RawClose(Vec<u8>),
     Close,
     ResetMidBody(oneshot::Sender<()>),
+    ResetResponseBody {
+        head: Vec<u8>,
+        reset: oneshot::Receiver<()>,
+    },
     Stall(oneshot::Sender<()>, usize),
     StallBeforeHead(oneshot::Sender<()>),
     ObserveStall {
@@ -51,16 +55,35 @@ pub struct Server {
 }
 
 impl Server {
+    #[cfg(test)]
+    pub(crate) fn oversized(status: &str) -> Response {
+        let size = (8 << 20) + 1;
+        let mut bytes =
+            format!("HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\n\r\n{size:x}\r\n")
+                .into_bytes();
+        bytes.resize(bytes.len() + size, b' ');
+        bytes.extend_from_slice(b"\r\n0\r\n\r\n");
+        Response::RawClose(bytes)
+    }
+
     pub fn start(responses: Vec<Response>) -> Self {
-        Self::start_inner(responses, None)
+        Self::start_inner(|_| responses, None)
     }
 
     #[cfg(test)]
     pub(crate) fn start_stopping_after(responses: Vec<Response>, count: usize) -> Self {
-        Self::start_inner(responses, Some(count))
+        Self::start_inner(|_| responses, Some(count))
     }
 
-    fn start_inner(responses: Vec<Response>, stop_after: Option<usize>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn start_with(responses: impl FnOnce(SocketAddr) -> Vec<Response>) -> Self {
+        Self::start_inner(responses, None)
+    }
+
+    fn start_inner(
+        responses: impl FnOnce(SocketAddr) -> Vec<Response>,
+        stop_after: Option<usize>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -86,7 +109,7 @@ impl Server {
         let request_heads = Arc::clone(&heads);
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let request_bodies = Arc::clone(&bodies);
-        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses(address))));
         let (shutdown, mut stop) = oneshot::channel();
         let thread = thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -155,8 +178,14 @@ impl Server {
                                         let (ack, done) = oneshot::channel();
                                         if stop_accept.send(ack).is_err() || done.await.is_err() { return; }
                                     }
+                                    let mut close = final_response;
                                     let bytes = match response {
                                         Response::ResetMidBody(_) => unreachable!(),
+                                        Response::ResetResponseBody { head, reset } => {
+                                            if stream.write_all(&head).await.is_err() || stream.flush().await.is_err() { return; }
+                                            if reset.await.is_ok() { let _ = stream.get_ref().0.set_zero_linger(); }
+                                            return;
+                                        }
                                         Response::Fragment { first, proceed, last } => {
                                             if stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\nTrailer: X-Trailer\r\n\r\n3\r\nabc\r\n").await.is_err() || stream.flush().await.is_err() { return; }
                                             let _ = first.send(());
@@ -193,7 +222,13 @@ impl Server {
                                         Response::Raw(bytes) => bytes,
                                         Response::Http { status, headers, body } => {
                                             let mut bytes = format!("HTTP/1.1 {status}\r\n").into_bytes();
-                                            for (name, value) in headers { bytes.extend_from_slice(format!("{name}: {value}\r\n").as_bytes()); }
+                                            for (name, value) in headers {
+                                                close |= (name.eq_ignore_ascii_case("content-length")
+                                                    && value.parse::<usize>().is_ok_and(|length| length > body.len()))
+                                                    || (name.eq_ignore_ascii_case("connection")
+                                                        && value.eq_ignore_ascii_case("close"));
+                                                bytes.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+                                            }
                                             if final_response { bytes.extend_from_slice(b"Connection: close\r\n"); }
                                             bytes.extend_from_slice(b"\r\n");
                                             bytes.extend_from_slice(&body);
@@ -201,7 +236,7 @@ impl Server {
                                         }
                                     };
                                     if stream.write_all(&bytes).await.is_err() || stream.flush().await.is_err() { return; }
-                                    if final_response { return; }
+                                    if close { return; }
                                 }
                                 }).await;
                             });

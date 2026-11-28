@@ -117,7 +117,7 @@ impl Client {
                     || failure
                         .error()
                         .api_error()
-                        .and_then(|api| api.status())
+                        .and_then(crate::ApiError::observed_status)
                         .is_some()
                 {
                     guard_failed(failure)

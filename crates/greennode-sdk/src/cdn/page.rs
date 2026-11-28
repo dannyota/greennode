@@ -60,27 +60,18 @@ impl Client {
             )
             .await
             .map_err(|failure| {
-                if failure.error().is_body_too_large()
-                    && failure.error().http_status() == Some(StatusCode::OK)
+                if let Some(status) =
+                    crate::wire::product::operation::raw_overflow_status(failure.error())
                 {
-                    return page_format(&format!("body over {CAP} bytes"), &evidence);
-                }
-                let status = failure.error().http_status().or_else(|| {
-                    failure
-                        .error()
-                        .api_error()
-                        .and_then(crate::ApiError::status)
-                        .and_then(|status| StatusCode::from_u16(status).ok())
-                });
-                if let Some(status) = status
-                    && status != StatusCode::OK
-                {
-                    return status_error(status);
+                    if status == StatusCode::OK {
+                        return page_format(&format!("body over {CAP} bytes"), &evidence);
+                    }
+                    return status_error(status, None);
                 }
                 convert(failure)
             })?;
             if reply.status != StatusCode::OK {
-                return Err(status_error(reply.status));
+                return Err(status_error(reply.status, reply.clean_absence()));
             }
             let content_type = reply
                 .headers
@@ -95,7 +86,9 @@ impl Client {
                 };
                 return Err(page_format(&reason, &evidence));
             }
-            let mut items = ranges(&String::from_utf8_lossy(&reply.body))
+            let mut items = reply
+                .decode_projection(|body| Ok(ranges(&String::from_utf8_lossy(body))))
+                .map_err(|error| read_failure(*error))?
                 .map_err(|reason| page_format(&reason, &evidence))?;
             for range in &mut items {
                 redact_text(range, &evidence);
@@ -106,21 +99,21 @@ impl Client {
     }
 }
 
-fn status_error<T>(status: StatusCode) -> Failure<T> {
+fn status_error<T>(
+    status: StatusCode,
+    absence: Option<crate::wire::product::absence::CleanAbsence>,
+) -> Failure<T> {
     let retryable = matches!(status.as_u16(), 429 | 502 | 503 | 504);
-    let message = match status {
-        StatusCode::FORBIDDEN => "greennode: permission denied".to_owned(),
-        StatusCode::NOT_FOUND => "greennode: resource not found".to_owned(),
-        StatusCode::TOO_MANY_REQUESTS => "greennode: rate limited".to_owned(),
-        _ => format!("request failed with status {}", status.as_u16()),
-    };
-    read_failure(Error::from_public_api(ApiError::new(
-        OP,
-        Some(status.as_u16()),
-        SafeText::new("", &[]),
-        SafeText::new(&message, &[]),
-        retryable,
-    )))
+    read_failure(
+        Error::from_public_api(ApiError::new(
+            OP,
+            Some(status.as_u16()),
+            SafeText::new("", &[]),
+            SafeText::new("", &[]),
+            retryable,
+        ))
+        .with_clean_absence(absence),
+    )
 }
 
 fn page_format<T>(reason: &str, evidence: &Evidence) -> Failure<T> {

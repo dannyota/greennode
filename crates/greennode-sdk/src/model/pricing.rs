@@ -106,6 +106,26 @@ crate::wire::product::output::public_fields!(DiscoveryFailure {
     status
 });
 
+impl DiscoveryFailure {
+    pub(crate) fn screen_fields(&mut self, evidence: &crate::wire::product::evidence::Evidence) {
+        for field in [&mut self.operation, &mut self.code] {
+            if evidence.text_reflects(field) {
+                field.clear();
+            }
+        }
+        if evidence.text_reflects(&self.item_key) {
+            self.item_key = if evidence.text_reflects("<redacted>") {
+                String::new()
+            } else {
+                "<redacted>".into()
+            };
+        }
+        if self.status != 0 && evidence.output_reflects(&serde_json::Value::from(self.status)) {
+            self.status = 0;
+        }
+    }
+}
+
 /// Published or observed pricing context.
 #[derive(Clone, Default, PartialEq, Serialize)]
 pub struct PricingNote {

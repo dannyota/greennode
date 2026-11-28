@@ -61,6 +61,150 @@ pub fn with_clock(
     options.with_clock(clock)
 }
 
+#[cfg(any(test, feature = "test-support"))]
+type VolumeConfirmationHook = Box<dyn Fn(&ResponseBodyClock) + Send + Sync>;
+
+#[cfg(any(test, feature = "test-support"))]
+pub struct ResponseBodyClock {
+    clock: crate::TestClock,
+    volume_confirmation: Option<VolumeConfirmationHook>,
+    reading: tokio::sync::watch::Sender<usize>,
+    sleep_started: tokio::sync::watch::Sender<std::collections::BTreeSet<std::time::Duration>>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl crate::Clock for ResponseBodyClock {
+    fn utc_now(&self) -> time::OffsetDateTime {
+        self.clock.utc_now()
+    }
+
+    fn monotonic_now(&self) -> tokio::time::Instant {
+        self.clock.monotonic_now()
+    }
+
+    fn sleep_until(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let delay = deadline.saturating_duration_since(self.clock.monotonic_now());
+        self.sleep_started
+            .send_if_modified(|started| started.insert(delay));
+        self.clock.sleep_until(deadline)
+    }
+    fn response_body_started(&self) {
+        self.reading.send_modify(|started| *started += 1);
+    }
+
+    fn volume_confirmation_read_completed(&self) {
+        if let Some(hook) = &self.volume_confirmation {
+            hook(self);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl ResponseBodyClock {
+    pub fn new() -> Self {
+        Self {
+            clock: crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+            reading: tokio::sync::watch::channel(0).0,
+            volume_confirmation: None,
+            sleep_started: tokio::sync::watch::channel(std::collections::BTreeSet::new()).0,
+        }
+    }
+
+    pub fn on_volume_confirmation(mut self, hook: impl Fn(&Self) + Send + Sync + 'static) -> Self {
+        self.volume_confirmation = Some(Box::new(hook));
+        self
+    }
+
+    pub async fn started(&self) {
+        self.wait_for_body(1).await;
+    }
+
+    pub async fn wait_for_body(&self, count: usize) {
+        self.reading
+            .subscribe()
+            .wait_for(|&started| started >= count)
+            .await
+            .unwrap();
+    }
+
+    pub async fn wait_for_one_second_retry(&self) {
+        self.wait_for_sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    pub async fn wait_for_sleep(&self, duration: std::time::Duration) {
+        self.sleep_started
+            .subscribe()
+            .wait_for(|started| started.contains(&duration))
+            .await
+            .unwrap();
+    }
+
+    pub fn advance(&self, duration: std::time::Duration) {
+        self.clock.advance(duration);
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Default for ResponseBodyClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn clock_advancing_on_sleep(
+    clock: crate::TestClock,
+    delay: std::time::Duration,
+) -> impl crate::Clock {
+    advancing_clock(clock, move |remaining| remaining == delay)
+}
+
+pub fn retry_clock() -> std::sync::Arc<dyn crate::Clock> {
+    std::sync::Arc::new(advancing_clock(
+        crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+        |remaining| !remaining.is_zero() && remaining <= std::time::Duration::from_secs(4),
+    ))
+}
+
+fn advancing_clock(
+    clock: crate::TestClock,
+    should_advance: impl Fn(std::time::Duration) -> bool + Send + Sync,
+) -> impl crate::Clock {
+    struct Clock<F> {
+        inner: crate::TestClock,
+        should_advance: F,
+    }
+
+    impl<F: Fn(std::time::Duration) -> bool + Send + Sync> crate::Clock for Clock<F> {
+        fn utc_now(&self) -> time::OffsetDateTime {
+            self.inner.utc_now()
+        }
+
+        fn monotonic_now(&self) -> tokio::time::Instant {
+            self.inner.monotonic_now()
+        }
+
+        fn sleep_until(
+            &self,
+            deadline: tokio::time::Instant,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+            let remaining = deadline.saturating_duration_since(self.monotonic_now());
+            if (self.should_advance)(remaining) {
+                Box::pin(async move { self.inner.advance(remaining) })
+            } else {
+                self.inner.sleep_until(deadline)
+            }
+        }
+    }
+
+    Clock {
+        inner: clock,
+        should_advance,
+    }
+}
+
 pub fn with_write_loopback(
     product: Product,
     options: crate::ConfigOptions,

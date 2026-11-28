@@ -3,7 +3,7 @@ pub(crate) mod images;
 pub(crate) mod storage;
 pub(crate) mod volume;
 
-pub(crate) use fields::{array, exact, unpaged};
+pub(crate) use fields::{array, array_rows, envelope_fields, exact, record, unpaged, wire_field};
 pub(crate) use images::Image;
 pub(crate) use storage::{
     StorageCatalog, StorageRegion, storage_data, storage_region, storage_region_name,
@@ -26,6 +26,8 @@ pub(crate) const TYPES: &str = "volume.ListVolumeTypes";
 pub(crate) const ENCRYPTIONS: &str = "volume.ListEncryptionTypes";
 pub(crate) const IMAGES: &str = "compute.ListOSImages";
 pub(crate) const REGIONS: &str = "storage.ListRegions";
+const RETAINED_BYTE_LIMIT: usize = 32 << 20;
+const ROW_LIMIT: usize = 10_000;
 
 pub(crate) struct Catalog<'a> {
     pub(crate) session: &'a Session,
@@ -40,6 +42,7 @@ struct Budget {
     requests: usize,
     rows: usize,
     retained: usize,
+    byte_limit: usize,
     pacing: Pacing,
 }
 
@@ -47,7 +50,7 @@ impl Budget {
     fn preflight(&self, count: usize) -> Result<(), Box<Error>> {
         if count > self.max.saturating_sub(self.requests) {
             return Err(limit(format!(
-                "estimate limit exceeded: discovery limit exceeded: requires {} requests, maximum {}",
+                "discovery limit exceeded: requires {} requests, maximum {}",
                 self.requests.saturating_add(count),
                 self.max,
             )));
@@ -56,18 +59,16 @@ impl Budget {
     }
 }
 
-impl Budget {
+impl InventoryLimits for Budget {
     fn check_bytes(&self, bytes: usize) -> Result<(), Box<Error>> {
-        if bytes > (32usize << 20).saturating_sub(self.retained) {
+        if bytes > self.byte_limit.saturating_sub(self.retained) {
             return Err(limit(
-                "estimate limit exceeded: discovery limit exceeded: maximum 32 MiB retained responses",
+                "discovery limit exceeded: maximum 32 MiB retained responses",
             ));
         }
         Ok(())
     }
-}
 
-impl InventoryLimits for Budget {
     fn reserve(&mut self) -> Result<(), Box<Error>> {
         self.preflight(1)?;
         self.requests += 1;
@@ -76,10 +77,8 @@ impl InventoryLimits for Budget {
 
     fn account(&mut self, rows: usize, bytes: usize) -> Result<(), Box<Error>> {
         self.check_bytes(bytes)?;
-        if rows > 10_000usize.saturating_sub(self.rows) {
-            return Err(limit(
-                "estimate limit exceeded: discovery limit exceeded: maximum 10000 rows",
-            ));
+        if rows > ROW_LIMIT.saturating_sub(self.rows) {
+            return Err(limit("discovery limit exceeded: maximum 10000 rows"));
         }
         self.rows += rows;
         self.retained += bytes;
@@ -94,6 +93,7 @@ impl InventoryLimits for Budget {
 impl<'a> Catalog<'a> {
     pub(crate) fn new(session: &'a Session, ctx: &RequestContext, max: i64) -> Self {
         let clock = session.clock();
+        let byte_limit = session.retained_byte_limit(RETAINED_BYTE_LIMIT);
         Self {
             session,
             ctx: ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600)),
@@ -108,6 +108,7 @@ impl<'a> Catalog<'a> {
                 requests: 0,
                 rows: 0,
                 retained: 0,
+                byte_limit,
                 pacing: Pacing::new(Duration::from_millis(500)),
             },
         }
@@ -151,6 +152,15 @@ impl<'a> Catalog<'a> {
     }
 
     pub(crate) async fn exchange(&mut self, req: Request<'_>) -> Result<Box<RawValue>, Box<Error>> {
+        let operation = req.operation;
+        self.exchange_validated(req, operation).await
+    }
+
+    async fn exchange_validated(
+        &mut self,
+        req: Request<'_>,
+        validation_op: &'static str,
+    ) -> Result<Box<RawValue>, Box<Error>> {
         self.check()?;
         if req
             .path
@@ -166,50 +176,73 @@ impl<'a> Catalog<'a> {
         }
         self.budget.reserve()?;
         self.unaccepted_bytes = 0;
-        let raw = request::exchange(
+        let ctx = &self.ctx;
+        let clock = self.session.clock();
+        let budget = &self.budget;
+        let (raw, raw_len) = request::exchange_validated(
             self.session,
             &self.ctx,
             &mut self.evidence,
             req,
-            Some(self.budget.pacing()),
+            Some(budget.pacing()),
+            validation_op,
+            |raw_len| {
+                if let Some(end) = ctx.check(clock) {
+                    return Err(Box::new(end.into()));
+                }
+                budget.check_bytes(raw_len)
+            },
         )
         .await?;
-        self.check()?;
-        self.budget.check_bytes(raw.get().len())?;
-        self.unaccepted_bytes = raw.get().len();
+        self.unaccepted_bytes = raw_len;
         Ok(raw)
     }
 
     pub(crate) async fn regional(
         &mut self,
         operation: &'static str,
+        validation_op: &'static str,
         template: &'static str,
         path: &[&str],
         query: &[(&str, &str)],
     ) -> Result<Value, Box<Error>> {
         let raw = self
-            .exchange(Request {
-                operation,
-                template,
-                product: Product::Regional,
-                path,
-                query,
-                body: None,
-            })
+            .exchange_validated(
+                Request {
+                    operation,
+                    template,
+                    product: Product::Regional,
+                    path,
+                    query,
+                    body: None,
+                },
+                validation_op,
+            )
             .await?;
-        value(operation, &raw)
+        value(validation_op, &raw)
     }
 
-    pub(crate) async fn zones(&mut self, project: &str) -> Result<Vec<Zone>, Box<Error>> {
-        let raw = self.regional(ZONES, "v1/{}/zones", &[project], &[]).await?;
-        let zones: Vec<Zone> = array(ZONES, &raw, Some("data"), &["uuid", "name", "isEnabled"])?;
+    pub(crate) async fn zones(
+        &mut self,
+        project: &str,
+        validation_op: &'static str,
+    ) -> Result<Vec<Zone>, Box<Error>> {
+        let raw = self
+            .regional(ZONES, validation_op, "v1/{}/zones", &[project], &[])
+            .await?;
+        let zones: Vec<Zone> = array(
+            validation_op,
+            &raw,
+            Some("data"),
+            &["uuid", "name", "isEnabled"],
+        )?;
         unique(
-            ZONES,
+            validation_op,
             zones.iter().map(|zone| zone.id.as_str()),
-            PathIds::WithUnderscore,
+            PathIds::Strict,
         )?;
         if zones.iter().any(|zone| zone.enabled.is_none()) {
-            return Err(request::invalid(ZONES, 200));
+            return Err(request::invalid(validation_op, 200));
         }
         self.rows(zones.len())?;
         Ok(zones)
@@ -219,9 +252,9 @@ impl<'a> Catalog<'a> {
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct Zone {
-    #[serde(rename = "uuid")]
+    #[serde(default, rename = "uuid", deserialize_with = "wire_field")]
     pub(crate) id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) name: String,
     #[serde(rename = "isEnabled")]
     pub(crate) enabled: Option<bool>,
@@ -268,14 +301,9 @@ pub(crate) fn unique<'a>(
     }
 }
 
-fn limit(message: impl Into<String>) -> Box<Error> {
-    Box::new(
-        Error::new(ErrorClass::EstimateLimit).with_cause(request::api(
-            "",
-            None,
-            "",
-            &message.into(),
-            false,
-        )),
-    )
+fn limit(message: impl AsRef<str>) -> Box<Error> {
+    Box::new(Error::new(ErrorClass::EstimateLimit).with_local_diagnostic(message.as_ref()))
 }
+
+#[cfg(test)]
+mod corpus;

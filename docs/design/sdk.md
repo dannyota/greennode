@@ -213,14 +213,14 @@ validation, envelope decoding, and path templates local.
 
 `Failure<T>` owns an `Error`, `Option<T>` partial output, and `WriteDispatch`.
 It offers `error()`, `partial()`, `write_dispatch()` and `into_parts()`; `Debug`
-reports whether a partial exists, not its contents. `WriteDispatch` is
-`NotAWrite`, `NotSent`, or `MayHaveBeenSent`. A write starts `NotSent`,
-including when only a quote, authentication, or other preflight reads have run.
-Once a mutation might have crossed the send boundary, retain `MayHaveBeenSent`
-through every error, including a 401, cancellation, decode failure, or
-settlement read. A response is evidence of a send, not necessarily of a state
-change. Retryability is a separate fact. Never infer it from partial output or
-dispatch alone.
+reports whether a partial exists, not its contents; synthetic quota outcome
+partials survive refusal, even `NotSent`. `WriteDispatch` is `NotAWrite`,
+`NotSent`, or `MayHaveBeenSent`. A write starts `NotSent`, including when only a
+quote, authentication, or other preflight reads have run. Once a mutation might
+have crossed the send boundary, retain `MayHaveBeenSent` through every error,
+including a 401, cancellation, decode failure, or settlement read. A response is
+evidence of a send, not necessarily of a state change. Retryability is a
+separate fact. Never infer it from partial output or dispatch alone.
 
 `Error::class()` returns a non-exhaustive `ErrorClass`; `has_class` also tests
 retained, typed causes. Accessors expose optional `ApiError`, `LoginError`, and
@@ -262,13 +262,13 @@ write as not found. `detail::<service::ErrorDetail>()` returns typed local
 reasons without adding a core variant for each service sentinel. Only SDK code
 attaches safe details, mapped from each service's Go sentinels.
 
-For example `volume.create_volume` may return an identified volume on
-`NotSettled`; keep it with `MayHaveBeenSent`. Preserve synthetic quota outcome
-objects on refusal even if the state is `NotSent`. The CLI maps the classes,
-operation-specific reasons, and safe diagnostics to the baseline's precedence
-and `{"error":{...}}` document. It owns when a partial is printed on stdout,
-when it bypasses a query, and which call or render error wins. SDK error text
-alone is not that CLI contract.
+`volume.create_volume` may return an identified volume on `NotSettled` with
+`MayHaveBeenSent`; after a possible send without a definite refusal or confirmed
+success its error carries `RecoveryAction::CheckExistingVolume`, or
+`DoNotRepeatVolumeCreate` once the confirmation window expires, and
+`recovery_diagnostic()` is `Some("")` when screening withheld the wording. The
+CLI maps classes and safe diagnostics to the baseline's `{"error":{...}}`
+document with recovery guidance, and owns partials and which error wins.
 
 ## Outputs and projection
 

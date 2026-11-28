@@ -346,13 +346,7 @@ async fn status_row(
     let mut row = empty_row(kind, "none", kind.next());
     let raw = match reader.get(kind.source(), &[]).await {
         Ok(raw) => raw,
-        Err(error)
-            if error.has_class(ErrorClass::NotFound)
-                && !error.is_body_too_large()
-                && error
-                    .detail::<super::super::wire::BodyReadFailure>()
-                    .is_none() =>
-        {
+        Err(error) if crate::confirms_absence(&error, OPERATION, "GET", kind.source()) => {
             return Ok(row);
         }
         Err(error) => return Err(error),

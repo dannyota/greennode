@@ -302,7 +302,7 @@ async fn deletes_wait_for_not_found_without_resending() {
     let server = Server::start(vec![
         response("200 OK", ZONE),
         response("204 No Content", ""),
-        response("404 Not Found", ""),
+        response("404 Not Found", "<html>missing record</html>"),
         response("200 OK", ZONE),
         response("204 No Content", ""),
         response("404 Not Found", ""),
@@ -627,7 +627,7 @@ async fn a_settlement_error_keeps_the_actual_api_failure() {
 }
 
 #[tokio::test]
-async fn partial_dns_resources_withhold_malformed_and_credential_bearing_ids() {
+async fn reflected_dns_acknowledgements_withhold_partials_and_confirmation() {
     let encoded = "%73ynthetic-sdk-dns-bearer";
     let zone_response = json!({"data": {
         "hostedZoneId": encoded,
@@ -644,7 +644,6 @@ async fn partial_dns_resources_withhold_malformed_and_credential_bearing_ids() {
         response("200 OK", &zone_response),
         response("200 OK", ZONE),
         response("200 OK", &record_response),
-        response("200 OK", ZONE),
     ]);
     let (ctx, _) = RequestContext::new();
     let client = client(&server, BEARER);
@@ -661,15 +660,28 @@ async fn partial_dns_resources_withhold_malformed_and_credential_bearing_ids() {
         .unwrap_err();
     assert_eq!(zone.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert_eq!(record.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    let zone = serde_json::to_value(zone.partial().unwrap()).unwrap();
-    let record = serde_json::to_value(record.partial().unwrap()).unwrap();
-    let screened = [
-        zone["HostedZone"]["ID"] == "<redacted>",
-        zone["HostedZone"]["AssociatedVPCIDs"] == json!(["vpc-1", "<redacted>", "<redacted>"]),
-        zone["HostedZone"]["AssocVPCMapRegion"][0]["VPCID"] == "<redacted>",
-        record["Record"]["ID"] == "<redacted>",
-        record["Record"]["HostedZoneID"] == "<redacted>",
-    ];
-    assert_eq!(screened, [true; 5]);
-    assert_eq!(server.requests(), 4);
+    assert!(zone.error().has_identity(ErrorClass::NotSettled));
+    assert!(record.error().has_identity(ErrorClass::NotSettled));
+    assert!(zone.partial().is_none());
+    assert!(record.partial().is_none());
+    assert_eq!(server.requests(), 3);
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"hostedZoneId":"malformed/id","assocVpcIds":["vpc-1","malformed/id"]}}"#,
+    )]);
+    let failure = super::client(&server, BEARER)
+        .create_hosted_zone(
+            &ctx,
+            CreateHostedZoneInput::new("example.test", vec!["vpc-1".into()]),
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    assert_eq!(partial["HostedZone"]["ID"], "<redacted>");
+    assert_eq!(
+        partial["HostedZone"]["AssociatedVPCIDs"],
+        json!(["vpc-1", "<redacted>"])
+    );
+    assert_eq!(server.requests(), 1);
 }

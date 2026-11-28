@@ -173,8 +173,17 @@ fn response(status: &str, body: &str) -> Response {
 }
 
 fn test_client(server: &Server, region: &str, bearer: &str) -> Client {
+    test_client_with_options(server, region, bearer, ConfigOptions::default())
+}
+
+fn test_client_with_options(
+    server: &Server,
+    region: &str,
+    bearer: &str,
+    options: ConfigOptions,
+) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_region(region.into())
             .with_static_token(Secret::new(bearer))
             .with_endpoint_overrides(EndpointOverrides {
@@ -483,7 +492,15 @@ async fn quota_keeps_status_and_retryability_without_provider_text() {
                 response(status, r#"{"code":"synthetic-provider-marker","error":{"message":"synthetic-provider-marker"}}"#)
             }).collect());
             let (ctx, _) = RequestContext::new();
-            let failure = test_client(&server, "hcm-3", BEARER).get_quota(&ctx, GetQuotaInput).await.unwrap_err();
+            let failure = test_client_with_options(
+                &server,
+                "hcm-3",
+                BEARER,
+                ConfigOptions::default().with_clock(crate::testing::retry_clock()),
+            )
+            .get_quota(&ctx, GetQuotaInput)
+            .await
+            .unwrap_err();
             assert_eq!(failure.error().class(), class);
             let api = failure.error().api_error().unwrap();
             assert_eq!(api.status(), Some(number));
@@ -515,7 +532,7 @@ async fn cancellation_keeps_its_class_and_skips_network() {
 #[tokio::test]
 async fn cross_origin_redirect_is_withheld_and_never_followed() {
     let other = Server::start(vec![]);
-    let server = Server::start(vec![Response::Http {
+    let redirect = || Response::Http {
         status: "302 Found".into(),
         headers: vec![
             ("Content-Length".into(), "0".into()),
@@ -525,16 +542,22 @@ async fn cross_origin_redirect_is_withheld_and_never_followed() {
             ),
         ],
         body: Vec::new(),
-    }]);
+    };
+    let server = Server::start((0..4).map(|_| redirect()).collect());
     let (ctx, _) = RequestContext::new();
-    let failure = test_client(&server, "hcm-3", BEARER)
-        .get_quota(&ctx, GetQuotaInput)
-        .await
-        .unwrap_err();
+    let failure = test_client_with_options(
+        &server,
+        "hcm-3",
+        BEARER,
+        ConfigOptions::default().with_clock(crate::testing::retry_clock()),
+    )
+    .get_quota(&ctx, GetQuotaInput)
+    .await
+    .unwrap_err();
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.status(), None);
     assert_eq!(api.message(), "request failed; response withheld");
-    assert_eq!(server.requests(), 1);
+    assert_eq!(server.requests(), 4);
     assert_eq!(other.connections(), 0);
 }
 
@@ -600,4 +623,39 @@ async fn incomplete_responses_drop_status_except_for_baseline_overflows() {
         assert_eq!(api.operation(), super::QUOTA);
     }
     assert_eq!(server.requests(), 5);
+}
+
+#[tokio::test]
+async fn cluster_guard_oversized_200_is_withheld_without_status() {
+    let server = Server::start(vec![Server::oversized("200 OK")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = test_client(&server, "hcm-3", BEARER)
+        .delete_cluster_inner(&ctx, DeleteClusterInput::new("cluster-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code(), api.message()),
+        (
+            "vks.GetCluster",
+            None,
+            "",
+            "request failed; response withheld"
+        )
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn vks_quota_error_screening_covers_the_rebuilt_status_suffix() {
+    let server = Server::start(vec![response("403 Forbidden", "{}")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = test_client(&server, "hcm-3", "403)")
+        .get_quota(&ctx, GetQuotaInput)
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(403));
+    assert!(!api.to_string().contains("403)"));
 }

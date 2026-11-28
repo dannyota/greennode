@@ -398,11 +398,11 @@ impl Client {
                 ids: &ids,
                 ..pool_target("", &ids)
             };
-            let (status, response) = write
+            let response = write
                 .send(ctx, Method::POST, &target, bytes, None)
                 .await
                 .map_err(|failure| write.create_failure(failure, "list-pools"))?;
-            let uuid = write.acknowledged_id(status, &response, "list-pools", no_wait)?;
+            let uuid = write.acknowledged_id(&response, "list-pools", no_wait)?;
             let fallback = body.submit(
                 Pool {
                     uuid: uuid.clone(),
@@ -484,7 +484,8 @@ impl Client {
             let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
             write
                 .send(ctx, Method::PUT, &target, bytes, Some(&target))
-                .await?;
+                .await
+                .map(drop)?;
             let fallback = if input.no_wait {
                 body.submit(pool, monitor)
             } else {
@@ -642,6 +643,9 @@ async fn finish<O>(
         let wait = ctx.child_with_deadline(write.client.session.clock().monotonic_now() + BOUND);
         settle_until(ctx, &wait, write, target, creating, &mut pool).await
     };
+    write
+        .check_acknowledgement(target)
+        .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
     let retained = PoolProjection::retain(&mut pool, &write.evidence)
         .map(|projection| output(pool, projection))
         .map_err(|()| GET_POOL.decode_error(&write.evidence, DecodeError::ReflectedCredential));

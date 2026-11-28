@@ -297,3 +297,23 @@ fn cdn_http_failures_keep_the_baseline_exit_codes() {
         assert_eq!(envelope["error"]["operation"], sdk_op);
     }
 }
+
+#[test]
+fn web_accelerator_refusal_stderr_screens_the_key_and_keeps_the_status() {
+    let server = Server::start(vec![response("403 Forbidden", "{}", "application/json")]);
+    let key = "403)";
+    let (exit, stdout, stderr) = invoke(
+        &["cdn", "list-web-accelerators"],
+        &server,
+        false,
+        Some(key),
+        true,
+    );
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert_eq!(server.requests(), 1);
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains(key));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["status"], 403);
+    assert_eq!(error["error"]["code"], "Forbidden");
+}

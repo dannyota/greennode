@@ -452,7 +452,9 @@ impl Client {
         .map(|(_, envelope)| envelope.data)
         .map_err(|error| {
             let (error, _, dispatch) = error.into_parts();
-            Failure::new(wire::safe_error(operation, error), None, dispatch)
+            let error =
+                wire::safe_error(operation, error).screen_api(&|text| evidence.text_reflects(text));
+            Failure::new(error, None, dispatch)
         })
     }
 }
@@ -480,11 +482,13 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }

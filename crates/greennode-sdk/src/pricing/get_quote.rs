@@ -4,7 +4,7 @@ use crate::quote::{
     request::{self, Product, Request, decode},
 };
 use crate::wire::product::evidence::Evidence;
-use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -170,13 +170,13 @@ impl Client {
         let numeric = evidence.credentials().has_numeric_product_credential();
         match raw {
             Err(error) => {
-                let observed = error
-                    .http_status()
-                    .map(|status| status.as_u16())
-                    .or_else(|| error.api_error().and_then(|api| api.status()));
+                let api = error.api_error();
+                let observed = api.and_then(ApiError::observed_status);
                 if numeric || observed.is_some_and(|status| (200..400).contains(&status)) {
                     Err(failure(
-                        decode::invalid_quote(OP, observed).with_cause(*error),
+                        decode::invalid_quote(OP, observed)
+                            .retain_status_visibility(api)
+                            .with_cause(*error),
                     ))
                 } else {
                     Err(failure(*error))

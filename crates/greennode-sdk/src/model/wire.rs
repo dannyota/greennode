@@ -270,6 +270,9 @@ impl Serialize for Detail<'_> {
 pub(crate) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     let text = go_utf8(bytes);
     let bytes = text.as_bytes();
+    if !bytes.contains(&b'\\') {
+        return text;
+    }
     let mut normalized = String::new();
     let mut start = 0;
     let mut index = 0;
@@ -277,28 +280,50 @@ pub(crate) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     while let Some(&byte) = bytes.get(index) {
         if byte == b'"' {
             in_string = !in_string;
-        }
-        if !in_string || byte != b'\\' {
             index += 1;
             continue;
         }
-        let Some(unit) = utf16_escape(bytes, index) else {
+        if !in_string || byte != b'\\' {
+            index += if in_string && byte >= 32 {
+                crate::go_json::ordinary_string_prefix(&bytes[index..])
+            } else {
+                1
+            };
+            continue;
+        }
+        let Some(unit) = crate::go_json::escaped_code_unit(&bytes[index..]) else {
             index += 2;
             continue;
         };
         let end = index + 6;
         if (0xD800..=0xDBFF).contains(&unit)
-            && utf16_escape(bytes, end).is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
+            && crate::go_json::escaped_code_unit(&bytes[end..])
+                .is_some_and(|next| (0xDC00..=0xDFFF).contains(&next))
         {
             index = end + 6;
             continue;
         }
         if (0xD800..=0xDFFF).contains(&unit) {
+            let spelling = &bytes[index..end];
+            let mut run_end = index + crate::go_json::repeated_code_unit_prefix(&bytes[index..]);
+            if (0xD800..=0xDBFF).contains(&unit)
+                && crate::go_json::escaped_code_unit(&bytes[run_end..])
+                    .is_some_and(|low| (0xDC00..=0xDFFF).contains(&low))
+            {
+                run_end -= spelling.len();
+            }
             if let Some(prefix) = text.get(start..index) {
                 normalized.push_str(prefix);
             }
-            normalized.push(char::REPLACEMENT_CHARACTER);
-            start = end;
+            let count = (run_end - index) / spelling.len();
+            if count == 1 {
+                normalized.push(char::REPLACEMENT_CHARACTER);
+            } else {
+                normalized.push_str(&"\u{fffd}".repeat(count));
+            }
+            start = run_end;
+            index = run_end;
+            continue;
         }
         index = end;
     }
@@ -311,16 +336,20 @@ pub(crate) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     Cow::Owned(normalized)
 }
 
-fn utf16_escape(bytes: &[u8], offset: usize) -> Option<u16> {
-    let digits = bytes.get(offset..offset + 6)?.strip_prefix(b"\\u")?;
-    let digits = std::str::from_utf8(digits).ok()?;
-    if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    u16::from_str_radix(digits, 16).ok()
+#[cfg(test)]
+#[test]
+fn go_json_preserves_the_last_high_surrogate_in_a_run_when_it_pairs() {
+    let text = go_json(br#""\uD800\uD800\uD800\uDC00\uDC00\uDC00""#);
+    assert_eq!(
+        serde_json::from_str::<String>(&text).unwrap(),
+        "\u{fffd}\u{fffd}\u{10000}\u{fffd}\u{fffd}"
+    );
 }
 
 fn go_utf8(bytes: &[u8]) -> Cow<'_, str> {
+    if let Ok(text) = str::from_utf8(bytes) {
+        return Cow::Borrowed(text);
+    }
     let mut chunks = bytes.utf8_chunks();
     let Some(first) = chunks.next() else {
         return Cow::Borrowed("");

@@ -6,11 +6,9 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::value::RawValue;
 
-use super::envelope::invalid_response;
 use super::model::null_default;
 use super::{Client, read_operation};
 use crate::error::SafeText;
-use crate::wire::product::operation;
 use crate::{ApiError, Error, ErrorClass, Failure, PagedList, RequestContext, WriteDispatch};
 
 use money::decode_money;
@@ -326,43 +324,7 @@ impl Client {
     ) -> Result<GetBalancesOutput, Failure<GetBalancesOutput>> {
         crate::wire::product::exit::finish!(async {
             let operation = read_operation(BALANCES, "navbar/balances/v1");
-            let session = &self.session;
-            let base = session
-                .endpoints()
-                .billing
-                .as_ref()
-                .ok_or_else(|| read_failure(Error::new(ErrorClass::InvalidConfig)))?;
-            let mut jitter = || session.retry_jitter();
-            let runtime = session
-                .runtime(ctx, &mut jitter)
-                .map_err(|error| read_failure(*error))?;
-            let (_, BalancesResponse(balances)) = operation::execute(
-                runtime,
-                base,
-                &operation,
-                &[],
-                &[],
-                session.bearer_source(),
-                bytes::Bytes::new(),
-            )
-            .await
-            .map_err(|error| {
-                let (error, _, dispatch) = error.into_parts();
-                let error = match error.http_status() {
-                    Some(status)
-                        if status.is_success()
-                            && error.class() == ErrorClass::Api
-                            && error
-                                .api_error()
-                                .is_none_or(|api| api.code() != "InvalidResponse") =>
-                    {
-                        invalid_response(&operation, status, error.is_body_too_large())
-                            .with_cause(error)
-                    }
-                    _ => error,
-                };
-                Failure::new(error, None, dispatch)
-            })?;
+            let BalancesResponse(balances) = self.read_output(ctx, &operation, &[], &[]).await?;
             Ok(GetBalancesOutput { balances })
         })
     }

@@ -1,6 +1,7 @@
 //! Read-only regional price quotes and monthly setup estimates.
 
 mod estimate;
+pub(crate) mod failure;
 mod get_quote;
 mod models;
 mod validate;

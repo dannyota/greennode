@@ -296,3 +296,47 @@ fn assert_invalid_response<T>(error: Failure<T>) {
     assert!(!error.error().to_string().contains("private-marker"));
     assert_eq!(error.write_dispatch(), WriteDispatch::NotAWrite);
 }
+
+#[tokio::test]
+async fn truncated_cross_host_balance_redirect_keeps_no_status() {
+    let redirect = || {
+        Response::RawClose(
+        b"HTTP/1.1 302 Found\r\nLocation: https://localhost:1/other\r\nContent-Length: 8\r\n\r\n{}"
+            .to_vec(),
+    )
+    };
+    let server = Server::start((0..4).map(|_| redirect()).collect());
+    let (ctx, _) = RequestContext::new();
+    let failure = client_with_options(
+        &server,
+        BEARER,
+        ConfigOptions::default().with_clock(crate::testing::retry_clock()),
+    )
+    .get_balances(&ctx, GetBalancesInput {})
+    .await
+    .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!((api.status(), api.code(), api.message()), (None, "", ""));
+    assert!(api.to_string().ends_with(": cross-host redirect refused"));
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
+async fn balance_decoder_screens_the_assembled_status_suffix() {
+    let bearer = "403)";
+    let server = Server::start(vec![response(
+        "403 Forbidden",
+        br#"{"message":"provider refused"}"#,
+    )]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, bearer)
+        .get_balances(&ctx, GetBalancesInput {})
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code()),
+        ("billing.GetBalances", Some(403), "Forbidden")
+    );
+    assert!(!api.to_string().contains(bearer));
+}

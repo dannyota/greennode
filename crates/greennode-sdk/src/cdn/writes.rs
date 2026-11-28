@@ -334,9 +334,13 @@ impl Client {
         failure: Failure<()>,
         evidence: &mut Evidence,
     ) -> Failure<()> {
-        if failure.error().api_error().and_then(ApiError::status) == Some(401)
+        if failure
+            .error()
+            .api_error()
+            .and_then(ApiError::observed_status)
+            == Some(401)
             && let Err(read) = self.read_guard_detail(ctx, call.id, cdn_id, evidence).await
-            && read.error().has_class(ErrorClass::NotFound)
+            && super::wire::confirms_missing_detail(read.error(), call.id)
         {
             return Failure::new(read.into_parts().0, None, failure.write_dispatch());
         }
@@ -371,9 +375,7 @@ fn possibly_applied(failure: Failure<()>, action: &str) -> Failure<()> {
     let (error, _, dispatch) = failure.into_parts();
     let message = error
         .api_error()
-        .map(ApiError::message)
-        .filter(|text| !text.is_empty())
-        .unwrap_or("request failed");
+        .map_or_else(|| "request failed".to_owned(), ApiError::go_text);
     let advice = format!(
         "{message}; the {action} may have been applied: read the CDN before running it again"
     );
@@ -385,7 +387,7 @@ fn rejected(failure: &Failure<()>) -> bool {
         || failure
             .error()
             .api_error()
-            .is_some_and(|api| match api.status() {
+            .is_some_and(|api| match api.observed_status() {
                 Some(400..=499) => true,
                 Some(200..=299) => api.code() != "EmptyResponse",
                 _ => false,

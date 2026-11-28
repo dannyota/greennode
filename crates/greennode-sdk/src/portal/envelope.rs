@@ -77,8 +77,7 @@ impl Output for Envelope {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK
-            || (!response.body.is_empty()
-                && serde_json::from_slice::<&RawValue>(&response.body).is_err())
+            || (!response.empty_body() && response.malformed_json())
         {
             return operation::decode_response(operation, response);
         }
@@ -106,18 +105,12 @@ pub(super) fn invalid_response(operation: &Operation, response: &Response) -> Er
 pub(super) fn withheld(operation: &Operation, error: Error) -> Error {
     let api = error.api_error();
     if error.has_class(ErrorClass::InvalidConfig)
+        || error.has_class(ErrorClass::InvalidInput)
         || api.is_some_and(|api| api.code() == "InvalidResponse")
     {
         return error;
     }
-    let status = if api.is_none() && error.has_class(ErrorClass::Auth) {
-        None
-    } else {
-        error
-            .http_status()
-            .map(|status| status.as_u16())
-            .or_else(|| api.and_then(ApiError::status))
-    };
+    let status = api.and_then(ApiError::status);
     let retryable = api.is_some_and(ApiError::retryable);
     Error::from_api(ApiError::new(
         operation.id,

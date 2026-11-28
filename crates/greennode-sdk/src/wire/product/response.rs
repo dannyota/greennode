@@ -1,17 +1,25 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Screen {
     Clean,
+    CleanNotFound,
     Reflected,
     Indeterminate,
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct Clean(());
+pub(crate) struct Clean {
+    pub(super) not_found_stream: bool,
+}
 
 impl Screen {
     pub(crate) fn clean(self) -> Option<Clean> {
         match self {
-            Self::Clean => Some(Clean(())),
+            Self::Clean => Some(Clean {
+                not_found_stream: false,
+            }),
+            Self::CleanNotFound => Some(Clean {
+                not_found_stream: true,
+            }),
             Self::Reflected | Self::Indeterminate => None,
         }
     }
@@ -25,7 +33,7 @@ impl Screen {
         status: Option<http::StatusCode>,
     ) -> Option<http::StatusCode> {
         match self {
-            Self::Clean | Self::Indeterminate => status,
+            Self::Clean | Self::CleanNotFound | Self::Indeterminate => status,
             Self::Reflected => None,
         }
     }
@@ -180,11 +188,11 @@ pub(crate) fn error_message_matches(
 }
 
 pub(crate) fn inspect_error_message<T>(
-    body: &[u8],
+    receipt: &super::guard::CleanReceipt<'_>,
     credentials: &SentCredentials,
     predicate: impl FnOnce(&str) -> T,
 ) -> Option<T> {
-    full_error::inspect_error_message(body, |message| {
+    full_error::inspect_error_message(receipt.body(), |message| {
         decision_text(message, credentials).map(|text| predicate(text.as_str()))
     })
     .flatten()
@@ -203,6 +211,84 @@ pub(crate) fn sanitize_error_text(
     } else {
         sanitized
     }
+}
+
+pub(super) fn sanitize_billing_refusal_message(
+    message: String,
+    credentials: &SentCredentials,
+) -> crate::error::SafeText {
+    const REDACTED: &str = "[redacted]";
+    let message = Zeroizing::new(message);
+    if (!credentials.values().is_empty() && !message.is_ascii())
+        || unsafe_message(&message, &SentCredentials::default())
+    {
+        return crate::error::SafeText::new("", &[]);
+    }
+    let Some(mut spans) = billing_refusal_spans(&message, credentials) else {
+        return sanitize_error_text(REDACTED, credentials);
+    };
+    if spans.is_empty() {
+        return sanitize_error_text(&message, credentials);
+    }
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut output = Zeroizing::new(String::new());
+    let mut previous = 0;
+    for span in spans {
+        if span.start >= previous {
+            output.push_str(&message[previous..span.start]);
+            output.push_str(REDACTED);
+        }
+        previous = previous.max(span.end);
+    }
+    output.push_str(&message[previous..]);
+    sanitize_error_text(&output, credentials)
+}
+
+fn billing_refusal_spans(
+    message: &str,
+    credentials: &SentCredentials,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    const WORK_LIMIT: usize = 8 << 20;
+    const SPAN_LIMIT: usize = 4096;
+    const MIN_REPLACE: usize = 8;
+    let mut work = WORK_LIMIT;
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    for secret in credentials.values() {
+        let secret = secret.expose_secret();
+        work = work.checked_sub(1)?;
+        if secret.is_empty() || secret.len() > message.len() {
+            continue;
+        }
+        let base = spans.len();
+        let mut cursor = 0;
+        while cursor <= message.len() - secret.len() {
+            work = work.checked_sub(secret.len())?;
+            let remaining = &message[cursor..];
+            let search = remaining.get(..remaining.len().min(work))?;
+            let Some(offset) = search.find(secret) else {
+                work = work.checked_sub(remaining.len())?;
+                break;
+            };
+            let start = cursor + offset;
+            let end = start + secret.len();
+            work = work.checked_sub(end - cursor)?;
+            if secret.len() < MIN_REPLACE {
+                return None;
+            }
+            if spans.len() > base
+                && let Some(last) = spans.last_mut().filter(|last| start < last.end)
+            {
+                last.end = end;
+            } else {
+                if spans.len() == SPAN_LIMIT {
+                    return None;
+                }
+                spans.push(start..end);
+            }
+            cursor = start + 1;
+        }
+    }
+    Some(spans)
 }
 
 pub(crate) fn decision_text(
@@ -374,6 +460,33 @@ fn equal_fold(value: &str, expected: &str) -> bool {
         })
         .eq(expected.chars())
 }
+pub(super) fn billing_envelope_fields(body: &[u8]) -> Option<(String, String)> {
+    let entry = parse_raw(std::str::from_utf8(body).ok()?, true)?;
+    if entry.invalid
+        || entry.code.is_empty()
+        || entry
+            .code
+            .parse::<i64>()
+            .is_ok_and(|code| (200..300).contains(&code))
+    {
+        None
+    } else {
+        Some((entry.code, entry.message))
+    }
+}
+
+pub(super) fn first_transport_error_entry(body: &[u8]) -> Option<&RawValue> {
+    let entries: Vec<&RawValue> = serde_json::from_slice(body).ok()?;
+    if entries
+        .iter()
+        .all(|entry| parse_raw(entry.get(), false).is_some_and(|entry| !entry.invalid))
+    {
+        entries.first().copied()
+    } else {
+        None
+    }
+}
+
 fn decode(body: &[u8], restricted: bool) -> (String, String) {
     let trimmed = body.iter().copied().find(|b| !b.is_ascii_whitespace());
     let envelope = if trimmed == Some(b'[') {
@@ -448,14 +561,32 @@ impl sender::Operation<'_> {
         let mut evidence = Evidence::from_credentials(known);
         evidence.absorb(sent);
         if self.guard.is_some() {
-            evidence = evidence.transport_only();
+            evidence = Evidence::from_credentials(&evidence.credentials().guard_credentials());
         }
         if let Some(project) = self.project_discovery {
             evidence.discovery_body_screen(&reply.body, project.accepted.contains(&reply.status))
+        } else if super::absence::is_not_found_status(reply.status) {
+            evidence.not_found_body_screen(&reply.body)
         } else if opaque {
             evidence.opaque_body_screen(&reply.body)
         } else {
             evidence.go_peer_body_screen(&reply.body)
+        }
+    }
+
+    pub(super) fn receipt_screen(
+        &self,
+        reply: &send::Reply,
+        diagnostic_screen: Screen,
+        known: &sender::SentCredentials,
+        sent: &sender::SentCredentials,
+    ) -> Screen {
+        if self.project_discovery.is_some() && super::absence::is_not_found_status(reply.status) {
+            let mut evidence = Evidence::from_credentials(known);
+            evidence.absorb(sent);
+            evidence.not_found_body_screen(&reply.body)
+        } else {
+            diagnostic_screen
         }
     }
 
@@ -502,6 +633,16 @@ pub(super) fn budget_test_credentials() -> SentCredentials {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn billing_refusal_checks_the_rendered_marker_without_rewriting_it() {
+        let credentials = SentCredentials::for_test(vec![
+            crate::Secret::new("long-token"),
+            crate::Secret::new("x[redacted]y"),
+        ]);
+        let message = sanitize_billing_refusal_message("xlong-tokeny".into(), &credentials);
+        assert!(message.as_str().is_empty());
+    }
+
     use super::matching::matching_work_limit;
     use super::*;
 

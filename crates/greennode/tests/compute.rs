@@ -33,7 +33,10 @@ async fn invoke(server: &Server, args: &[&str], terminal: bool) -> (ExitCode, Ve
         server,
         args,
         terminal,
-        ConfigOptions::default().with_static_token(Secret::new(BEARER)),
+        greennode_sdk::testing::with_clock(
+            ConfigOptions::default().with_static_token(Secret::new(BEARER)),
+            greennode_sdk::testing::retry_clock(),
+        ),
     )
     .await
 }

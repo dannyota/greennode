@@ -96,6 +96,7 @@ async fn ambiguous_pool_acknowledgements_never_start_confirmation() {
         r#"{"uuid":"pool-1","UUID":"pool-2"}"#,
         r#"{"uuid":"../pool-1"}"#,
         r#"{"uuid":"pool_1"}"#,
+        r#"{"uuid":"pool-1","ignored":"toy-secret"}"#,
     ] {
         let server = Server::start(vec![
             response("200 OK", PARENT),
@@ -146,7 +147,7 @@ async fn pool_confirmation_keeps_submitted_or_read_state_on_failure() {
         response("403 Forbidden", r#"{"message":"lookup denied"}"#),
     ]);
     let (ctx, _) = RequestContext::new();
-    let failure = client(&server, CANARY)
+    let failure = settlement_client(&server)
         .create_pool(&ctx, create(false))
         .await
         .unwrap_err();
@@ -173,7 +174,7 @@ async fn pool_confirmation_keeps_submitted_or_read_state_on_failure() {
     ]);
     let mut input = update();
     input.no_wait = false;
-    let failure = client(&server, CANARY)
+    let failure = settlement_client(&server)
         .update_pool(&ctx, input)
         .await
         .unwrap_err();
@@ -340,4 +341,71 @@ async fn malformed_or_alias_only_parent_type_stops_pool_dispatch() {
         assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
         assert_eq!(server.requests(), 1);
     }
+}
+
+#[tokio::test]
+async fn busy_retry_rejects_a_reflection_in_an_unused_field() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response(
+            "409 Conflict",
+            r#"{"message":"load balancer is not ready","ignored":"toy-secret"}"#,
+        ),
+        response("200 OK", PARENT),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let result = client(&server, CANARY)
+        .create_pool(&RequestContext::new().0, create(true))
+        .await;
+    assert!(result.is_err());
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn busy_receipt_is_rechecked_after_readiness_before_retrying() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response(
+            "409 Conflict",
+            r#"{"message":"load balancer is not ready","unknown":"confirmation-bearer"}"#,
+        ),
+        response("200 OK", PARENT),
+        response("202 Accepted", r#"{"uuid":"pool-1"}"#),
+    ]);
+    let failure = super::receipt_fixtures::rotating_client(&server, 2)
+        .create_pool(&RequestContext::new().0, create(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 3);
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::RefusedGuard>()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn child_create_rechecks_the_acknowledgement_before_confirming() {
+    let server = Server::start(vec![
+        response("200 OK", PARENT),
+        response(
+            "202 Accepted",
+            r#"{"uuid":"pool-1","unknown":"confirmation-bearer"}"#,
+        ),
+        response(
+            "200 OK",
+            r#"{"data":{"uuid":"pool-1","progressStatus":"CREATED"}}"#,
+        ),
+        response("200 OK", PARENT),
+    ]);
+    let failure = super::receipt_fixtures::rotating_client(&server, 2)
+        .create_pool(&RequestContext::new().0, create(false))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 2);
 }

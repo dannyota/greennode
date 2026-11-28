@@ -25,7 +25,7 @@ use crate::{
     WriteDispatch,
 };
 
-use super::wire::{CompleteNotFound, DecodeError, Envelope, Read, screen_input, validate_ids};
+use super::wire::{DecodeError, Envelope, Read, screen_input, validate_ids};
 use super::{Certificate, Client, ZonedLoadBalancer, page_query};
 
 const DELETE_LB: &str = "loadbalancer.DeleteLoadBalancer";
@@ -121,7 +121,8 @@ impl Client {
                     &[StatusCode::OK, StatusCode::ACCEPTED],
                     &mut evidence,
                 )
-                .await?;
+                .await
+                .map(drop)?;
                 WriteDispatch::MayHaveBeenSent
             };
             if input.no_wait {
@@ -152,7 +153,14 @@ impl Client {
                     );
                 }
                 match poll.and_then(|status| status.into_checked(&evidence)) {
-                    Err(error) if error.detail::<CompleteNotFound>().is_some() => {
+                    Err(error)
+                        if crate::confirms_absence(
+                            &error,
+                            "loadbalancer.GetLoadBalancer",
+                            "GET",
+                            LB_ROUTE,
+                        ) =>
+                    {
                         return Ok(DeleteLoadBalancerOutput {});
                     }
                     Err(error) => {
@@ -229,8 +237,14 @@ impl Client {
                 let error = if error.detail::<WriteError>().is_some() {
                     *error
                 } else {
-                    self.certificate_not_found(ctx, id, *error, &mut evidence)
-                        .await
+                    self.certificate_not_found(
+                        ctx,
+                        id,
+                        *error,
+                        WriteDispatch::NotSent,
+                        &mut evidence,
+                    )
+                    .await
                 };
                 return Err(not_sent(error));
             }
@@ -255,18 +269,13 @@ impl Client {
                 );
                 if let Some(api) = error.api_error() {
                     use std::fmt::Write as _;
-                    if !api.message().is_empty() {
-                        let _ = write!(detail, ": {DELETE_CERT}: {}", api.message());
-                    }
-                    if let Some(status) = api.status() {
-                        let _ = write!(detail, " (status {status})");
-                    }
+                    let _ = write!(detail, ": {}", api.go_text());
                 }
                 let error = local(ErrorClass::Api, &detail, &evidence).with_cause(error);
                 return Err(Failure::new(error, None, dispatch));
             }
             let error = self
-                .certificate_not_found(ctx, id, error, &mut evidence)
+                .certificate_not_found(ctx, id, error, dispatch, &mut evidence)
                 .await;
             Err(Failure::new(error, None, dispatch))
         })
@@ -377,21 +386,40 @@ impl Client {
         ctx: &RequestContext,
         id: &str,
         error: Error,
+        dispatch: WriteDispatch,
         evidence: &mut Evidence,
     ) -> Error {
         use crate::wire::product::operation::RefusedGuard;
-        if error.detail::<CompleteNotFound>().is_some()
-            || error.detail::<RefusedGuard>().is_some()
+        let unresolved_404 = crate::wire::product::absence::is_not_found_diagnostic(&error);
+        if crate::confirms_absence(&error, DELETE_CERT, "DELETE", CERT_ROUTE)
+            || crate::confirms_absence(&error, "loadbalancer.GetCertificate", "GET", CERT_ROUTE)
+            || (error.detail::<RefusedGuard>().is_some() && !unresolved_404)
             || error.has_class(ErrorClass::InvalidInput)
         {
             return evidence.screen_error(error);
         }
-        match self.certificate_absent(ctx, id, evidence).await {
-            Err(refusal) if refusal.detail::<RefusedGuard>().is_some() => {
-                return evidence.screen_error(*refusal);
+        let inventory = self.certificate_absent(ctx, id, evidence).await;
+        if !matches!(inventory, Ok(true)) {
+            if unresolved_404 {
+                let class = if dispatch == WriteDispatch::MayHaveBeenSent {
+                    ErrorClass::NotSettled
+                } else {
+                    ErrorClass::Api
+                };
+                let uncertain = local(
+                    class,
+                    "certificate absence could not be confirmed",
+                    evidence,
+                );
+                return crate::wire::product::absence::keep_not_found_diagnostic(
+                    uncertain, &error, evidence,
+                );
             }
-            Ok(true) => {}
-            _ => return evidence.screen_error(error),
+            let error = match inventory {
+                Err(refusal) if refusal.detail::<RefusedGuard>().is_some() => *refusal,
+                _ => error,
+            };
+            return evidence.screen_error(error);
         }
         let message = format!(
             "vngcloud: resource not found: {DELETE_CERT}: certificate {}",
@@ -416,6 +444,7 @@ impl Client {
         let text = self
             .read_guard_text(ctx, super::wire::GuardRead(&read), &[], &query, evidence)
             .await?;
+        let text = Guarded::latest_direct(text, evidence, read.id)?.into_checked(evidence)?;
         let envelope = Envelope::parse(&text, &read, evidence)?;
         let body = envelope.canonical_raw(&read, evidence, "listData")?;
         let Some(rows): Option<Vec<Certificate>> = super::guard::parse(
@@ -467,7 +496,7 @@ impl Client {
         resource: &str,
         success: &'static [StatusCode],
         evidence: &mut Evidence,
-    ) -> Result<(), Failure<O>> {
+    ) -> Result<crate::wire::product::sender::Response, Failure<O>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -500,10 +529,12 @@ impl Client {
             allow_empty: true,
             no_output: true,
             keep_status: false,
-            overflow_overrides_status: true,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: false,
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: true,
+            no_redirect: false,
+            report_redirect: false,
             retry_config: retry::Config::default(),
         };
         let result = operation::execute_raw(
@@ -524,33 +555,29 @@ impl Client {
             Failure::new(screen(error), None, dispatch)
         })?;
         let status = reply.status;
+        if success.contains(&status) {
+            return Ok(reply);
+        }
+        let absence = reply.clean_absence();
         let in_use = id == DELETE_CERT
-            && status != StatusCode::NO_CONTENT
-            && response::error_message_matches(
-                &reply.body,
-                evidence.credentials(),
-                certificate_in_use,
-            );
-        response::classify(
-            id,
-            status,
-            Bytes::from(reply.reply.body),
-            success,
-            (true, false, op.retry),
-            evidence.credentials(),
-        )
-        .map(|_| ())
-        .map_err(|error| {
-            let mut error = screen(*error);
-            if status == StatusCode::NOT_FOUND {
-                error = error.with_outer_detail(CompleteNotFound);
-            }
-            if in_use {
-                error = decide(evidence, |decision| resource_in_use(decision, error))
-                    .unwrap_or_else(|error| *error);
-            }
-            Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
-        })
+            && reply.clean_receipt().is_some_and(|receipt| {
+                response::error_message_matches(
+                    receipt.body(),
+                    evidence.credentials(),
+                    certificate_in_use,
+                )
+            });
+        reply
+            .classify(id, success, (true, false, op.retry), false)
+            .map_err(|error| {
+                let mut error = screen(error.with_clean_absence(absence));
+                if in_use {
+                    error = decide(evidence, |decision| resource_in_use(decision, error))
+                        .unwrap_or_else(|error| *error);
+                }
+                Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+            })?;
+        Ok(reply)
     }
 }
 

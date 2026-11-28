@@ -14,30 +14,165 @@ pub(super) fn decoded_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen
     })
 }
 
-pub(super) fn discovery_stream_screen(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
-    let body = body.trim_ascii_start();
-    let body = body.strip_prefix(b"\xef\xbb\xbf").unwrap_or(body);
-    let text = crate::model::wire::go_json(body.trim_ascii_start());
-    let mut values = serde_json::Deserializer::from_str(&text).into_iter::<&RawValue>();
-    let mut require_json = false;
-    loop {
-        require_json = require_json
-            || matches!(
-                text.as_bytes()[values.byte_offset()..]
-                    .trim_ascii_start()
-                    .first(),
-                Some(b'{' | b'[' | b'"')
-            );
-        let value = match values.next() {
-            Some(Ok(value)) => value,
-            Some(Err(_)) if require_json => return Screen::Indeterminate,
-            Some(Err(_)) | None => return Screen::Clean,
+pub(super) fn not_found_body_screen(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
+    if body
+        .trim_ascii()
+        .eq_ignore_ascii_case(b"404 page not found")
+    {
+        return Screen::CleanNotFound;
+    }
+    stream_screen(matcher, body, false, true, decoded_reflects).then(|| Screen::CleanNotFound)
+}
+
+pub(super) fn discovery_stream_screen(
+    matcher: &BodyMatcher<'_>,
+    body: &[u8],
+    require_json: bool,
+) -> Screen {
+    stream_screen(matcher, body, require_json, false, discovery_value_screen)
+}
+
+fn stream_screen(
+    matcher: &BodyMatcher<'_>,
+    body: &[u8],
+    require_json: bool,
+    strict_after_value: bool,
+    screen_value: impl Fn(&BodyMatcher<'_>, &[u8]) -> Screen,
+) -> Screen {
+    let text = crate::model::wire::go_json(stream_start(body, require_json));
+    screen_normalized_stream(
+        matcher,
+        text.as_bytes(),
+        require_json,
+        strict_after_value,
+        screen_value,
+    )
+}
+
+pub(super) fn discovery_normalized_stream_screen(
+    matcher: &BodyMatcher<'_>,
+    normalized: &str,
+    require_json: bool,
+) -> Screen {
+    let body = stream_start(normalized.as_bytes(), require_json);
+    screen_normalized_stream(matcher, body, require_json, false, discovery_value_screen)
+}
+
+impl super::Evidence {
+    pub(in crate::wire::product) fn normalized_discovery_body_screen(
+        &self,
+        body: &[u8],
+        normalized: &str,
+        accepted: bool,
+    ) -> Screen {
+        let matcher = BodyMatcher::new(&self.credentials, body.len());
+        matcher
+            .scan(body, false)
+            .then(|| discovery_normalized_stream_screen(&matcher, normalized, accepted))
+    }
+}
+
+fn stream_start(body: &[u8], require_json: bool) -> &[u8] {
+    if require_json {
+        body
+    } else {
+        let trimmed = body.trim_ascii_start();
+        trimmed.strip_prefix(b"\xef\xbb\xbf").unwrap_or(trimmed)
+    }
+}
+
+fn screen_normalized_stream(
+    matcher: &BodyMatcher<'_>,
+    mut rest: &[u8],
+    mut require_json: bool,
+    strict_after_value: bool,
+    screen_value: impl Fn(&BodyMatcher<'_>, &[u8]) -> Screen,
+) -> Screen {
+    for value in crate::go_json::stream_values(rest) {
+        rest = rest.trim_ascii_start();
+        require_json |= matches!(rest.first(), Some(b'{' | b'[' | b'"'));
+        let value = match value {
+            Ok(value) => value,
+            Err(()) if require_json => return Screen::Indeterminate,
+            Err(()) if strict_after_value => return matcher.scan(rest, false),
+            Err(()) => return Screen::Clean,
         };
-        let screen = decoded_value_screen(matcher, value);
+        require_json |= strict_after_value;
+        let screen = screen_value(matcher, value);
         if !screen.is_clean() {
             return screen;
         }
+        rest = &rest[value.len()..];
     }
+    Screen::Clean
+}
+
+fn discovery_value_screen(matcher: &BodyMatcher<'_>, bytes: &[u8]) -> Screen {
+    let mut frames: Vec<(bool, bool)> = Vec::new();
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
+        let identifier = frames.last().is_some_and(|frame| frame.1);
+        match byte {
+            b'{' | b'[' => frames.push((identifier, identifier)),
+            b'}' | b']' => {
+                frames.pop();
+            }
+            b',' => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.1 = frame.0;
+                }
+            }
+            b'"' => {
+                let start = index;
+                index += 1;
+                loop {
+                    index += crate::go_json::ordinary_string_prefix(&bytes[index..]);
+                    match bytes.get(index) {
+                        Some(b'"') => break,
+                        Some(b'\\') if index + 1 < bytes.len() => index += 2,
+                        _ => return Screen::Indeterminate,
+                    }
+                }
+                let contents = &bytes[start + 1..index];
+                let decoded;
+                let text = if contents.contains(&b'\\') {
+                    let Ok(value) = serde_json::from_slice::<String>(&bytes[start..=index]) else {
+                        return Screen::Indeterminate;
+                    };
+                    decoded = Zeroizing::new(value);
+                    decoded.as_bytes()
+                } else {
+                    contents
+                };
+                let screen = matcher.scan(text, identifier);
+                if !screen.is_clean() {
+                    return screen;
+                }
+                if bytes[index + 1..].trim_ascii_start().first() == Some(&b':')
+                    && let Some(frame) = frames.last_mut()
+                {
+                    frame.1 = frame.0
+                        || std::str::from_utf8(text)
+                            .is_ok_and(super::super::identifier::declared_wire);
+                }
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = index;
+                while bytes.get(index + 1).is_some_and(|byte| {
+                    matches!(byte, b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                }) {
+                    index += 1;
+                }
+                let screen = matcher.scan(&bytes[start..=index], identifier);
+                if !screen.is_clean() {
+                    return screen;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Screen::Clean
 }
 
 fn decoded_value_screen(matcher: &BodyMatcher<'_>, value: &RawValue) -> Screen {
@@ -163,8 +298,12 @@ impl<F: Fn(&str, bool, bool) -> Screen> Walker<'_, F> {
             Some(b'{') => decoder.deserialize_map(self),
             Some(b'[') => decoder.deserialize_seq(self),
             Some(b'"') => {
-                let decoded = Zeroizing::new(serde_json::from_str::<String>(raw)?);
-                Ok((self.matches)(&decoded, self.identifier, false))
+                if let Ok(decoded) = serde_json::from_str::<&str>(raw) {
+                    Ok((self.matches)(decoded, self.identifier, false))
+                } else {
+                    let decoded = Zeroizing::new(serde_json::from_str::<String>(raw)?);
+                    Ok((self.matches)(&decoded, self.identifier, false))
+                }
             }
             Some(b'-' | b'0'..=b'9') => Ok((self.matches)(raw, self.identifier, true)),
             _ => Ok((self.matches)(raw, false, false)),

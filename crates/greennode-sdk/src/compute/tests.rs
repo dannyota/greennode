@@ -26,8 +26,12 @@ fn client(server: &TestServer) -> Client {
 }
 
 fn client_with_token(server: &TestServer, token: &str) -> Client {
+    client_with_options(server, token, ConfigOptions::default())
+}
+
+fn client_with_options(server: &TestServer, token: &str, options: ConfigOptions) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_region("hcm-3".into())
             .with_project_id("project-1".into())
             .with_static_token(Secret::new(token))
@@ -37,10 +41,17 @@ fn client_with_token(server: &TestServer, token: &str) -> Client {
             }),
     )
     .unwrap();
-    config
-        .session()
-        .set_test_product_root(server.root_der.clone());
+    let session = config.session();
+    session.set_test_product_root(server.root_der.clone());
     Client::new(&config)
+}
+
+fn retained_budget_client(server: &TestServer) -> Client {
+    let options = ConfigOptions::default().with_clock(crate::testing::retry_clock());
+    let client = client_with_options(server, CANARY, options);
+    let limit = &client.session.test_retained_byte_limit;
+    limit.set(128 << 10).unwrap();
+    client
 }
 
 #[tokio::test]
@@ -187,6 +198,7 @@ async fn explicitly_selected_disabled_zone_quotes_the_selected_root_disk() {
         fixture!("quote"),
     ]);
     let options = ConfigOptions::default()
+        .with_clock(crate::testing::retry_clock())
         .with_region("hcm-3".into())
         .with_project_id("proj-1".into())
         .with_static_token(Secret::new(CANARY))
@@ -264,10 +276,11 @@ async fn status_reflection_preserves_permission_denied() {
 
 #[tokio::test]
 async fn console_keeps_clean_near_limit_bytes() {
-    let mut log = "x".repeat((8 << 20) - 15);
+    const LIMIT: usize = 8 << 20;
+    let mut log = "x".repeat(LIMIT - 15);
     log.push('\n');
     let body = serde_json::json!({"data":log}).to_string();
-    assert!(body.len() <= 8 << 20);
+    assert_eq!(body.len(), LIMIT - 2);
     let server = TestServer::start(vec![response(&body)]);
     let (ctx, _) = RequestContext::new();
     let output = client(&server)
@@ -327,13 +340,38 @@ async fn console_http_errors_keep_retryability() {
         "503 Service Unavailable",
         "504 Gateway Timeout",
     ] {
-        let server = TestServer::start((0..5).map(|_| http(status, "{}")).collect());
+        let server = TestServer::start((0..4).map(|_| http(status, "{}")).collect());
         let (ctx, _) = RequestContext::new();
-        let error = client(&server)
+        let options = ConfigOptions::default().with_clock(crate::testing::retry_clock());
+        let error = client_with_options(&server, CANARY, options)
             .get_server_console_log(&ctx, GetServerConsoleLogInput::new("server-1"))
             .await
             .unwrap_err();
         assert!(error.error().api_error().unwrap().retryable());
+        assert_eq!(server.requests(), 4);
+    }
+}
+
+#[tokio::test]
+async fn flavor_pricing_refuses_underscored_zone_and_root_disk_before_discovery() {
+    let (ctx, _) = RequestContext::new();
+    for input in [
+        ListFlavorPricesInput {
+            zone_id: "zone_1".into(),
+            ..Default::default()
+        },
+        ListFlavorPricesInput {
+            root_disk_type_id: "type_1".into(),
+            ..Default::default()
+        },
+    ] {
+        let server = TestServer::start(vec![response(r#"{"data":[]}"#)]);
+        let error = client(&server)
+            .list_flavor_prices(&ctx, input)
+            .await
+            .unwrap_err();
+        assert_eq!(server.requests(), 0);
+        assert!(error.error().has_identity(ErrorClass::InvalidInput));
     }
 }
 
@@ -400,6 +438,7 @@ async fn quote_body_is_screened_before_sending() {
     );
     let config = Config::new(
         ConfigOptions::default()
+            .with_clock(crate::testing::retry_clock())
             .with_region("hcm-3".into())
             .with_project_id("proj-1".into())
             .with_static_token(Secret::new("encryptionVolume"))
@@ -430,7 +469,7 @@ async fn quote_body_is_screened_before_sending() {
 
 #[tokio::test]
 async fn expanded_flavor_rows_count_against_the_retained_byte_limit() {
-    let zone = serde_json::json!({"data":[{"uuid":"zone-1","name":"x".repeat(1 << 20),"isEnabled":false}]}).to_string();
+    let zone = serde_json::json!({"data":[{"uuid":"zone-1","name":"x".repeat(4 << 10),"isEnabled":false}]}).to_string();
     let flavors = (0..33).map(|i| serde_json::json!({"flavorId":format!("flavor-{i}"),"flavorZoneId":"offer-1","name":"small","cpu":2,"memory":4,"remainingVms":1,"isSoldOut":false})).collect::<Vec<_>>();
     let server = TestServer::start(vec![
         response(&zone),
@@ -439,7 +478,7 @@ async fn expanded_flavor_rows_count_against_the_retained_byte_limit() {
         response(&serde_json::to_string(&flavors).unwrap()),
     ]);
     let (ctx, _) = RequestContext::new();
-    let error = client(&server)
+    let error = retained_budget_client(&server)
         .list_flavor_prices(&ctx, ListFlavorPricesInput::default())
         .await
         .unwrap_err();
@@ -503,6 +542,7 @@ async fn discovery_quote_never_sends_a_body_with_the_refreshed_bearer() {
     let provider = Arc::new(Provider::default());
     let config = Config::new(
         ConfigOptions::default()
+            .with_clock(crate::testing::retry_clock())
             .with_region("hcm-3".into())
             .with_project_id("proj-1".into())
             .with_credentials_provider(provider.clone())
@@ -553,7 +593,7 @@ async fn discovery_quote_never_sends_a_body_with_the_refreshed_bearer() {
 
 #[tokio::test]
 async fn repeated_image_versions_count_against_the_retained_byte_limit() {
-    let version = "v1.0.".repeat((1 << 20) / 5);
+    let version = "v1.0.".repeat((4 << 10) / 5);
     let images = serde_json::json!({"images":[{"id":"image-1","imageType":"ubuntu","imageVersion":version,"licence":false,"packageLimit":{"cpu":1,"memory":1,"diskSize":10}}]}).to_string();
     let flavors = (0..33).map(|i| serde_json::json!({"flavorId":format!("flavor-{i}"),"flavorZoneId":"offer-1","name":"small","cpu":2,"memory":4,"remainingVms":1,"isSoldOut":false,"metaData":"{\"imageTypeSupport\":[\"ubuntu\"]}"})).collect::<Vec<_>>();
     let server = TestServer::start(vec![
@@ -566,7 +606,7 @@ async fn repeated_image_versions_count_against_the_retained_byte_limit() {
         response(&images),
     ]);
     let (ctx, _) = RequestContext::new();
-    let error = client(&server)
+    let error = retained_budget_client(&server)
         .list_flavor_prices(
             &ctx,
             ListFlavorPricesInput {
@@ -609,4 +649,50 @@ async fn user_image_page_redacts_a_short_encoding_in_a_projected_id() {
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].uuid, "image-1");
     assert!(page.items[0].project_id == "<redacted>");
+}
+
+struct ReceiptBearer(std::sync::atomic::AtomicUsize, usize);
+
+impl crate::CredentialsProvider for ReceiptBearer {
+    fn token<'a>(
+        &'a self,
+        _: &'a RequestContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>,
+    > {
+        let token = if self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= self.1 {
+            "later-receipt-bearer"
+        } else {
+            "initial-receipt-bearer"
+        };
+        Box::pin(async move { Ok(crate::Token::new(Secret::new(token), None)) })
+    }
+
+    fn invalidate<'a>(
+        &'a self,
+        _: &'a RequestContext,
+        _: &'a Secret,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::Error>> + Send + 'a>>
+    {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn receipt_client(server: &TestServer, rotates_at: usize) -> Client {
+    let config = Config::new(
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_credentials_provider(std::sync::Arc::new(ReceiptBearer(0.into(), rotates_at)))
+            .with_endpoint_overrides(EndpointOverrides {
+                vserver: Some(format!("{}/", server.origin)),
+                portal: Some(format!("{}/portal/", server.origin)),
+                ..Default::default()
+            }),
+    )
+    .unwrap();
+    config
+        .session()
+        .set_test_product_root(server.root_der.clone());
+    Client::new(&config)
 }

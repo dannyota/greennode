@@ -40,13 +40,7 @@ impl<T: Data> Output for Envelope<T> {
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK {
-            return operation::decode_response(operation, response).map_err(|error| {
-                if response.status == StatusCode::NOT_FOUND && response.reflection.is_clean() {
-                    Box::new(error.with_detail(CompletedNotFound))
-                } else {
-                    error
-                }
-            });
+            return operation::decode_response(operation, response);
         }
         let invalid = || Box::new(invalid_response(operation));
         #[derive(Deserialize)]
@@ -55,37 +49,36 @@ impl<T: Data> Output for Envelope<T> {
             #[serde(borrow)]
             data: &'a RawValue,
         }
-        let header: Header<'_> = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-        if response.credentials.has_numeric_product_credential()
-            || header.code != 200
-            || header.data.get() == "null"
-            || !T::canonical_fields(header.data)
-        {
-            return Err(invalid());
-        }
-        if operation.id == "ListDatabaseNetworks" {
-            #[derive(Deserialize)]
-            struct NetworkRow<'a> {
-                #[serde(borrow)]
-                subnets: &'a RawValue,
-            }
-            let rows: Vec<NetworkRow<'_>> =
-                serde_json::from_str(header.data.get()).map_err(|_| invalid())?;
-            if rows.iter().any(|row| !row.subnets.get().starts_with('[')) {
+        response.decode_projection(|body| {
+            let header: Header<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
+            if response.credentials.has_numeric_product_credential()
+                || header.code != 200
+                || header.data.get() == "null"
+                || !T::canonical_fields(header.data)
+            {
                 return Err(invalid());
             }
-        }
-        let output: Self =
-            operation::decode_response(operation, response).map_err(|_| invalid())?;
-        if !output.data.valid() || output.data.reflects(&response.credentials) {
-            return Err(invalid());
-        }
-        Ok(output)
+            if operation.id == "ListDatabaseNetworks" {
+                #[derive(Deserialize)]
+                struct NetworkRow<'a> {
+                    #[serde(borrow)]
+                    subnets: &'a RawValue,
+                }
+                let rows: Vec<NetworkRow<'_>> =
+                    serde_json::from_str(header.data.get()).map_err(|_| invalid())?;
+                if rows.iter().any(|row| !row.subnets.get().starts_with('[')) {
+                    return Err(invalid());
+                }
+            }
+            let output: Self =
+                operation::decode_response(operation, response).map_err(|_| invalid())?;
+            if !output.data.valid() || output.data.reflects(&response.credentials) {
+                return Err(invalid());
+            }
+            Ok(output)
+        })
     }
 }
-
-#[derive(Debug)]
-pub(super) struct CompletedNotFound;
 
 pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
     if error.detail::<RefusedGuard>().is_some() {
@@ -94,26 +87,28 @@ pub(super) fn safe_error(operation: &Operation, error: Error) -> Error {
     let Some(api) = error.api_error() else {
         return error;
     };
-    if api.operation() != operation.id || api.status() == Some(200) {
+    let overflow = error.is_body_too_large();
+    let status = api.observed_status();
+    if overflow && status == Some(200) {
+        return invalid_response(operation).retain_status_visibility(Some(api));
+    }
+    if !overflow && (!api.is_for_operation(operation.id) || status == Some(200)) {
         return error;
     }
     let safe = Error::from_api(ApiError::new(
         operation.id,
-        api.status(),
+        status.filter(|_| !overflow),
         SafeText::new("", &[]),
         SafeText::new("request failed; response withheld", &[]),
         api.retryable(),
-    ));
+    ))
+    .retain_status_visibility(Some(api));
     let safe = if error.class() == ErrorClass::Api {
         safe
     } else {
         Error::new(error.class()).with_cause(safe)
     };
-    if error.detail::<CompletedNotFound>().is_some() {
-        safe.with_detail(CompletedNotFound)
-    } else {
-        safe
-    }
+    safe.with_clean_absence(error.clean_absence_proof())
 }
 
 pub(super) fn invalid_response(operation: &Operation) -> Error {

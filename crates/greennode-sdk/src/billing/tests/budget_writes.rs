@@ -265,3 +265,68 @@ async fn budget_acknowledgement_requires_a_clean_screen_even_without_output() {
         assert_eq!(server.requests(), 1);
     }
 }
+
+#[tokio::test]
+async fn once_create_keeps_307_even_when_location_cannot_be_parsed() {
+    let body = br#"{"code":"Moved","message":"temporary destination"}"#.to_vec();
+    let server = Server::start(vec![Response::Http {
+        status: "307 Temporary Redirect".into(),
+        headers: vec![
+            ("Location".into(), "/bad%zz".into()),
+            ("Content-Length".into(), body.len().to_string()),
+        ],
+        body,
+    }]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, BEARER)
+        .create_budget(&ctx, create_input())
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code(), api.message()),
+        (
+            "billing.CreateBudget",
+            Some(307),
+            "InvalidResponse",
+            "budget write outcome is unconfirmed; read current state before retrying"
+        )
+    );
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn hidden_client_refusal_keeps_budget_write_definite() {
+    let server = Server::start(vec![response("403 Forbidden", b"{}")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "403")
+        .create_budget(&ctx, create_input())
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 1);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), None);
+    assert_eq!(api.code(), "Forbidden");
+    assert!(!api.message().contains("unconfirmed"));
+}
+
+#[tokio::test]
+async fn create_budget_refusal_screens_the_operation_at_the_sdk_exit() {
+    let server = Server::start(vec![response("403 Forbidden", b"{}")]);
+    let bearer = "CreateBudget";
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, bearer)
+        .create_budget(&ctx, create_input())
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 1);
+    assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code()),
+        ("", Some(403), "Forbidden")
+    );
+    assert!(!format!("{} {api} {failure:?}", failure.error()).contains(bearer));
+}

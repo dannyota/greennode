@@ -1,4 +1,8 @@
-use super::{Screen, SentCredentials, marker, patterns::Patterns};
+use super::{Screen, SentCredentials, automaton::SCAN_BLOCK, marker, patterns::Patterns};
+use crate::go_json::{
+    escaped_code_unit, hex_digit, printable_byte_prefix, repeated_code_unit_prefix,
+};
+use std::rc::Rc;
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy)]
@@ -78,7 +82,10 @@ impl<'a> BodyMatcher<'a> {
             return true;
         };
         self.remaining.set(remaining);
-        self.raw(&Zeroizing::new(percent_decode(bytes)))
+        match percent_decode(bytes) {
+            Some(decoded) => self.raw(&decoded),
+            None => self.raw(bytes),
+        }
     }
 
     pub(in crate::wire::product) fn reflects(&self, bytes: &[u8], identifier: bool) -> bool {
@@ -119,7 +126,7 @@ fn match_with_budget(
         error_text,
         strict_base64: matches!(context, MatchContext::Identifier),
     };
-    let reflects = matches_forms(text, [0; 4], &mut state);
+    let reflects = matches_forms(MatchInput::Borrowed(text), [0; 4], &mut state);
     *work = state.work;
     reflects
 }
@@ -133,16 +140,31 @@ pub(super) fn matching_work_limit(length: usize, error_text: bool) -> usize {
     }
 }
 
-struct MatchState<'a> {
+#[derive(Clone)]
+enum MatchInput<'a> {
+    Borrowed(&'a [u8]),
+    Decoded(Rc<Zeroizing<Vec<u8>>>),
+}
+
+impl MatchInput<'_> {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Decoded(bytes) => bytes,
+        }
+    }
+}
+
+struct MatchState<'a, 'text> {
     work: usize,
-    forms: Vec<(Zeroizing<Vec<u8>>, bool)>,
+    forms: Vec<(MatchInput<'text>, bool)>,
     visited: Vec<(usize, [u8; 4])>,
     patterns: &'a Patterns,
     error_text: bool,
     strict_base64: bool,
 }
 
-impl MatchState<'_> {
+impl MatchState<'_, '_> {
     fn charge(&mut self, work: usize) -> bool {
         if work >= self.work {
             return false;
@@ -152,14 +174,19 @@ impl MatchState<'_> {
     }
 }
 
-fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> Screen {
+fn matches_forms<'text>(
+    form: MatchInput<'text>,
+    counts: [u8; 4],
+    state: &mut MatchState<'_, 'text>,
+) -> Screen {
+    let input = form.bytes();
     let decoded_base64 = counts[3] != 0;
     let mut found = None;
     for index in 0..state.forms.len() {
         if !state.charge(input.len()) {
             return Screen::Indeterminate;
         }
-        if state.forms[index].0.as_slice() == input && state.forms[index].1 == decoded_base64 {
+        if state.forms[index].0.bytes() == input && state.forms[index].1 == decoded_base64 {
             found = Some(index);
             break;
         }
@@ -185,9 +212,7 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> S
         if !screen.is_clean() {
             return screen;
         }
-        state
-            .forms
-            .push((Zeroizing::new(input.to_vec()), decoded_base64));
+        state.forms.push((form.clone(), decoded_base64));
         state.forms.len() - 1
     };
     if state.visited.contains(&(index, counts)) {
@@ -199,24 +224,18 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> S
             return Screen::Indeterminate;
         }
         let next = match step {
-            0 => Zeroizing::new(
-                input
-                    .iter()
-                    .copied()
-                    .filter(|byte| !byte.is_ascii_control())
-                    .collect(),
-            ),
+            0 => remove_controls(input),
             1 => json_unescape(input),
-            2 => Zeroizing::new(percent_decode(input)),
+            2 => percent_decode(input),
             _ if state
                 .patterns
                 .can_decode_base64(input.len(), state.strict_base64) =>
             {
-                decode_base64(input).unwrap_or_else(|| Zeroizing::new(input.to_vec()))
+                decode_base64(input)
             }
-            _ => Zeroizing::new(input.to_vec()),
+            _ => None,
         };
-        if next.as_slice() != input {
+        if let Some(next) = next {
             if step != 3 && counts[step] == 2 {
                 return Screen::Indeterminate;
             }
@@ -226,7 +245,7 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> S
             if step == 3 {
                 state.error_text = false;
             }
-            let matched = matches_forms(&next, next_counts, state);
+            let matched = matches_forms(MatchInput::Decoded(Rc::new(next)), next_counts, state);
             state.error_text = error_text;
             if !matched.is_clean() {
                 return matched;
@@ -236,104 +255,224 @@ fn matches_forms(input: &[u8], counts: [u8; 4], state: &mut MatchState<'_>) -> S
     Screen::Clean
 }
 
-fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-    [
-        data_encoding::BASE64,
-        data_encoding::BASE64_NOPAD,
-        data_encoding::BASE64URL,
-        data_encoding::BASE64URL_NOPAD,
-    ]
-    .iter()
-    .find_map(|encoding| {
-        let len = encoding.decode_len(input.len()).ok()?;
-        let mut decoded = Zeroizing::new(vec![0; len]);
-        let written = encoding.decode_mut(input, &mut decoded).ok()?;
-        decoded.truncate(written);
-        Some(decoded)
-    })
+fn remove_controls(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    let first = printable_byte_prefix(input);
+    if first == input.len() {
+        return None;
+    }
+    let mut output = Zeroizing::new(Vec::with_capacity(input.len()));
+    output.extend_from_slice(&input[..first]);
+    let mut previous = None;
+    for block in input[first + 1..].chunks(SCAN_BLOCK) {
+        if let Some((input_block, start, end)) = previous
+            && block == input_block
+        {
+            output.extend_from_within(start..end);
+        } else {
+            let start = output.len();
+            let mut rest = block;
+            loop {
+                let end = printable_byte_prefix(rest);
+                output.extend_from_slice(&rest[..end]);
+                if end == rest.len() {
+                    break;
+                }
+                rest = &rest[end + 1..];
+            }
+            previous = Some((block, start, output.len()));
+        }
+    }
+    Some(output)
 }
 
-fn json_unescape(input: &[u8]) -> Zeroizing<Vec<u8>> {
-    let mut unescaped = Zeroizing::new(Vec::with_capacity(input.len()));
+fn decode_base64(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    if input.is_empty() || !input.is_ascii() {
+        return None;
+    }
+    let url_safe = input.contains(&b'-') || input.contains(&b'_');
+    let padded = input.contains(&b'=');
+    let encoding = match (url_safe, padded) {
+        (false, false) => &data_encoding::BASE64_NOPAD,
+        (false, true) => &data_encoding::BASE64,
+        (true, false) => &data_encoding::BASE64URL_NOPAD,
+        (true, true) => &data_encoding::BASE64URL,
+    };
+    let len = encoding.decode_len(input.len()).ok()?;
+    let tail = (input.len().saturating_sub(1) / 4) * 4;
+    let mut last = Zeroizing::new([0; 3]);
+    let tail_len = encoding.decode_len(input.len() - tail).ok()?;
+    encoding
+        .decode_mut(&input[tail..], &mut last[..tail_len])
+        .ok()?;
+    let mut previous = &[][..];
+    for block in input[..tail].chunks(SCAN_BLOCK) {
+        if block != previous {
+            if !block.iter().copied().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || (padded && byte == b'=')
+                    || if url_safe {
+                        matches!(byte, b'-' | b'_')
+                    } else {
+                        matches!(byte, b'+' | b'/')
+                    }
+            }) {
+                return None;
+            }
+            previous = block;
+        }
+    }
+    let mut decoded = Zeroizing::new(vec![0; len]);
+    let mut previous = None;
+    let mut written = 0;
+    for block in input.chunks(SCAN_BLOCK) {
+        if let Some((previous_block, start, end)) = previous
+            && block == previous_block
+        {
+            decoded.copy_within(start..end, written);
+            written += end - start;
+        } else {
+            let end = written + encoding.decode_len(block.len()).ok()?;
+            let count = encoding
+                .decode_mut(block, &mut decoded[written..end])
+                .ok()?;
+            previous = Some((block, written, written + count));
+            written += count;
+        }
+    }
+    decoded.truncate(written);
+    Some(decoded)
+}
+
+fn json_escape(input: &[u8]) -> (Option<char>, usize) {
+    let decoded = match input.get(1) {
+        Some(b'"') => '"',
+        Some(b'\\') => '\\',
+        Some(b'/') => '/',
+        Some(b'b') => '\x08',
+        Some(b'f') => '\x0c',
+        Some(b'n') => '\n',
+        Some(b'r') => '\r',
+        Some(b't') => '\t',
+        Some(b'u') => {
+            let Some(high) = escaped_code_unit(input) else {
+                return (None, 1);
+            };
+            if (0xd800..=0xdbff).contains(&high) {
+                let Some(low) =
+                    escaped_code_unit(&input[6..]).filter(|low| (0xdc00..=0xdfff).contains(low))
+                else {
+                    return (None, 6);
+                };
+                let point = 0x10000 + ((u32::from(high) - 0xd800) << 10) + u32::from(low) - 0xdc00;
+                return (char::from_u32(point), 12);
+            }
+            return (char::from_u32(u32::from(high)), 6);
+        }
+        _ => return (None, 1),
+    };
+    (Some(decoded), 2)
+}
+
+fn json_unescape(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    if !input.contains(&b'\\') {
+        return None;
+    }
+    let mut output = None;
+    let mut copied = 0;
     let mut index = 0;
     while index < input.len() {
-        if input[index] == b'\\'
-            && let Some(&next) = input.get(index + 1)
-        {
-            if next == b'u' && index + 6 <= input.len() {
-                let mut end = index + 6;
-                if end + 6 <= input.len() && &input[end..end + 2] == b"\\u" {
-                    end += 6;
-                }
-                let mut quoted = Zeroizing::new(Vec::with_capacity(end - index + 2));
-                quoted.push(b'"');
-                quoted.extend_from_slice(&input[index..end]);
-                quoted.push(b'"');
-                if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
-                    let value = Zeroizing::new(value);
-                    unescaped.extend_from_slice(value.as_bytes());
-                    index = end;
-                    continue;
-                }
-                if end != index + 6 {
-                    quoted.truncate(1);
-                    quoted.extend_from_slice(&input[index..index + 6]);
-                    quoted.push(b'"');
-                    if let Ok(value) = serde_json::from_slice::<String>(&quoted) {
-                        let value = Zeroizing::new(value);
-                        unescaped.extend_from_slice(value.as_bytes());
-                        index += 6;
-                        continue;
-                    }
-                }
-            }
-            let decoded = match next {
-                b'"' => Some(b'"'),
-                b'\\' => Some(b'\\'),
-                b'/' => Some(b'/'),
-                b'b' => Some(8),
-                b'f' => Some(12),
-                b'n' => Some(b'\n'),
-                b'r' => Some(b'\r'),
-                b't' => Some(b'\t'),
-                _ => None,
-            };
-            if let Some(byte) = decoded {
-                unescaped.push(byte);
-                index += 2;
-                continue;
-            }
+        if input[index] != b'\\' {
+            index += 1;
+            continue;
         }
-        unescaped.push(input[index]);
-        index += 1;
+        let (decoded, mut size) = json_escape(&input[index..]);
+        if decoded.is_none() && size == 6 {
+            let repeated = repeated_code_unit_prefix(&input[index..]);
+            size = (repeated - size).max(size);
+        }
+        if let Some(ch) = decoded {
+            let buffer =
+                output.get_or_insert_with(|| Zeroizing::new(Vec::with_capacity(input.len())));
+            buffer.extend_from_slice(&input[copied..index]);
+            buffer.extend_from_slice(ch.encode_utf8(Zeroizing::new([0; 4]).as_mut()).as_bytes());
+            copied = index + size;
+        }
+        index += size;
     }
-    unescaped
+    let mut output = output?;
+    output.extend_from_slice(&input[copied..]);
+    Some(output)
 }
 
-fn percent_decode(data: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(data.len());
+fn percent_decode(input: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    if !input.contains(&b'%') {
+        return None;
+    }
+    let mut output = None;
+    let mut copied = 0;
     let mut index = 0;
-    while index < data.len() {
-        if data[index] == b'%'
-            && index + 2 < data.len()
-            && let (Some(a), Some(b)) = (
-                (data[index + 1] as char).to_digit(16),
-                (data[index + 2] as char).to_digit(16),
-            )
+    while index + 2 < input.len() {
+        if input[index] == b'%'
+            && let (Some(a), Some(b)) = (hex_digit(input[index + 1]), hex_digit(input[index + 2]))
         {
-            output.push(((a << 4) | b) as u8);
+            let buffer =
+                output.get_or_insert_with(|| Zeroizing::new(Vec::with_capacity(input.len())));
+            buffer.extend_from_slice(&input[copied..index]);
+            buffer.push((a << 4) | b);
             index += 3;
+            copied = index;
         } else {
-            output.push(data[index]);
             index += 1;
         }
     }
-    output
+    let mut output = output?;
+    output.extend_from_slice(&input[copied..]);
+    Some(output)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_fast_path_preserves_all_alphabets_and_concatenated_padding() {
+        for input in [
+            "YQ==Yg==", "YQ==YmNk", "YWI", "//8=", "__8", "Yx", "Ya==", "YQ-_+/",
+        ] {
+            let old = [
+                data_encoding::BASE64,
+                data_encoding::BASE64_NOPAD,
+                data_encoding::BASE64URL,
+                data_encoding::BASE64URL_NOPAD,
+            ]
+            .iter()
+            .find_map(|encoding| encoding.decode(input.as_bytes()).ok());
+            let decoded = decode_base64(input.as_bytes());
+            assert_eq!(decoded.as_deref(), old.as_ref());
+        }
+    }
+
+    #[test]
+    fn repeated_transforms_preserve_complete_output() {
+        let input = "YQ==YmNk".repeat(SCAN_BLOCK / 4);
+        let expected = data_encoding::BASE64.decode(input.as_bytes()).unwrap();
+        assert!(decode_base64(input.as_bytes()).as_deref() == Some(&expected));
+        let filtered = b"\x1cxy".repeat(SCAN_BLOCK);
+        assert!(remove_controls(&filtered).as_deref() == Some(&b"xy".repeat(SCAN_BLOCK)));
+    }
+
+    #[test]
+    fn json_escape_fast_path_preserves_mixed_and_unpaired_escapes() {
+        for (wire, expected) in [
+            (br"plain".as_slice(), None),
+            (br"\uD800\uD801", None),
+            (br"\u0061\uD800\u0062", Some(br"a\uD800b".as_slice())),
+            (br"\uD83D\uDE00\n\u0062", Some("😀\nb".as_bytes())),
+        ] {
+            let decoded = json_unescape(wire);
+            assert_eq!(decoded.as_ref().map(|text| text.as_slice()), expected);
+        }
+    }
 
     #[test]
     fn ten_long_credentials_allow_clean_256_kib_output() {

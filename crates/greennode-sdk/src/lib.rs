@@ -20,6 +20,7 @@ mod error;
 mod event;
 mod file_diagnostic;
 pub mod globalloadbalancer;
+mod go_json;
 mod go_text;
 pub mod iam;
 pub mod loadbalancer;
@@ -62,6 +63,8 @@ pub use provider::CredentialsProvider;
 pub use secret::Secret;
 pub use source::*;
 pub use token::Token;
+
+pub use wire::product::absence::confirms_absence;
 
 #[cfg(test)]
 mod iam_entry_tests {

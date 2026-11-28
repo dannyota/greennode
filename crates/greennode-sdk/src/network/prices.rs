@@ -1,16 +1,16 @@
 use serde::Serialize;
 
 use crate::model::pricing::{
-    DiscoveryFailure, DiscoveryMetadata, DiscoveryPrice, PricingNote, discovery_notes, note,
+    DiscoveryMetadata, DiscoveryPrice, PricingNote, discovery_notes, note,
 };
+use crate::pricing::failure as pricing_failure;
 use crate::quote::{
     catalog::{self, Catalog},
     input,
     request::{self, Product, Request, decode},
 };
-use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
-use super::inventory::screen;
 use super::{Client, failure};
 
 const QUOTE: &str = "pricing.GetQuote";
@@ -102,13 +102,13 @@ impl Client {
             catalog
                 .project()
                 .await
-                .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
+                .map_err(|error| failure(pricing_failure::screen(*error, &catalog.evidence)))?;
             catalog
                 .preflight(3)
-                .map_err(|error| failure(screen(*error, &catalog.evidence)))?;
+                .map_err(|error| failure(pricing_failure::screen(*error, &catalog.evidence)))?;
             let mut items = Vec::new();
             let mut failures = Vec::new();
-            let mut first_error = None;
+            let mut errors = Vec::new();
             let mut usable = false;
             for kind in ["public", "public-vm", "public-mkp"] {
                 let body = input::public_ip(kind);
@@ -119,9 +119,9 @@ impl Client {
                         (price, false)
                     }
                     Err(error) => {
-                        let error = screen(*error, &catalog.evidence);
+                        let error = *error;
                         if !input.allow_partial {
-                            return Err(failure(error));
+                            return Err(failure(pricing_failure::screen(error, &catalog.evidence)));
                         }
                         let stop = [
                             ErrorClass::Auth,
@@ -134,30 +134,13 @@ impl Client {
                         ]
                         .into_iter()
                         .any(|class| error.has_class(class));
-                        let api = error.api_error();
-                        let status = api.and_then(ApiError::status);
-                        let code = if api.is_some_and(|api| api.code() == "InvalidResponse") {
-                            "InvalidResponse".into()
-                        } else if api.is_some() {
-                            ApiError::new(
-                                QUOTE,
-                                status,
-                                crate::error::SafeText::new("", &[]),
-                                crate::error::SafeText::new("", &[]),
-                                false,
-                            )
-                            .code()
-                            .to_owned()
-                        } else {
-                            "DiscoveryIncomplete".into()
-                        };
-                        failures.push(DiscoveryFailure {
-                            operation: QUOTE.into(),
-                            item_key: kind.into(),
-                            status: i64::from(status.unwrap_or(0)),
-                            code,
-                        });
-                        first_error.get_or_insert(error);
+                        failures.push(pricing_failure::row(
+                            QUOTE,
+                            kind,
+                            &error,
+                            pricing_failure::CodePolicy::Catalog,
+                        ));
+                        errors.push(error);
                         (
                             DiscoveryPrice {
                                 status: "failed".into(),
@@ -180,8 +163,11 @@ impl Client {
                     break;
                 }
             }
-            if !usable && let Some(error) = first_error {
-                return Err(failure(screen(error, &catalog.evidence)));
+            if !usable && !errors.is_empty() {
+                return Err(failure(pricing_failure::screen(
+                    errors.remove(0),
+                    &catalog.evidence,
+                )));
             }
             for (kind, name, source) in [
                 ("floating-ip", "Floating IP", FLOATING),
@@ -202,6 +188,7 @@ impl Client {
                 });
             }
             items.sort_by(|a, b| a.r#type.cmp(&b.r#type));
+            pricing_failure::screen_rows(&mut failures, &catalog.evidence);
             let output = ListNetworkPricesOutput {
                 items,
                 metadata: DiscoveryMetadata {
@@ -229,7 +216,7 @@ impl Client {
                 || !serde_json::to_value(&output)
                     .is_ok_and(|value| !catalog.evidence.output_reflects(&value))
             {
-                return Err(failure(screen(
+                return Err(failure(pricing_failure::screen(
                     *request::invalid(QUOTE, 200),
                     &catalog.evidence,
                 )));
@@ -237,10 +224,10 @@ impl Client {
             if output.metadata.complete {
                 Ok(output)
             } else {
-                let error = Error::new(ErrorClass::DiscoveryIncomplete);
-                let error = first_error.map_or_else(
-                    || Error::new(ErrorClass::DiscoveryIncomplete),
-                    |cause| error.with_cause(screen(cause, &catalog.evidence)),
+                let error = pricing_failure::incomplete(
+                    errors
+                        .into_iter()
+                        .map(|error| pricing_failure::screen(error, &catalog.evidence)),
                 );
                 Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
             }
@@ -263,8 +250,7 @@ async fn public_ip_price(
         })
         .await?;
     let value = catalog::value(QUOTE, &raw)?;
-    let mut price = decode::monthly(QUOTE, &value)?;
-    price.currency = "VND".into();
+    let price = decode::network_monthly(QUOTE, &value)?;
     if price
         .monthly_price
         .is_some_and(|amount| catalog.evidence.reflects_fixed_two(amount))

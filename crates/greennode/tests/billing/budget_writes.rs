@@ -475,7 +475,7 @@ fn threshold_delete_emits_fixed_debug_events_on_failure() {
 }
 
 #[test]
-fn created_threshold_redacts_reflected_strings_before_rendering() {
+fn created_threshold_refuses_a_reflected_acknowledgement() {
     let body = format!(
         r#"{{"code":201,"data":{{"uuid":"threshold-1","thresholdType":"ACTUAL","notificationState":"reflected {BEARER}"}}}}"#
     );
@@ -492,11 +492,9 @@ fn created_threshold_redacts_reflected_strings_before_rendering() {
     ] {
         let args = [CREATE_THRESHOLD, extra].concat();
         let (status, stdout, stderr) = invoke_write(&args, &server);
-        assert_eq!(status, ExitCode::SUCCESS);
-        let stdout = std::str::from_utf8(&stdout).unwrap();
-        assert!(!stdout.contains(BEARER));
-        assert!(stdout.contains("redacted"));
-        assert!(stderr.is_empty());
+        assert_eq!(status, ExitCode::FAILURE);
+        assert!(stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&stderr).contains(BEARER));
     }
     assert_eq!(server.requests(), 4);
 }
@@ -559,4 +557,29 @@ fn confirmed_write_prints_recovery_when_stdout_breaks() {
         diagnostic["error"]["message"],
         "write succeeded; do not retry"
     );
+}
+
+#[test]
+fn create_budget_stderr_withholds_the_operation_that_matches_the_bearer() {
+    let server = Server::start(vec![response("403 Forbidden", "{}".into())]);
+    let bearer = "CreateBudget";
+    let (exit, stdout, stderr) = invoke_with_source(
+        &[
+            "billing",
+            "create-budget",
+            "--cli-input-json",
+            r#"{"Name":"example-budget","PeriodType":"MONTHLY","Type":"ACTUAL","LimitAmount":1000000}"#,
+        ],
+        Some(&server),
+        bearer,
+        &WRITABLE,
+    );
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert_eq!(server.requests(), 1);
+    assert!(stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&stderr).contains(bearer));
+    let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+    assert_eq!(error["error"]["status"], 403);
+    assert_eq!(error["error"]["code"], "Forbidden");
+    assert!(error["error"].get("operation").is_none());
 }

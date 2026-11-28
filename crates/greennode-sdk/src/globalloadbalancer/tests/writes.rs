@@ -228,7 +228,11 @@ async fn oversized_not_found_preserves_delete_status() {
         .delete_load_balancer(&ctx, DeleteLoadBalancerInput::new(GLB))
         .await
         .unwrap_err();
-    assert!(failure.error().has_class(ErrorClass::NotFound));
+    assert!(!failure.error().has_class(ErrorClass::NotFound));
+    assert_eq!(
+        failure.error().http_status(),
+        Some(http::StatusCode::NOT_FOUND)
+    );
     assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
 
     let server = Server::start(vec![

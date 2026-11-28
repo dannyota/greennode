@@ -105,14 +105,21 @@ async fn cleanup_keeps_the_original_created_identity() {
 
 #[tokio::test]
 async fn account_confirmation_never_follows_redirects_reflecting_the_issued_secret() {
-    for (location, expected_requests) in [
+    for (location, final_path, confirmed) in [
         (
             "/dashboard/accounts-api/v1/service-accounts/confirmed?value=public",
-            3,
+            "/dashboard/accounts-api/v1/service-accounts/confirmed?value=public",
+            false,
         ),
         (
             "/dashboard/accounts-api/v1/service-accounts/confirmed?value=%74oy-issued-key",
-            2,
+            "/dashboard/accounts-api/v1/service-accounts/sa-1",
+            true,
+        ),
+        (
+            "/dashboard/accounts-api/v1/service-accounts/confirmed?value=%74oy-issued-key",
+            "/dashboard/accounts-api/v1/service-accounts/sa-1",
+            false,
         ),
     ] {
         let server = Server::start(vec![
@@ -128,23 +135,26 @@ async fn account_confirmation_never_follows_redirects_reflecting_the_issued_secr
                 ],
                 body: Vec::new(),
             },
-            response("200 OK", br#"{"id":"sa-1"}"#),
+            if confirmed || location == final_path {
+                response("200 OK", br#"{"id":"sa-1"}"#)
+            } else {
+                response("403 Forbidden", b"{}")
+            },
         ]);
         let (ctx, _) = RequestContext::new();
         let result = client(&server, "toy-bearer")
             .create_service_account(&ctx, CreateServiceAccountInput::new("worker"))
             .await;
-        assert_eq!(server.requests(), expected_requests);
-        if expected_requests == 2 {
-            let failure = result.unwrap_err();
+        assert_eq!(result.is_ok(), confirmed);
+        if let Err(failure) = result {
             assert_eq!(
                 failure.error().detail::<WriteError>(),
                 Some(&WriteError::CreateUnconfirmed)
             );
             assert!(issued_service_account_secret(&failure).is_some());
-        } else {
-            assert!(result.is_ok());
         }
+        assert_eq!(server.requests(), 3);
+        assert!(server.heads()[2].starts_with(format!("GET {final_path} ").as_bytes()));
     }
 }
 
@@ -333,4 +343,196 @@ async fn account_confirmation_ignores_unknown_out_of_range_numbers() {
         }
         assert_eq!(server.requests(), 2);
     }
+}
+
+#[tokio::test]
+async fn service_account_absence_requires_the_dispatched_delete() {
+    for dispatched in [false, true] {
+        let mut replies = vec![
+            response("200 OK", br#"{"userId":"user-1","userType":"iam-user"}"#),
+            response("200 OK", br#"[{"action":"CreatePolicy","label":"Write"}]"#),
+        ];
+        if dispatched {
+            replies.push(response("200 OK", br#"{"data":[],"totalItems":0}"#));
+        }
+        replies.push(response("404 Not Found", b"{}"));
+        let server = Server::start(replies);
+        let failure = client(&server, "toy-bearer")
+            .delete_service_account(
+                &RequestContext::new().0,
+                DeleteServiceAccountInput::new("sa-1"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.write_dispatch(),
+            if dispatched {
+                WriteDispatch::MayHaveBeenSent
+            } else {
+                WriteDispatch::NotSent
+            }
+        );
+        assert_eq!(server.requests(), if dispatched { 4 } else { 3 });
+        assert_eq!(
+            crate::confirms_absence(
+                failure.error(),
+                "iam.DeleteServiceAccount",
+                "DELETE",
+                "accounts-api/v1/service-accounts/{}"
+            ),
+            dispatched
+        );
+        assert_eq!(
+            crate::confirms_absence(
+                failure.error(),
+                "iam.DeleteServiceAccount",
+                "GET",
+                "policies-api/v1/user-attachments/service-accounts/{}/policies"
+            ),
+            !dispatched
+        );
+    }
+}
+
+#[tokio::test]
+async fn account_diagnostic_translation_preserves_clean_absence() {
+    for (bearer, status) in [("toy-bearer", Some(404)), ("404", None)] {
+        let server = Server::start(vec![response("404 Not Found", b"{}")]);
+        let failure = client(&server, bearer)
+            .get_service_account(
+                &RequestContext::new().0,
+                crate::iam::GetServiceAccountInput::new("sa-1"),
+            )
+            .await
+            .unwrap_err();
+        assert!(crate::confirms_absence(
+            failure.error(),
+            "iam.GetServiceAccount",
+            "GET",
+            "accounts-api/v1/service-accounts/{}"
+        ));
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), status);
+        if status.is_none() {
+            assert!(api.message() == "IAM response withheld");
+        }
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn redirected_account_404_cannot_prove_absence_at_the_requested_route() {
+    let server = Server::start(vec![
+        crate::wire::test_server::Response::Http {
+            status: "307 Temporary Redirect".into(),
+            headers: vec![
+                (
+                    "Location".into(),
+                    "/dashboard/accounts-api/v1/service-accounts/sa-2".into(),
+                ),
+                ("Content-Length".into(), "0".into()),
+            ],
+            body: Vec::new(),
+        },
+        response("404 Not Found", b"{}"),
+    ]);
+    let failure = client(&server, "toy-bearer")
+        .get_service_account(
+            &RequestContext::new().0,
+            crate::iam::GetServiceAccountInput::new("sa-1"),
+        )
+        .await
+        .unwrap_err();
+    assert!(!crate::confirms_absence(
+        failure.error(),
+        "iam.GetServiceAccount",
+        "GET",
+        "accounts-api/v1/service-accounts/{}"
+    ));
+    assert_eq!(server.requests(), 2);
+}
+
+#[tokio::test]
+async fn unclean_acknowledgement_never_issues_a_reflecting_or_ambiguous_secret() {
+    for body in [
+        br#"{"id":"toy-bearer","clientSecret":"toy%2Dbearer"}"#.as_slice(),
+        br#"{"id":"toy-bearer","clientSecret":"first","clientSecret":"second"}"#.as_slice(),
+        br#"{"id":"toy-bearer","clientSecret":"first","ClientSecret":"second"}"#.as_slice(),
+    ] {
+        let server = Server::start(vec![response("201 Created", body)]);
+        let failure = client(&server, "toy-bearer")
+            .create_service_account(
+                &RequestContext::new().0,
+                CreateServiceAccountInput::new("worker"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        assert!(issued_service_account_secret(&failure).is_none());
+        assert!(failed_service_account_cleanup(&failure).is_none());
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn reset_private_delivery_only_extracts_the_declared_secret() {
+    let mut replies = account_guard();
+    replies.push(response(
+        "200 OK",
+        br#"{"clientSecret":"clientSecret-is-valid","unknown":"toy-bearer"}"#,
+    ));
+    let server = Server::start(replies);
+    let failure = client(&server, "toy-bearer")
+        .reset_service_account_secret(
+            &RequestContext::new().0,
+            crate::iam::ResetServiceAccountSecretInput::new("sa-1"),
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(
+        crate::iam::issued_reset_service_account_secret(&failure)
+            .is_some_and(|secret| secret.expose_secret() == "clientSecret-is-valid")
+    );
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
+async fn field_only_issuance_reads_an_escaped_secret_key() {
+    let server = Server::start(vec![response(
+        "201 Created",
+        br#"{"id":"toy-bearer","clientSecr\u0065t":"issued-secret"}"#,
+    )]);
+    let failure = client(&server, "toy-bearer")
+        .create_service_account(
+            &RequestContext::new().0,
+            CreateServiceAccountInput::new("worker"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        issued_service_account_secret(&failure)
+            .is_some_and(|secret| secret.expose_secret() == "issued-secret")
+    );
+    assert!(failed_service_account_cleanup(&failure).is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn private_issuance_preserves_secret_when_other_fields_expand_during_normalization() {
+    let body = b"{\"id\":\"toy-bearer\",\"clientSecret\":\"issued-secret\",\"unknown\":\"\xff\"}";
+    let server = Server::start(vec![response("201 Created", body)]);
+    let failure = client(&server, "toy-bearer")
+        .create_service_account(
+            &RequestContext::new().0,
+            CreateServiceAccountInput::new("worker"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        issued_service_account_secret(&failure)
+            .is_some_and(|secret| secret.expose_secret() == "issued-secret")
+    );
+    assert_eq!(server.requests(), 1);
 }

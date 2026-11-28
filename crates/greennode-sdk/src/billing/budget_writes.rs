@@ -295,9 +295,7 @@ pub(super) fn not_sent<T>(error: Error) -> Failure<T> {
 
 fn reconcile(operation: &Operation, error: Error) -> Error {
     let api = error.api_error();
-    let status = error
-        .http_status()
-        .or_else(|| api.and_then(|api| StatusCode::from_u16(api.status()?).ok()));
+    let status = api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
     let code = api.map_or("", ApiError::code);
     let message = if let Some(status) = status.filter(StatusCode::is_client_error) {
         if !code.is_empty() {
@@ -316,7 +314,7 @@ fn reconcile(operation: &Operation, error: Error) -> Error {
     };
     Error::from_api(ApiError::new(
         operation.id,
-        status.map(|status| status.as_u16()),
+        api.and_then(ApiError::status),
         SafeText::new(code, &[]),
         SafeText::new(message, &[]),
         false,
@@ -342,10 +340,12 @@ pub(super) fn write_operation(
         allow_empty: acknowledgement,
         no_output: acknowledgement,
         keep_status: true,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }

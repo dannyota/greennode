@@ -177,7 +177,7 @@ async fn member_confirmation_reads_the_list_after_settlement_and_keeps_a_partial
     let (ctx, _) = RequestContext::new();
     let mut input = add();
     input.no_wait = false;
-    let failure = client(&server, CANARY)
+    let failure = settlement_client(&server)
         .add_pool_member(&ctx, input)
         .await
         .unwrap_err();
@@ -202,7 +202,9 @@ async fn incomplete_busy_response_never_authorizes_another_replacement() {
         .await
         .unwrap_err();
     assert!(failure.error().has_class(ErrorClass::NotSettled));
-    assert!(failure.error().is_body_too_large());
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(409));
+    assert_eq!(api.code(), "Conflict");
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert!(failure.partial().unwrap().changed);
     assert_eq!(server.requests(), 4);
@@ -221,7 +223,7 @@ async fn confirmed_member_comparison_is_independent_of_list_order() {
     let (ctx, _) = RequestContext::new();
     let mut input = add();
     input.no_wait = false;
-    let output = client(&server, CANARY)
+    let output = settlement_client(&server)
         .add_pool_member(&ctx, input)
         .await
         .unwrap();

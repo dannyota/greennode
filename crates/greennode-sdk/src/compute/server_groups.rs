@@ -144,8 +144,18 @@ impl Client {
                 .send_mutation(ctx, &CREATE, &[], Some(&body), false, &mut evidence)
                 .await
                 .map_err(|error| ambiguous_create(error, &evidence))?;
-            let mut group =
-                decode_data::<ServerGroup>(&raw, &CREATE, &evidence).map_err(|error| {
+            let receipt = raw.clean_receipt().ok_or_else(|| {
+                ambiguous_create(
+                    Failure::new(
+                        invalid_mutation_response(&CREATE, &evidence),
+                        None,
+                        WriteDispatch::MayHaveBeenSent,
+                    ),
+                    &evidence,
+                )
+            })?;
+            let mut group = decode_data::<ServerGroup>(receipt.body(), &CREATE, &evidence)
+                .map_err(|error| {
                     ambiguous_create(
                         Failure::new(*error, None, WriteDispatch::MayHaveBeenSent),
                         &evidence,
@@ -242,7 +252,8 @@ impl Client {
             };
             let body = json!({"name": fallback.name, "description": fallback.description, "serverGroupId": id});
             self.send_mutation(ctx, &UPDATE, &[id], Some(&body), false, &mut evidence)
-                .await?;
+                .await
+                .map(drop)?;
             let result = self.group_detail::<()>(ctx, id, &mut evidence).await;
             let error = match result {
                 Ok(mut group)
@@ -335,6 +346,7 @@ impl Client {
             }
             self.send_mutation::<()>(ctx, &DELETE, &[id], None, false, &mut evidence)
                 .await
+                .map(drop)
                 .map_err(|failure| {
                     let (error, _, dispatch) = failure.into_parts();
                     let error = if let Some(api) = error.api_error()
@@ -376,7 +388,9 @@ fn ambiguous_create(
 ) -> Failure<CreateServerGroupOutput> {
     let (error, _, dispatch) = failure.into_parts();
     let error = if dispatch == WriteDispatch::MayHaveBeenSent && !rejected(&error) {
-        let reason = error.api_error().map_or("", |api| api.message());
+        let reason = error
+            .api_error()
+            .map_or_else(String::new, crate::ApiError::go_text);
         let advice = format!(
             "{}: create may have already reached the server; list server groups and match the name exactly before creating it again: {reason}",
             CREATE.id

@@ -151,10 +151,9 @@ impl Child<'_> {
                 if error.detail::<RefusedGuard>().is_some() {
                     return Box::new(error);
                 }
-                if error
-                    .api_error()
-                    .is_some_and(|api| api.operation() == self.0.id && api.status().is_none())
-                    && !error.has_identity(ErrorClass::InvalidInput)
+                if error.api_error().is_some_and(|api| {
+                    api.is_for_operation(self.0.id) && api.observed_status().is_none()
+                }) && !error.has_identity(ErrorClass::InvalidInput)
                 {
                     self.invalid(DecodeError::InvalidShape)
                 } else {
@@ -168,8 +167,13 @@ impl Child<'_> {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
         if reply.status != StatusCode::OK {
-            let error = Box::new(rejected_response(&op, &reply, None, Some(PROVIDER_TEXT)));
-            if reply.status == StatusCode::NOT_FOUND || internal_error(&reply) {
+            let error = Box::new(
+                rejected_response(&op, &reply, None, Some(PROVIDER_TEXT))
+                    .with_clean_absence(reply.clean_absence()),
+            );
+            if crate::confirms_absence(&error, op.id, "GET", op.template)
+                || (reply.reflection.clean().is_some() && internal_error(&reply))
+            {
                 return Guarded::from_checkpoint(
                     GuardReply::Absent(error),
                     &self.0.evidence,
@@ -178,10 +182,13 @@ impl Child<'_> {
             }
             return Err(error);
         }
-        if reply.body.is_empty() || super::wire::go_json(&reply.body).trim() == "null" {
+        let receipt = reply
+            .clean_receipt()
+            .ok_or_else(|| self.invalid(DecodeError::ReflectedCredential))?;
+        if receipt.body().is_empty() || super::wire::go_json(receipt.body()).trim() == "null" {
             return Err(self.invalid(DecodeError::InvalidShape));
         }
-        let result: T = decode_canonical(&op, &reply.body, &T::SHAPE).map_err(|error| {
+        let result: T = decode_canonical(&op, receipt.body(), &T::SHAPE).map_err(|error| {
             self.invalid(
                 error
                     .detail::<DecodeError>()
@@ -244,13 +251,17 @@ impl Child<'_> {
         template: &'static str,
         valid: impl FnOnce(&model::Acceptance) -> bool,
     ) -> Option<Guarded<model::Acceptance>> {
-        let clean = reply.reflection.clean()?;
+        let receipt = reply.clean_receipt()?;
         let op = guard_operation(self.0.id, template);
-        let value = decode_canonical(&op, &reply.body, &model::Acceptance::SHAPE).ok()?;
+        let value = decode_canonical(&op, receipt.body(), &model::Acceptance::SHAPE).ok()?;
         if !valid(&value) {
             return None;
         }
-        Guarded::acknowledgement(value, &mut self.0.evidence, op.id, &reply.body, clean).ok()
+        let guarded = receipt.guard(value);
+        guarded
+            .register_acknowledgement(&mut self.0.evidence, |value| Some(&value.id))
+            .ok()?;
+        Some(guarded)
     }
 
     fn fail<O: Serialize>(&self, reason: &'static str, partial: O) -> Failure<O> {
@@ -480,8 +491,10 @@ fn internal_error(reply: &Response) -> bool {
     struct Code {
         code: Option<String>,
     }
-    decode_canonical::<Code>(&op, &reply.body, &shape)
-        .is_ok_and(|envelope| envelope.code.as_deref() == Some("internal_error"))
+    reply.clean_receipt().is_some_and(|receipt| {
+        decode_canonical::<Code>(&op, receipt.body(), &shape)
+            .is_ok_and(|envelope| envelope.code.as_deref() == Some("internal_error"))
+    })
 }
 
 #[expect(

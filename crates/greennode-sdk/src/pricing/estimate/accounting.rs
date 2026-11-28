@@ -1,9 +1,7 @@
-use super::{EstimateInput, EstimateItem, EstimateOutput, OP, Run, Shared, failed, failure_code};
-use crate::model::pricing::{
-    DiscoveryFailure, DiscoveryMetadata, PricingNote, discovery_notes, note,
-};
-use crate::pricing::EstimateArithmeticError;
-use crate::pricing::{EstimateCharge, EstimateCoverage, EstimateTotal};
+use super::{EstimateInput, EstimateItem, EstimateOutput, OP, Run, Shared, failed};
+use crate::model::pricing::{DiscoveryMetadata, PricingNote, discovery_notes, note};
+use crate::pricing::failure as pricing_failure;
+use crate::pricing::{EstimateArithmeticError, EstimateCharge, EstimateCoverage, EstimateTotal};
 use crate::quote::request::decode::Quote;
 use crate::wire::product::evidence::Evidence;
 use crate::{Error, ErrorClass};
@@ -220,10 +218,10 @@ pub(super) fn account(
 
 impl Run<'_> {
     pub(super) fn record(&mut self, key: &str, error: Arc<Error>) {
-        let api = error.api_error().filter(|api| !api.operation().is_empty());
-        let mut code = api.map_or_else(|| "DiscoveryIncomplete".into(), failure_code);
+        let mut failure =
+            pricing_failure::row(OP, key, &error, pricing_failure::CodePolicy::Estimate);
         let reason = if let Some(arithmetic) = error.detail::<EstimateArithmeticError>() {
-            code = if arithmetic.stage == "multiplication" {
+            failure.code = if arithmetic.stage == "multiplication" {
                 "EstimateMultiplicationOverflow"
             } else {
                 "EstimateSubtotalOverflow"
@@ -234,12 +232,7 @@ impl Run<'_> {
             "request-failed"
         };
         self.output.metadata.complete = false;
-        self.output.metadata.failures.push(DiscoveryFailure {
-            operation: OP.into(),
-            item_key: key.into(),
-            code,
-            status: i64::from(api.and_then(|api| api.status()).unwrap_or_default()),
-        });
+        self.output.metadata.failures.push(failure);
         self.output.coverage.push(cover(
             "processing",
             if key.is_empty() { "setup" } else { key },

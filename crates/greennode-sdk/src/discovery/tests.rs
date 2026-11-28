@@ -207,6 +207,7 @@ async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
     };
     let base = crate::endpoint::Base::parse(&server.origin).unwrap();
     let (ctx, _) = RequestContext::new();
+    let mut limit = NoLimit(Pacing::new(Duration::ZERO));
     let error = read_projects_with_evidence(
         Runtime {
             configured_credentials: None,
@@ -221,7 +222,7 @@ async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
         &Source,
         "han-1",
         &mut Evidence::new(),
-        Some(&Pacing::new(Duration::ZERO)),
+        Some(&mut limit),
     )
     .await
     .unwrap_err();
@@ -504,4 +505,32 @@ async fn failed_read_is_not_cached() {
     assert!(call(&discovery, &server, &ctx).await.is_err());
     assert_eq!(call(&discovery, &server, &ctx).await.unwrap().id, "two");
     assert_eq!(server.requests(), 2);
+}
+
+struct NoLimit(Pacing);
+impl InventoryLimits for NoLimit {
+    fn reserve(&mut self) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn check_bytes(&self, _: usize) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn account(&mut self, _: usize, _: usize) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn pacing(&self) -> &Pacing {
+        &self.0
+    }
+}
+
+#[tokio::test]
+async fn discovery_plain_text_404_keeps_http_refusal() {
+    let server = Server::start(vec![response("404 Not Found", b"404 Not Found")]);
+    let error = call(&Discovery::default(), &server, &RequestContext::new().0)
+        .await
+        .unwrap_err();
+    let api = error.api_error().unwrap();
+    assert_eq!(api.code(), "NotFound");
+    assert_eq!(api.status(), Some(404));
+    assert_eq!(server.requests(), 1);
 }

@@ -1,4 +1,4 @@
-use super::reads::{RepositoryRead, valid_id};
+use super::reads::{RepositoryAbsentFromInventory, RepositoryRead, valid_id};
 use super::*;
 use crate::wire::product::guard::{Guarded, guarded_poll};
 use bytes::Bytes;
@@ -188,7 +188,7 @@ impl Client {
             }
             let body = json!({"repoName": input.name, "quotaLimit": input.quota_limit_gb, "isPublic": false});
             let mut evidence = Evidence::for_write();
-            let RepositoryWrite(repo) = self.request(
+            let receipt: crate::wire::product::guard::Acknowledgement<RepositoryWrite> = self.request(
                 ctx, &Operation { allow_empty: true, reflection: crate::wire::product::operation::Reflection::Redact, ..write_operation(
                     CREATE, Method::POST, "v1/repository", &[StatusCode::ACCEPTED],
                 ) }, &[], &[], Bytes::from(body.to_string()), &mut evidence,
@@ -196,25 +196,46 @@ impl Client {
                 "containerregistry.CreateRepository: create may have already reached the server; ",
                 "list-repositories --name <name> and match the exact name before creating again",
             )))?;
-            if !valid_id(&repo.id) || evidence.credentials().reflects(repo.id.as_bytes()) {
-                let message = if repo.id.is_empty() {
-                    format!("create response had no id; {RECONCILE}")
-                } else {
-                    format!("create response had no usable id; {RECONCILE}")
-                };
+            let bad_id = |message: &str| {
+                Failure::new(
+                    registry_error(CREATE, Some(202), "", &format!("{message}; {RECONCILE}")),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            };
+            let Some((RepositoryWrite(repo), acknowledged)) =
+                receipt.into_id(|row| (!row.0.id.is_empty()).then_some(row.0.id.as_str()))
+            else {
+                return Err(bad_id("create response had no id"));
+            };
+            let id = acknowledged
+                .recheck(&evidence)
+                .map_err(|_| bad_id("create response had no usable id"))?;
+            if !valid_id(id) {
+                return Err(bad_id("create response had no usable id"));
+            }
+            evidence
+                .keep_acknowledgement(&acknowledged)
+                .map_err(|_| bad_id("create response had no usable id"))?;
+            if input.no_wait {
+                return Ok(CreateRepositoryOutput::new(repo, &evidence));
+            }
+            let result = self
+                .wait_repository(
+                    ctx,
+                    crate::wire::product::guard::ConfirmationTarget::Acknowledged(&acknowledged),
+                    false,
+                    &mut evidence,
+                )
+                .await;
+            if let Err(error) = acknowledged.recheck(&evidence) {
                 return Err(Failure::new(
-                    registry_error(CREATE, Some(202), "", &message),
+                    Error::new(ErrorClass::NotSettled).with_cause(*error),
                     None,
                     WriteDispatch::MayHaveBeenSent,
                 ));
             }
-            if input.no_wait {
-                return Ok(CreateRepositoryOutput::new(repo, &evidence));
-            }
-            match self
-                .wait_repository(ctx, &repo.id, false, &mut evidence)
-                .await
-            {
+            match result {
                 Ok(Some(read)) => Ok(CreateRepositoryOutput::new(read, &evidence)),
                 result => {
                     let output = CreateRepositoryOutput::new(repo, &evidence);
@@ -283,7 +304,14 @@ impl Client {
             .await?;
             let output = DeleteRepositoryOutput {};
             if !input.no_wait
-                && let Err(error) = self.wait_repository(ctx, id, true, &mut evidence).await
+                && let Err(error) = self
+                    .wait_repository(
+                        ctx,
+                        crate::wire::product::guard::ConfirmationTarget::Explicit(id),
+                        true,
+                        &mut evidence,
+                    )
+                    .await
             {
                 return Err(settlement_failure(
                     Some(error),
@@ -299,7 +327,7 @@ impl Client {
     async fn wait_repository(
         &self,
         ctx: &RequestContext,
-        id: &str,
+        target: crate::wire::product::guard::ConfirmationTarget<'_>,
         absent: bool,
         evidence: &mut Evidence,
     ) -> Result<Option<Repository>, Failure<()>> {
@@ -309,13 +337,28 @@ impl Client {
             if let Some(end) = ctx.check(clock) {
                 return Err(failure(end.into()));
             }
+            let refused = |error: Box<Error>| failure(*error);
+            let id = target.checked(evidence).map_err(refused)?;
             let read = self.get_repository_evidenced(&ctx, id, evidence).await;
+            target.checked(evidence).map_err(refused)?;
             if let Some(end) = ctx.check(clock) {
                 return Err(failure(end.into()));
             }
             match read {
                 Ok(RepositoryRead { repository, .. }) if !absent => return Ok(Some(repository)),
-                Err(error) if !error.error().has_class(ErrorClass::NotFound) => return Err(error),
+                Err(error)
+                    if !crate::confirms_absence(
+                        error.error(),
+                        "containerregistry.GetRepository",
+                        "GET",
+                        "v1/repository/{}",
+                    ) && error
+                        .error()
+                        .internal_detail::<RepositoryAbsentFromInventory>()
+                        .is_none() =>
+                {
+                    return Err(error);
+                }
                 Err(_) if absent => return Ok(None),
                 _ => (),
             }

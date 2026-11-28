@@ -31,6 +31,8 @@ pub(super) enum Outcome {
 pub(super) struct CreateReply {
     #[serde(skip)]
     pub(super) outcome: Outcome,
+    #[serde(skip)]
+    pub(super) acknowledged: Option<crate::wire::product::guard::AcknowledgedId>,
 }
 
 impl Output for CreateReply {
@@ -46,8 +48,21 @@ impl Output for CreateReply {
     ]);
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        let receipt = response.clean_receipt();
+        let outcome = outcome(
+            operation,
+            response.status,
+            receipt.as_ref().map_or(&[][..], |receipt| receipt.body()),
+        );
+        let acknowledged = match &outcome {
+            Outcome::Accepted(output) | Outcome::Unconfirmed(output) if !output.id.is_empty() => {
+                receipt.map(|receipt| receipt.bind_id(output.id.clone()))
+            }
+            _ => None,
+        };
         Ok(Self {
-            outcome: outcome(operation, response.status, &response.body),
+            outcome,
+            acknowledged,
         })
     }
 }

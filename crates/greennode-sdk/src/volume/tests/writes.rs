@@ -177,14 +177,11 @@ async fn create_checks_inventory_and_quotes_before_sending_once() {
         .unwrap_err();
     assert_eq!(error.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     assert!(error.partial().is_none());
-    assert!(
-        error
-            .error()
-            .detail::<crate::RecoveryAdvice>()
-            .unwrap()
-            .message()
-            .contains("match the name exactly")
+    assert_eq!(
+        error.recovery_action(),
+        Some(crate::RecoveryAction::CheckExistingVolume)
     );
+    assert_eq!(error.error().api_error().unwrap().status(), Some(503));
     assert_eq!(server.requests(), 3);
     let heads = server.heads();
     assert!(
@@ -227,7 +224,8 @@ async fn ambiguous_create_id_never_polls_and_duplicate_name_never_quotes() {
         .await
         .unwrap_err();
     assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    assert_eq!(failure.error().api_error().unwrap().status(), Some(202));
+    let api = failure.error().api_error().unwrap();
+    assert_eq!((api.status(), api.code()), (Some(202), "InvalidResponse"));
     assert!(failure.partial().is_none());
     assert_eq!(server.requests(), 3);
 }
@@ -758,3 +756,38 @@ mod guard_tests {
         }
     }
 }
+
+#[tokio::test]
+async fn oversized_create_keeps_the_body_limit_cause_and_recovery_action() {
+    let server = Server::start(vec![
+        response(EMPTY),
+        response(QUOTE),
+        Response::RawClose(
+            format!(
+                "HTTP/1.1 202 Accepted\r\nContent-Length: {}\r\n\r\n",
+                (8 << 20) + 1
+            )
+            .into_bytes(),
+        ),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "han-1")
+        .create_volume(&ctx, create())
+        .await
+        .unwrap_err();
+    let error = failure.error();
+    assert_eq!(error.api_error().unwrap().status(), Some(202));
+    assert_eq!(
+        error.api_error().unwrap().to_string(),
+        "transport: response body exceeds limit"
+    );
+    assert_eq!(
+        failure.recovery_action(),
+        Some(crate::RecoveryAction::CheckExistingVolume)
+    );
+    assert_eq!(error.class(), ErrorClass::Api);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 3);
+}
+
+mod recovery;

@@ -13,6 +13,14 @@ pub(crate) use detail::{debug_reflects, write_debug};
 mod parts;
 pub(crate) use parts::LoginFailureKind;
 pub use parts::{ApiError, LoginError, ServiceAccountLoginError};
+#[path = "error/display.rs"]
+mod display;
+#[path = "error/provenance.rs"]
+mod provenance;
+pub(crate) use provenance::ApiProvenance;
+#[path = "error/recovery.rs"]
+mod recovery;
+pub use recovery::RecoveryAction;
 
 /// Stable categories for operation failures.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -96,6 +104,9 @@ crate::error::debug_record!(ErrorClass;
 pub(crate) struct SafeText(String);
 
 impl SafeText {
+    const LIMIT: usize = 512;
+
+    #[allow(dead_code)]
     pub(crate) fn new(text: &str, credentials: &[&crate::Secret]) -> Self {
         let cleaned: String = text.chars().filter(|c| {
             !c.is_control() && !matches!(*c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{206f}')
@@ -109,7 +120,7 @@ impl SafeText {
         let end = cleaned
             .char_indices()
             .map(|(i, c)| i + c.len_utf8())
-            .take_while(|end| *end <= 512)
+            .take_while(|end| *end <= Self::LIMIT)
             .last()
             .unwrap_or(0);
         Self(cleaned[..end].to_owned())
@@ -147,6 +158,28 @@ impl RecoveryAdvice {
         Self(SafeText::new(message, &[]))
     }
 
+    pub(crate) fn screened(candidates: &[&str], reflects: impl Fn(&str) -> bool) -> Option<Self> {
+        candidates.iter().find_map(|message| {
+            let advice = Self::new(message);
+            (!message.is_empty() && advice.message() == *message && !reflects(message))
+                .then_some(advice)
+        })
+    }
+
+    pub(crate) fn screened_with_cause(
+        candidates: &[&str],
+        cause: &str,
+        reflects: impl Fn(&str) -> bool,
+    ) -> Option<Self> {
+        let cause = Self::screened(&[cause], &reflects)?;
+        candidates.iter().find_map(|line| {
+            let line = Self::screened(&[line], &reflects)?;
+            let joined = format!("{}\n{}", line.message(), cause.message());
+            (joined.len() <= SafeText::LIMIT && !reflects(&joined))
+                .then_some(Self(SafeText(joined)))
+        })
+    }
+
     /// Returns the recovery guidance, which can include a sanitized service reason.
     pub fn message(&self) -> &str {
         self.0.as_str()
@@ -168,6 +201,9 @@ impl SystemTagText {
 /// HTTP response status retained in a screened SDK error.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct HttpStatus(http::StatusCode);
+
+#[derive(Debug)]
+struct ObservedHttpStatus(http::StatusCode);
 
 impl HttpStatus {
     /// Returns the numeric HTTP response status.
@@ -195,6 +231,12 @@ pub struct Error {
     detail: Option<Detail>,
     cause: CauseChain,
 }
+
+/// Returned through [`Error::detail`] when a service preserves the authentication
+/// failure identity and withholds the underlying login diagnostic.
+pub struct SanitizedAuthentication;
+
+crate::error::debug_record!(SanitizedAuthentication unit);
 
 #[derive(Debug)]
 struct BodyTooLarge;
@@ -231,19 +273,37 @@ impl Error {
         Self::from_api(api)
     }
     pub(crate) fn from_api(api: ApiError) -> Self {
-        let class = match api.status {
-            Some(404) => ErrorClass::NotFound,
-            Some(403) => ErrorClass::PermissionDenied,
-            Some(429) => ErrorClass::RateLimited,
-            Some(401) if !api.public_route => ErrorClass::Auth,
-            _ => ErrorClass::Api,
-        };
+        let class = api.http_class().unwrap_or(ErrorClass::Api);
         Self {
             identity: false,
             api: Some(api),
             ..Self::new(class)
         }
     }
+    pub(crate) fn with_http_identity(mut self, class: ErrorClass) -> Self {
+        if matches!(
+            class,
+            ErrorClass::Auth
+                | ErrorClass::NotFound
+                | ErrorClass::PermissionDenied
+                | ErrorClass::RateLimited
+        ) && (self.class == ErrorClass::Api || self.class == class)
+        {
+            self.class = class;
+            self.identity = true;
+        }
+        self
+    }
+
+    pub(crate) fn preserve_http_identity(self, source: &Self) -> Self {
+        let class = source.class();
+        if source.has_class(class) {
+            self.with_http_identity(class)
+        } else {
+            self
+        }
+    }
+
     fn screen_layer(&mut self, reflects: &impl Fn(&str) -> bool) {
         self.fallback_message_reflected |= reflects(DIAGNOSTIC_FALLBACK);
         if let Some(api) = self.api.as_mut() {
@@ -251,11 +311,11 @@ impl Error {
                 .status
                 .is_some_and(|status| reflects(&status.to_string()))
             {
-                api.status = None;
+                api.status_withheld = true;
                 self.identity = true;
             }
             if reflects(api.operation) {
-                api.operation = "";
+                api.operation_withheld = true;
             }
             if reflects(&api.code) {
                 api.code.clear();
@@ -263,6 +323,14 @@ impl Error {
             if reflects(&api.message) {
                 api.message.clear();
             }
+            if api
+                .request_cause
+                .as_ref()
+                .is_some_and(|cause| reflects(cause))
+            {
+                api.request_cause = None;
+            }
+            api.screen_display(reflects);
         }
         if let Some(login) = &mut self.login {
             login.screen(reflects);
@@ -281,6 +349,8 @@ impl Error {
         if let Some(detail) = &mut self.detail {
             detail.screen_fields(reflects);
         }
+        self.screen_recovery(reflects);
+        self.screen_service_display(reflects);
         self.display_reflected =
             self.display_reflected || reflects(&zeroize::Zeroizing::new(self.to_string()));
     }
@@ -342,7 +412,24 @@ impl Error {
     }
 
     pub(crate) fn http_status(&self) -> Option<http::StatusCode> {
-        self.detail::<HttpStatus>().map(|status| status.0)
+        self.internal_detail::<HttpStatus>()
+            .map(|status| status.0)
+            .or_else(|| {
+                self.internal_detail::<ObservedHttpStatus>()
+                    .map(|status| status.0)
+            })
+    }
+
+    pub(crate) fn with_observed_http_status(self, status: http::StatusCode) -> Self {
+        self.with_outer_detail(ObservedHttpStatus(status))
+    }
+
+    pub(crate) fn internal_detail<T: Any>(&self) -> Option<&T> {
+        self.chain().find_map(Self::own_detail)
+    }
+
+    pub(crate) fn own_detail<T: Any>(&self) -> Option<&T> {
+        self.detail.as_ref()?.value().downcast_ref()
     }
 
     pub(crate) fn with_outer_detail<T: Any + Send + Sync + fmt::Debug>(self, detail: T) -> Self {
@@ -359,6 +446,13 @@ impl Error {
             cause: CauseChain::from(self),
         }
     }
+    pub(crate) fn bare_body_limit() -> Self {
+        Self::new(ErrorClass::Api)
+            .with_detail("transport: response body exceeds limit".to_owned())
+            .with_body_too_large()
+            .with_service_display()
+    }
+
     pub(crate) fn is_body_too_large(&self) -> bool {
         self.detail::<BodyTooLarge>().is_some()
     }
@@ -387,18 +481,19 @@ impl Error {
     pub fn class(&self) -> ErrorClass {
         self.class
     }
+    /// Reports an HTTP 401 from the first API error, including screened replies.
+    pub fn is_http_unauthorized(&self) -> bool {
+        self.api_error()
+            .is_some_and(|api| api.observed_response_status() == Some(401))
+    }
+
     /// Checks the cause chain and maps HTTP 401, 403, 404 and 429 to their categories.
     /// Public routes carry no credential for a 401 to reject. Any API error also matches `Api`.
     pub fn has_class(&self, class: ErrorClass) -> bool {
         self.has_identity(class)
-            || self.api_error().is_some_and(|api| match class {
-                ErrorClass::NotFound => api.status == Some(404),
-                ErrorClass::PermissionDenied => api.status == Some(403),
-                ErrorClass::RateLimited => api.status == Some(429),
-                ErrorClass::Auth => api.status == Some(401) && !api.public_route,
-                ErrorClass::Api => true,
-                _ => false,
-            })
+            || self
+                .api_error()
+                .is_some_and(|api| class == ErrorClass::Api || api.http_class() == Some(class))
     }
     /// Checks explicit category identities in the cause chain without HTTP status mapping.
     pub fn has_identity(&self, class: ErrorClass) -> bool {
@@ -440,14 +535,6 @@ crate::error::debug_record!(Error => |self, f| {
         .field("class", &self.class)
         .finish_non_exhaustive()
 });
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.display_reflected {
-            return f.write_str(self.diagnostic_fallback());
-        }
-        write!(f, "greennode: {:?}", self.class)
-    }
-}
 impl std::error::Error for Error {}
 
 /// Whether a failed operation may have dispatched a write.

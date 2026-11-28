@@ -3,7 +3,8 @@ use crate::Error;
 use crate::pricing::{EstimateCoverage, EstimateServer, EstimateStorage, EstimateVolume};
 use crate::quote::{
     catalog::{
-        IMAGES, REGIONS, StorageRegion, VolumeType, ZONES, storage_region, storage_region_name,
+        ENCRYPTIONS, IMAGES, REGIONS, StorageRegion, VolumeType, ZONES, storage_region,
+        storage_region_name,
     },
     input,
 };
@@ -39,7 +40,7 @@ impl Run<'_> {
 
     async fn disks(&mut self, zone: &str) -> Shared<Vec<VolumeType>> {
         let project = self.project().await?;
-        let zones = cached(&mut self.memo.zones, self.catalog.zones(&project)).await?;
+        let zones = cached(&mut self.memo.zones, self.catalog.zones(&project, ZONES)).await?;
         self.screen_cached(ZONES, &zones)?;
         if !zones.iter().any(|row| row.id == zone) {
             return Err(invalid("ZoneID"));
@@ -60,7 +61,7 @@ impl Run<'_> {
         let project = self.project().await?;
         let keys = cached(
             &mut self.memo.encryption,
-            self.catalog.encryptions(&project),
+            self.catalog.encryptions(&project, ENCRYPTIONS),
         )
         .await?;
         self.screen_cached(crate::quote::catalog::ENCRYPTIONS, &keys)?;
@@ -145,7 +146,7 @@ impl Run<'_> {
             region_name,
         } = storage_region(&regions, &name).ok_or_else(|| invalid("storage region"))?;
         if let Some(item) = self.output.items.get_mut(index) {
-            item.region = region_name.to_uppercase();
+            item.region = crate::go_text::go_upper(region_name);
         }
         if self.memo.storage.len() >= 32 && !self.memo.storage.contains_key(region_id) {
             return Err(invalid("storage region count"));
@@ -221,6 +222,9 @@ impl Run<'_> {
             match result {
                 Ok(request) => requests.push(request),
                 Err(error) => {
+                    if error.has_class(crate::ErrorClass::InvalidInput) {
+                        return Err(error);
+                    }
                     self.handle(key, error)?;
                     requests.push(None);
                 }

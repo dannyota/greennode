@@ -11,7 +11,7 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::Options,
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::{
     ApiError, ContextEnd, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch,
@@ -48,7 +48,7 @@ impl From<bool> for ReplyPolicy {
 }
 
 pub(super) enum Settlement<'a> {
-    Created,
+    Created(&'a crate::wire::product::guard::AcknowledgedId),
     Deleted,
     Status(&'static str),
     Rebooted(tokio::time::Instant),
@@ -59,7 +59,7 @@ impl Settlement<'_> {
     pub(super) fn matches(&self, server: &Server, now: tokio::time::Instant) -> bool {
         let has_status = |status| server.status.eq_ignore_ascii_case(status);
         match self {
-            Self::Created => has_status("ACTIVE"),
+            Self::Created(_) => has_status("ACTIVE"),
             Self::Deleted => has_status("DELETED"),
             Self::Status(status) => has_status(status),
             Self::Rebooted(earliest) => has_status("ACTIVE") && now >= *earliest,
@@ -84,7 +84,7 @@ impl Client {
         body: Option<&Value>,
         policy: impl Into<ReplyPolicy>,
         evidence: &mut Evidence,
-    ) -> Result<Bytes, Failure<O>> {
+    ) -> Result<crate::wire::product::sender::Response, Failure<O>> {
         let policy = policy.into();
         let project = self
             .session
@@ -121,19 +121,55 @@ impl Client {
             cap: 8 << 20,
             allow_recovery: !once,
             allow_empty: true,
-            no_output: false,
-            keep_status: true,
+            no_output: !matches!(
+                mutation.id,
+                "compute.CreateServer"
+                    | "compute.RenameServer"
+                    | "compute.CreateServerGroup"
+                    | "compute.CreateSSHKey"
+                    | "compute.ImportSSHKey"
+            ),
+            keep_status: false,
+            raw_body: false,
             overflow_overrides_status: mutation.overflow_overrides_status,
             sensitive: !matches!(policy, ReplyPolicy::Ordinary),
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: true,
+            no_redirect: matches!(
+                mutation.id,
+                "compute.CreateServer"
+                    | "compute.StartServer"
+                    | "compute.StopServer"
+                    | "compute.RebootServer"
+                    | "compute.ResizeServer"
+                    | "compute.RenameServer"
+                    | "compute.ImportSSHKey"
+                    | "compute.CreateSSHKey"
+            ),
+            report_redirect: matches!(
+                mutation.id,
+                "compute.CreateServer"
+                    | "compute.StartServer"
+                    | "compute.StopServer"
+                    | "compute.RebootServer"
+                    | "compute.ResizeServer"
+                    | "compute.RenameServer"
+                    | "compute.ImportSSHKey"
+                    | "compute.CreateSSHKey"
+            ),
             retry_config: retry::Config::default(),
         };
         let reply = operation::execute_raw(
             runtime,
             base,
             &operation,
-            &Options::DEFAULT,
+            &Options {
+                receipt_policy: if matches!(policy, ReplyPolicy::PrivateKey) {
+                    crate::wire::product::guard::ReceiptPolicy::Transport
+                } else {
+                    crate::wire::product::guard::ReceiptPolicy::All
+                },
+                ..Options::DEFAULT
+            },
             &path,
             &[],
             RouteAuth::Bearer(self.session.bearer_source()),
@@ -143,27 +179,72 @@ impl Client {
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
+            let error = match status(&error) {
+                Some(status)
+                    if error.is_body_too_large()
+                        && matches!(
+                            mutation.id,
+                            "compute.CreateServer"
+                                | "compute.RenameServer"
+                                | "compute.ImportSSHKey"
+                                | "compute.CreateSSHKey"
+                        ) =>
+                {
+                    api(
+                        mutation.id,
+                        Some(status),
+                        "InvalidResponse",
+                        "invalid server response; body withheld",
+                        evidence,
+                    )
+                    .with_cause(error)
+                }
+                _ => error,
+            };
             Failure::new(evidence.screen_error(error), None, dispatch)
         })?;
+        if operation.success.contains(&reply.status) {
+            if matches!(
+                mutation.id,
+                "compute.CreateServer" | "compute.RenameServer" | "compute.CreateServerGroup"
+            ) && !reply.empty_body()
+                && reply.malformed_json()
+            {
+                let error = operation::go_decode_failure(
+                    mutation.id,
+                    mutation.id != "compute.CreateServerGroup",
+                );
+                return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
+            }
+            return Ok(reply);
+        }
         let withhold = matches!(policy, ReplyPolicy::PrivateKey)
             || (matches!(policy, ReplyPolicy::SshPublic)
                 && !operation.success.contains(&reply.status)
-                && super::ssh_keys::withhold_key_error(&reply.body));
-        response::classify(
-            operation.id,
-            reply.status,
-            Bytes::copy_from_slice(&reply.body),
-            operation.success,
-            (true, withhold, operation.retry),
-            evidence.credentials(),
-        )
-        .map_err(|error| {
-            Failure::new(
-                evidence.screen_error(*error),
-                None,
-                WriteDispatch::MayHaveBeenSent,
+                && reply
+                    .clean_receipt()
+                    .is_none_or(|receipt| super::ssh_keys::withhold_key_error(receipt.body())));
+        reply
+            .classify(
+                operation.id,
+                operation.success,
+                (true, withhold, operation.retry),
+                false,
             )
-        })
+            .map_err(|error| {
+                let error = error.with_clean_absence(reply.clean_absence());
+                let error = if matches!(policy, ReplyPolicy::SshPublic) && !withhold {
+                    super::ssh_keys::key_already_gone(&reply, ids, error)
+                } else {
+                    error
+                };
+                Failure::new(
+                    evidence.screen_error(error),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })?;
+        Ok(reply)
     }
 
     pub(super) async fn settle_server(
@@ -176,7 +257,7 @@ impl Client {
     ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
         let minutes = match mode {
-            Settlement::Created | Settlement::Resized(_) => 15,
+            Settlement::Created(_) | Settlement::Resized(_) => 15,
             Settlement::Deleted => 10,
             Settlement::Status(_) | Settlement::Rebooted(_) => 5,
         };
@@ -184,18 +265,26 @@ impl Client {
             ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
         guarded_poll!(evidence, {
             check(&wait, clock)?;
+            if let Settlement::Created(receipt) = mode {
+                receipt.recheck(evidence)?;
+            }
             let result = self.server_guard::<()>(&wait, id, evidence).await;
             check(&wait, clock)?;
+            if let Settlement::Created(receipt) = mode {
+                receipt.recheck(evidence)?;
+            }
             match result {
                 Err(error)
-                    if error.error().http_status().is_none()
-                        && error.error().api_error().is_some_and(|api| {
-                            api.operation() == "compute.GetServer" && api.status() == Some(404)
-                        }) =>
+                    if crate::confirms_absence(
+                        error.error(),
+                        super::inventory::GET_SERVER.id,
+                        "GET",
+                        super::inventory::GET_SERVER.template,
+                    ) =>
                 {
                     match mode {
                         Settlement::Deleted => return Ok(()),
-                        Settlement::Created => {}
+                        Settlement::Created(_) => {}
                         _ => return Err(Box::new(error.into_parts().0)),
                     }
                 }
@@ -271,16 +360,15 @@ pub(super) fn settlement_error(
     } else {
         ErrorClass::NotSettled
     };
-    let reason = error
-        .api_error()
-        .map(ApiError::message)
-        .filter(|message| !message.is_empty())
-        .unwrap_or(match error.class() {
+    let reason = error.api_error().map(ApiError::go_text).unwrap_or_else(|| {
+        match error.class() {
             ErrorClass::Failed => "server reached ERROR",
             ErrorClass::Cancelled => "context canceled",
             ErrorClass::DeadlineExceeded => "context deadline exceeded",
             _ => "",
-        });
+        }
+        .to_owned()
+    });
     let advice = if reason.is_empty() {
         format!("{operation}: {message}")
     } else {
@@ -309,20 +397,16 @@ pub(super) fn with_screened_advice(error: Error, message: &str, evidence: &Evide
     {
         error
     } else {
-        error.with_detail(advice)
+        error.with_outer_detail(advice)
     }
 }
 
 pub(super) fn rejected(error: &Error) -> bool {
-    error.http_status().is_none()
-        && status(error).is_some_and(|status| (400..500).contains(&status))
+    !error.is_body_too_large() && status(error).is_some_and(|status| (400..500).contains(&status))
 }
 
 pub(super) fn status(error: &Error) -> Option<u16> {
-    error
-        .api_error()
-        .and_then(ApiError::status)
-        .or_else(|| error.http_status().map(|value| value.as_u16()))
+    error.api_error().and_then(ApiError::observed_status)
 }
 
 pub(super) fn safe_server(mut server: Server, evidence: &Evidence) -> Option<Server> {

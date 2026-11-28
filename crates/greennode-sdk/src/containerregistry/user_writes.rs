@@ -136,10 +136,28 @@ crate::wire::product::output::public_fields!(DeleteUserOutput {});
 struct IssuedSecret {
     #[serde(default, deserialize_with = "null_default")]
     secret_key: String,
+    #[serde(skip)]
+    field_only: bool,
 }
 
 impl Output for IssuedSecret {
     const SCHEMA: Shape<'static> = Shape::Object(&[field("secretKey")]);
+
+    fn decode_response(
+        op: &Operation,
+        response: &crate::wire::product::sender::Response,
+    ) -> Result<Self, Box<Error>> {
+        if op.success.contains(&response.status)
+            && response.clean_receipt().is_none()
+            && let Some(secret) = response.private_issuance()
+        {
+            return Ok(Self {
+                secret_key: secret.expose_secret().to_owned(),
+                field_only: true,
+            });
+        }
+        crate::wire::product::operation::decode_response(op, response)
+    }
 }
 
 impl Output for DeleteUserOutput {
@@ -179,7 +197,7 @@ impl Client {
                 let Some(api) = error.api_error() else {
                     return not_sent(error);
                 };
-                let message = format!("containerregistry.CreateUser: could not prove the requested user name is absent: {}", api.message());
+                let message = format!("containerregistry.CreateUser: could not prove the requested user name is absent: {}", api.go_text());
                 not_sent(registry_error(api.operation(), api.status(), api.code(), &message).with_cause(error))
             })?;
             if found {
@@ -197,7 +215,7 @@ impl Client {
                 ..Options::DEFAULT
             };
             let issued: IssuedSecret = self.request_with_options(
-                ctx, &Operation { allow_empty: true, sensitive: true, reflection: crate::wire::product::operation::Reflection::PrivateDelivery, ..write_operation(
+                ctx, &Operation { allow_empty: true, sensitive: true, reflection: crate::wire::product::operation::Reflection::PrivateDelivery("secretKey"), ..write_operation(
                     CREATE, Method::POST, "v1/user", &[StatusCode::OK],
                 ) }, &[], &[], (Bytes::from(body.to_string()), options), &mut evidence,
             ).await.map_err(|failure| create_failure(failure, concat!(
@@ -224,13 +242,17 @@ impl Client {
             if !trimmed_key.is_empty() && trimmed_key.len() != secret_key.expose_secret().len() {
                 evidence.add_secret(&Secret::new(trimmed_key));
             }
-            let lookup = self.find_user_name(ctx, &input.name, &mut evidence).await;
+            let lookup = if issued.field_only {
+                None
+            } else {
+                Some(self.find_user_name(ctx, &input.name, &mut evidence).await)
+            };
             let (message, cause) = match lookup {
-                Ok(_) => (
+                None | Some(Ok(_)) => (
                     "containerregistry: created user not found: containerregistry.CreateUser: a name match cannot prove creation ownership; reconcile with list-users before any cleanup",
                     None,
                 ),
-                Err(failure) => (
+                Some(Err(failure)) => (
                     "containerregistry: created user not found: containerregistry.CreateUser: candidate lookup failed; reconcile with list-users before any cleanup",
                     Some(failure.into_parts().0),
                 ),
@@ -298,31 +320,27 @@ impl Client {
                 .await;
             match result {
                 Err(original) if is_server_error(original.error()) => {
-                    let result: Result<Users, Failure<()>> = self
-                        .request(
+                    let result = self
+                        .fallback_inventory::<Users, ()>(
                             ctx,
-                            &Operation {
-                                cap: 4 << 20,
-                                ..read_operation(
-                                    "containerregistry.userFoundAfterServerError",
-                                    "v1/user",
-                                )
-                            },
-                            &[],
+                            "containerregistry.userFoundAfterServerError",
+                            "v1/user",
                             &[("name", ""), ("size", "10000")],
-                            Bytes::new(),
                             &mut evidence,
                         )
                         .await;
-                    if let Some(list) = result.ok().and_then(Users::into_page)
-                        && complete_absence(
-                            &list.items,
-                            list.total_page,
-                            list.total_item,
+                    if result.is_ok_and(|receipt| {
+                        complete_absence(
+                            receipt,
+                            &evidence,
                             id,
+                            |list| {
+                                let page = list.into_page()?;
+                                Some((page.items, page.total_page, page.total_item))
+                            },
                             |item| &item.id,
                         )
-                    {
+                    }) {
                         return Err(Failure::new(
                             Error::new(ErrorClass::NotFound).with_cause(registry_error(
                                 "",

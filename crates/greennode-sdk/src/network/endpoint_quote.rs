@@ -295,10 +295,56 @@ pub(super) fn local_error(class: ErrorClass, detail: &str) -> Error {
     Error::new(class).with_cause(request::api("", None, code, &message, false))
 }
 
+pub(super) fn endpoint_interruption(error: &Error, evidence: &Evidence) -> Option<Error> {
+    let (class, reason) = [
+        (ErrorClass::Cancelled, "context canceled"),
+        (ErrorClass::DeadlineExceeded, "context deadline exceeded"),
+    ]
+    .into_iter()
+    .find(|(class, _)| error.has_identity(*class))?;
+    let context = super::wire::nat_diagnostic(class, format!("{OP}: {reason}"), evidence)
+        .with_service_display();
+    let Some(api) = error
+        .api_error()
+        .filter(|api| api.observed_status().is_some_and(|status| status >= 400))
+    else {
+        return Some(context);
+    };
+    let refusal = request::api(
+        OP,
+        api.status(),
+        api.code(),
+        "endpoint response withheld",
+        api.retryable(),
+    );
+    let http_class = [
+        ErrorClass::Auth,
+        ErrorClass::PermissionDenied,
+        ErrorClass::NotFound,
+        ErrorClass::RateLimited,
+    ]
+    .into_iter()
+    .find(|class| error.has_class(*class))
+    .unwrap_or_else(|| refusal.class());
+    let refusal = screen(refusal.with_http_identity(http_class), evidence).with_service_display();
+    let display = format!("{refusal}\n{context}");
+    Some(screen(
+        Error::new(class)
+            .with_cause(refusal)
+            .with_cause(context)
+            .with_joined_service_display(display),
+        evidence,
+    ))
+}
+
 fn endpoint_error(error: Error, evidence: &Evidence) -> Error {
+    if let Some(interruption) = endpoint_interruption(&error, evidence) {
+        return interruption;
+    }
     if error.is_body_too_large()
         || error.api_error().is_some_and(|api| {
-            api.status() == Some(200) || api.code() == "InvalidResponse" && api.status().is_none()
+            api.observed_status() == Some(200)
+                || api.code() == "InvalidResponse" && api.observed_status().is_none()
         })
     {
         return PRICE.invalid(evidence);

@@ -205,8 +205,7 @@ impl<T: for<'de> Deserialize<'de> + RetainedRow> Output for Collection<T> {
         response: &crate::wire::product::sender::Response,
     ) -> Result<Self, Box<Error>> {
         if response.status != StatusCode::OK
-            || (!response.body.is_empty()
-                && serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err())
+            || (!response.empty_body() && response.malformed_json())
         {
             return operation::decode_response(operation, response);
         }

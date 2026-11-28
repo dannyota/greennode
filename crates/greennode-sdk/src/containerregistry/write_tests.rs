@@ -83,11 +83,12 @@ async fn create_user_preserves_only_the_secret_after_reflected_candidate() {
 }
 
 #[tokio::test]
-async fn repository_confirmation_failure_retains_sanitized_partial() {
+async fn repository_confirmation_failure_keeps_clean_partial_and_refuses_reflected_acknowledgement()
+{
     let server = Server::start(vec![
         response(
             "202 Accepted",
-            r#"{"uuid":"repo-1","name":"synthetic-registry-token","quotaUsed":0.5}"#,
+            r#"{"uuid":"repo-1","name":"app-images","quotaUsed":0.5}"#,
         ),
         response("403 Forbidden", "{}"),
     ]);
@@ -102,13 +103,28 @@ async fn repository_confirmation_failure_retains_sanitized_partial() {
     assert_eq!(error.write_dispatch(), WriteDispatch::MayHaveBeenSent);
     let partial = error.partial().unwrap();
     assert_eq!(partial.repository.id, "repo-1");
-    assert_eq!(partial.repository.name, "<redacted>");
+    assert_eq!(partial.repository.name, "app-images");
     let body: serde_json::Value = serde_json::from_slice(&server.bodies()[0]).unwrap();
     assert_eq!(
         body,
         serde_json::json!({"repoName":"app-images","quotaLimit":4,"isPublic":false})
     );
     assert_eq!(server.requests(), 2);
+    let server = Server::start(vec![response(
+        "202 Accepted",
+        r#"{"uuid":"repo-1","name":"synthetic-registry-token"}"#,
+    )]);
+    let failure = client(&server)
+        .create_repository(
+            &RequestContext::new().0,
+            CreateRepositoryInput::new("app-images", 4),
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]
@@ -453,14 +469,23 @@ async fn failed_lookup_keeps_private_delivery_outside_the_error() {
 
 #[tokio::test]
 async fn reflected_registry_404_does_not_confirm_deletion() {
-    for (body, allowed) in [
-        ("{}", true),
-        (r#"{"note":"synthetic-registry-token"}"#, false),
+    for (receipt, allowed) in [
+        (response("404 Not Found", "{}"), true),
+        (response("404 Not Found", "repository is missing"), true),
+        (
+            response("404 Not Found", r#"{"note":"synthetic-registry-token"}"#),
+            false,
+        ),
+        (
+            response("404 Not Found", "reflected synthetic-registry-token"),
+            false,
+        ),
+        (Server::oversized("404 Not Found"), false),
     ] {
         let server = Server::start(vec![
             response("200 OK", r#"{"uuid":"repo-1","imageCount":0}"#),
             response("202 Accepted", ""),
-            response("404 Not Found", body),
+            receipt,
         ]);
         let result = client(&server)
             .delete_repository(
@@ -471,4 +496,169 @@ async fn reflected_registry_404_does_not_confirm_deletion() {
         assert_eq!(result.is_ok(), allowed);
         assert_eq!(server.requests(), 3);
     }
+}
+
+#[tokio::test]
+async fn delete_repository_accepts_only_complete_clean_inventory_after_500() {
+    for (inventory, confirmed) in [
+        (r#"{"data":[],"totalPage":0,"totalItem":0}"#, true),
+        (
+            r#"{"data":[],"totalPage":0,"totalItem":0,"note":"synthetic-registry-token"}"#,
+            false,
+        ),
+        (r#"{"data":[],"totalPage":2,"totalItem":3}"#, false),
+    ] {
+        let server = Server::start(vec![
+            response("200 OK", r#"{"uuid":"repo-1","imageCount":0}"#),
+            response("202 Accepted", ""),
+            response("500 Internal Server Error", "{}"),
+            response("200 OK", inventory),
+        ]);
+        let result = client(&server)
+            .delete_repository(
+                &RequestContext::new().0,
+                DeleteRepositoryInput::new("repo-1"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), confirmed);
+        if let Err(failure) = result {
+            assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+            assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+        }
+        assert_eq!(server.requests(), 4);
+    }
+}
+
+#[tokio::test]
+async fn redirected_registry_inventory_cannot_confirm_absence() {
+    for (route, user) in [
+        ("/v1/user?name=someone", true),
+        ("/v1/repository?name=other", false),
+    ] {
+        let server = Server::start(vec![
+            response("500 Internal Server Error", "{}"),
+            Response::Http {
+                status: "307 Temporary Redirect".into(),
+                headers: vec![
+                    ("Location".into(), route.into()),
+                    ("Content-Length".into(), "0".into()),
+                ],
+                body: Vec::new(),
+            },
+            response("200 OK", r#"{"data":[],"totalPage":0,"totalItem":0}"#),
+        ]);
+        let ctx = RequestContext::new().0;
+        let client = client(&server);
+        let (error, dispatch) = if user {
+            let failure = client
+                .delete_user(&ctx, DeleteUserInput::new("user-1"))
+                .await
+                .unwrap_err();
+            (failure.error().class(), failure.write_dispatch())
+        } else {
+            let failure = client
+                .get_repository(&ctx, GetRepositoryInput::new("repo-1"))
+                .await
+                .unwrap_err();
+            (failure.error().class(), failure.write_dispatch())
+        };
+        assert_ne!(error, ErrorClass::NotFound);
+        assert_eq!(
+            dispatch,
+            if user {
+                WriteDispatch::MayHaveBeenSent
+            } else {
+                WriteDispatch::NotAWrite
+            }
+        );
+        assert_eq!(server.requests(), 3);
+    }
+}
+
+#[tokio::test]
+async fn repository_create_rechecks_issued_id_receipt_before_confirmation() {
+    let server = Server::start(vec![
+        response(
+            "202 Accepted",
+            r#"{"uuid":"repo-1","unknown":"synthetic-bearer-1"}"#,
+        ),
+        response("200 OK", r#"{"uuid":"repo-1","name":"ordinary"}"#),
+    ]);
+    let client = client_with(
+        &server,
+        ConfigOptions::default()
+            .with_credentials_provider(std::sync::Arc::new(SequenceProvider::default())),
+    );
+    let failure = client
+        .create_repository(
+            &RequestContext::new().0,
+            CreateRepositoryInput::new("ordinary", 1),
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn registry_private_delivery_only_extracts_the_declared_secret() {
+    let server = Server::start(vec![
+        response("200 OK", r#"[{"uuid":"policy-1","action":"pull"}]"#),
+        response("200 OK", r#"{"data":[],"totalPage":0,"totalItem":0}"#),
+        response(
+            "200 OK",
+            r#"{"secretKey":"clientSecret-is-valid","unknown":"synthetic-registry-token"}"#,
+        ),
+    ]);
+    let failure = client(&server)
+        .create_user(
+            &RequestContext::new().0,
+            CreateUserInput::new(
+                "app-ci",
+                vec![UserPermission::new("repo-1", vec!["pull".into()])],
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        issued_user_secret(&failure).is_some_and(|s| s.expose_secret() == "clientSecret-is-valid")
+    );
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
+async fn discarded_registry_write_acknowledgement_checks_transport_credentials() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"ignored":"synthetic-registry-token"}"#,
+    )]);
+    let failure = client(&server)
+        .delete_user(&RequestContext::new().0, DeleteUserInput::new("user-1"))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn registry_delete_classifies_undeclared_success_status_without_discard_screen() {
+    let server = Server::start(vec![response(
+        "201 Created",
+        r#"{"ignored":"synthetic-registry-token"}"#,
+    )]);
+    let failure = client(&server)
+        .delete_user(&RequestContext::new().0, DeleteUserInput::new("user-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure
+            .error()
+            .api_error()
+            .and_then(crate::ApiError::status),
+        Some(201)
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(!failure.error().has_identity(ErrorClass::NotSettled));
 }

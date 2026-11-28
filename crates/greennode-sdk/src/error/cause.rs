@@ -19,7 +19,7 @@ impl Drop for CauseChain {
 }
 
 impl Error {
-    pub(super) fn chain(&self) -> impl Iterator<Item = &Self> {
+    pub(crate) fn chain(&self) -> impl Iterator<Item = &Self> {
         std::iter::successors(Some(self), |layer| layer.cause.0.as_deref())
     }
 

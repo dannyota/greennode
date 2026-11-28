@@ -40,6 +40,10 @@ impl Detail {
         self.value.as_ref().value()
     }
 
+    pub(super) fn value_mut(&mut self) -> &mut Value {
+        self.value.as_mut().value_mut()
+    }
+
     pub(super) fn public<T: Any>(&self) -> Option<&T> {
         (!self.withheld)
             .then(|| self.value().downcast_ref())

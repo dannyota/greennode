@@ -14,7 +14,9 @@ pub use models::{Cluster, ClusterVersion, Quota};
 use crate::config::Session;
 use crate::error::SafeText;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation},
+    options::Options,
     redirect::{Classification, Retry},
     retry,
 };
@@ -194,18 +196,26 @@ impl Client {
         let runtime = session
             .runtime(ctx, &mut jitter)
             .map_err(|error| read_failure(*error))?;
-        operation::execute(
+        let mut evidence = Evidence::new();
+        operation::execute_with_evidence(
             runtime,
             base,
             operation,
+            &Options::DEFAULT,
             &[],
             query,
             session.bearer_source(),
             bytes::Bytes::new(),
+            &mut evidence,
         )
         .await
         .map(|(_, output)| output)
-        .map_err(|failure| read_failure(safe_error(operation.id, failure.error())))
+        .map_err(|failure| {
+            read_failure(
+                safe_error(operation.id, failure.error())
+                    .screen_api(&|text| evidence.text_reflects(text)),
+            )
+        })
     }
 }
 
@@ -222,10 +232,12 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_empty: false,
         no_output: false,
         keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }
@@ -288,21 +300,21 @@ fn safe_error(operation: &'static str, error: &Error) -> Error {
     }
 
     let api = error.api_error();
-    let status = api.and_then(ApiError::status);
-    if status == Some(200)
-        || (error.is_body_too_large() && error.http_status() == Some(StatusCode::OK))
-    {
-        return malformed(operation);
+    let status = api.and_then(ApiError::observed_status);
+    if status == Some(200) && (operation != "vks.GetCluster" || !error.is_body_too_large()) {
+        return malformed(operation).retain_status_visibility(api);
     }
     let safe = api_error(
         operation,
-        status,
+        status.filter(|_| !error.is_body_too_large()),
         "request failed; response withheld",
         api.is_some_and(ApiError::retryable),
-    );
-    if class == ErrorClass::Api {
+    )
+    .retain_status_visibility(api);
+    let safe = if class == ErrorClass::Api {
         safe
     } else {
         Error::new(class).with_cause(safe)
-    }
+    };
+    safe.with_clean_absence(error.clean_absence_proof())
 }

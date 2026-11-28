@@ -17,6 +17,10 @@ use std::{
 };
 use tower_service::Service;
 
+mod io_phase;
+pub(super) use io_phase::IoPhase;
+use io_phase::PhaseIo;
+
 #[derive(Clone)]
 pub(crate) struct DialConnector<C = HttpConnector>(
     C,
@@ -47,7 +51,7 @@ where
     C::Error: Error + Send + Sync + 'static,
     C::Future: Send + 'static,
 {
-    type Response = C::Response;
+    type Response = PhaseIo<C::Response>;
     type Error = DialFailure;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -97,7 +101,7 @@ where
                         .parse()
                         .map_err(|_| test_dial_failure())?;
                     match connector.call(pinned).await {
-                        Ok(connection) => return Ok(connection),
+                        Ok(connection) => return Ok(PhaseIo(connection)),
                         Err(error) => last = Some(error),
                     }
                 }
@@ -107,7 +111,12 @@ where
         #[cfg(not(any(test, feature = "test-support")))]
         {
             let future = self.0.call(uri);
-            Box::pin(async move { future.await.map_err(|e| DialFailure(Box::new(e))) })
+            Box::pin(async move {
+                future
+                    .await
+                    .map(PhaseIo)
+                    .map_err(|e| DialFailure(Box::new(e)))
+            })
         }
     }
 }

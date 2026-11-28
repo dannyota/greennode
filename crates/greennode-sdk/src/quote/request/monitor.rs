@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use serde_json::value::RawValue;
 
-use super::{Request, response_body};
+use super::{Request, check_response};
 use crate::endpoint::Base;
 use crate::model::wire::go_json;
 use crate::wire::product::{
@@ -64,24 +64,26 @@ impl Output for MonitorDocument {
     }]);
 
     fn decode_response(op: &Operation, response: &sender::Response) -> Result<Self, Box<Error>> {
-        let body = response_body(op, response)?;
-        if body.is_empty() {
-            return Err(Box::new(invalid(op.id)));
-        }
-        let text = go_json(&body);
-        let raw: Box<RawValue> = serde_json::from_str(&text).map_err(|_| {
-            Box::new(error(
-                op.id,
-                Some(200),
-                "InvalidResponse",
-                "quota response withheld",
-                false,
-            ))
-        })?;
-        validate_canonical_shape(raw.get().as_bytes(), &Self::SCHEMA, raw.get().len())
-            .map_err(|_| Box::new(invalid(op.id)))?;
-        price(&raw).ok_or_else(|| Box::new(invalid(op.id)))?;
-        Ok(Self(Some(raw)))
+        check_response(op, response)?;
+        response.decode_projection(|body| {
+            if body.is_empty() {
+                return Err(Box::new(invalid(op.id)));
+            }
+            let text = go_json(body);
+            let raw: Box<RawValue> = serde_json::from_str(&text).map_err(|_| {
+                Box::new(error(
+                    op.id,
+                    Some(200),
+                    "InvalidResponse",
+                    "quota response withheld",
+                    false,
+                ))
+            })?;
+            validate_canonical_shape(raw.get().as_bytes(), &Self::SCHEMA, raw.get().len())
+                .map_err(|_| Box::new(invalid(op.id)))?;
+            price(&raw).ok_or_else(|| Box::new(invalid(op.id)))?;
+            Ok(Self(Some(raw)))
+        })
     }
 }
 
@@ -145,22 +147,13 @@ pub(super) async fn exchange(
             operation.id,
             failure.into_parts().0,
             evidence,
-            operation.no_redirect,
         ))),
     }
 }
 
-fn failure_error(
-    op: &'static str,
-    failure: Error,
-    evidence: &Evidence,
-    no_redirect: bool,
-) -> Error {
+fn failure_error(op: &'static str, failure: Error, evidence: &Evidence) -> Error {
     let api = failure.api_error();
-    let status = failure
-        .http_status()
-        .map(|status| status.as_u16())
-        .or_else(|| api.and_then(ApiError::status));
+    let status = api.and_then(ApiError::observed_status);
     let result = if failure.is_body_too_large() {
         error(
             op,
@@ -170,25 +163,24 @@ fn failure_error(
             false,
         )
         .with_body_too_large()
+    } else if operation::is_active_transport_failure(&failure) {
+        crate::monitor::response_read_failure(
+            failure,
+            error(
+                op,
+                status,
+                "InvalidResponse",
+                "quota response withheld",
+                false,
+            ),
+        )
     } else if matches!(
         failure.class(),
         ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
     ) {
         failure
-    } else if (!no_redirect || status.is_some_and(|status| !(300..400).contains(&status)))
-        && status.is_some()
-        && api.is_some()
-        && failure.http_status().is_some()
-    {
-        error(
-            op,
-            None,
-            "InvalidResponse",
-            "quota response withheld",
-            false,
-        )
     } else if let Some(api) =
-        api.filter(|api| api.operation() == op && api.code() != "InvalidResponse")
+        api.filter(|api| api.is_for_operation(op) && api.code() != "InvalidResponse")
     {
         let retryable =
             api.retryable() && status.is_none_or(|status| matches!(status, 429 | 502 | 503 | 504));

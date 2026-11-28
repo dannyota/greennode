@@ -196,40 +196,52 @@ impl Child<'_> {
             None,
             |run| Some(result(run, false)),
         )
-        .await?;
+        .await
+        .map(drop)?;
         let wait = self.0.wait_context(ctx, DELETE_WAIT);
-        let reason = guarded_poll!(self.0.evidence, {
+        let (reason, cause) = guarded_poll!(self.0.evidence, {
             if self.0.interrupted(&wait) {
-                break "delete confirmation interrupted";
+                break ("delete confirmation interrupted", None);
             }
             match self.check_delete(&wait, &plan).await {
                 Ok(false) => self.0.pause(&wait).await,
                 Ok(true) => {
                     if self.0.interrupted(&wait) {
-                        break "delete confirmation interrupted";
+                        break ("delete confirmation interrupted", None);
                     }
                     let out = result(self, true);
                     if self.0.safe_output(&out) {
                         return Ok(out);
                     }
-                    break "output withheld";
+                    break ("output withheld", None);
                 }
-                Err(reason) => break reason,
+                Err(CheckFailure { reason, cause }) => break (reason, cause),
             }
         });
-        Err(self.fail(reason, result(self, false)))
+        let failure = self.fail(reason, result(self, false));
+        let Some(cause) = cause else {
+            return Err(failure);
+        };
+        let (error, partial, dispatch) = failure.into_parts();
+        Err(Failure::new(error.with_cause(*cause), partial, dispatch))
     }
 
     async fn check_delete(
         &mut self,
         ctx: &RequestContext,
         plan: &DeletePlan<'_>,
-    ) -> Result<bool, &'static str> {
+    ) -> Result<bool, CheckFailure> {
         let interrupted = "delete confirmation interrupted";
         let unproven = "delete absence could not be proven";
         let reads = match plan.kind {
             Kind::Pool => {
-                let rows = self.pools(ctx, plan.glb).await.map_err(|_| interrupted)?;
+                let rows = self
+                    .pools(ctx, plan.glb)
+                    .await
+                    .map_err(|cause| CheckFailure {
+                        reason: interrupted,
+                        cause: Some(cause),
+                    })?;
                 self.delete_reads(ctx, plan, POOL, rows, |row| (row.id, row.status))
                     .await
             }
@@ -237,17 +249,34 @@ impl Child<'_> {
                 let rows = self
                     .listeners(ctx, plan.glb)
                     .await
-                    .map_err(|_| interrupted)?;
+                    .map_err(|cause| CheckFailure {
+                        reason: interrupted,
+                        cause: Some(cause),
+                    })?;
                 self.delete_reads(ctx, plan, LISTENER, rows, |row| (row.id, row.status))
                     .await
             }
         }
-        .map_err(|_| interrupted)?;
+        .map_err(|cause| CheckFailure {
+            reason: interrupted,
+            cause: Some(cause),
+        })?;
         match reads.decision(plan.id, &self.0.evidence)? {
             DeleteState::Pending => Ok(false),
             DeleteState::Absent => {
-                let survivors = self.survivors(ctx, plan).await.map_err(|_| unproven)?;
-                survivors.recheck(&self.0.evidence).map_err(|_| unproven)?;
+                let survivors = self
+                    .survivors(ctx, plan)
+                    .await
+                    .map_err(|cause| CheckFailure {
+                        reason: unproven,
+                        cause: Some(cause),
+                    })?;
+                survivors
+                    .recheck(&self.0.evidence)
+                    .map_err(|cause| CheckFailure {
+                        reason: unproven,
+                        cause: Some(cause),
+                    })?;
                 Ok(matches!(
                     reads.decision(plan.id, &self.0.evidence)?,
                     DeleteState::Absent
@@ -315,6 +344,20 @@ impl Child<'_> {
         }
         parent.recheck(&self.0.evidence)?;
         Guarded::from_checkpoint((), &self.0.evidence, checkpoint)
+    }
+}
+
+struct CheckFailure {
+    reason: &'static str,
+    cause: Option<Box<Error>>,
+}
+
+impl From<&'static str> for CheckFailure {
+    fn from(reason: &'static str) -> Self {
+        Self {
+            reason,
+            cause: None,
+        }
     }
 }
 
@@ -394,7 +437,13 @@ mod tests {
                 pool: "pool-1",
                 group: &group,
             };
-            assert_eq!(child.check_delete(&ctx, &plan).await == Ok(true), expected);
+            assert_eq!(
+                child
+                    .check_delete(&ctx, &plan)
+                    .await
+                    .is_ok_and(|settled| settled),
+                expected
+            );
             assert_eq!(glb.requests(), 6);
         }
     }
@@ -429,7 +478,13 @@ mod tests {
                 pool: "pool-1",
                 group: &group,
             };
-            assert_eq!(child.check_delete(&ctx, &plan).await, expected);
+            assert_eq!(
+                child
+                    .check_delete(&ctx, &plan)
+                    .await
+                    .map_err(|error| error.reason),
+                expected
+            );
             assert_eq!(glb.requests(), 6);
         }
     }

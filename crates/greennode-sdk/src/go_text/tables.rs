@@ -93,3 +93,38 @@ pub(super) fn ascii_lower(ch: char) -> Option<u8> {
         .ok()
         .map(|at| table[at].1)
 }
+
+pub(super) fn simple_uppercase(ch: char) -> char {
+    static TABLE: OnceLock<Vec<(char, char)>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        rows(include_str!("upper_simple.txt"))
+            .filter_map(|row| {
+                let (source, upper) = row.split_once(' ')?;
+                Some((code(source), code(upper)))
+            })
+            .collect()
+    });
+    table
+        .binary_search_by_key(&ch, |&(source, _)| source)
+        .ok()
+        .map_or(ch, |at| table[at].1)
+}
+
+pub(super) fn simple_fold(ch: char) -> char {
+    if ch.is_ascii() {
+        return ch.to_ascii_uppercase();
+    }
+    static TABLE: OnceLock<Vec<(char, char)>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        rows(include_str!("simple_fold.txt"))
+            .filter_map(|row| {
+                let (source, folded) = row.split_once(' ')?;
+                Some((code(source), code(folded)))
+            })
+            .collect()
+    });
+    table
+        .binary_search_by_key(&ch, |&(source, _)| source)
+        .ok()
+        .map_or(ch, |index| table[index].1)
+}

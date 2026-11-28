@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
-use serde_json::value::RawValue;
+use serde_json::Value;
 
 use crate::model::pricing::DiscoveryPrice;
 use crate::model::wire::Field;
-use crate::quote::catalog::{Catalog, Zone};
+use crate::quote::catalog::{self, Catalog, Zone, array, array_rows, exact, wire_field};
 use crate::quote::request::{Product, Request, invalid};
 use crate::wire::product::options::PathIds;
 use crate::{Error, ErrorClass};
@@ -23,20 +23,29 @@ const LEGACY: &str = "compute.ListFlavors";
 
 #[derive(Deserialize)]
 pub(super) struct Platform {
+    #[serde(default, deserialize_with = "wire_field")]
     key: String,
+    #[serde(default, rename = "value", deserialize_with = "wire_field")]
+    _value: String,
+    #[serde(default, rename = "description", deserialize_with = "wire_field")]
+    _description: String,
 }
 
 #[derive(Deserialize)]
 struct Family {
+    #[serde(default, deserialize_with = "wire_field")]
     key: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     value: String,
+    #[serde(default, rename = "description", deserialize_with = "wire_field")]
+    _description: String,
     condition: Condition,
 }
 
 #[derive(Deserialize)]
 struct Condition {
-    codes: Vec<String>,
+    #[serde(deserialize_with = "wire_field")]
+    codes: Option<Vec<String>>,
 }
 
 async fn get(
@@ -45,8 +54,8 @@ async fn get(
     template: &'static str,
     path: &[&str],
     query: &[(&str, &str)],
-) -> Result<Box<RawValue>, Box<Error>> {
-    catalog
+) -> Result<Value, Box<Error>> {
+    let raw = catalog
         .exchange(Request {
             operation,
             template,
@@ -55,32 +64,8 @@ async fn get(
             query,
             body: None,
         })
-        .await
-}
-
-fn array<'a, T: Deserialize<'a>>(
-    op: &'static str,
-    raw: &'a RawValue,
-    key: Option<&str>,
-) -> Result<Vec<T>, Box<Error>> {
-    let body = if let Some(key) = key {
-        let value = crate::quote::catalog::value(op, raw)?;
-        let object = value.as_object().ok_or_else(|| invalid(op, 200))?;
-        crate::quote::catalog::unpaged(op, object, false)?;
-        crate::quote::catalog::exact(op, object, &[key])?;
-        if object
-            .get("success")
-            .is_some_and(|value| value.as_bool() != Some(true))
-        {
-            return Err(invalid(op, 200));
-        }
-        let fields: HashMap<String, &RawValue> =
-            serde_json::from_str(raw.get()).map_err(|_| invalid(op, 200))?;
-        fields.get(key).ok_or_else(|| invalid(op, 200))?.get()
-    } else {
-        raw.get()
-    };
-    serde_json::from_str(body).map_err(|_| invalid(op, 200))
+        .await?;
+    catalog::value(operation, &raw)
 }
 
 fn unique_ids<'a>(ids: impl IntoIterator<Item = &'a str>, rule: PathIds) -> bool {
@@ -98,7 +83,7 @@ impl Run<'_> {
             &[],
         )
         .await?;
-        let rows: Vec<Platform> = array(PLATFORMS, &raw, None)?;
+        let rows: Vec<Platform> = array(PLATFORMS, &raw, None, &["key", "value", "description"])?;
         if !unique_ids(
             rows.iter().map(|platform| platform.key.as_str()),
             PathIds::Strict,
@@ -124,19 +109,28 @@ impl Run<'_> {
             &query,
         )
         .await?;
-        let families: Vec<Family> = array(FAMILIES, &raw, None)?;
+        let families: Vec<Family> = array(
+            FAMILIES,
+            &raw,
+            None,
+            &["key", "value", "description", "condition", "types"],
+        )?;
+        for condition in array_rows(FAMILIES, &raw, None)?
+            .iter()
+            .filter_map(|row| row.get("condition").and_then(Value::as_object))
+        {
+            exact(FAMILIES, condition, &["codes"])?;
+        }
         if !unique_ids(
             families.iter().map(|family| family.key.as_str()),
             PathIds::Strict,
         ) || families.iter().any(|family| {
-            !unique_ids(
-                family.condition.codes.iter().map(String::as_str),
-                PathIds::Strict,
-            ) || family
-                .condition
-                .codes
-                .iter()
-                .any(|code| !platforms.iter().any(|platform| platform.key == *code))
+            family.condition.codes.as_ref().is_none_or(|codes| {
+                !unique_ids(codes.iter().map(String::as_str), PathIds::Strict)
+                    || codes
+                        .iter()
+                        .any(|code| !platforms.iter().any(|platform| platform.key == *code))
+            })
         }) {
             return Err(invalid(FAMILIES, 200));
         }
@@ -145,7 +139,7 @@ impl Run<'_> {
             if family.key == "custom" || !matches_filter(&self.input.family, &family.key) {
                 continue;
             }
-            for platform in &family.condition.codes {
+            for platform in family.condition.codes.iter().flatten() {
                 if !matches_filter(&self.input.platform, platform) {
                     continue;
                 }
@@ -195,13 +189,13 @@ impl Run<'_> {
             &[],
         )
         .await?;
-        let groups: Vec<FlavorZone> = array(GROUPS, &raw, Some("flavorZones"))?;
+        let groups: Vec<FlavorZone> = array(GROUPS, &raw, Some("flavorZones"), &[])?;
         if !unique_ids(
             groups.iter().map(|group| group.id.as_str()),
             PathIds::Strict,
         ) || groups
             .iter()
-            .any(|group| !PathIds::WithUnderscore.allows(&group.zone_id))
+            .any(|group| !PathIds::Strict.allows(&group.zone_id))
         {
             return Err(invalid(GROUPS, 200));
         }
@@ -214,7 +208,7 @@ impl Run<'_> {
                 let result = get(&mut self.catalog, CUSTOM, template, &[project], &query)
                     .await
                     .and_then(|raw| {
-                        let rows: Vec<&RawValue> = array(CUSTOM, &raw, None)?;
+                        let rows = array_rows(CUSTOM, &raw, None)?;
                         if !rows.is_empty() {
                             return Err(invalid(CUSTOM, 200));
                         }
@@ -251,22 +245,21 @@ impl Run<'_> {
     fn flavors(
         &mut self,
         op: &'static str,
-        raw: &RawValue,
+        raw: &Value,
         key: Option<&str>,
         zone: &Zone,
         scope: (&str, &str, &str),
     ) -> Result<(), Box<Error>> {
         let (family, family_name, platform) = scope;
-        let entries = array::<&RawValue>(op, raw, key)?;
-        self.catalog.rows(entries.len())?;
+        let entries = array_rows(op, raw, key)?;
         let mut identities = HashMap::new();
         let mut tuples = HashMap::new();
         let mut rows = Vec::new();
-        for entry in &entries {
+        for entry in entries {
             let f = decode_flavor(op, entry)?;
             if [&f.flavor_id, &f.flavor_zone_id]
                 .into_iter()
-                .any(|id| !PathIds::WithUnderscore.allows(id))
+                .any(|id| !PathIds::Strict.allows(id))
                 || f.name.is_empty()
                 || f.cpu < 0
                 || f.memory < 0
@@ -302,18 +295,26 @@ impl Run<'_> {
             if !matches_row(self.input, &f, family, platform) {
                 continue;
             }
-            let retained_bytes = [
-                zone.id.len(),
-                zone.name.len(),
-                family.len(),
-                family_name.len(),
-                platform.len(),
-            ]
-            .into_iter()
-            .fold(0usize, usize::saturating_add);
-            self.catalog.rows_with_bytes(1, retained_bytes)?;
-            let inapplicable = self.input.zone_id.is_empty() && zone.enabled == Some(false);
-            rows.push(FlavorPrice {
+            rows.push(f);
+        }
+        let bytes_per_row = [
+            zone.id.len(),
+            zone.name.len(),
+            family.len(),
+            family_name.len(),
+            platform.len(),
+        ]
+        .into_iter()
+        .fold(0usize, usize::saturating_add);
+        self.catalog.rows_with_bytes(
+            entries.len().saturating_add(rows.len()),
+            bytes_per_row.saturating_mul(rows.len()),
+        )?;
+        self.identities.extend(identities);
+        self.tuples.extend(tuples);
+        let inapplicable = self.input.zone_id.is_empty() && zone.enabled == Some(false);
+        self.output.items.extend(rows.into_iter().map(|f| {
+            FlavorPrice {
                 flavor: f,
                 zone_id: zone.id.clone(),
                 zone_name: zone.name.clone(),
@@ -342,31 +343,24 @@ impl Run<'_> {
                     source: "pricing.GetQuote".into(),
                     ..DiscoveryPrice::default()
                 },
-            });
-        }
-        self.identities.extend(identities);
-        self.tuples.extend(tuples);
-        self.output.items.extend(rows);
+            }
+        }));
         Ok(())
     }
 }
 
-fn decode_flavor(op: &'static str, raw: &RawValue) -> Result<Flavor, Box<Error>> {
-    let mut fields: std::collections::BTreeMap<String, &RawValue> =
-        serde_json::from_str(raw.get()).map_err(|_| invalid(op, 200))?;
+fn decode_flavor(op: &'static str, raw: &Value) -> Result<Flavor, Box<Error>> {
+    let mut fields = raw.as_object().ok_or_else(|| invalid(op, 200))?.clone();
     for name in ["cpu", "memory", "remainingVms", "isSoldOut"] {
-        if fields.get(name).is_none_or(|value| value.get() == "null") {
+        if fields.get(name).is_none_or(Value::is_null) {
             return Err(invalid(op, 200));
         }
     }
-    let metadata = fields
-        .remove("metaData")
-        .and_then(|value| serde_json::from_str::<String>(value.get()).ok())
+    let metadata = fields.remove("metaData");
+    let Field(mut flavor): Field<Flavor> = catalog::record(op, &Value::Object(fields), &[])?;
+    flavor.metadata = metadata
+        .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default();
-    let body = serde_json::to_string(&fields).map_err(|_| invalid(op, 200))?;
-    let Field(mut flavor): Field<Flavor> =
-        serde_json::from_str(&body).map_err(|_| invalid(op, 200))?;
-    flavor.metadata = metadata;
     Ok(flavor)
 }
 

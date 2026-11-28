@@ -1,7 +1,8 @@
 mod peer;
+mod roles;
 
 use super::options::PasswordSlot;
-use super::response::{self, Clean, Screen};
+use super::response::{self, Screen};
 use crate::{Failure, Secret, WriteDispatch};
 use serde_json::Value;
 use std::sync::{Arc, LazyLock, OnceLock};
@@ -9,6 +10,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 enum Source {
     Redaction,
+    Issued,
     OperationPassword,
     Credential,
     Bearer,
@@ -79,14 +81,6 @@ impl SentCredentials {
             self.values.push(secret.clone());
             self.sources.push(source);
             self.patterns = Arc::default();
-        }
-    }
-
-    pub(super) fn transport_only(&self) -> Self {
-        if self.sources.contains(&Source::Redaction) {
-            self.filtered(|_, source| source != Source::Redaction)
-        } else {
-            self.clone()
         }
     }
 
@@ -254,6 +248,7 @@ pub(crate) struct Evidence {
     credentials: SentCredentials,
     cached: Vec<CachedCheck>,
     guards: Vec<super::guard::Proof>,
+    acknowledged: Option<super::guard::AcknowledgedId>,
     guard_bytes: usize,
     guard_scope: Option<Arc<std::sync::atomic::AtomicUsize>>,
     write_flow: bool,
@@ -286,7 +281,7 @@ impl Evidence {
         }
     }
 
-    pub(super) fn guards_reads(&self) -> bool {
+    pub(crate) fn guards_reads(&self) -> bool {
         self.write_flow
             || self
                 .guard_scope
@@ -328,6 +323,11 @@ impl Evidence {
         super::exit::record_secret(value);
     }
 
+    pub(crate) fn add_issued_secret(&mut self, value: &Secret) {
+        self.credentials.record_from(value, Source::Issued);
+        super::exit::record_secret(value);
+    }
+
     pub(crate) fn add_operation_password(&mut self, value: &Secret) {
         self.credentials
             .record_from(value, Source::OperationPassword);
@@ -353,21 +353,25 @@ impl Evidence {
         }
     }
 
-    pub(super) fn keep_guard(&mut self, id: &'static str, body: &[u8], clean: Clean) -> bool {
-        let Some(total) = self.guard_bytes.checked_add(body.len()) else {
+    pub(super) fn keep_proof(&mut self, proof: super::guard::Proof) -> bool {
+        let Some(total) = self.guard_bytes.checked_add(proof.retained_bytes()) else {
             return false;
         };
         if total > GUARD_BYTES || self.guards.len() == 512 {
             return false;
         }
         self.guard_bytes = total;
-        self.guards.push(super::guard::Proof::new(id, body, clean));
+        self.guards.push(proof);
         true
     }
 
     #[cfg(test)]
     pub(crate) fn keep_guard_for_test(&mut self, id: &'static str, body: &[u8]) -> bool {
-        self.keep_guard(id, body, Screen::Clean.clean().unwrap())
+        self.keep_proof(super::guard::Proof::new(
+            id,
+            body,
+            Screen::Clean.clean().unwrap(),
+        ))
     }
 
     pub(crate) fn guard_checkpoint(&self) -> usize {
@@ -418,9 +422,7 @@ impl Evidence {
         &self,
         credentials: &SentCredentials,
     ) -> Option<Box<crate::Error>> {
-        let transport = credentials.transport_only();
-        let matcher = response::BodyMatcher::with_work(&transport, 192 << 20);
-        self.guards.iter().find_map(|proof| proof.check(&matcher))
+        super::guard::check_proofs(&self.guards, credentials)
     }
 
     pub(crate) fn recheck_read_proofs(&self) -> Result<(), Box<crate::Error>> {
@@ -584,13 +586,24 @@ impl Evidence {
     }
 
     pub(super) fn discovery_body_screen(&self, body: &[u8], accepted: bool) -> Screen {
-        if accepted {
-            return self.go_peer_body_screen(body);
-        }
         let matcher = response::BodyMatcher::new(&self.credentials, body.len());
         matcher
             .scan(body, false)
-            .then(|| peer::discovery_stream_screen(&matcher, body))
+            .then(|| peer::discovery_stream_screen(&matcher, body, accepted))
+    }
+
+    pub(super) fn not_found_body_screen(&self, body: &[u8]) -> Screen {
+        let matcher = response::BodyMatcher::new(&self.credentials, body.len());
+        Self::screen_not_found_with(&matcher, body)
+    }
+
+    pub(super) fn screen_not_found_with(
+        matcher: &response::BodyMatcher<'_>,
+        body: &[u8],
+    ) -> Screen {
+        matcher
+            .scan(body, false)
+            .then(|| peer::not_found_body_screen(matcher, body))
     }
 
     pub(crate) fn peer_body_screen(&self, body: &[u8]) -> Screen {

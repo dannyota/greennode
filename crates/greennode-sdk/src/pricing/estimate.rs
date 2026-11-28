@@ -3,6 +3,7 @@ mod prepare;
 
 use super::{Client, EstimateInput, EstimateItem, EstimateOutput};
 use crate::model::pricing::DiscoveryPrice;
+use crate::pricing::failure as pricing_failure;
 use crate::quote::{
     catalog::{self, Catalog, Encryption, Image, StorageCatalog, StorageRegion, VolumeType, Zone},
     request::{self, Product, Request, decode},
@@ -118,7 +119,7 @@ impl Client {
             };
             let outcome = run.quote().await.and_then(|()| run.finish());
             let Run {
-                output,
+                mut output,
                 errors,
                 catalog,
                 memo,
@@ -128,7 +129,10 @@ impl Client {
             let evidence = &catalog.evidence;
             if let Err(error) = outcome {
                 drop(errors);
-                return Err(failure(safe_error(recover(error))));
+                return Err(failure(pricing_failure::estimate_error(
+                    recover(error),
+                    evidence,
+                )));
             }
             if let Some(first) = errors.first()
                 && output
@@ -138,23 +142,29 @@ impl Client {
             {
                 let error = Arc::clone(first);
                 drop(errors);
-                return Err(failure(safe_error(recover(error))));
+                return Err(failure(pricing_failure::estimate_error(
+                    recover(error),
+                    evidence,
+                )));
             }
+            pricing_failure::screen_rows(&mut output.metadata.failures, evidence);
             if serde_json::to_value(&output).map_or(true, |value| evidence.output_reflects(&value))
                 || accounting::table_amounts(&output)
                     .any(|amount| evidence.reflects_fixed_two(amount))
             {
-                return Err(failure(safe_error(*request::invalid(OP, 200))));
+                return Err(failure(pricing_failure::estimate_error(
+                    *request::invalid(OP, 200),
+                    evidence,
+                )));
             }
             if errors.is_empty() {
                 return Ok(output);
             }
-            let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
-            for cause in errors {
-                if let Some(cause) = Arc::into_inner(cause) {
-                    error = error.with_cause(safe_error(cause));
-                }
-            }
+            let error = pricing_failure::incomplete(
+                errors
+                    .into_iter()
+                    .map(|error| pricing_failure::estimate_error(recover(error), evidence)),
+            );
             Err(Failure::new(error, Some(output), WriteDispatch::NotAWrite))
         })
     }
@@ -217,7 +227,7 @@ impl Run<'_> {
     }
 
     fn handle(&mut self, key: &str, error: Arc<Error>) -> Shared<()> {
-        if error.has_class(ErrorClass::InvalidInput) || !self.input.allow_partial {
+        if !self.input.allow_partial {
             return Err(error);
         }
         self.stopped |= [
@@ -248,64 +258,68 @@ fn failed() -> DiscoveryPrice {
 }
 
 fn recover(error: Arc<Error>) -> Error {
-    Arc::try_unwrap(error).unwrap_or_else(|error| Error::new(error.class()))
+    Arc::try_unwrap(error).unwrap_or_else(|error| pricing_failure::copy(&error))
 }
 
-fn failure_code(error: &crate::ApiError) -> String {
-    if error.code() == "InvalidResponse" {
-        return error.code().into();
-    }
-    if error.status() == Some(200)
-        && let Ok(code) = error.code().parse::<u16>()
-        && (code == 112 || (400..=599).contains(&code))
-    {
-        return code.to_string();
-    }
-    match error.status() {
-        Some(400) => "BadRequest",
-        Some(401) => "Unauthorized",
-        Some(403) => "Forbidden",
-        Some(404) => "NotFound",
-        Some(409) => "Conflict",
-        Some(429) => "Throttled",
-        Some(500..) => "ServerError",
-        Some(400..) => "ClientError",
-        _ => "",
-    }
-    .into()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::product::evidence::Evidence;
 
-fn safe_error(error: Error) -> Error {
-    if error.has_class(ErrorClass::InvalidInput)
-        && error
-            .api_error()
-            .is_some_and(|api| api.operation().is_empty())
-    {
-        return error;
+    #[test]
+    fn estimate_failure_code_retains_a_screened_private_status() {
+        let mut evidence = Evidence::new();
+        evidence.add_secret(&crate::Secret::new("403"));
+        let error = request::api(OP, Some(403), "", "provider refused", false)
+            .screen_api(&|text| evidence.text_reflects(text));
+        let error = pricing_failure::estimate_error(error, &evidence);
+        let api = error.api_error().unwrap();
+        assert_eq!(api.status(), None);
+        assert_eq!(api.code(), "Forbidden");
+        assert_eq!(api.observed_status(), Some(403));
+        assert!(!api.to_string().contains("403"));
     }
-    let Some(api) = error.api_error() else {
-        return error;
-    };
-    if error.has_class(ErrorClass::EstimateLimit) || error.is_body_too_large() {
-        return error;
+
+    #[tokio::test]
+    async fn estimate_records_transport_api_failure_even_when_operation_is_screened() {
+        let config = crate::Config::new(
+            crate::ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(crate::Secret::new("toy-bearer")),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        let mut catalog = Catalog::new(config.session(), &ctx, 0);
+        const WIRE: &str = "pricing.GetQuote";
+        catalog.evidence.add_secret(&crate::Secret::new(WIRE));
+        let input = EstimateInput::default();
+        let mut run = Run {
+            input: &input,
+            catalog,
+            region: "hcm-3",
+            memo: Memo::default(),
+            output: accounting::initialize(&input, "hcm-3", time::OffsetDateTime::UNIX_EPOCH),
+            errors: Vec::new(),
+            stopped: false,
+        };
+        let error = Error::from_api(
+            crate::ApiError::new(
+                WIRE,
+                None,
+                crate::error::SafeText::new("", &[]),
+                crate::error::SafeText::new("", &[]),
+                false,
+            )
+            .with_request_cause(crate::error::SafeText::new("dial: connection refused", &[])),
+        )
+        .screen_api(&|text| run.catalog.evidence.text_reflects(text));
+        run.record("network", Arc::new(error));
+        assert_eq!(
+            (
+                run.output.metadata.failures[0].code.as_str(),
+                run.output.metadata.failures[0].status
+            ),
+            ("", 0)
+        );
     }
-    let safe = request::api(
-        api.operation(),
-        api.status(),
-        &failure_code(api),
-        "estimate request failed; body withheld",
-        api.retryable(),
-    );
-    [
-        ErrorClass::InvalidInput,
-        ErrorClass::Auth,
-        ErrorClass::PermissionDenied,
-        ErrorClass::NotFound,
-        ErrorClass::RateLimited,
-        ErrorClass::Cancelled,
-        ErrorClass::DeadlineExceeded,
-    ]
-    .into_iter()
-    .filter(|class| error.has_identity(*class))
-    .fold(safe, |safe, class| Error::new(class).with_cause(safe))
 }

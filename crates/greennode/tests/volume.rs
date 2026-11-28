@@ -30,17 +30,28 @@ fn invoke(args: &[&str], server: &Server) -> (ExitCode, Vec<u8>, Vec<u8>) {
 }
 
 fn invoke_mode(args: &[&str], server: &Server, read_only: bool) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_bearer(args, server, read_only, BEARER)
+}
+
+fn invoke_with_bearer(
+    args: &[&str],
+    server: &Server,
+    read_only: bool,
+    bearer: &str,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let config_options = with_billing_loopback(
-        ConfigOptions::default()
-            .with_static_token(Secret::new(BEARER))
-            .with_endpoint_overrides(EndpointOverrides {
-                vserver: Some(format!("{}/", server.origin)),
-                portal: Some(format!("{}/", server.origin)),
-                vserver_backup: Some(format!("{}/vserver/vbackup-gateway/", server.origin)),
-                ..Default::default()
-            }),
+        greennode_sdk::testing::with_clock(
+            ConfigOptions::default().with_static_token(Secret::new(bearer)),
+            greennode_sdk::testing::retry_clock(),
+        )
+        .with_endpoint_overrides(EndpointOverrides {
+            vserver: Some(format!("{}/", server.origin)),
+            portal: Some(format!("{}/", server.origin)),
+            vserver_backup: Some(format!("{}/vserver/vbackup-gateway/", server.origin)),
+            ..Default::default()
+        }),
         server,
     );
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -546,41 +557,108 @@ fn missing_confirmation_status_keeps_unexpected_status_cli_identity() {
 }
 
 #[test]
-fn create_gateway_failure_keeps_status_reason_and_recovery_advice() {
-    let server = Server::start(vec![
-        response(
-            "200 OK",
-            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
-        ),
-        response("200 OK", QUOTE),
-        response("502 Bad Gateway", ""),
-    ]);
-    let (status, stdout, stderr) = invoke_mode(
-        &[
-            "create-volume",
-            "--name",
-            "toy-volume",
-            "--zone-id",
-            "zone-1",
-            "--volume-type-id",
-            "type-1",
-            "--size",
-            "1",
-            "--max-price",
-            "3200",
-            "--no-wait",
-        ],
-        &server,
-        false,
+fn paid_write_peer_codes_do_not_select_cli_error_overrides() {
+    let local_names = [
+        "HistoryIncomplete",
+        "QuotaChanged",
+        "QuotaStatusIncomplete",
+        "SecretFileFailed",
+        "RequestFailed",
+        "ObjectCopyUnconfirmed",
+        "ObjectDeleteUnconfirmed",
+        "ObjectWriteUnconfirmed",
+        "DiscoveryIncomplete",
+        "EstimateLimit",
+        "EstimateOverflow",
+        "BucketEncryptionIncomplete",
+        "PurgeCooldown",
+        "StatusUnconfirmed",
+        "UnexpectedStatus",
+        "ResourceBusy",
+        "OTPRejected",
+        "ZoneBusy",
+        "NotSettled",
+        "WriteFailed",
+        "OpenLogin",
+        "VolumeInUse",
+        "BootVolume",
+        "ServerRunning",
+        "SystemTag",
+        "RepositoryNotEmpty",
+        "PaymentRequired",
+        "ProjectNotEmpty",
+        "BucketNotEmpty",
+        "UserNotFound",
+        "SystemSecurityGroup",
+        "SecurityGroupInUse",
+        "ServerGroupInUse",
+        "ResourceInUse",
+        "DefaultResource",
+        "PriceAboveMax",
+        "Unpriced",
+        "SelfChange",
+        "PrivilegedChange",
+        "ManagedPolicy",
+        "NotFound",
+        "InvalidUsage",
+        "ReadOnly",
+        "QueryFailed",
+        "NoCredentials",
+        "TokenCacheFailed",
+        "ServiceAccountLoginFailed",
+        "LoginFailed",
+        "InvalidConfig",
+        "PageFormat",
+    ];
+    let mut mismatches = Vec::new();
+    for code in local_names {
+        let rejected = serde_json::json!({"code":code,"message":"provider refused"}).to_string();
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":0,"totalItem":0}"#,
+            ),
+            response("200 OK", QUOTE),
+            response("500 Internal Server Error", &rejected),
+        ]);
+        let (exit, stdout, stderr) = invoke_mode(
+            &[
+                "create-volume",
+                "--name",
+                "toy-volume",
+                "--zone-id",
+                "zone-1",
+                "--volume-type-id",
+                "type-1",
+                "--size",
+                "1",
+                "--max-price",
+                "3200",
+                "--no-wait",
+            ],
+            &server,
+            false,
+        );
+        let actual: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        let expected = serde_json::json!({"error": {
+            "code": code,
+            "status": 500,
+            "operation": "volume.CreateVolume",
+            "message": "provider refused\nCheck for an existing volume with the exact name before retrying.",
+        }});
+        if exit != ExitCode::FAILURE || !stdout.is_empty() || actual != expected {
+            mismatches.push(code);
+        }
+        assert_eq!(server.requests(), 3);
+    }
+    assert!(
+        mismatches.is_empty(),
+        "incorrect CLI metadata or message for peer codes: {mismatches:?}"
     );
-    assert_eq!(status, ExitCode::from(1));
-    assert!(stdout.is_empty());
-    let output: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
-    let error = &output["error"];
-    assert_eq!(error["code"], "ServerError");
-    assert_eq!(error["status"], 502);
-    assert_eq!(error["operation"], "volume.CreateVolume");
-    let message = error["message"].as_str().unwrap();
-    assert!(message.contains("Bad Gateway") && message.contains("match the name exactly"));
-    assert_eq!(server.requests(), 3);
 }
+
+#[path = "volume/recovery.rs"]
+mod recovery;
+
+#[path = "volume/settlement.rs"]
+mod settlement;

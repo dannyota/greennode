@@ -1,3 +1,5 @@
+mod settlement;
+
 use std::time::Duration;
 
 use http::{Method, StatusCode};
@@ -147,8 +149,9 @@ impl Client {
                 .send_once(ctx, &CREATE_WRITE, &[], body, &mut evidence)
                 .await;
             let advice = |failure| advise(failure, CREATE_ADVICE, &evidence);
-            let (status, raw) = result.map_err(advice)?;
-            let raw = reject(&CREATE_WRITE, status, raw, &evidence, None).map_err(|failure| {
+            let reply = result.map_err(advice)?;
+            let status = reply.status;
+            reject(&CREATE_WRITE, &reply, &evidence, None).map_err(|failure| {
                 if status.is_client_error() {
                     failure
                 } else {
@@ -162,7 +165,15 @@ impl Client {
             let decode_failed = |error: Box<Error>| {
                 advice(Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))
             };
-            let text = go_json(&raw);
+            let receipt = reply.clean_receipt().ok_or_else(|| {
+                if reply.malformed_json() {
+                    return decode_failed(read.decode_error(&evidence, DecodeError::MalformedJson));
+                }
+                decode_failed(Box::new(
+                    crate::wire::product::operation::unsafe_guard_response(CREATE),
+                ))
+            })?;
+            let text = go_json(receipt.body());
             serde_json::from_str::<&serde_json::value::RawValue>(&text).map_err(|_| {
                 decode_failed(read.decode_error(&evidence, DecodeError::MalformedJson))
             })?;
@@ -183,7 +194,7 @@ impl Client {
             } else {
                 PathIds::Strict
             };
-            if !policy.allows(&id) || evidence.text_reflects(&id) {
+            if !policy.allows(&id) || evidence.id_reflects(&id) {
                 let error = api(
                     CREATE,
                     Some(status),
@@ -204,11 +215,29 @@ impl Client {
                 ..Default::default()
             };
             let target = Target::Create;
+            let acknowledgement = receipt.bind_id(id.clone());
+            evidence
+                .keep_acknowledgement(&acknowledgement)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let (load_balancer, error) = if input.no_wait {
                 (fallback, None)
             } else {
-                self.settle(ctx, &mut evidence, target, &id, fallback).await
+                self.settle(
+                    ctx,
+                    &mut evidence,
+                    target,
+                    &id,
+                    fallback,
+                    Some(&acknowledgement),
+                )
+                .await
             };
+            if let Err(refusal) = acknowledgement.recheck(&evidence) {
+                let error = error.unwrap_or_else(|| {
+                    outcome(ErrorClass::NotSettled, CREATE_ADVICE, &evidence).with_cause(*refusal)
+                });
+                return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent));
+            }
             complete(
                 load_balancer,
                 price,
@@ -287,20 +316,23 @@ impl Client {
             let advice = format!(
                 "{RESIZE}: load balancer {id}: resize may have already reached the server; read the load balancer with GetLoadBalancer and compare its package to the one requested before any rerun"
             );
-            let (status, raw) = result.map_err(|failure| advise(failure, &advice, &evidence))?;
+            let reply = result.map_err(|failure| advise(failure, &advice, &evidence))?;
+            let status = reply.status;
             let busy = status.is_client_error()
-                && crate::wire::product::response::error_message_matches(
-                    &raw,
-                    evidence.credentials(),
-                    |message| {
-                        let message = message.to_ascii_lowercase();
-                        ["is not ready", "is updating", "is creating", "is deleting"]
-                            .iter()
-                            .any(|part| message.contains(part))
-                    },
-                );
-            let acknowledgement = match reject(&RESIZE_WRITE, status, raw, &evidence, None) {
-                Ok(acknowledgement) => acknowledgement,
+                && reply.clean_receipt().is_some_and(|receipt| {
+                    crate::wire::product::response::error_message_matches(
+                        receipt.body(),
+                        evidence.credentials(),
+                        |message| {
+                            let message = message.to_ascii_lowercase();
+                            ["is not ready", "is updating", "is creating", "is deleting"]
+                                .iter()
+                                .any(|part| message.contains(part))
+                        },
+                    )
+                });
+            match reject(&RESIZE_WRITE, &reply, &evidence, None) {
+                Ok(()) => (),
                 Err(failure) => {
                     if busy && let Some(api_error) = failure.error().api_error() {
                         let message = format!(
@@ -323,14 +355,35 @@ impl Client {
             };
             let target = Target::Resize(package);
             let (load_balancer, error) = if input.no_wait {
-                check_resize_acknowledgement(&acknowledgement, id, &evidence).map_err(|error| {
+                let receipt = reply.clean_receipt().ok_or_else(|| {
+                    advise(
+                        Failure::new(
+                            crate::wire::product::operation::unsafe_guard_response(RESIZE),
+                            None,
+                            WriteDispatch::MayHaveBeenSent,
+                        ),
+                        &advice,
+                        &evidence,
+                    )
+                })?;
+                check_resize_acknowledgement(receipt.body(), id, &evidence).map_err(|error| {
                     let failure = Failure::new(*error, None, WriteDispatch::MayHaveBeenSent);
                     advise(failure, &advice, &evidence)
                 })?;
                 current.package_id.clone_from(package);
                 (current, None)
             } else {
-                self.settle(ctx, &mut evidence, target, id, current).await
+                reply
+                    .check_discarded_acknowledgement(RESIZE)
+                    .map_err(|error| {
+                        advise(
+                            Failure::new(*error, None, WriteDispatch::MayHaveBeenSent),
+                            &advice,
+                            &evidence,
+                        )
+                    })?;
+                self.settle(ctx, &mut evidence, target, id, current, None)
+                    .await
             };
             complete(
                 load_balancer,
@@ -424,70 +477,6 @@ impl Client {
                 .wait(clock)
                 .await;
         });
-    }
-
-    async fn settle(
-        &self,
-        ctx: &RequestContext,
-        evidence: &mut Evidence,
-        target: Target<'_>,
-        id: &str,
-        mut last: LoadBalancer,
-    ) -> (LoadBalancer, Option<Error>) {
-        let clock = self.session.clock();
-        let (minutes, wanted, warning) = target.settlement();
-        let wait =
-            ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
-        let op = target.operation();
-        let package_requirement = match target {
-            Target::Create => PackageRequirement::Optional,
-            Target::Resize(_) => PackageRequirement::UnlessFailed,
-        };
-        let why = format!("vngcloud: write outcome not confirmed: {op}: load balancer {id}");
-        let error = guarded_poll!(evidence, {
-            if let Some(end) = wait.check(clock) {
-                let msg = format!("{why} did not reach {wanted} within {minutes}m0s; {warning}");
-                break outcome(ErrorClass::NotSettled, &msg, evidence).with_cause(Error::from(end));
-            }
-            match self
-                .read_state(&wait, id, evidence, package_requirement)
-                .await
-                .and_then(|row| row.into_checked(evidence))
-            {
-                Ok(row) => {
-                    last = row;
-                    if wait.check(clock).is_none() {
-                        if last.progress_status == "ERROR" {
-                            break outcome(
-                                ErrorClass::Failed,
-                                &format!(
-                                    "vngcloud: write failed: {op}: load balancer {id} is ERROR"
-                                ),
-                                evidence,
-                            );
-                        }
-                        if last.progress_status == "CREATED" && target.matches(&last) {
-                            return (last, None);
-                        }
-                    }
-                }
-                Err(error)
-                    if matches!(target, Target::Create)
-                        && error.detail::<super::wire::CompleteNotFound>().is_some() => {}
-                Err(error) => {
-                    break outcome(
-                        ErrorClass::NotSettled,
-                        &format!("{why}; {warning}"),
-                        evidence,
-                    )
-                    .with_cause(*error);
-                }
-            }
-            wait.child_with_deadline(clock.monotonic_now() + POLL)
-                .wait(clock)
-                .await;
-        });
-        (last, Some(error))
     }
 
     async fn guard_price(

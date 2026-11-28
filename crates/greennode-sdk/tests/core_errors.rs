@@ -3,7 +3,7 @@
 mod error;
 
 use error::{
-    ApiError, Error, ErrorClass, Failure, LoginError, LoginFailureKind, SafeText,
+    ApiError, Error, ErrorClass, Failure, LoginError, LoginFailureKind, RecoveryAction, SafeText,
     ServiceAccountLoginError, WriteDispatch,
 };
 use greennode_sdk::{ContextEnd, Secret, pricing};
@@ -188,4 +188,21 @@ fn credentials_errors_include_invalid_config_identity() {
         assert!(error.has_identity(ErrorClass::InvalidConfig));
     }
     assert!(!Error::new(ErrorClass::InvalidInput).has_identity(ErrorClass::InvalidConfig));
+}
+
+#[test]
+fn screening_recovery_text_preserves_the_typed_action_in_the_failure() {
+    let action = RecoveryAction::CheckExistingVolume;
+    let error = Error::new(ErrorClass::NotSettled).with_recovery_action(action, |_| false);
+    assert!(
+        error
+            .recovery_diagnostic()
+            .is_some_and(|text| !text.is_empty())
+    );
+    let error = error.screen_api(&|text| text.contains("Check"));
+    let outcome = Failure::<()>::new(error, None, WriteDispatch::MayHaveBeenSent);
+    assert_eq!(outcome.recovery_action(), Some(action));
+    assert_eq!(outcome.error().recovery_action(), Some(action));
+    assert_eq!(outcome.error().recovery_diagnostic(), Some(""));
+    assert!(outcome.error().has_identity(ErrorClass::NotSettled));
 }

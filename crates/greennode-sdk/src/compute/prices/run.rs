@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::model::pricing::{DiscoveryFailure, DiscoveryMetadata, discovery_notes, note};
+use crate::compute::quotes::path_id;
+use crate::model::pricing::{DiscoveryMetadata, discovery_notes, note};
+use crate::pricing::failure as pricing_failure;
 use crate::quote::{
     catalog::{self, Catalog, Image, VolumeType, Zone},
     input,
     request::{self, Product, Request, decode},
 };
-use crate::wire::product::options::PathIds;
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::super::{
@@ -78,7 +79,10 @@ impl Client {
             run.note("visibility", "compute", "Console-family scope excludes custom, partner, and legacy catalogs unless requested. Catalog visibility establishes no sale eligibility.");
             run.note("reference-component", "compute", "Each price is the instance component of its recorded reference configuration. The root disk and other excluded costs are not included.");
             if let Err(error) = run.discover().await {
-                return Err(failure(run.safe_error(*error)));
+                return Err(failure(pricing_failure::screen(
+                    *error,
+                    &run.catalog.evidence,
+                )));
             }
             run.finish()
         })
@@ -97,25 +101,14 @@ fn validate(input: &ListFlavorPricesInput) -> Result<(), Box<Error>> {
             "MaxRequests must be between 1 and 2000",
         )));
     }
-    for (name, value, rule) in [
-        ("ZoneID", &input.zone_id, PathIds::WithUnderscore),
-        ("Family", &input.family, PathIds::Strict),
-        ("Platform", &input.platform, PathIds::Strict),
-        (
-            "RootDiskTypeID",
-            &input.root_disk_type_id,
-            PathIds::WithUnderscore,
-        ),
+    for (name, value) in [
+        ("ZoneID", &input.zone_id),
+        ("Family", &input.family),
+        ("Platform", &input.platform),
+        ("RootDiskTypeID", &input.root_disk_type_id),
     ] {
-        if !value.is_empty() && !rule.allows(value) {
-            let pattern = if rule == PathIds::Strict {
-                "^[A-Za-z0-9-]+$"
-            } else {
-                "^[A-Za-z0-9_-]+$"
-            };
-            return Err(Box::new(invalid_input(&format!(
-                "{OP} requires {name} to match {pattern}"
-            ))));
+        if !value.is_empty() {
+            path_id(OP, name, value)?;
         }
     }
     Ok(())
@@ -124,7 +117,7 @@ fn validate(input: &ListFlavorPricesInput) -> Result<(), Box<Error>> {
 impl Run<'_> {
     async fn discover(&mut self) -> Result<(), Box<Error>> {
         let project = self.catalog.project().await?;
-        let mut zones = self.catalog.zones(&project).await?;
+        let mut zones = self.catalog.zones(&project, catalog::ZONES).await?;
         let selected = &self.input.zone_id;
         if !selected.is_empty() {
             zones.retain(|zone| zone.id == *selected);
@@ -364,26 +357,13 @@ impl Run<'_> {
     }
 
     fn record_metadata(&mut self, operation: &'static str, key: &str, error: &Error) {
-        let api = error.api_error();
-        let status = api.and_then(crate::ApiError::status);
         self.output.metadata.complete = false;
-        self.output.metadata.failures.push(DiscoveryFailure {
-            operation: operation.into(),
-            item_key: key.into(),
-            status: i64::from(status.unwrap_or(0)),
-            code: if api.is_some_and(|api| api.code() == "InvalidResponse") {
-                "InvalidResponse"
-            } else if api.is_some() {
-                status_code(status).unwrap_or_default()
-            } else {
-                "DiscoveryIncomplete"
-            }
-            .into(),
-        });
-    }
-
-    fn safe_error(&self, error: Error) -> Error {
-        self.catalog.evidence.screen_error(error)
+        self.output.metadata.failures.push(pricing_failure::row(
+            operation,
+            key,
+            error,
+            pricing_failure::CodePolicy::Catalog,
+        ));
     }
 
     #[expect(
@@ -393,7 +373,10 @@ impl Run<'_> {
     fn finish(mut self) -> Result<ListFlavorPricesOutput, Failure<ListFlavorPricesOutput>> {
         if self.output.items.is_empty() && !self.errors.is_empty() {
             let error = self.errors.remove(0);
-            return Err(failure(self.safe_error(error)));
+            return Err(failure(pricing_failure::screen(
+                error,
+                &self.catalog.evidence,
+            )));
         }
         self.output
             .items
@@ -401,6 +384,7 @@ impl Run<'_> {
         self.output.metadata.requests = i64::try_from(self.catalog.requests()).unwrap_or(i64::MAX);
         self.output.metadata.quoted_at = self.catalog.session.clock().utc_now();
         let evidence = &self.catalog.evidence;
+        pricing_failure::screen_rows(&mut self.output.metadata.failures, evidence);
         if !evidence.can_retain_partial()
             || serde_json::to_value(&self.output)
                 .map_or(true, |value| evidence.output_reflects(&value))
@@ -423,10 +407,11 @@ impl Run<'_> {
         if self.errors.is_empty() {
             return Ok(self.output);
         }
-        let mut error = Error::new(ErrorClass::DiscoveryIncomplete);
-        for cause in std::mem::take(&mut self.errors) {
-            error = error.with_cause(self.safe_error(cause));
-        }
+        let error = pricing_failure::incomplete(
+            self.errors
+                .into_iter()
+                .map(|error| pricing_failure::screen(error, evidence)),
+        );
         Err(Failure::new(
             error,
             Some(self.output),
@@ -584,19 +569,6 @@ fn valid_root_quote(value: &Value) -> bool {
             == 1
 }
 
-fn status_code(status: Option<u16>) -> Option<&'static str> {
-    match status {
-        Some(400) => Some("BadRequest"),
-        Some(401) => Some("Unauthorized"),
-        Some(403) => Some("Forbidden"),
-        Some(404) => Some("NotFound"),
-        Some(409) => Some("Conflict"),
-        Some(429) => Some("Throttled"),
-        Some(500..=599) => Some("ServerError"),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -629,5 +601,65 @@ mod tests {
             }
         });
         assert!(matches!(result, Err(error) if error.has_class(crate::ErrorClass::Cancelled)));
+    }
+
+    #[tokio::test]
+    async fn flavor_price_failure_retains_the_private_status_and_code() {
+        use super::{ListFlavorPricesInput, ListFlavorPricesOutput, Run};
+        use crate::model::pricing::DiscoveryMetadata;
+        use crate::quote::{catalog::Catalog, request};
+        use crate::{Config, ConfigOptions, ErrorClass, RequestContext, Secret};
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("403")),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        let mut catalog = Catalog::new(config.session(), &ctx, 0);
+        catalog.evidence.add_secret(&Secret::new("403"));
+        let input = ListFlavorPricesInput {
+            allow_partial: true,
+            ..Default::default()
+        };
+        let mut run = Run {
+            catalog,
+            input: &input,
+            identities: Default::default(),
+            tuples: Default::default(),
+            stopped: false,
+            errors: Vec::new(),
+            output: ListFlavorPricesOutput {
+                items: Vec::new(),
+                metadata: DiscoveryMetadata {
+                    region: "hcm-3".into(),
+                    complete: true,
+                    requests: 0,
+                    quoted_at: time::OffsetDateTime::UNIX_EPOCH,
+                    failures: Vec::new(),
+                    notes: Vec::new(),
+                    excluded_groups: None,
+                },
+            },
+        };
+        let error = request::api(
+            "compute.ListFlavorZones",
+            Some(403),
+            "",
+            "provider refused",
+            false,
+        )
+        .screen_api(&|text| run.catalog.evidence.text_reflects(text));
+        run.record("compute.ListFlavorZones", "", Box::new(error))
+            .unwrap();
+        assert_eq!(
+            (
+                run.output.metadata.failures[0].code.as_str(),
+                run.output.metadata.failures[0].status
+            ),
+            ("Forbidden", 0)
+        );
+        let failure = run.finish().unwrap_err();
+        assert!(failure.error().has_identity(ErrorClass::PermissionDenied));
     }
 }

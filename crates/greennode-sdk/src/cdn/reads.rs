@@ -16,7 +16,7 @@ use crate::wire::{
 use crate::{Error, ErrorClass, Failure, List, RequestContext, Secret};
 
 const LIST_WEB: Call = Call::get("cdn.ListWebAccelerators", "v1/cdn/list");
-const GET_WEB: Call = Call {
+pub(super) const GET_WEB: Call = Call {
     not_found: Some("no such CDN"),
     ..Call::get("cdn.GetWebAccelerator", "v1/cdn/detail/{}")
 };

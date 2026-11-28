@@ -9,7 +9,7 @@ use crate::model::wire::go_json;
 use crate::wire::product::options::PathIds;
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{Operation, RouteAuth, execute_raw},
+    operation::{self, Operation, RouteAuth, execute_raw},
     options::Options,
     redirect::{Classification, Retry},
     retry,
@@ -25,7 +25,17 @@ pub(super) enum Family {
 }
 
 #[derive(Debug)]
-pub(super) struct BodyReadFailure;
+pub(super) struct ResponseReadFailure;
+
+pub(crate) fn response_read_failure(error: Error, safe: Error) -> Error {
+    let safe = safe.with_outer_detail(ResponseReadFailure);
+    let class = error.class();
+    if matches!(class, ErrorClass::Cancelled | ErrorClass::DeadlineExceeded) {
+        Error::new(class).with_cause(safe.with_cause(error))
+    } else {
+        safe
+    }
+}
 
 pub(super) struct Read {
     pub(super) id: &'static str,
@@ -71,24 +81,26 @@ impl Read {
 
     fn failure(&self, error: Error, evidence: &Evidence) -> Error {
         let api = error.api_error();
-        let status = error
-            .http_status()
-            .map(|status| status.as_u16())
-            .or_else(|| api.and_then(ApiError::status));
+        let status = api.and_then(ApiError::observed_status);
         if error.is_body_too_large() {
-            return self.overflow(status, evidence);
+            return if matches!(self.family, Family::Dashboard) && status != Some(200) {
+                Error::bare_body_limit()
+            } else {
+                self.overflow(status, evidence)
+            };
         }
-        if matches!(self.family, Family::Quota { .. }) && status.is_some() && api.is_some() {
-            let kept_redirect =
-                self.no_redirect() && status.is_some_and(|status| (300..400).contains(&status));
-            if error.http_status().is_some() && !kept_redirect {
-                return self
-                    .request_failed(None, false, evidence)
-                    .with_outer_detail(BodyReadFailure);
-            }
+        if matches!(self.family, Family::Quota { .. } | Family::CheckAlarm)
+            && operation::is_active_transport_failure(&error)
+        {
+            return response_read_failure(error, self.request_failed(status, false, evidence));
+        }
+        if matches!(self.family, Family::Quota { .. }) && status.is_some() {
             return self.request_failed(status, api.is_some_and(ApiError::retryable), evidence);
         }
-        if error.class() != ErrorClass::Api || api.is_none() {
+        if matches!(self.family, Family::Dashboard) && status.is_none()
+            || error.class() != ErrorClass::Api
+            || api.is_none()
+        {
             return evidence.screen_error(error);
         }
         self.request_failed(status, api.is_some_and(ApiError::retryable), evidence)
@@ -137,7 +149,7 @@ impl Client {
     ) -> Result<Box<RawValue>, Error> {
         self.read_status(ctx, read, path, query, evidence, false)
             .await
-            .map(|(_, raw)| raw)
+            .map(|(_, raw, _)| raw)
     }
 
     pub(super) async fn read_status(
@@ -148,7 +160,14 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
         accept_not_found: bool,
-    ) -> Result<(StatusCode, Box<RawValue>), Error> {
+    ) -> Result<
+        (
+            StatusCode,
+            Box<RawValue>,
+            Option<crate::wire::product::absence::CleanAbsence>,
+        ),
+        Error,
+    > {
         let base = self
             .session
             .endpoints()
@@ -181,11 +200,13 @@ impl Client {
             allow_recovery: true,
             allow_empty: false,
             no_output: false,
-            keep_status: true,
+            keep_status: false,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: true,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.no_redirect(),
+            report_redirect: read.no_redirect(),
             retry_config: retry::Config::default(),
         };
         let reply = match execute_raw(
@@ -212,33 +233,62 @@ impl Client {
             Ok(reply) => reply,
             Err(failure) => return Err(read.failure(failure.into_parts().0, evidence)),
         };
+        let absence = reply.clean_absence();
         if !operation.success.contains(&reply.status) {
             let retryable = matches!(reply.status.as_u16(), 429 | 502 | 503 | 504);
-            return Err(read.request_failed(Some(reply.status.as_u16()), retryable, evidence));
+            return Err(read
+                .request_failed(Some(reply.status.as_u16()), retryable, evidence)
+                .with_clean_absence(absence));
         }
-        if reply.body.is_empty() && matches!(read.family, Family::Quota { .. }) {
-            let status = reply.status.as_u16();
-            let code = if status == 404 {
-                "NotFound"
-            } else {
-                "InvalidResponse"
-            };
+        if reply.status != StatusCode::OK && absence.is_none() {
             return Err(read.error(
-                Some(status),
-                code,
-                "quota response had invalid structure",
+                Some(reply.status.as_u16()),
+                "InvalidResponse",
+                "quota response withheld",
                 false,
                 evidence,
             ));
         }
-        let text = go_json(&reply.body);
-        let raw = serde_json::from_str(&text).map_err(|_| match read.family {
-            Family::Dashboard => read.invalid(evidence),
-            Family::CheckAlarm | Family::Quota { .. } => {
-                read.request_failed(Some(reply.status.as_u16()), false, evidence)
-            }
-        })?;
-        Ok((reply.status, raw))
+        if reply.empty_body() && matches!(read.family, Family::Quota { .. }) {
+            let status = reply.status.as_u16();
+            let code = if absence.is_some() {
+                "NotFound"
+            } else {
+                "InvalidResponse"
+            };
+            return Err(read
+                .error(
+                    Some(status),
+                    code,
+                    "quota response had invalid structure",
+                    false,
+                    evidence,
+                )
+                .with_clean_absence(absence));
+        }
+        let raw = reply
+            .decode_projection(|body| {
+                let text = go_json(body);
+                serde_json::from_str(&text).map_err(|_| {
+                    Box::new(match read.family {
+                        Family::Dashboard => read.invalid(evidence),
+                        Family::Quota { .. } if absence.is_some() => read
+                            .error(
+                                Some(reply.status.as_u16()),
+                                "NotFound",
+                                "quota response withheld",
+                                false,
+                                evidence,
+                            )
+                            .with_clean_absence(absence.clone()),
+                        Family::CheckAlarm | Family::Quota { .. } => {
+                            read.request_failed(Some(reply.status.as_u16()), false, evidence)
+                        }
+                    })
+                })
+            })
+            .map_err(|error| *error)?;
+        Ok((reply.status, raw, absence))
     }
 }
 
@@ -281,4 +331,199 @@ pub(super) fn check_path_id<T>(op: &str, field: &str, value: &str) -> Result<(),
         return Err(path_id_failure(op, field));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testing::Server;
+    use crate::{Config, ConfigOptions, EndpointOverrides, RequestContext, Secret};
+
+    #[tokio::test]
+    async fn dashboard_oversized_redirect_keeps_the_bare_limit_error() {
+        let server = Server::start(vec![Server::oversized("302 Found")]);
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("toy-dashboard-token"))
+                .with_endpoint_overrides(EndpointOverrides {
+                    monitor: Some(server.origin.clone()),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+        config
+            .session()
+            .set_test_product_root(server.root_der.clone());
+        let (ctx, _) = RequestContext::new();
+        let failure = crate::monitor::Client::new(&config)
+            .list_dashboards(&ctx, Default::default())
+            .await
+            .unwrap_err();
+        assert!(failure.error().is_body_too_large());
+        assert!(failure.error().api_error().is_none());
+        assert_eq!(
+            failure.error().to_string(),
+            "transport: response body exceeds limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_active_interruptions_keep_the_service_envelope() {
+        use crate::quote::request::{self, Product, Request};
+        use crate::testing::{Response, ResponseBodyClock};
+        use crate::{ErrorClass, monitor};
+        use std::{sync::Arc, time::Duration};
+
+        let mut mismatches = Vec::new();
+        for (op, message) in [
+            (
+                "monitor.GetCheckAlarm",
+                "check alarm request failed; response withheld",
+            ),
+            (
+                "monitor.QuoteCreateSyntheticQuota",
+                "quota response withheld",
+            ),
+        ] {
+            for end in [ErrorClass::Cancelled, ErrorClass::DeadlineExceeded] {
+                for stage in ["headers", "body", "backoff"] {
+                    let clock = Arc::new(ResponseBodyClock::new());
+                    let (head, request_sent) = tokio::sync::oneshot::channel();
+                    let response = match stage {
+                        "body" => Response::Stall(head, 10),
+                        "backoff" => Response::Http {
+                            status: "429 Too Many Requests".into(),
+                            headers: vec![
+                                ("Retry-After".into(), "1".into()),
+                                ("Content-Length".into(), "0".into()),
+                            ],
+                            body: Vec::new(),
+                        },
+                        _ => Response::StallBeforeHead(head),
+                    };
+                    let server = Server::start(vec![response]);
+                    let config = Config::new(
+                        ConfigOptions::default()
+                            .with_region("hcm-3".into())
+                            .with_static_token(Secret::new("toy-monitor-token"))
+                            .with_clock(clock.clone())
+                            .with_endpoint_overrides(EndpointOverrides {
+                                monitor: Some(server.origin.clone()),
+                                ..Default::default()
+                            }),
+                    )
+                    .unwrap();
+                    config
+                        .session()
+                        .set_test_product_root(server.root_der.clone());
+                    let (ctx, cancel) = RequestContext::new();
+                    let work = async {
+                        if op == "monitor.GetCheckAlarm" {
+                            monitor::Client::new(&config)
+                                .get_check_alarm(&ctx, monitor::GetCheckAlarmInput::new("check-1"))
+                                .await
+                                .unwrap_err()
+                                .into_parts()
+                                .0
+                        } else {
+                            *request::exchange(
+                                config.session(),
+                                &ctx,
+                                &mut super::Evidence::new(),
+                                Request {
+                                    operation: op,
+                                    template: "billing-api/v2/synthetic/prices/created-price",
+                                    product: Product::Monitor {
+                                        identifiers: &[],
+                                        no_redirect: true,
+                                    },
+                                    body: Some(&serde_json::json!({})),
+                                    path: &[],
+                                    query: &[],
+                                },
+                                None,
+                            )
+                            .await
+                            .unwrap_err()
+                        }
+                    };
+                    let interrupt = async {
+                        match stage {
+                            "body" => clock.started().await,
+                            "backoff" => clock.wait_for_one_second_retry().await,
+                            _ => request_sent.await.unwrap(),
+                        }
+                        if end == ErrorClass::Cancelled {
+                            cancel.cancel();
+                        } else {
+                            clock.advance(Duration::from_secs(120));
+                        }
+                    };
+                    let (error, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+                        tokio::join!(work, interrupt)
+                    })
+                    .await
+                    .unwrap();
+                    if error.class() != end
+                        || !error.has_identity(end)
+                        || !error.api_error().is_some_and(|api| {
+                            (api.operation(), api.status(), api.code(), api.message())
+                                == (op, None, "InvalidResponse", message)
+                        })
+                    {
+                        mismatches.push((op, end, stage));
+                    }
+                    assert_eq!(server.requests(), 1);
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "unexpected interruption outcomes: {mismatches:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn quota_cancellation_during_tls_keeps_the_service_envelope() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let config = Config::new(
+            ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(Secret::new("toy-monitor-token"))
+                .with_endpoint_overrides(EndpointOverrides {
+                    monitor: Some(format!("https://{address}")),
+                    ..Default::default()
+                }),
+        )
+        .unwrap();
+        let (ctx, cancel) = RequestContext::new();
+        let client = crate::monitor::Client::new(&config);
+        let work = client.list_synthetic_packages(&ctx, crate::monitor::ListSyntheticPackagesInput);
+        tokio::pin!(work);
+        let handshake = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.read_exact(&mut [0]).await.unwrap();
+            stream
+        };
+        let stream = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::select! { stream = handshake => stream, _ = &mut work => panic!("request ended before TLS cancellation") }
+        }).await.unwrap();
+        cancel.cancel();
+        let failure = work.await.unwrap_err();
+        drop(stream);
+        let error = failure.error();
+        assert!(error.has_identity(crate::ErrorClass::Cancelled));
+        let api = error.api_error().unwrap();
+        assert_eq!(
+            (api.operation(), api.status(), api.code(), api.message()),
+            (
+                "monitor.ListSyntheticPackages",
+                None,
+                "InvalidResponse",
+                "quota response withheld"
+            )
+        );
+    }
 }

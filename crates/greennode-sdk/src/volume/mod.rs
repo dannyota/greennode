@@ -142,10 +142,12 @@ impl Client {
             allow_empty: false,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: matches!(evidence.field_names(), FieldNames::Canonical),
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: read.backup,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: false,
+            report_redirect: false,
             retry_config: retry::Config::default(),
         };
         let mut jitter = || self.session.retry_jitter();
@@ -208,17 +210,9 @@ impl Client {
     ) -> Result<T, Box<Error>> {
         let document = self.document(ctx, read, path, query, evidence).await?;
         let names = evidence.field_names();
-        decode(&document, names, from_wire).map_err(|()| {
-            if matches!(names, FieldNames::Canonical) {
-                Box::new(wire::api(
-                    read.id,
-                    Some(200),
-                    "InvalidResponse",
-                    read.shape_error,
-                ))
-            } else {
-                shape(read.id, read.shape_error)
-            }
+        decode(&document, names, from_wire).map_err(|issue| match issue {
+            wire::ShapeIssue::Alias => Box::new(operation::unsafe_guard_response(read.id)),
+            wire::ShapeIssue::Invalid => shape(read.id, read.shape_error),
         })
     }
 }

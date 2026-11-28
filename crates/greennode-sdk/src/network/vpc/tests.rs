@@ -334,7 +334,8 @@ async fn aggregate_rechecks_earlier_rows_against_later_tokens() {
 
 #[tokio::test]
 async fn rule_aggregate_limits_retained_output() {
-    let payload = "x".repeat(4_300_000);
+    const LIMIT: usize = 32 << 10;
+    let payload = "x".repeat(LIMIT / 2);
     let first = format!(r#"{{"data":[{{"id":"rule-1","description":"{payload}"}}]}}"#);
     let second = format!(r#"{{"data":[{{"id":"rule-2","description":"{payload}"}}]}}"#);
     let server = Server::start(vec![
@@ -346,7 +347,9 @@ async fn rule_aggregate_limits_retained_output() {
         reply("200 OK", &second),
     ]);
     let (ctx, _) = RequestContext::new();
-    let error = client(&server)
+    let client = client(&server);
+    client.session.test_retained_byte_limit.set(LIMIT).unwrap();
+    let error = client
         .list_all_security_group_rules(&ctx, ListAllSecurityGroupRulesInput::default())
         .await
         .unwrap_err();

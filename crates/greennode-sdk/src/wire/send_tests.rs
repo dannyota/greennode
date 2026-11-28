@@ -1,6 +1,7 @@
 use super::{
     connection::{self, HeadLimit, Trust},
-    send::{self, Encoding, Error},
+    product::retry::SendFailure,
+    send::{self, Encoding, Error, NetworkCause},
     test_server::{Response, Server},
 };
 use crate::{Clock, TestClock};
@@ -123,13 +124,13 @@ mod policy_tests;
 
 #[test]
 fn send_errors_map_to_retry_outcomes() {
-    use super::product::retry::{Outcome, SendFailure};
+    use super::product::retry::Outcome;
     assert!(matches!(
-        Error::Transport(SendFailure::FailedDial).retry_outcome(),
+        Error::Transport(SendFailure::FailedDial, NetworkCause::Other).retry_outcome(),
         Some(Outcome::Send(SendFailure::FailedDial))
     ));
     assert!(matches!(
-        Error::Transport(SendFailure::PossiblySent).retry_outcome(),
+        Error::Transport(SendFailure::PossiblySent, NetworkCause::Other).retry_outcome(),
         Some(Outcome::Send(SendFailure::PossiblySent))
     ));
     assert!(Error::Deadline.retry_outcome().is_none());
@@ -149,9 +150,7 @@ async fn refused_port_is_proven_dial_failure() {
     .await;
     assert!(matches!(
         result,
-        Err(Error::Transport(
-            super::product::retry::SendFailure::FailedDial
-        ))
+        Err(Error::Transport(SendFailure::FailedDial, _))
     ));
 }
 
@@ -163,7 +162,8 @@ async fn untrusted_tls_is_possibly_sent() {
     assert!(matches!(
         result,
         Err(Error::Transport(
-            super::product::retry::SendFailure::PossiblySent
+            SendFailure::PossiblySent,
+            NetworkCause::CertificateUnknownAuthority
         ))
     ));
 }
@@ -174,9 +174,7 @@ async fn close_after_head_is_possibly_sent() {
     let result = send(&client(&server), req(Method::GET, &server.origin), 10).await;
     assert!(matches!(
         result,
-        Err(Error::Transport(
-            super::product::retry::SendFailure::PossiblySent
-        ))
+        Err(Error::Transport(SendFailure::PossiblySent, _))
     ));
     assert_eq!(server.requests(), 1);
 }
@@ -194,9 +192,7 @@ async fn reset_during_request_body_is_possibly_sent() {
     assert!(received.await.is_ok());
     assert!(matches!(
         result,
-        Err(Error::Transport(
-            super::product::retry::SendFailure::PossiblySent
-        ))
+        Err(Error::Transport(SendFailure::PossiblySent, _))
     ));
 }
 

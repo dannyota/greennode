@@ -202,8 +202,9 @@ impl Output for Repositories {
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_slice(&response.body)
-                .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
+            response.decode_projection(|body| {
+                serde_json::from_slice(body).map_err(|_| Box::new(Error::new(ErrorClass::Api)))
+            })?;
         if keys
             .keys()
             .filter(|key| key.eq_ignore_ascii_case("data") || key.eq_ignore_ascii_case("listData"))
@@ -371,6 +372,26 @@ impl Client {
         .await
     }
 
+    async fn fallback_inventory<T: Output, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &'static str,
+        route: &'static str,
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+    ) -> Result<crate::wire::product::guard::Guarded<T>, Failure<O>> {
+        let op = Operation {
+            cap: 4 << 20,
+            ..read_operation(operation, route)
+        };
+        let inventory: InventoryReceipt<T> = self
+            .request(ctx, &op, &[], query, bytes::Bytes::new(), evidence)
+            .await?;
+        inventory
+            .proof
+            .ok_or_else(|| failure(operation::unsafe_guard_response(op.id)))
+    }
+
     async fn request_with_options<T: Output, O>(
         &self,
         ctx: &RequestContext,
@@ -440,6 +461,26 @@ impl Client {
 }
 
 #[derive(Default, Deserialize)]
+struct InventoryReceipt<T> {
+    #[serde(skip)]
+    proof: Option<crate::wire::product::guard::Guarded<T>>,
+}
+
+impl<T: Output> Output for InventoryReceipt<T> {
+    const SCHEMA: Shape<'static> = T::SCHEMA;
+
+    fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
+        let data = T::decode_response(op, response)?;
+        let receipt = response
+            .clean_receipt()
+            .ok_or_else(|| Box::new(operation::unsafe_guard_response(op.id)))?;
+        Ok(Self {
+            proof: Some(receipt.guard(data)),
+        })
+    }
+}
+
+#[derive(Default, Deserialize)]
 #[serde(transparent)]
 struct RegistryResponse<T>(T);
 
@@ -466,15 +507,14 @@ impl<T: Output> Output for RegistryResponse<T> {
         if matches!(op.class, Classification::Read) && !op.sensitive {
             return T::decode_response(op, response).map(Self);
         }
-        if op.allow_empty && response.body.is_empty() && op.success.contains(&response.status) {
+        if op.allow_empty && response.empty_body() && op.success.contains(&response.status) {
             return Ok(Self::default());
         }
         T::decode_response(op, response).map(Self).map_err(|error| {
             if !op.success.contains(&response.status) {
                 return error;
             }
-            let malformed =
-                serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err();
+            let malformed = response.malformed_json();
             let (operation, message) = if malformed && op.sensitive {
                 (op.id, "invalid JSON response; body withheld")
             } else if op.sensitive {
@@ -504,11 +544,13 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }
@@ -552,13 +594,14 @@ fn withhold_registry_error(operation: &Operation, error: Error) -> Error {
         return error;
     }
     match error.api_error() {
-        Some(api) if api.status().is_some() => Error::from_api(crate::ApiError::new(
+        Some(api) if api.observed_status().is_some() => Error::from_api(crate::ApiError::new(
             operation.id,
-            api.status(),
+            api.observed_status(),
             crate::error::SafeText::new(api.code(), &[]),
             crate::error::SafeText::new("registry response withheld", &[]),
             api.retryable(),
         ))
+        .retain_status_visibility(Some(api))
         .with_cause(error),
         _ => error,
     }
@@ -613,13 +656,13 @@ fn write_operation(
         retry: Retry::Once,
         success,
         allow_recovery: false,
-        no_redirect: true,
+        report_redirect: id == "containerregistry.CreateUser",
         ..read_operation(id, template)
     }
 }
 
 fn status(error: &Error) -> Option<u16> {
-    error.api_error().and_then(crate::ApiError::status)
+    error.api_error().and_then(crate::ApiError::observed_status)
 }
 
 fn is_server_error(error: &Error) -> bool {
@@ -635,14 +678,14 @@ fn create_failure<T>(failure: Failure<T>, message: &'static str) -> Failure<T> {
         return Failure::new(error, partial, dispatch);
     }
     let api = error.api_error();
-    let message = if let Some(api) = api.filter(|api| !api.message().is_empty()) {
-        format!("{message}: {}", api.message())
+    let message = if let Some(api) = api {
+        format!("{message}: {}", api.go_text())
     } else {
         message.to_owned()
     };
     let error = registry_error(
         api.map_or("", crate::ApiError::operation),
-        status(&error),
+        api.and_then(crate::ApiError::status),
         api.map_or("", crate::ApiError::code),
         &message,
     )

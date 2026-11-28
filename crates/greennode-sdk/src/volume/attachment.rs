@@ -250,7 +250,8 @@ impl Client {
                 Ok(()),
                 &evidence,
                 mutation,
-                "",
+                input.volume,
+                None,
                 WriteDispatch::NotSent,
             );
         }
@@ -277,8 +278,15 @@ impl Client {
             } else {
                 Settlement::Detached
             };
-            self.settle(ctx, input.volume, settlement, &mut volume, &mut evidence)
-                .await
+            self.settle(
+                ctx,
+                mutation.id,
+                input.volume,
+                settlement,
+                &mut volume,
+                &mut evidence,
+            )
+            .await
         };
         finish(
             AttachVolumeOutput {
@@ -288,7 +296,8 @@ impl Client {
             result,
             &evidence,
             mutation,
-            "run this operation again to check volume state",
+            input.volume,
+            None,
             WriteDispatch::MayHaveBeenSent,
         )
     }
@@ -417,15 +426,23 @@ impl Client {
             let result = if input.no_wait {
                 Ok(())
             } else {
-                self.settle(ctx, id, Settlement::Deleted, &mut volume, &mut evidence)
-                    .await
+                self.settle(
+                    ctx,
+                    DELETE.id,
+                    id,
+                    Settlement::Deleted,
+                    &mut volume,
+                    &mut evidence,
+                )
+                .await
             };
             finish(
                 DeleteVolumeOutput {},
                 result,
                 &evidence,
                 &DELETE,
-                "delete was sent and a rerun is safe",
+                id,
+                None,
                 WriteDispatch::MayHaveBeenSent,
             )
         })

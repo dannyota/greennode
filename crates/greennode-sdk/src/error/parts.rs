@@ -1,14 +1,22 @@
-use super::SafeText;
+use super::{ApiProvenance, SafeText};
 
 /// Sanitized details of a failed service request.
+#[derive(Clone)]
 pub struct ApiError {
     debug_reflected: bool,
     pub(super) operation: &'static str,
     pub(super) status: Option<u16>,
     pub(super) code: String,
+    pub(super) invalid_response: bool,
     pub(super) message: String,
     pub(super) retryable: bool,
     pub(super) public_route: bool,
+    pub(super) provenance: ApiProvenance,
+    pub(super) request_cause: Option<String>,
+    pub(super) message_is_formatted: bool,
+    pub(super) status_withheld: bool,
+    pub(super) operation_withheld: bool,
+    pub(super) display: super::display::DisplayOverride,
 }
 
 impl ApiError {
@@ -16,6 +24,7 @@ impl ApiError {
         self.debug_reflected |= super::detail::debug_reflects(self, reflects);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new(
         operation: &'static str,
         status: Option<u16>,
@@ -26,17 +35,7 @@ impl ApiError {
         let value = code.as_str();
         let code =
             if value.is_empty() || value == "null" || value == status.unwrap_or(0).to_string() {
-                match status {
-                    Some(400) => "BadRequest",
-                    Some(401) => "Unauthorized",
-                    Some(403) => "Forbidden",
-                    Some(404) => "NotFound",
-                    Some(409) => "Conflict",
-                    Some(429) => "Throttled",
-                    Some(500..) => "ServerError",
-                    Some(400..) => "ClientError",
-                    _ => "",
-                }
+                Self::fallback_code(status)
             } else {
                 value
             };
@@ -45,9 +44,16 @@ impl ApiError {
             operation,
             status,
             code: code.to_owned(),
+            invalid_response: code == "InvalidResponse",
             message: message.0,
             retryable,
             public_route: false,
+            provenance: ApiProvenance::from_fields(operation, status),
+            request_cause: None,
+            message_is_formatted: false,
+            status_withheld: false,
+            operation_withheld: false,
+            display: Default::default(),
         }
     }
     pub(crate) fn without_fallback(
@@ -61,19 +67,70 @@ impl ApiError {
             debug_reflected: false,
             operation,
             status,
+            invalid_response: code.as_str() == "InvalidResponse",
             code: code.0,
             message: message.0,
             retryable,
             public_route: false,
+            provenance: ApiProvenance::from_fields(operation, status),
+            request_cause: None,
+            message_is_formatted: false,
+            status_withheld: false,
+            operation_withheld: false,
+            display: Default::default(),
         }
+    }
+    pub(crate) fn with_formatted_message(mut self) -> Self {
+        self.message_is_formatted = true;
+        self
+    }
+
+    pub(crate) fn with_request_cause(mut self, cause: SafeText) -> Self {
+        self.request_cause = Some(cause.0);
+        if self.provenance != ApiProvenance::BareOverflow {
+            self.provenance = ApiProvenance::Transport;
+        }
+        self
+    }
+
+    pub(crate) fn is_client_rejection(&self) -> bool {
+        self.observed_response_status()
+            .is_some_and(|status| (400..500).contains(&status))
+    }
+
+    pub(crate) fn with_public_status_withheld(mut self) -> Self {
+        self.status_withheld = true;
+        self
+    }
+
+    pub(crate) fn observed_status(&self) -> Option<u16> {
+        self.status
+    }
+
+    pub(crate) fn is_for_operation(&self, operation: &str) -> bool {
+        self.operation == operation
+    }
+
+    pub(crate) fn go_text(&self) -> String {
+        self.to_string()
+    }
+
+    pub(crate) fn with_status_evidence(mut self) -> Self {
+        self.provenance = ApiProvenance::BareOverflow;
+        self
     }
     /// Returns the operation identifier.
     pub fn operation(&self) -> &'static str {
-        self.operation
+        if self.operation_withheld {
+            ""
+        } else {
+            self.operation
+        }
     }
-    /// Returns the HTTP status when a response was received.
+    /// Returns the public HTTP status. `None` also covers a received status withheld
+    /// by credential screening. A withheld status can still affect classification.
     pub fn status(&self) -> Option<u16> {
-        self.status
+        self.status.filter(|_| !self.status_withheld)
     }
     /// Returns the sanitized service code or a status-derived fallback, possibly empty.
     pub fn code(&self) -> &str {
@@ -95,8 +152,8 @@ crate::error::debug_record!(ApiError => |self, f| {
             return f.write_str("");
         }
         f.debug_struct("ApiError")
-            .field("operation", &self.operation)
-            .field("status", &self.status)
+            .field("operation", &self.operation())
+            .field("status", &self.status())
             .field("retryable", &self.retryable)
             .finish_non_exhaustive()
     })
@@ -174,13 +231,14 @@ crate::error::debug_record!(LoginError => |self, f| {
             return f.write_str("");
         }
         f.debug_struct("LoginError")
-            .field("status", &self.status)
+            .field("status", &self.status())
             .field("captcha_suspected", &self.captcha_suspected)
             .finish_non_exhaustive()
     })
 });
 
 /// Safe details of a service-account token exchange failure.
+#[derive(Clone)]
 pub struct ServiceAccountLoginError {
     debug_reflected: bool,
     pub(super) reason: &'static str,
@@ -213,7 +271,7 @@ crate::error::debug_record!(ServiceAccountLoginError => |self, f| {
             return f.write_str("");
         }
         f.debug_struct("ServiceAccountLoginError")
-            .field("status", &self.status)
+            .field("status", &self.status())
             .finish_non_exhaustive()
     })
 });

@@ -39,6 +39,28 @@ async fn server_inventory_accepts_eight_mib_boundary() {
 }
 
 #[tokio::test]
+async fn nat_inventory_checks_zone_before_pagination_without_echoing_the_id() {
+    let server = Server::start(Vec::new());
+    let config = Config::new(with_product_loopback(Product::Vnetwork, options(), &server)).unwrap();
+    let client = Client::new(&config);
+    let (ctx, _) = RequestContext::new();
+    let diagnostic = "vngcloud: invalid input: network.ListNATInstances requires ZoneID to match ^[A-Za-z0-9-]+$";
+    for zone_id in ["not/valid", "bad/toy-secret"] {
+        let input = ListNatInstancesInput {
+            zone_id: zone_id.into(),
+            page: -1,
+            ..Default::default()
+        };
+        let failure = client.list_nat_instances(&ctx, input).await.unwrap_err();
+        let error = failure.error();
+        assert_eq!(error.class(), ErrorClass::InvalidInput);
+        assert!(error.api_error().is_none());
+        assert!(error.detail::<String>().map(String::as_str) == Some(diagnostic));
+    }
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
 async fn nat_inventory_preserves_safe_peer_error_code() {
     let server = Server::start(vec![response(
         "404 Not Found",
@@ -228,14 +250,9 @@ async fn unpriced_quote_errors_screen_current_credentials() {
         .quote_create_nat_instance(&ctx, input)
         .await
         .unwrap_err();
-    assert!(
-        !failure
-            .error()
-            .api_error()
-            .unwrap()
-            .message()
-            .contains("refusing")
-    );
+    assert!(failure.error().has_identity(ErrorClass::Unpriced));
+    assert!(failure.error().api_error().is_none());
+    assert!(!failure.error().to_string().contains("refusing"));
 }
 
 #[tokio::test]

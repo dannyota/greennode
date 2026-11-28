@@ -9,7 +9,7 @@ use super::wire::{DETAIL_SHAPE, FromWire, Object, PAGE_SHAPE, Redact, ShapeResul
 use super::{Client, Read, Volume, output, page_query, path_id};
 
 const VOLUMES: Read = Read::vserver("volume.ListVolumes", "v2/{}/volumes", PAGE_SHAPE);
-const VOLUME: Read = Read::vserver("volume.GetVolume", "v2/{}/volumes/{}", DETAIL_SHAPE);
+pub(super) const VOLUME: Read = Read::vserver("volume.GetVolume", "v2/{}/volumes/{}", DETAIL_SHAPE);
 const UNDERLYING: Read = Read::vserver(
     "volume.GetUnderlyingVolume",
     "v2/{}/volumes/{}/mapping",
@@ -167,7 +167,9 @@ impl Client {
         let project = self.project(ctx, evidence).await?;
         let (volume, attachment_known) = self
             .read_value(ctx, VOLUME, &[&project, id], &[], evidence, |raw, names| {
-                let raw = Object::parse(raw, names)?.get("data")?.ok_or(())?;
+                let raw = Object::parse(raw, names)?
+                    .get("data")?
+                    .ok_or(super::wire::ShapeIssue::Invalid)?;
                 let volume = Volume::from_wire(raw, names)?;
                 let fields = Object::parse(raw, names)?;
                 let attachment_known = fields.entry("serverId")?.is_some()
@@ -175,7 +177,7 @@ impl Client {
                     && volume.server_id_list.as_ref().is_some_and(Vec::is_empty)
                     && volume.server_name_list.as_ref().is_none_or(Vec::is_empty);
                 if volume.uuid != id {
-                    return Err(());
+                    return Err(super::wire::ShapeIssue::Invalid);
                 }
                 Ok((volume, attachment_known))
             })

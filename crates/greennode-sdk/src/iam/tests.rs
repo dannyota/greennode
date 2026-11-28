@@ -17,8 +17,12 @@ fn response(status: &str, body: &[u8]) -> Response {
 }
 
 fn client(server: &Server, bearer: &str) -> Client {
+    client_with_options(server, bearer, ConfigOptions::default())
+}
+
+fn client_with_options(server: &Server, bearer: &str, options: ConfigOptions) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_region("han-1".into())
             .with_project_id("unscoped".into())
             .with_static_token(Secret::new(bearer))
@@ -174,6 +178,20 @@ async fn user_decodes_go_strings_and_validates_types_without_error_details() {
         assert!(partial.is_none());
         assert_eq!(dispatch, WriteDispatch::NotAWrite);
     }
+}
+
+#[tokio::test]
+async fn service_account_error_screening_covers_the_rebuilt_status_suffix() {
+    let server = Server::start(vec![response("403 Forbidden", br#"{"message":"denied"}"#)]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "403)")
+        .get_service_account(&ctx, GetServiceAccountInput::new("sa-1"))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(403));
+    assert!(!api.message().contains("403)"));
+    assert!(!api.to_string().contains("403)"));
 }
 
 #[tokio::test]

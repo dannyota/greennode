@@ -19,6 +19,8 @@ pub(crate) enum Refusal {
     Limit,
     Invalid,
     Origin,
+    Scheme,
+    CrossHost(Box<(String, String)>),
     Userinfo,
     Fragment,
     Cycle,
@@ -26,6 +28,47 @@ pub(crate) enum Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "redirect refused: {self:?}")
+    }
+}
+
+pub(super) fn describe_origin(
+    current: &Url,
+    location: &str,
+    credentials: &super::sender::SentCredentials,
+) -> Refusal {
+    use url::Position::{AfterPort, BeforeHost};
+    let Ok(next) = current.join(location) else {
+        return Refusal::Invalid;
+    };
+    let from = &current[BeforeHost..AfterPort];
+    let to = &next[BeforeHost..AfterPort];
+    if from == to {
+        return Refusal::Scheme;
+    }
+    let screen = |host: &str| {
+        if host.len() > 253 || super::response::reflects_identifier(host, credentials) {
+            "[redacted]".to_owned()
+        } else {
+            host.to_owned()
+        }
+    };
+    Refusal::CrossHost(Box::new((screen(from), screen(to))))
+}
+
+impl Refusal {
+    pub(super) fn cause(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Limit => "stopped after 10 redirects".into(),
+            Self::Cycle => "redirect cycle refused".into(),
+            Self::Scheme => "redirect scheme change refused".into(),
+            Self::CrossHost(hosts) => format!(
+                "redirected from {} to {}: cross-host redirect refused",
+                crate::go_text::go_quote(&hosts.0),
+                crate::go_text::go_quote(&hosts.1)
+            )
+            .into(),
+            _ => "network request failed".into(),
+        }
     }
 }
 
@@ -43,19 +86,11 @@ pub(crate) fn decide(
     visited: &HashSet<Url>,
     location: &str,
 ) -> Result<Url, Refusal> {
-    if !matches!(operation.class, Classification::Read) {
-        return Err(Refusal::Operation);
-    }
-    if !matches!(*operation.method, Method::GET | Method::HEAD) {
-        return Err(Refusal::Operation);
-    }
-    if matches!(operation.retry, Retry::Once) {
-        return Err(Refusal::Operation);
-    }
-    if operation.no_redirect {
-        return Err(Refusal::Operation);
-    }
-    if hops >= 9 {
+    let permitted = matches!(operation.class, Classification::Read)
+        && matches!(*operation.method, Method::GET | Method::HEAD)
+        && !matches!(operation.retry, Retry::Once)
+        && !operation.no_redirect;
+    if permitted && hops >= 9 {
         return Err(Refusal::Limit);
     }
     if location.contains('#') {
@@ -68,15 +103,6 @@ pub(crate) fn decide(
         return Err(Refusal::Invalid);
     }
     let next = current.join(location).map_err(|_| Refusal::Invalid)?;
-    if current.scheme() != next.scheme() {
-        return Err(Refusal::Origin);
-    }
-    if current.host() != next.host() {
-        return Err(Refusal::Origin);
-    }
-    if current.port_or_known_default() != next.port_or_known_default() {
-        return Err(Refusal::Origin);
-    }
     if !next.username().is_empty() || next.password().is_some() {
         return Err(Refusal::Userinfo);
     }
@@ -118,6 +144,18 @@ pub(crate) fn decide(
         .join("/");
     crate::endpoint::Base::parse(&format!("https://example.test/{path}"))
         .map_err(|_| Refusal::Invalid)?;
+    if !permitted {
+        return Err(Refusal::Operation);
+    }
+    if current.scheme() != next.scheme() {
+        return Err(Refusal::Origin);
+    }
+    if current.host() != next.host() {
+        return Err(Refusal::Origin);
+    }
+    if current.port_or_known_default() != next.port_or_known_default() {
+        return Err(Refusal::Origin);
+    }
     let origin_and_path = &next[..url::Position::AfterPath];
     crate::endpoint::Base::parse(origin_and_path).map_err(|_| Refusal::Invalid)?;
     if visited.contains(&next) || next == *current {
@@ -248,6 +286,30 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn cycle_and_hop_limit_have_distinct_diagnostics() {
+        let cycle = run(
+            Classification::Read,
+            Method::GET,
+            Retry::Repeatable,
+            1,
+            &["https://example.test/a/start"],
+            "/a/start",
+        )
+        .unwrap_err();
+        let limit = run(
+            Classification::Read,
+            Method::GET,
+            Retry::Repeatable,
+            9,
+            &[],
+            "/next",
+        )
+        .unwrap_err();
+        assert_eq!(cycle.cause(), "redirect cycle refused");
+        assert_eq!(limit.cause(), "stopped after 10 redirects");
+    }
+
     #[test]
     fn hop_limit() {
         assert!(

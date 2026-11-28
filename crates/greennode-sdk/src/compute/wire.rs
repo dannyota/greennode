@@ -10,7 +10,7 @@ use crate::wire::product::{
     operation::{self, GuardOperation, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::wire::strict_json::{self, FieldNames, field_matches};
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, error::SafeText};
@@ -28,7 +28,7 @@ pub(super) struct GuardRead<'a>(pub(super) &'a Read);
 
 pub(super) struct Read {
     pub(super) id: &'static str,
-    template: &'static str,
+    pub(super) template: &'static str,
     style: ReadStyle,
 }
 
@@ -270,11 +270,13 @@ impl Client {
             allow_recovery: true,
             allow_empty: true,
             no_output: false,
-            keep_status: protected,
-            overflow_overrides_status: protected,
+            keep_status: false,
+            raw_body: false,
+            overflow_overrides_status: matches!(read.style, ReadStyle::Console),
             sensitive: protected,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
+            report_redirect: protected,
             retry_config: retry::Config::default(),
         };
         let guarded;
@@ -298,10 +300,7 @@ impl Client {
         .await;
         let response = result.map_err(|error| {
             let error = error.into_parts().0;
-            let status = error
-                .api_error()
-                .and_then(ApiError::status)
-                .or_else(|| error.http_status().map(|status| status.as_u16()));
+            let status = error.api_error().and_then(ApiError::observed_status);
             if error.is_body_too_large() {
                 return failure(match read.style {
                     ReadStyle::Console => api(
@@ -322,52 +321,58 @@ impl Client {
                     ReadStyle::Plain => evidence.screen_error(error),
                 });
             }
-            if read.style == ReadStyle::Console && status.is_some() {
+            if matches!(read.style, ReadStyle::Console) && status.is_some() {
                 return failure(console_status(read, status, evidence));
             }
             failure(evidence.screen_error(error))
         })?;
-        if read.style == ReadStyle::Console && response.status != StatusCode::OK {
+        if matches!(read.style, ReadStyle::Console) && response.status != StatusCode::OK {
             return Err(failure(console_status(
                 read,
                 Some(response.status.as_u16()),
                 evidence,
             )));
         }
-        let body = response::classify(
-            read.id,
-            response.status,
-            Bytes::copy_from_slice(&response.body),
-            operation.success,
-            (true, protected, operation.retry),
-            evidence.credentials(),
-        )
-        .map_err(|error| failure(evidence.screen_error(*error)))?;
-        if body.is_empty() && !protected {
-            return Ok(Envelope::default());
-        }
-        let text = go_json(&body);
-        let syntax_error = || {
-            failure(if read.style == ReadStyle::Console {
-                read.invalid(evidence)
-            } else {
-                read.decode_error(evidence)
+        response
+            .classify(
+                read.id,
+                operation.success,
+                (true, protected, operation.retry),
+                false,
+            )
+            .map_err(|error| {
+                let error = error.with_clean_absence(response.clean_absence());
+                failure(evidence.screen_error(error))
+            })?;
+        response
+            .decode_projection(|body| {
+                if body.is_empty() && !protected {
+                    return Ok(Envelope::default());
+                }
+                let text = go_json(body);
+                let syntax_error = || {
+                    Box::new(if matches!(read.style, ReadStyle::Console) {
+                        read.invalid(evidence)
+                    } else {
+                        read.decode_error(evidence)
+                    })
+                };
+                let raw = serde_json::from_str::<&RawValue>(&text).map_err(|_| syntax_error())?;
+                strict_json::validate(raw.get().as_bytes(), &[], operation.cap)
+                    .map_err(|_| Box::new(read.invalid(evidence)))?;
+                let fields = serde_json::from_str::<Option<_>>(raw.get())
+                    .map_err(|_| Box::new(read.invalid(evidence)))?;
+                Ok(Envelope {
+                    fields: fields.unwrap_or_default(),
+                    original: Bytes::copy_from_slice(body),
+                    names: if guard {
+                        FieldNames::Canonical
+                    } else {
+                        evidence.field_names()
+                    },
+                })
             })
-        };
-        let raw = serde_json::from_str::<&RawValue>(&text).map_err(|_| syntax_error())?;
-        strict_json::validate(raw.get().as_bytes(), &[], operation.cap)
-            .map_err(|_| failure(read.invalid(evidence)))?;
-        let fields = serde_json::from_str::<Option<_>>(raw.get())
-            .map_err(|_| failure(read.invalid(evidence)))?;
-        Ok(Envelope {
-            fields: fields.unwrap_or_default(),
-            original: body,
-            names: if guard {
-                FieldNames::Canonical
-            } else {
-                evidence.field_names()
-            },
-        })
+            .map_err(|error| failure(*error))
     }
 }
 

@@ -6,6 +6,7 @@ mod cost;
 mod envelope;
 mod history;
 mod model;
+mod response_validation;
 #[cfg(test)]
 mod tests;
 mod threshold_writes;
@@ -39,12 +40,14 @@ pub use threshold_writes::{
 
 use crate::config::Session;
 use crate::wire::product::{
+    evidence::Evidence,
     operation::{self, Operation},
+    options::Options,
     redirect::{Classification, Retry},
     retry,
 };
 use crate::{Config, Error, ErrorClass, Failure, List, RequestContext, WriteDispatch};
-use envelope::{BudgetData, Envelope, invalid_response};
+use envelope::{BudgetData, Envelope, read_failure_response};
 use http::{Method, StatusCode};
 use serde::Serialize;
 use std::sync::Arc;
@@ -156,6 +159,18 @@ impl Client {
         path: &[&str],
         query: &[(&str, &str)],
     ) -> Result<T, Failure<O>> {
+        self.read_output::<Envelope<T>, O>(ctx, operation, path, query)
+            .await
+            .map(|envelope| envelope.data)
+    }
+
+    async fn read_output<T: operation::Output, O>(
+        &self,
+        ctx: &RequestContext,
+        operation: &Operation,
+        path: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T, Failure<O>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         let session = &self.session;
         let base = session
@@ -167,31 +182,23 @@ impl Client {
         let runtime = session
             .runtime(ctx, &mut jitter)
             .map_err(|error| failure(*error))?;
-        operation::execute::<Envelope<T>>(
+        let mut evidence = Evidence::new();
+        operation::execute_with_evidence::<T>(
             runtime,
             base,
             operation,
+            &Options::DEFAULT,
             path,
             query,
             session.bearer_source(),
             bytes::Bytes::new(),
+            &mut evidence,
         )
         .await
-        .map(|(_, envelope)| envelope.data)
+        .map(|(_, output)| output)
         .map_err(|error| {
             let (error, _, dispatch) = error.into_parts();
-            let error = match error.http_status() {
-                Some(status)
-                    if status.is_success()
-                        && error.class() == ErrorClass::Api
-                        && error
-                            .api_error()
-                            .is_none_or(|api| api.code() != "InvalidResponse") =>
-                {
-                    invalid_response(operation, status, error.is_body_too_large()).with_cause(error)
-                }
-                _ => error,
-            };
+            let error = evidence.screen_error(read_failure_response(operation, error));
             Failure::new(error, None, dispatch)
         })
     }
@@ -210,10 +217,12 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_empty: false,
         no_output: false,
         keep_status: true,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }

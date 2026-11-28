@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 
 use greennode_sdk::{Error, ErrorClass};
@@ -60,7 +61,7 @@ pub fn validate_rules(rules: &[Rule]) -> bool {
 
 pub struct Envelope<'a> {
     pub code: &'a str,
-    pub message: &'a str,
+    pub message: Cow<'a, str>,
     pub status: Option<u16>,
     pub operation: Option<&'a str>,
 }
@@ -68,6 +69,16 @@ pub struct Envelope<'a> {
 pub struct Classified<'a> {
     pub envelope: Envelope<'a>,
     pub exit: u8,
+    pub(crate) fixed_message: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NameSource {
+    Outcome(ErrorClass),
+    NotFound,
+    Api,
+    TokenCache,
+    Local,
 }
 
 pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
@@ -79,39 +90,47 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         .min_by_key(|name| name.rank);
     let matches_exit = |exit| matching.clone().any(|rule| rule.exit == Some(exit));
     let status = api
-        .and_then(|api| api.status())
+        .and_then(greennode_sdk::ApiError::response_status)
         .filter(|status| *status > 0);
     let has = |class| error.has_identity(class);
-    let not_found = has(ErrorClass::NotFound) || status == Some(404);
+    let not_found = error.has_class(ErrorClass::NotFound);
     let outcome = OUTCOME_NAMES.into_iter().find(|(_, class, _)| has(*class));
-    let (rank, code) = if let Some((rank, _, code)) = outcome {
-        (rank, code)
+    let (rank, code, source) = if let Some((rank, class, code)) = outcome {
+        (rank, code, NameSource::Outcome(class))
     } else if not_found {
-        (NOT_FOUND_RANK, "NotFound")
+        (NOT_FOUND_RANK, "NotFound", NameSource::NotFound)
     } else if let Some(api) = api {
         let code = if api.code().is_empty() {
             "RequestFailed"
         } else {
             api.code()
         };
-        (51, code)
+        (51, code, NameSource::Api)
     } else if has(ErrorClass::NoCredentials) || has(ErrorClass::CredentialsFile) {
-        (52, "NoCredentials")
+        (52, "NoCredentials", NameSource::Local)
     } else if has(ErrorClass::TokenCache) {
-        (53, "TokenCacheFailed")
+        (53, "TokenCacheFailed", NameSource::TokenCache)
     } else if error.service_account_login_error().is_some() {
-        (54, "ServiceAccountLoginFailed")
-    } else if error.login_error().is_some() || has(ErrorClass::Auth) {
-        (55, "LoginFailed")
+        (54, "ServiceAccountLoginFailed", NameSource::Local)
+    } else if error.login_error().is_some()
+        || (has(ErrorClass::Auth)
+            && error
+                .detail::<greennode_sdk::SanitizedAuthentication>()
+                .is_none())
+    {
+        (55, "LoginFailed", NameSource::Local)
     } else if has(ErrorClass::InvalidInput) {
-        (56, "InvalidUsage")
+        (56, "InvalidUsage", NameSource::Local)
     } else if has(ErrorClass::InvalidConfig) || has(ErrorClass::ProjectAmbiguous) {
-        (57, "InvalidConfig")
+        (57, "InvalidConfig", NameSource::Local)
     } else {
-        (PAGE_FORMAT_RANK + 1, "RequestFailed")
+        (PAGE_FORMAT_RANK + 1, "RequestFailed", NameSource::Local)
     };
     let name = name.filter(|name| name.rank < rank);
     let code = name.map_or(code, |name| name.code);
+    let token_cache_message = name.is_none() && source == NameSource::TokenCache;
+    let recovery_message = error.recovery_diagnostic();
+    let fixed_message = token_cache_message || recovery_message.is_some();
     let exit = if matches_exit(RuleExit::Failure)
         || has(ErrorClass::NotSettled)
         || has(ErrorClass::Failed)
@@ -125,7 +144,7 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
         || has(ErrorClass::Auth)
         || error.login_error().is_some()
         || error.service_account_login_error().is_some()
-        || status == Some(401)
+        || error.is_http_unauthorized()
     {
         3
     } else if matches_exit(RuleExit::NotFound) || not_found {
@@ -139,10 +158,9 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
     } else {
         1
     };
-    let message = matching
-        .clone()
-        .filter_map(|rule| rule.message)
-        .next()
+    let message = token_cache_message
+        .then_some("vngcloud: token cache unavailable")
+        .or_else(|| matching.clone().find_map(|rule| rule.message))
         .or_else(|| {
             error
                 .detail::<greennode_sdk::tagging::SystemTagText>()
@@ -154,21 +172,50 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
                 .map(|advice| advice.message())
         })
         .or_else(|| {
+            has(ErrorClass::EstimateLimit)
+                .then(|| error.local_diagnostic())
+                .flatten()
+        })
+        .or_else(|| {
             api.map(|api| api.message())
                 .filter(|message| !message.is_empty())
-                .or_else(|| {
-                    error
-                        .service_account_login_error()
-                        .map(|login| login.reason())
-                })
-                .or_else(|| error.login_error().map(|login| login.reason()))
-                .or_else(|| {
-                    error
-                        .detail::<greennode_sdk::Diagnostic>()
-                        .map(|detail| detail.message())
-                })
         })
-        .unwrap_or_else(|| error.diagnostic_fallback());
+        .map(Cow::Borrowed)
+        .or_else(|| {
+            error
+                .service_account_login_error()
+                .map(|login| Cow::Owned(login.to_string()))
+        })
+        .or_else(|| {
+            error
+                .login_error()
+                .map(|login| Cow::Owned(login.to_string()))
+        })
+        .or_else(|| {
+            error
+                .detail::<greennode_sdk::Diagnostic>()
+                .map(|detail| Cow::Borrowed(detail.message()))
+        })
+        .unwrap_or_else(|| {
+            if let Some(api) = api.filter(|api| {
+                api.status().is_none_or(|status| {
+                    (200..300).contains(&status) && api.operation().starts_with("billing.")
+                })
+            }) {
+                return Cow::Owned(api.to_string());
+            }
+            Cow::Borrowed(match error.class() {
+                ErrorClass::InvalidInput => "vngcloud: invalid input",
+                ErrorClass::Cancelled => "context canceled",
+                ErrorClass::DeadlineExceeded => "context deadline exceeded",
+                _ => error.diagnostic_fallback(),
+            })
+        });
+    let message = match recovery_message.filter(|message| !message.is_empty()) {
+        Some(guidance) if message.is_empty() => Cow::Borrowed(guidance),
+        Some(guidance) => Cow::Owned(format!("{message}\n{guidance}")),
+        None => message,
+    };
     let (status, operation) = match name {
         Some(name) => (
             name.include_api_status.then_some(status).flatten(),
@@ -178,11 +225,12 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
                 RuleOperation::Api => api.map(|api| api.operation()),
             },
         ),
-        None if api.is_some()
-            && (code == "NotFound"
-                || code == "HistoryIncomplete"
-                || code == "RequestFailed"
-                || code == api.map_or("", |api| api.code())) =>
+        None if matches!(
+            source,
+            NameSource::Api
+                | NameSource::NotFound
+                | NameSource::Outcome(ErrorClass::HistoryIncomplete)
+        ) =>
         {
             (
                 status,
@@ -199,6 +247,7 @@ pub fn classify<'a>(error: &'a Error, rules: &'a [Rule]) -> Classified<'a> {
             operation,
         },
         exit,
+        fixed_message,
     }
 }
 
@@ -226,7 +275,7 @@ pub fn write_error(writer: &mut dyn Write, envelope: &Envelope<'_>) {
     let _ = write!(writer, "{{\"error\":{{\"code\":");
     let _ = write_string(writer, envelope.code);
     let _ = write!(writer, ",\"message\":");
-    let _ = write_string(writer, envelope.message);
+    let _ = write_string(writer, &envelope.message);
     if let Some(status) = envelope.status {
         let _ = write!(writer, ",\"status\":{status}");
     }
@@ -239,13 +288,43 @@ pub fn write_error(writer: &mut dyn Write, envelope: &Envelope<'_>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn peer_code_cannot_add_metadata_to_a_typed_outcome() {
+        use greennode_sdk::testing::{api, cause, identity};
+        let mut mismatches = Vec::new();
+        for (class, code) in [
+            (greennode_sdk::ErrorClass::NotSettled, "NotSettled"),
+            (greennode_sdk::ErrorClass::Failed, "WriteFailed"),
+            (greennode_sdk::ErrorClass::PriceAboveMax, "PriceAboveMax"),
+            (greennode_sdk::ErrorClass::Unpriced, "Unpriced"),
+        ] {
+            let error = cause(
+                identity(class),
+                api("test.operation", Some(500), code, "safe provider message"),
+            );
+            let result = super::classify(&error, &[]);
+            if (
+                result.envelope.code,
+                result.envelope.status,
+                result.envelope.operation,
+            ) != (code, None, None)
+            {
+                mismatches.push(code);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "unexpected HTTP metadata: {mismatches:?}"
+        );
+    }
+
     use super::{Envelope, write_error};
 
     #[test]
     fn error_envelope_uses_go_json_escaping() {
         let envelope = Envelope {
             code: "<code>",
-            message: "missing <path> & \"file\"\n\u{2028}\u{2029}\u{007f}",
+            message: "missing <path> & \"file\"\n\u{2028}\u{2029}\u{007f}".into(),
             status: Some(400),
             operation: Some("a&b"),
         };

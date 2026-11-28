@@ -1,10 +1,11 @@
 use crate::wire::product::{
+    DiscoveryDocument,
     evidence::Evidence,
-    operation::{self, Operation, Output},
+    operation::{self, Operation},
     options::{Options, Pacing},
     redirect::{Classification, Retry},
-    retry,
-    sender::{BearerSource, Response, Runtime, SentCredentials},
+    retry, screened_discovery_stream,
+    sender::{BearerSource, Runtime, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
 use crate::{Clock, Error, ErrorClass, Project, RequestContext};
@@ -23,6 +24,7 @@ pub(crate) enum ProjectRead {
 
 pub(crate) trait InventoryLimits: Send {
     fn reserve(&mut self) -> Result<(), Box<Error>>;
+    fn check_bytes(&self, bytes: usize) -> Result<(), Box<Error>>;
     fn account(&mut self, rows: usize, bytes: usize) -> Result<(), Box<Error>>;
     fn pacing(&self) -> &Pacing;
 }
@@ -130,18 +132,8 @@ impl Discovery {
         if let Some(limits) = limits.as_deref_mut() {
             limits.reserve()?;
         }
-        let (projects, rows, bytes) = read_projects_with_evidence(
-            runtime,
-            base,
-            source,
-            region,
-            evidence,
-            limits.as_ref().map(|limit| limit.pacing()),
-        )
-        .await?;
-        if let Some(limits) = limits {
-            limits.account(rows, bytes)?;
-        }
+        let projects =
+            read_projects_with_evidence(runtime, base, source, region, evidence, limits).await?;
         let selected = select(projects, region, state.as_ref())?;
         if evidence.id_reflects(&selected.id) {
             return Err(invalid_response(StatusCode::OK));
@@ -164,9 +156,7 @@ pub(crate) async fn read_projects(
     source: &dyn BearerSource,
     region: &str,
 ) -> Result<Vec<Project>, Box<Error>> {
-    read_projects_with_evidence(runtime, base, source, region, &mut Evidence::new(), None)
-        .await
-        .map(|(projects, _, _)| projects)
+    read_projects_with_evidence(runtime, base, source, region, &mut Evidence::new(), None).await
 }
 
 async fn read_projects_with_evidence(
@@ -175,12 +165,16 @@ async fn read_projects_with_evidence(
     source: &dyn BearerSource,
     region: &str,
     evidence: &mut Evidence,
-    pacing: Option<&Pacing>,
-) -> Result<(Vec<Project>, usize, usize), Box<Error>> {
-    let (_, inventory) = operation::execute_with_evidence::<Inventory>(
+    limits: Option<&mut dyn InventoryLimits>,
+) -> Result<Vec<Project>, Box<Error>> {
+    let op = projects_operation();
+    let ctx = runtime.ctx;
+    let clock = runtime.clock;
+    let pacing = limits.as_deref().map(InventoryLimits::pacing);
+    let (status, document) = operation::execute_with_evidence::<DiscoveryDocument>(
         runtime,
         base,
-        &projects_operation(),
+        &op,
         &Options {
             pacing,
             project_discovery: true,
@@ -194,17 +188,30 @@ async fn read_projects_with_evidence(
         evidence,
     )
     .await
-    .map_err(|failure| {
-        let (error, _, _) = failure.into_parts();
-        if error.class() == ErrorClass::Api
-            && error.http_status() == Some(StatusCode::OK)
-            && !error.is_body_too_large()
-        {
-            invalid_response(StatusCode::OK)
-        } else {
-            Box::new(error)
+    .map_err(|failure| Box::new(failure.into_parts().0))?;
+    if let Some(limits) = limits.as_deref() {
+        if let Some(end) = ctx.check(clock) {
+            return Err(Box::new(end.into()));
         }
-    })?;
+        limits.check_bytes(document.raw_len)?;
+    }
+    let raw = document.raw.ok_or_else(|| invalid_response(status))?;
+    if evidence.guards_reads()
+        && crate::wire::strict_json::FieldNames::Canonical
+            .has_case_variant(raw.get().as_bytes(), &Inventory::SCHEMA)
+    {
+        return Err(Box::new(
+            operation::unsafe_guard_response(LIST_PROJECTS).with_http_status(status),
+        ));
+    }
+    crate::wire::strict_json::validate_shape(
+        raw.get().as_bytes(),
+        &Inventory::SCHEMA,
+        raw.get().len(),
+    )
+    .map_err(|_| invalid_response(status))?;
+    let inventory: Inventory =
+        serde_json::from_str(raw.get()).map_err(|_| invalid_response(status))?;
     let mut ids = HashSet::new();
     let mut projects = inventory
         .projects
@@ -237,7 +244,7 @@ async fn read_projects_with_evidence(
         }
         project.region == region
     });
-    let credentials = &inventory.credentials;
+    let credentials = &document.credentials;
     if (!projects.is_empty() && credentials.reflects(region.as_bytes()))
         || projects
             .iter()
@@ -245,7 +252,10 @@ async fn read_projects_with_evidence(
     {
         return Err(invalid_response(StatusCode::OK));
     }
-    Ok((projects, rows, inventory.bytes))
+    if let Some(limits) = limits {
+        limits.account(rows, document.raw_len)?;
+    }
+    Ok(projects)
 }
 
 const LIST_PROJECTS: &str = "project.ListProjects";
@@ -291,11 +301,13 @@ fn projects_operation() -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }
@@ -303,15 +315,11 @@ fn projects_operation() -> Operation {
 #[derive(Default, serde::Deserialize)]
 struct Inventory {
     projects: Option<Vec<Project>>,
-    #[serde(skip)]
-    credentials: SentCredentials,
-    #[serde(skip)]
-    bytes: usize,
     #[serde(flatten)]
     extra: BTreeMap<String, serde_json::Value>,
 }
 
-impl Output for Inventory {
+impl Inventory {
     const SCHEMA: Shape<'static> = Shape::Object(&[ShapeField {
         name: "projects",
         shape: Shape::Array(&Shape::Object(&[
@@ -341,14 +349,6 @@ impl Output for Inventory {
             },
         ])),
     }]);
-
-    fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        Ok(Self {
-            credentials: response.credentials.clone(),
-            bytes: response.body.len(),
-            ..operation::decode_response(operation, response)?
-        })
-    }
 }
 
 #[cfg(test)]
@@ -358,12 +358,10 @@ fn guard_estimate_project_response(
     _: &'static str,
     status: StatusCode,
     body: &[u8],
-    _: &SentCredentials,
-    _: &SentCredentials,
+    known: &SentCredentials,
+    sent: &SentCredentials,
 ) -> Option<Box<Error>> {
-    (!PROJECTS_OK.contains(&status)
-        && !body.iter().all(u8::is_ascii_whitespace)
-        && serde_json::from_str::<&serde_json::value::RawValue>(&crate::model::wire::go_json(body))
-            .is_err())
-    .then(|| invalid_response(status))
+    screened_discovery_stream(body, known, sent, true)
+        .is_none()
+        .then(|| invalid_response(status))
 }

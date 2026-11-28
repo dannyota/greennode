@@ -218,3 +218,38 @@ async fn database_reads_and_api_errors() {
         assert!(server.heads()[0].starts_with(format!("GET {path} ").as_bytes()));
     }
 }
+
+#[tokio::test]
+async fn database_detail_reports_an_oversized_200_as_invalid_response() {
+    let server = Server::start(vec![Server::oversized("200 OK")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_database_instance(&ctx, GetDatabaseInstanceInput { id: "db-1".into() })
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code()),
+        ("GetDatabaseInstance", Some(200), "InvalidResponse")
+    );
+}
+
+#[tokio::test]
+async fn database_detail_oversized_redirect_is_withheld_without_status() {
+    let server = Server::start(vec![Server::oversized("302 Found")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .get_database_instance(&ctx, GetDatabaseInstanceInput { id: "db-1".into() })
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code(), api.message()),
+        (
+            "GetDatabaseInstance",
+            None,
+            "",
+            "request failed; response withheld"
+        )
+    );
+}

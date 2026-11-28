@@ -615,10 +615,12 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_empty: true,
         no_output: false,
         keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }

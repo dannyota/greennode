@@ -553,3 +553,49 @@ async fn database_indeterminate_404_retains_status_without_confirming_absence() 
     assert!(!failure.partial().unwrap().deleted);
     assert_eq!(server.requests(), 7);
 }
+
+#[tokio::test]
+async fn delete_preserves_the_sender_refusal_before_mutation() {
+    let server = Server::start(delete_reads(br#"{"code":200,"data":[]}"#));
+    let config = Config::new(with_write_loopback(
+        Product::Database,
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("project-1".into())
+            .with_static_token(Secret::new("dbaas")),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let failure = Client::new(&config)
+        .delete_database_instance(&ctx, DeleteDatabaseInstanceInput::new("db-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 5);
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
+    assert!(failure.error().api_error().is_none());
+}
+
+#[tokio::test]
+async fn delete_cannot_confirm_absence_from_an_oversized_404() {
+    let mut responses = delete_reads(br#"{"code":200,"data":[]}"#);
+    responses.extend([
+        response("204 No Content", b""),
+        Server::oversized("404 Not Found"),
+    ]);
+    let server = Server::start(responses);
+    let (ctx, _) = RequestContext::new();
+    let result = fixture(&server)
+        .delete_database_instance(&ctx, DeleteDatabaseInstanceInput::new("db-1"))
+        .await;
+    let failure = result.unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(
+        failure.error().http_status(),
+        Some(http::StatusCode::NOT_FOUND)
+    );
+    assert!(!failure.partial().unwrap().deleted);
+    assert_eq!(server.requests(), 7);
+}

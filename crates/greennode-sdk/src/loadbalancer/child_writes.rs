@@ -12,15 +12,13 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::wire::strict_json::{Shape, field_matches};
 use crate::{ApiError, ContextEnd, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::deletes::{context_error, local, safe_text};
-use super::wire::{
-    CompleteNotFound, DecodeError, Envelope, Read, invalid_input, screen_input, validate_ids,
-};
+use super::wire::{DecodeError, Envelope, Read, invalid_input, screen_input, validate_ids};
 use super::{Client, WriteError, ZonedLoadBalancer, guard};
 
 pub(super) const INTERVAL: Duration = Duration::from_secs(5);
@@ -30,8 +28,7 @@ const LOAD_BALANCER: Read = Read {
     route: "v2/{}/loadBalancers/{}",
 };
 
-#[derive(Debug)]
-pub(super) struct BusyRefusal;
+pub(super) use super::write::BusyRefusal;
 #[derive(Debug)]
 pub(super) struct CompleteRefusal;
 
@@ -55,6 +52,7 @@ pub(super) struct ChildWriter<'a> {
     pub(super) lb_id: &'a str,
     pub(super) evidence: Evidence,
     pub(super) report_redirect: bool,
+    acknowledgement: Option<crate::wire::product::guard::AcknowledgedId>,
 }
 
 pub(super) struct Ready {
@@ -88,6 +86,7 @@ impl<'a> ChildWriter<'a> {
             lb_id,
             evidence,
             report_redirect: false,
+            acknowledgement: None,
         })
     }
 
@@ -223,11 +222,23 @@ impl<'a> ChildWriter<'a> {
                 .wait(clock)
                 .await;
             self.confirm_time(ctx, wait, target)?;
+            self.check_acknowledgement(target)?;
             let data = self.read_data(wait, target.read, target.ids).await;
             self.confirm_time(ctx, wait, target)?;
+            self.check_acknowledgement(target)?;
             let data = match data {
                 Ok(data) => data,
-                Err(error) if creating && error.detail::<CompleteNotFound>().is_some() => continue,
+                Err(error)
+                    if creating
+                        && crate::confirms_absence(
+                            &error,
+                            target.read.id,
+                            "GET",
+                            target.read.route,
+                        ) =>
+                {
+                    continue;
+                }
                 Err(error) => return Err(self.unconfirmed(target, *error)),
             };
             let row: T = guard::parse(target.read, &data, target.shape, &self.evidence)
@@ -246,6 +257,7 @@ impl<'a> ChildWriter<'a> {
             let parent = if created {
                 let parent = self.parent(wait).await;
                 self.confirm_time(ctx, wait, target)?;
+                self.check_acknowledgement(target)?;
                 Some(parent.map_err(|error| self.unconfirmed(target, *error))?)
             } else {
                 None
@@ -289,7 +301,7 @@ impl<'a> ChildWriter<'a> {
         target: &ChildTarget<'_>,
         body: Bytes,
         busy_child: Option<&ChildTarget<'_>>,
-    ) -> Result<(StatusCode, Bytes), Failure<O>> {
+    ) -> Result<crate::wire::product::sender::Response, Failure<O>> {
         let retry = if method == Method::POST {
             Retry::NonIdempotent
         } else {
@@ -299,9 +311,13 @@ impl<'a> ChildWriter<'a> {
             .send_once(ctx, &method, target, body.clone(), retry)
             .await;
         match first {
-            Err(failure) if failure.error().detail::<BusyRefusal>().is_some() => {
+            Err(failure)
+                if let Some(busy) = failure.error().internal_detail::<BusyRefusal>().cloned() =>
+            {
                 self.ready(ctx, busy_child)
                     .await
+                    .map_err(|error| Failure::new(*error, None, failure.write_dispatch()))?;
+                busy.retain(&mut self.evidence)
                     .map_err(|error| Failure::new(*error, None, failure.write_dispatch()))?;
                 self.send_once(ctx, &method, target, body, retry)
                     .await
@@ -320,7 +336,7 @@ impl<'a> ChildWriter<'a> {
         target: &ChildTarget<'_>,
         body: Bytes,
         retry: Retry,
-    ) -> Result<(StatusCode, Bytes), Failure<O>> {
+    ) -> Result<crate::wire::product::sender::Response, Failure<O>> {
         let session = &self.client.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session.runtime(ctx, &mut jitter).map_err(not_sent)?;
@@ -357,22 +373,21 @@ impl<'a> ChildWriter<'a> {
             cap: 8 << 20,
             allow_recovery: true,
             allow_empty: true,
-            no_output: false,
+            no_output: *method != Method::POST,
             keep_status: false,
-            overflow_overrides_status: true,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: false,
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: true,
+            no_redirect: false,
+            report_redirect: self.report_redirect,
             retry_config: retry::Config::default(),
         };
         let reply = operation::execute_raw(
             runtime,
             base,
             &op,
-            &Options {
-                report_redirect: self.report_redirect,
-                ..Options::DEFAULT
-            },
+            &Options { ..Options::DEFAULT },
             &path,
             &[],
             RouteAuth::Bearer(session.bearer_source()),
@@ -385,36 +400,43 @@ impl<'a> ChildWriter<'a> {
             Failure::new(self.evidence.screen_error(error), None, dispatch)
         })?;
         let status = reply.status;
-        let body = Bytes::from(reply.reply.body);
+        if op.success.contains(&status) {
+            return Ok(reply);
+        }
         let refusal = status.is_client_error();
-        let busy = refusal
-            && response::inspect_error_message(&body, self.evidence.credentials(), busy_message)
-                .unwrap_or(false);
-        let body = response::classify(
-            op.id,
-            status,
-            body,
-            op.success,
-            (true, false, op.retry),
-            self.evidence.credentials(),
-        )
-        .map_err(|error| {
-            let mut error = self.evidence.screen_error(*error);
-            if refusal {
-                error = error.with_outer_detail(CompleteRefusal);
-            }
-            if busy {
-                error = error.with_outer_detail(BusyRefusal);
-            }
-            Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
-        })?;
-        Ok((status, body))
+        let busy = if refusal {
+            reply.clean_receipt().and_then(|receipt| {
+                BusyRefusal::from_receipt(receipt, self.evidence.credentials(), busy_message)
+            })
+        } else {
+            None
+        };
+        reply
+            .classify(op.id, op.success, (true, false, op.retry), false)
+            .map_err(|error| {
+                let mut error = self
+                    .evidence
+                    .screen_error(error.with_clean_absence(reply.clean_absence()));
+                if refusal {
+                    error = error.with_outer_detail(CompleteRefusal);
+                }
+                if let Some(busy) = busy {
+                    error = error.with_outer_detail(busy);
+                }
+                Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+            })?;
+        Ok(reply)
     }
 
     pub(super) fn create_failure<O>(&self, failure: Failure<O>, list: &str) -> Failure<O> {
         if failure.write_dispatch() == WriteDispatch::NotSent
             || failure.error().detail::<CompleteRefusal>().is_some()
-            || failure.error().detail::<CompleteNotFound>().is_some()
+            || crate::confirms_absence(
+                failure.error(),
+                LOAD_BALANCER.id,
+                "GET",
+                LOAD_BALANCER.route,
+            )
         {
             return failure;
         }
@@ -432,12 +454,23 @@ impl<'a> ChildWriter<'a> {
     }
 
     pub(super) fn acknowledged_id<O>(
-        &self,
-        status: StatusCode,
-        body: &Bytes,
+        &mut self,
+        reply: &crate::wire::product::sender::Response,
         list: &str,
         no_wait: bool,
     ) -> Result<String, Failure<O>> {
+        let status = reply.status;
+        let receipt = reply.clean_receipt().ok_or_else(|| {
+            self.create_failure(
+                Failure::new(
+                    operation::unsafe_guard_response(self.operation),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ),
+                list,
+            )
+        })?;
+        let body = receipt.body();
         let text = go_json(body);
         let read = Read {
             id: self.operation,
@@ -465,13 +498,33 @@ impl<'a> ChildWriter<'a> {
             PathIds::Strict
         };
         let id = (valid.allows(&id) && !self.evidence.id_reflects(&id)).then_some(id);
-        id.ok_or_else(|| {
+        let id = id.ok_or_else(|| {
             let message = format!("create response had no id; the resource may exist, check with {list} and match the name exactly");
             let error = self.evidence.screen_error(Error::from_api(ApiError::without_fallback(
                 self.operation, Some(status.as_u16()), crate::error::SafeText::new("", &[]),
                 crate::error::SafeText::new(&message, &[]), false,
             )));
             Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+        })?;
+        let acknowledgement = receipt.bind_id(id.clone());
+        self.evidence
+            .keep_acknowledgement(&acknowledgement)
+            .map_err(|error| {
+                self.create_failure(
+                    Failure::new(*error, None, WriteDispatch::MayHaveBeenSent),
+                    list,
+                )
+            })?;
+        self.acknowledgement = Some(acknowledgement);
+        Ok(id)
+    }
+
+    pub(super) fn check_acknowledgement(&self, target: &ChildTarget<'_>) -> Result<(), Box<Error>> {
+        self.acknowledgement.as_ref().map_or(Ok(()), |receipt| {
+            receipt
+                .recheck(&self.evidence)
+                .map(drop)
+                .map_err(|error| self.unconfirmed(target, *error))
         })
     }
 
@@ -622,23 +675,5 @@ fn public_reason(error: &Error) -> String {
     if error.detail::<DecodeError>().is_some() && !api.message().is_empty() {
         return api.message().into();
     }
-    api_error_text(api)
-}
-
-fn api_error_text(api: &ApiError) -> String {
-    use std::fmt::Write as _;
-
-    let mut message = String::new();
-    if !api.operation().is_empty() {
-        let _ = write!(message, "{}: ", api.operation());
-    }
-    message.push_str(if api.message().is_empty() {
-        "request failed"
-    } else {
-        api.message()
-    });
-    if let Some(status) = api.status() {
-        let _ = write!(message, " (status {status})");
-    }
-    message
+    api.go_text()
 }

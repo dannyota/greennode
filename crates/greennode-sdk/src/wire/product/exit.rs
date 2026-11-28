@@ -162,7 +162,10 @@ mod tests {
                     continue;
                 }
                 if file.extension().and_then(std::ffi::OsStr::to_str) != Some("rs")
-                    || file.file_name().and_then(std::ffi::OsStr::to_str) == Some("context.rs")
+                    || matches!(
+                        file.file_name().and_then(std::ffi::OsStr::to_str),
+                        Some("context.rs" | "testing.rs")
+                    )
                 {
                     continue;
                 }

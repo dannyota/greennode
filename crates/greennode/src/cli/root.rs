@@ -215,7 +215,8 @@ pub(super) fn refuse_configure_write(stderr: &mut dyn Write) -> ExitCode {
         stderr,
         &super::errors::Envelope {
             code: "InvalidUsage",
-            message: "configure writes are not supported on Windows yet. Edit the files by hand.",
+            message: "configure writes are not supported on Windows yet. Edit the files by hand."
+                .into(),
             status: None,
             operation: None,
         },

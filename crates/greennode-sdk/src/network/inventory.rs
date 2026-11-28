@@ -9,7 +9,7 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::{ApiError, Error, ErrorClass, RequestContext};
 
@@ -148,11 +148,13 @@ impl Client {
             allow_recovery: true,
             allow_empty: !protected,
             no_output: false,
-            keep_status: protected,
-            overflow_overrides_status: protected,
+            keep_status: false,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: protected,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
+            report_redirect: protected,
             retry_config: retry::Config::default(),
         };
         let options = Options {
@@ -177,19 +179,20 @@ impl Client {
         )
         .await
         .map_err(|error| screen(error.into_parts().0, evidence))?;
-        let body = response::classify(
-            read.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
-            operation.success,
-            (true, protected, operation.retry),
-            evidence.credentials(),
-        )
-        .map_err(|error| screen(*error, evidence))?;
-        if protected && !evidence.go_peer_body_screen(&body).is_clean() {
+        response
+            .classify(
+                read.id,
+                operation.success,
+                (true, protected, operation.retry),
+                false,
+            )
+            .map_err(|error| screen(*error, evidence))?;
+        if protected && response.clean_receipt().is_none() {
             return Err(read.shape(evidence));
         }
-        Ok(response.reply.body)
+        response
+            .decode_projection(|body| Ok(body.to_vec()))
+            .map_err(|error| screen(*error, evidence))
     }
 }
 

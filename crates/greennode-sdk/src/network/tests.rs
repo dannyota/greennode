@@ -1,4 +1,5 @@
 mod endpoint_quotes;
+mod receipts;
 mod refusals;
 mod review;
 mod variants;
@@ -768,3 +769,5 @@ mod discovery_retry {
         }
     }
 }
+
+mod prices;

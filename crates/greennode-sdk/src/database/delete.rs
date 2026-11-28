@@ -119,6 +119,12 @@ impl Client {
                 .await
             {
                 Ok(reply) => reply,
+                Err(failure)
+                    if failure.write_dispatch() == WriteDispatch::NotSent
+                        && failure.error().has_class(ErrorClass::InvalidInput) =>
+                {
+                    return Err(not_sent(failure.into_parts().0));
+                }
                 Err(failure) => {
                     let reason = if failure.error().detail::<UnsafeReply>().is_some() {
                         "vngcloud: write outcome not confirmed: delete response withheld"
@@ -152,7 +158,7 @@ impl Client {
             let result = self
                 .poll_instance(
                     ctx,
-                    &id,
+                    crate::wire::product::guard::ConfirmationTarget::Explicit(&id),
                     &mut evidence,
                     INTERRUPTED,
                     |instance| match instance {
@@ -384,13 +390,11 @@ impl Output for DeleteReply {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        if response.status.is_success() && response.body.is_empty() {
+        if response.status.is_success() && response.empty_body() {
             return Ok(Self::default());
         }
         operation::decode_response(operation, response).map_err(|error| {
-            if response.status.is_success()
-                && serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_ok()
-            {
+            if response.status.is_success() && !response.malformed_json() {
                 Box::new(error.with_detail(UnsafeReply))
             } else {
                 error
