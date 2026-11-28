@@ -566,10 +566,14 @@ async fn history_walk_counts_only_json_bytes_and_withholds_over_budget() {
                 } else {
                     7 << 10
                 };
+                body.push('\0');
                 body.extend(std::iter::repeat_n('x', size - body.len() - 2));
                 body.push_str("\"}");
                 assert!(body.len() < LIMIT);
-                response("200 OK", format!(" \n{body}\n ").as_bytes())
+                let mut bytes = format!(" \n{body}\n ").into_bytes();
+                let invalid = bytes.iter_mut().find(|byte| **byte == 0).unwrap();
+                *invalid = 0xff;
+                response("200 OK", &bytes)
             })
             .collect();
         let server = Server::start(replies);

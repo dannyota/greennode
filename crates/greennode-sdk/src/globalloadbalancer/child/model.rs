@@ -166,7 +166,10 @@ impl From<ListenerWire> for Listener {
 
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
-pub(super) struct PackageId(Option<Box<serde_json::value::RawValue>>);
+pub(super) struct PackageId(
+    #[serde(deserialize_with = "crate::wire::product::lossy::optional_boxed")]
+    Option<Box<serde_json::value::RawValue>>,
+);
 
 impl PackageId {
     pub(super) fn matches(&self, id: &str) -> bool {

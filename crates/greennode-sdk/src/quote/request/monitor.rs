@@ -55,7 +55,10 @@ impl BearerSource for ScopedBearer<'_> {
 
 #[derive(Default, serde::Deserialize)]
 #[serde(transparent)]
-struct MonitorDocument(Option<Box<RawValue>>);
+struct MonitorDocument(
+    #[serde(deserialize_with = "crate::wire::product::lossy::optional_boxed")]
+    Option<Box<RawValue>>,
+);
 
 impl Output for MonitorDocument {
     const SCHEMA: Shape<'static> = Shape::Object(&[ShapeField {
@@ -90,7 +93,11 @@ impl Output for MonitorDocument {
 pub(crate) fn price(raw: &RawValue) -> Option<f64> {
     #[derive(serde::Deserialize)]
     struct Price<'a> {
-        #[serde(rename = "optimumPrice", borrow)]
+        #[serde(
+            rename = "optimumPrice",
+            borrow,
+            deserialize_with = "crate::wire::product::lossy::borrowed"
+        )]
         value: &'a RawValue,
     }
     let wire: Price<'_> = serde_json::from_str(raw.get()).ok()?;

@@ -1,5 +1,5 @@
-use crate::model::wire::JsonSource;
 use crate::model::wire::{exact_integer, null_default};
+use crate::wire::product::lossy;
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
@@ -79,12 +79,15 @@ pub struct Resource {
     /// Reported cost field with unverified meaning and currency.
     pub cost: Option<f64>,
     /// Raw status value, when present.
-    #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
+    #[serde(
+        deserialize_with = "lossy::present_boxed",
+        serialize_with = "serialize_raw"
+    )]
     pub status: Option<Box<RawValue>>,
     /// Raw status display value, when present.
     #[serde(
         rename(deserialize = "statusUI", serialize = "StatusUI"),
-        deserialize_with = "raw_value",
+        deserialize_with = "lossy::present_boxed",
         serialize_with = "serialize_raw"
     )]
     pub status_ui: Option<Box<RawValue>>,
@@ -104,10 +107,16 @@ pub struct ResourceBillingElement {
     #[serde(rename(serialize = "SKU"), deserialize_with = "null_default")]
     pub sku: String,
     /// Raw quantity value, when present.
-    #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
+    #[serde(
+        deserialize_with = "lossy::present_boxed",
+        serialize_with = "serialize_raw"
+    )]
     pub quantity: Option<Box<RawValue>>,
     /// Raw metadata, when present.
-    #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
+    #[serde(
+        deserialize_with = "lossy::present_boxed",
+        serialize_with = "serialize_raw"
+    )]
     pub meta_key: Option<Box<RawValue>>,
 }
 
@@ -119,10 +128,16 @@ pub struct ResourceBillingElement {
 )]
 pub struct ResourceThresholds {
     /// Raw warning threshold data, when present.
-    #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
+    #[serde(
+        deserialize_with = "lossy::present_boxed",
+        serialize_with = "serialize_raw"
+    )]
     pub warning_thresholds: Option<Box<RawValue>>,
     /// Raw alarm threshold data, when present.
-    #[serde(deserialize_with = "raw_value", serialize_with = "serialize_raw")]
+    #[serde(
+        deserialize_with = "lossy::present_boxed",
+        serialize_with = "serialize_raw"
+    )]
     pub alarm_thresholds: Option<Box<RawValue>>,
 }
 
@@ -229,9 +244,9 @@ pub(super) fn envelope(raw: &RawValue) -> Result<&RawValue, ()> {
     validate(raw, &ENVELOPE)?;
     #[derive(Deserialize)]
     struct Envelope<'a> {
-        #[serde(borrow)]
+        #[serde(borrow, deserialize_with = "lossy::borrowed")]
         code: &'a RawValue,
-        #[serde(borrow)]
+        #[serde(borrow, deserialize_with = "lossy::borrowed")]
         data: &'a RawValue,
     }
     let envelope: Envelope<'_> = serde_json::from_str(raw.get()).map_err(|_| ())?;
@@ -269,56 +284,6 @@ pub(super) fn list(data: &RawValue) -> Result<(ListResourcesOutput, Vec<RenewPer
     Ok((projection, renew_periods))
 }
 
-pub(super) fn restore_raw_fields(
-    source: &JsonSource<'_>,
-    data: &RawValue,
-    projection: &mut ListResourcesOutput,
-) -> Result<(), ()> {
-    let fields = object_fields(data)?;
-    let rows: Vec<&RawValue> =
-        serde_json::from_str(fields.get("data").ok_or(())?.get()).map_err(|_| ())?;
-    for (raw, resource) in rows.into_iter().zip(&mut projection.items) {
-        let row = object_fields(raw)?;
-        resource.status = original_field(source, &row, "status")?;
-        resource.status_ui = original_field(source, &row, "statusUI")?;
-        if let Some(elements) = row
-            .get("billingElements")
-            .filter(|elements| elements.get() != "null")
-        {
-            let items: Vec<&RawValue> = serde_json::from_str(elements.get()).map_err(|_| ())?;
-            for (raw, element) in items.into_iter().zip(&mut resource.billing_elements) {
-                if raw.get() == "null" {
-                    continue;
-                }
-                let fields = object_fields(raw)?;
-                element.quantity = original_field(source, &fields, "quantity")?;
-                element.meta_key = original_field(source, &fields, "metaKey")?;
-            }
-        }
-    }
-    if let Some(extra) = fields.get("extra").filter(|extra| extra.get() != "null") {
-        let fields = object_fields(extra)?;
-        projection.extra.warning_thresholds = original_field(source, &fields, "warningThresholds")?;
-        projection.extra.alarm_thresholds = original_field(source, &fields, "alarmThresholds")?;
-    }
-    Ok(())
-}
-
-fn object_fields(raw: &RawValue) -> Result<BTreeMap<String, &RawValue>, ()> {
-    serde_json::from_str(raw.get()).map_err(|_| ())
-}
-
-fn original_field(
-    source: &JsonSource<'_>,
-    fields: &BTreeMap<String, &RawValue>,
-    key: &str,
-) -> Result<Option<Box<RawValue>>, ()> {
-    fields
-        .get(key)
-        .map(|raw| source.raw_fragment(raw).ok_or(()))
-        .transpose()
-}
-
 pub(super) fn account(data: &RawValue) -> Result<String, ()> {
     validate(data, &ACCOUNT)?;
     let fields: BTreeMap<String, &RawValue> = serde_json::from_str(data.get()).map_err(|_| ())?;
@@ -341,7 +306,7 @@ pub(super) fn renewal(data: &RawValue) -> Result<Option<usize>, ()> {
     #[serde(rename_all = "camelCase")]
     struct Renewal {
         success_all: bool,
-        error_auto_renew_resources: Option<Vec<Box<RawValue>>>,
+        error_auto_renew_resources: Option<Vec<serde::de::IgnoredAny>>,
     }
     let output: Renewal = serde_json::from_str(data.get()).map_err(|_| ())?;
     let errors = output
@@ -380,10 +345,6 @@ fn exact_names(raw: &RawValue, shape: &Shape<'_>) -> bool {
         Shape::Array(item) => serde_json::from_str::<Vec<&RawValue>>(raw.get())
             .is_ok_and(|elements| elements.into_iter().all(|value| exact_names(value, item))),
     }
-}
-
-fn raw_value<'de, D: Deserializer<'de>>(decoder: D) -> Result<Option<Box<RawValue>>, D::Error> {
-    Box::<RawValue>::deserialize(decoder).map(Some)
 }
 
 fn serialize_raw<S: Serializer>(

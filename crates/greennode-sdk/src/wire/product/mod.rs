@@ -3,6 +3,7 @@ pub(crate) mod evidence;
 pub(crate) mod exit;
 pub(crate) mod guard;
 pub(crate) mod identifier;
+pub(crate) mod lossy;
 pub(crate) mod operation;
 pub(crate) mod options;
 pub(crate) mod output;
@@ -44,6 +45,10 @@ pub(crate) fn screened_discovery_stream<'a>(
 
 #[derive(Default, Deserialize)]
 pub(crate) struct DiscoveryDocument {
+    #[serde(
+        default,
+        deserialize_with = "crate::wire::product::lossy::optional_boxed"
+    )]
     pub(crate) raw: Option<Box<RawValue>>,
     #[serde(skip)]
     pub(crate) raw_len: usize,

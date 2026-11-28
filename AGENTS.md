@@ -64,7 +64,7 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode-sdk/src/discovery/`|Project discovery: the region's projects read, selection and the shared discovery gate (crate-private)|
 |`crates/greennode-sdk/src/config/session/tests/queries.rs`, `tests/monitor.rs`|Session project access and auth and endpoint query tests, and the monitor quota scrub test that needs a sign-in endpoint hook|
 |`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
-|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, the operation client with strict schema decoding, safe response classification, the shared absence proof (`wire/product/absence.rs`), strict token validation, the service-account exchange, the IAM user sign-in with PKCE, cookies and TOTP, and the loopback TLS test server (crate-private)|
+|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, the operation client with strict schema decoding and Go's lossy string decoding (`wire/product/lossy.rs`), safe response classification, the shared absence proof (`wire/product/absence.rs`), strict token validation, the service-account exchange, the IAM user sign-in with PKCE, cookies and TOTP, and the loopback TLS test server (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
 
 The [architecture](docs/design/architecture.md#layout) owns the intended layout. Add a row here in the change that adds the path.

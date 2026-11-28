@@ -119,6 +119,7 @@ struct Snapshot {
 
 #[derive(Deserialize)]
 struct CheckOptions {
+    #[serde(deserialize_with = "crate::wire::product::lossy::boxed")]
     test_frequency: Box<RawValue>,
 }
 

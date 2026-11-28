@@ -41,3 +41,10 @@ The generator runs all 17 billing commands against loopback responses and
 records full stdout, exit codes, and Go CLI error diagnostics. The generator
 and Rust replay default to the toy bearer test-token. Cases can override it
 to exercise short-credential redaction.
+
+For malformed response strings, use the same v1.8.0 and Go 1.27.4 setup.
+Copy lossy_goldens_test.go into internal/cli and run go test ./internal/cli
+-run '^TestBillingLossyGoldens$' -count=1. Copy lossy-go-v1.8.0.json to
+crates/greennode/tests/fixtures/billing/. The generator verifies that Go
+preserves invalid UTF-8 in direct RawMessage JSON. The Rust test expects
+U+FFFD in that output and uses the Go goldens for the agreeing cases.

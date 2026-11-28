@@ -804,7 +804,7 @@ fn third() {}
             (
                 "cdn/wire.rs",
                 "call_with_policy",
-                ".validate(body, &ENVELOPE",
+                ".validate(text.as_bytes(), &ENVELOPE",
             ),
             ("cdn/reads.rs", "read_guard_detail", "FieldNames::Canonical"),
             (

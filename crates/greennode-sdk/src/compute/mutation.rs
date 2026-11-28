@@ -423,7 +423,11 @@ pub(super) fn decode_data<T: WireField>(
 
     #[derive(serde::Deserialize)]
     struct Envelope<'a> {
-        #[serde(borrow)]
+        #[serde(
+            borrow,
+            default,
+            deserialize_with = "crate::wire::product::lossy::optional_borrowed"
+        )]
         data: Option<&'a serde_json::value::RawValue>,
     }
 

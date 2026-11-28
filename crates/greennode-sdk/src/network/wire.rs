@@ -593,7 +593,10 @@ impl Client {
 
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub(super) struct Fields<'a>(#[serde(borrow)] BTreeMap<String, &'a RawValue>);
+pub(super) struct Fields<'a>(
+    #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed_map")]
+    BTreeMap<String, &'a RawValue>,
+);
 
 impl<'a> Fields<'a> {
     pub(super) fn decode(text: &'a str) -> Result<Self, ()> {

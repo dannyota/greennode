@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, value::RawValue};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::wire::product::evidence::Evidence;
+use crate::wire::product::{evidence::Evidence, lossy};
 
 const REDACTED: &str = "<redacted>";
 
@@ -118,8 +118,10 @@ pub(super) fn redact_id(text: &mut String, evidence: &Evidence) {
 
 fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
     let Some(text) = raw.as_ref() else { return };
-    let raw_reflects = !evidence.peer_body_screen(text.get().as_bytes()).is_clean();
-    match serde_json::from_str::<Value>(text.get()) {
+    let raw_reflects = !evidence
+        .go_peer_body_screen(text.get().as_bytes())
+        .is_clean();
+    match lossy::from_slice::<Value>(text.get().as_bytes()) {
         Ok(mut value) if evidence.output_reflects(&value) => {
             *raw = evidence
                 .redact(&mut value)
@@ -129,12 +131,6 @@ fn redact_raw(raw: &mut Option<Box<RawValue>>, evidence: &Evidence) {
         Ok(_) if !raw_reflects => {}
         _ => *raw = None,
     }
-}
-
-fn rule_from_wire<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Box<RawValue>>, D::Error> {
-    Box::<RawValue>::deserialize(deserializer).map(Some)
 }
 
 fn serialize_rule<S: Serializer>(
@@ -601,14 +597,14 @@ pub struct WebAccelerator {
     /// PageRules returned by the service.
     #[serde(
         rename(serialize = "PageRules", deserialize = "childrenRule"),
-        deserialize_with = "rule_from_wire",
+        deserialize_with = "lossy::present_boxed",
         serialize_with = "serialize_rule"
     )]
     pub page_rules: Option<Box<RawValue>>,
     /// AdvancedRule returned by the service.
     #[serde(
         rename(serialize = "AdvancedRule", deserialize = "childrenAdvanceRule"),
-        deserialize_with = "rule_from_wire",
+        deserialize_with = "lossy::present_boxed",
         serialize_with = "serialize_rule"
     )]
     pub advanced_rule: Option<Box<RawValue>>,

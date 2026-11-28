@@ -424,7 +424,11 @@ fn decode_key(
 ) -> Result<(SshKey, Secret), Box<Error>> {
     #[derive(Deserialize)]
     struct Envelope<'a> {
-        #[serde(borrow)]
+        #[serde(
+            borrow,
+            default,
+            deserialize_with = "crate::wire::product::lossy::optional_borrowed"
+        )]
         data: Option<&'a RawValue>,
     }
 

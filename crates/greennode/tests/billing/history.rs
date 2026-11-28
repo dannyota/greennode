@@ -176,6 +176,80 @@ fn resources_list_matches_baseline_goldens() {
 }
 
 #[test]
+fn lossy_billing_strings_match_go_goldens() {
+    #[derive(serde::Deserialize)]
+    struct Golden {
+        command: String,
+        input: String,
+        format: String,
+        query: String,
+        stdout: String,
+    }
+
+    let goldens: Vec<Golden> =
+        serde_json::from_str(include_str!("../fixtures/billing/lossy-go-v1.8.0.json")).unwrap();
+    let resources = RESOURCES.replacen("10000000.123456789", "123", 1);
+    for golden in goldens {
+        let token = match golden.input.as_str() {
+            "surrogate" => r#""\ud800""#,
+            "invalid-byte" => "\"\0\"",
+            _ => panic!("unknown malformed string case"),
+        };
+        let mut args = vec!["billing", &golden.command, "--output", &golden.format];
+        let wire = if golden.command == "list-resources" {
+            resources.replacen(r#""status": 1"#, &format!(r#""status": {token}"#), 1)
+        } else {
+            args.extend(["--start-date", "2024-11-01", "--end-date", "2024-11-30"]);
+            history_body(&TRANSACTION.replace(r#""synthetic-description""#, token))
+        };
+        if !golden.query.is_empty() {
+            args.extend(["--query", &golden.query]);
+        }
+        let run = |body: Vec<u8>, expected: &str| {
+            let server = Server::start(vec![greennode_sdk::testing::Response::Http {
+                status: "200 OK".into(),
+                headers: vec![("Content-Length".into(), body.len().to_string())],
+                body,
+            }]);
+            let (status, stdout, stderr) = invoke(&args, Some(&server));
+            assert_eq!(
+                status,
+                ExitCode::SUCCESS,
+                "{} {} {} {}",
+                golden.command,
+                golden.input,
+                golden.format,
+                golden.query
+            );
+            assert!(
+                stdout == expected.as_bytes(),
+                "{} {} {} {} differs from golden",
+                golden.command,
+                golden.input,
+                golden.format,
+                golden.query
+            );
+            assert!(stderr.is_empty());
+        };
+        let mut bytes = wire.into_bytes();
+        for invalid in bytes.iter_mut().filter(|byte| **byte == 0) {
+            *invalid = 0xff;
+        }
+        if golden.command == "list-resources"
+            && golden.input == "surrogate"
+            && golden.format == "json"
+            && golden.query.is_empty()
+        {
+            let other = resources.replacen(r#""status": 1"#, "\"status\": \"\0\"", 1);
+            let mut other = other.into_bytes();
+            *other.iter_mut().find(|byte| **byte == 0).unwrap() = 0xff;
+            run(other, &golden.stdout.replace(r#""\ud800""#, "\"�\""));
+        }
+        run(bytes, &golden.stdout);
+    }
+}
+
+#[test]
 fn resources_table_skips_unselected_raw_numbers() {
     let body = RESOURCES.replacen(r#""level": "good""#, r#""level": 1e400"#, 1);
     let server = Server::start(vec![response("200 OK", body)]);

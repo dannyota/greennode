@@ -112,6 +112,17 @@ async fn get_reads_budget_by_id() {
 }
 
 #[tokio::test]
+async fn get_replaces_lone_surrogate_in_name() {
+    let body = br#"{"code":200,"data":{"uuid":"budget-1","name":"\ud800"}}"#;
+    let server = Server::start(vec![response("200 OK", body)]);
+    let output = client(&server, BEARER)
+        .get_budget(&RequestContext::new().0, GetBudgetInput::new(BUDGET_ID))
+        .await
+        .unwrap();
+    assert_eq!(output.budget.name, "\u{fffd}");
+}
+
+#[tokio::test]
 async fn get_refuses_invalid_id_before_sending() {
     let server = Server::start(Vec::new());
     let client = client(&server, BEARER);

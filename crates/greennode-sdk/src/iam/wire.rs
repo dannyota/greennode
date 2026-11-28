@@ -15,7 +15,6 @@ use crate::wire::product::{
 use crate::wire::strict_json::{self, Shape};
 use crate::{ApiError, Error};
 
-mod text;
 mod timestamp;
 
 pub(super) const REDACTED: &str = "<redacted>";
@@ -407,7 +406,7 @@ impl<T: Wire> Output for Body<T> {
             return Err(error(super::DecodeError::MalformedJson));
         }
         response.decode_projection(|raw_body| {
-            let body = text::go_json(raw_body);
+            let body = crate::model::wire::go_json(raw_body);
             let raw = serde_json::from_str::<&RawValue>(&body)
                 .map_err(|_| error(super::DecodeError::MalformedJson))?;
             strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())

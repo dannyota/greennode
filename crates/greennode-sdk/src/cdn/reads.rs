@@ -3,6 +3,8 @@ use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+
+use crate::wire::product::lossy;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -300,7 +302,7 @@ impl Client {
             let row: CertificateWire = answer
                 .data
                 .as_deref()
-                .and_then(|data| serde_json::from_str(data.get()).ok())
+                .and_then(|data| lossy::from_slice(data.get().as_bytes()).ok())
                 .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
             answer.evidence.add_secret(&Secret::new(row.private_key));
             let mut certificate = row.certificate;
@@ -367,20 +369,23 @@ fn decode_web_detail(
 ) -> Result<WebDetail, Failure<()>> {
     let malformed = || read_failure(call.unexpected(200));
     let raw = data.ok_or_else(malformed)?;
-    let text = raw.get();
-    if names.has_case_variant(text.as_bytes(), &STATE) {
-        return Err(read_failure(
-            crate::wire::product::operation::unsafe_guard_response(call.id),
-        ));
-    }
-    names
-        .validate(text.as_bytes(), &STATE, text.len())
-        .map_err(|_| malformed())?;
-    let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
-    if state.id != cdn_id {
-        return Err(malformed());
-    }
-    let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
+    let (state, mut model): (State, WebAccelerator) =
+        lossy::with_normalized(raw.get().as_bytes(), |text| {
+            if names.has_case_variant(text.as_bytes(), &STATE) {
+                return Err(read_failure(
+                    crate::wire::product::operation::unsafe_guard_response(call.id),
+                ));
+            }
+            names
+                .validate(text.as_bytes(), &STATE, text.len())
+                .map_err(|_| malformed())?;
+            let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
+            if state.id != cdn_id {
+                return Err(malformed());
+            }
+            let model = serde_json::from_str(text).map_err(|_| malformed())?;
+            Ok((state, model))
+        })?;
     model.status = super::Field::Value(state.status);
     Ok(WebDetail {
         raw,

@@ -6,7 +6,7 @@ use failure::{FailureText, classify_failure, invalid_response, request_failure};
 
 use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
-use super::{redirect, retry, sender};
+use super::{lossy, redirect, retry, sender};
 use crate::wire::send;
 use crate::wire::strict_json::Shape;
 use http::{Method, StatusCode};
@@ -601,8 +601,14 @@ fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()
     if allow_empty && body.is_empty() {
         return Ok(T::default());
     }
-    crate::wire::strict_json::validate_shape(body, &T::SCHEMA, cap).map_err(|_| ())?;
-    serde_json::from_slice(body).map_err(|_| ())
+    if body.len() > cap {
+        return Err(());
+    }
+    lossy::with_normalized(body, |text| {
+        crate::wire::strict_json::validate_shape(text.as_bytes(), &T::SCHEMA, text.len())
+            .map_err(|_| ())?;
+        serde_json::from_str(text).map_err(|_| ())
+    })
 }
 
 #[cfg(test)]
@@ -834,6 +840,35 @@ mod tests {
         assert!(!first.contains("content-type:"));
         assert!(second.contains("accept: application/json"));
         assert!(second.contains("content-type: application/json"));
+    }
+
+    #[tokio::test]
+    async fn response_decodes_surrogates_and_screens_raw_spelling() {
+        for (wire, expected) in [
+            (br#"{"id":"\ud800"}"#.as_slice(), "\u{fffd}"),
+            (br#"{"id":"\ud800\udc00"}"#, "\u{10000}"),
+            (br#"{"id":"\ud800\u0041\udc00"}"#, "\u{fffd}A\u{fffd}"),
+            (br#"{"id":"\\ud800"}"#, "\\ud800"),
+            (b"{\"id\":\"\xff|\xc0\xaf|\xe2\x82|\xf0\x9f\x92|\xe2(\xa1|\xed\xa0\x80|\xf4\x90\x80\x80|\xef\xbf\xbd\"}",
+             "�|��|��|���|�(�|���|����|�"),
+        ] {
+            let server = Server::start(vec![response("200 OK", wire)]);
+            assert_eq!(
+                call(&server, &declaration(), &["one"]).await.unwrap().1.id,
+                expected
+            );
+        }
+        let server = Server::start(vec![response("200 OK", br#"{"id":"\ud800"}"#)]);
+        let projected = call_with_source(
+            &server,
+            &declaration(),
+            &["one"],
+            &[],
+            bytes::Bytes::new(),
+            &Source(false, "ud800"),
+        )
+        .await;
+        assert!(projected.is_err());
     }
 
     #[tokio::test]

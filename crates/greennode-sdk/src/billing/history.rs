@@ -18,6 +18,7 @@ use super::{
 };
 use crate::wire::{
     product::{
+        lossy,
         operation::{self, Operation, Output},
         sender::{Response, SentCredentials},
     },
@@ -222,7 +223,8 @@ impl Client {
             }
             check_context()?;
             let data = reply.data.as_deref().ok_or_else(invalid)?;
-            let decoded = decode_history_page(data).map_err(|_| invalid())?;
+            let text = crate::model::wire::go_json(data.get().as_bytes());
+            let decoded = decode_history_page(&text).map_err(|_| invalid())?;
             let meta = decoded.pageable;
             let count = decoded.content.len() as i64;
             let expected_pages = if meta.total > 0 {
@@ -255,7 +257,7 @@ impl Client {
             let mut local = HashSet::new();
             for row in decoded.content {
                 check_context()?;
-                let row: W = serde_json::from_str(row.get()).map_err(|_| invalid())?;
+                let row: W = lossy::from_slice(row.get().as_bytes()).map_err(|_| invalid())?;
                 if !local.insert(row.id()) {
                     return Err(invalid());
                 }
@@ -419,11 +421,11 @@ struct HistoryPage<'a> {
     pageable: Metadata,
 }
 
-fn decode_history_page(data: &RawValue) -> Result<HistoryPage<'_>, serde_json::Error> {
+fn decode_history_page(data: &str) -> Result<HistoryPage<'_>, serde_json::Error> {
     let mut content = None;
     let mut metadata = None;
     visit_history_fields(
-        &mut serde_json::Deserializer::from_str(data.get()),
+        &mut serde_json::Deserializer::from_str(data),
         &["content", "pageable"],
         |name, _, raw| {
             match name {
@@ -509,6 +511,7 @@ where
 
 #[derive(Default, Deserialize)]
 struct HistoryEnvelope {
+    #[serde(default, deserialize_with = "lossy::optional_boxed")]
     data: Option<Box<RawValue>>,
     #[serde(skip)]
     bytes: usize,
@@ -549,22 +552,29 @@ impl Output for HistoryEnvelope {
             )));
         }
         response.decode_projection(|body| {
-            let raw: &RawValue = serde_json::from_slice(body).map_err(|_| invalid())?;
-            let (mut code, mut data) = (None, None);
-            visit_history_fields(
-                &mut serde_json::Deserializer::from_str(raw.get()),
-                &["code", "data"],
-                |name, _, raw| {
-                    match name {
-                        "code" => code = Some(raw),
-                        "data" => data = Some(raw),
-                        _ => unreachable!(),
-                    }
-                    Ok(())
-                },
-            )
+            let raw = crate::go_json::raw_message(body)
+                .ok()
+                .flatten()
+                .ok_or_else(invalid)?;
+            let (code, data) = lossy::with_normalized(raw, |text| {
+                let (mut code, mut data) = (None, None);
+                visit_history_fields(
+                    &mut serde_json::Deserializer::from_str(text),
+                    &["code", "data"],
+                    |name, _, raw| {
+                        match name {
+                            "code" => code = envelope_code(raw),
+                            "data" if raw.get() == "null" => data = None,
+                            "data" => data = Some(lossy::to_owned(raw)?),
+                            _ => unreachable!(),
+                        }
+                        Ok(())
+                    },
+                )?;
+                Ok::<_, serde_json::Error>((code, data))
+            })
             .map_err(|_| invalid())?;
-            let code = code.and_then(envelope_code).ok_or_else(invalid)?;
+            let code = code.ok_or_else(invalid)?;
             if !(200..=299).contains(&code) {
                 if reflects_integer(code, &response.credentials) {
                     return Err(invalid());
@@ -578,10 +588,8 @@ impl Output for HistoryEnvelope {
                 )));
             }
             Ok(Self {
-                data: data
-                    .filter(|data| data.get() != "null")
-                    .map(ToOwned::to_owned),
-                bytes: raw.get().len(),
+                data,
+                bytes: raw.len(),
                 credentials: response.credentials.clone(),
             })
         })

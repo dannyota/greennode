@@ -46,11 +46,12 @@ impl<T: Data> Output for Envelope<T> {
         #[derive(Deserialize)]
         struct Header<'a> {
             code: i64,
-            #[serde(borrow)]
+            #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed")]
             data: &'a RawValue,
         }
         response.decode_projection(|body| {
-            let header: Header<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let text = crate::model::wire::go_json(body);
+            let header: Header<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;
             if response.credentials.has_numeric_product_credential()
                 || header.code != 200
                 || header.data.get() == "null"
@@ -61,7 +62,7 @@ impl<T: Data> Output for Envelope<T> {
             if operation.id == "ListDatabaseNetworks" {
                 #[derive(Deserialize)]
                 struct NetworkRow<'a> {
-                    #[serde(borrow)]
+                    #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed")]
                     subnets: &'a RawValue,
                 }
                 let rows: Vec<NetworkRow<'_>> =

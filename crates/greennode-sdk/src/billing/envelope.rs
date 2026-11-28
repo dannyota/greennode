@@ -2,6 +2,7 @@ use super::model::{Budget, field};
 use super::response_validation::data_valid;
 use crate::error::SafeText;
 use crate::wire::product::{
+    lossy,
     operation::{self, Operation, Output},
     response,
     sender::{Response, SentCredentials},
@@ -9,9 +10,8 @@ use crate::wire::product::{
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use crate::{ApiError, Error, ErrorClass};
 use http::StatusCode;
-use serde::{Deserialize, Deserializer, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::value::RawValue;
-use std::borrow::Cow;
 
 #[derive(Default, Deserialize)]
 pub(super) struct Envelope<T> {
@@ -125,7 +125,7 @@ impl<T: BudgetData> Envelope<T> {
     fn decoded_projection(
         operation: &Operation,
         response: &Response,
-        header: &Header<'_>,
+        header: &Header,
         code: &str,
         body: &[u8],
     ) -> Result<Self, Box<Error>> {
@@ -135,12 +135,14 @@ impl<T: BudgetData> Envelope<T> {
             return Err(api_error(operation, response));
         }
         if response.credentials.has_numeric_product_credential()
-            || (!operation.no_output && !data_valid(operation.id, header.data))
+            || (!operation.no_output && !data_valid(operation.id, header.data.as_deref()))
         {
             return Err(invalid());
         }
-        strict_json::validate_canonical_shape(body, &Self::SCHEMA, operation.cap)
-            .map_err(|_| invalid())?;
+        lossy::validate(body, operation.cap, |bytes, limit| {
+            strict_json::validate_canonical_shape(bytes, &Self::SCHEMA, limit)
+        })
+        .map_err(|_| invalid())?;
         let mut output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
         if !output.data.valid(&response.credentials) {
@@ -152,27 +154,33 @@ impl<T: BudgetData> Envelope<T> {
 }
 
 #[derive(Deserialize)]
-pub(super) struct Header<'a> {
-    #[serde(borrow, default, deserialize_with = "present_code")]
-    code: Option<&'a RawValue>,
-    #[serde(borrow, rename = "message")]
-    _message: Option<Cow<'a, str>>,
-    #[serde(borrow, default, deserialize_with = "present_code")]
-    data: Option<&'a RawValue>,
+pub(super) struct Header {
+    #[serde(default, deserialize_with = "lossy::present_boxed")]
+    code: Option<Box<RawValue>>,
+    #[serde(rename = "message")]
+    _message: Option<String>,
+    #[serde(default, deserialize_with = "lossy::present_boxed")]
+    data: Option<Box<RawValue>>,
 }
 
-pub(super) fn decode_header(body: &[u8], cap: usize) -> Option<Header<'_>> {
-    strict_json::validate_folded_canonical_shape(body, &HEADER_SCHEMA, cap).ok()?;
-    serde_json::from_slice(body).ok()
+pub(super) fn decode_header(body: &[u8], cap: usize) -> Option<Header> {
+    if body.len() > cap {
+        return None;
+    }
+    lossy::with_normalized(body, |text| {
+        strict_json::validate_folded_canonical_shape(text.as_bytes(), &HEADER_SCHEMA, text.len())
+            .ok()?;
+        serde_json::from_str(text).ok()
+    })
 }
 
-impl Header<'_> {
+impl Header {
     pub(super) fn is_direct(&self) -> bool {
         self.code.is_none() && self.data.is_none()
     }
 
     fn proved_code(&self, credentials: &SentCredentials) -> Option<(&str, response::Clean)> {
-        let raw = self.code?.get();
+        let raw = self.code.as_deref()?.get();
         let clean = crate::wire::product::evidence::Evidence::from_credentials(credentials)
             .peer_body_screen(raw.as_bytes())
             .clean()?;
@@ -180,7 +188,7 @@ impl Header<'_> {
     }
 
     fn screened_code(&self, credentials: &SentCredentials) -> Option<&str> {
-        let wire = self.code?.get();
+        let wire = self.code.as_deref()?.get();
         if credentials.text_reflects(wire) {
             return None;
         }
@@ -190,12 +198,6 @@ impl Header<'_> {
         }
         Some(wire)
     }
-}
-
-fn present_code<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<&'de RawValue>, D::Error> {
-    <&RawValue>::deserialize(deserializer).map(Some)
 }
 
 fn success_code(code: &str) -> Option<bool> {
