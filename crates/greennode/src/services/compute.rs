@@ -169,11 +169,25 @@ const LIMIT: Field = flag("limit", "int", false);
 const PAGE: Field = flag("page", "int", false);
 const SIZE: Field = flag("size", "int", false);
 
+const OPEN_LOGIN: crate::cli::errors::Rule = crate::cli::errors::Rule {
+    identity: "compute-open-login",
+    matches: |error| error.detail::<sdk::OpenLogin>().is_some(),
+    name: Some(crate::cli::errors::RuleName {
+        rank: 22,
+        code: "OpenLogin",
+        operation: crate::cli::errors::RuleOperation::Omit,
+        include_api_status: false,
+    }),
+    exit: Some(crate::cli::errors::RuleExit::Failure),
+    message: None,
+};
+
 pub(super) const SERVICE: Service = Service {
     name: "compute",
     error_rules: &[
         prices::ERROR_RULES[0],
         server_actions::UNEXPECTED_STATUS,
+        OPEN_LOGIN,
         server_groups::GROUP_IN_USE,
     ],
     operations: &[

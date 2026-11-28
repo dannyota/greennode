@@ -1,5 +1,5 @@
 use crate::model::wire::WireField;
-use crate::wire::product::evidence::Evidence;
+use crate::wire::product::{evidence::Evidence, options::AttemptCheck};
 use crate::{
     DEFAULT_PAGE, DEFAULT_PAGE_SIZE, Error, ErrorClass, Failure, List, PagedList, RequestContext,
     Secret,
@@ -74,18 +74,35 @@ impl Client {
         size: i64,
         evidence: &mut Evidence,
     ) -> Result<PagedList<Server>, Failure<O>> {
+        self.server_page_with_attempt(ctx, page, size, evidence, None, false)
+            .await
+    }
+
+    pub(super) async fn server_page_with_attempt<O>(
+        &self,
+        ctx: &RequestContext,
+        page: i64,
+        size: i64,
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+        reject_reflection: bool,
+    ) -> Result<PagedList<Server>, Failure<O>> {
         let ctx = self.server_deadline(ctx);
         let [page, size] = page_query(page, size);
         let envelope = self
-            .read(
+            .read_with_attempt(
                 &ctx,
                 &LIST_SERVERS,
                 &[],
                 &[("page", &page), ("size", &size)],
                 evidence,
+                attempt_check,
             )
             .await?;
-        parse_page(envelope, &LIST_SERVERS, evidence, true)
+        if reject_reflection && envelope.guard_reflects(evidence) {
+            return Err(failure(LIST_SERVERS.invalid(evidence)));
+        }
+        parse_page(envelope, &LIST_SERVERS, evidence, true, reject_reflection)
     }
 
     /// Reads the server identified by the input.
@@ -128,6 +145,20 @@ impl Client {
             .map_err(|error| failure(*error))
     }
 
+    pub(super) async fn server_guard_with_attempt<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<crate::wire::product::guard::Guarded<Server>, Failure<O>> {
+        let value = self
+            .server_detail_with_attempt(ctx, id, evidence, true, attempt_check)
+            .await?;
+        crate::wire::product::guard::Guarded::latest(value, evidence)
+            .map_err(|error| failure(*error))
+    }
+
     async fn server_detail_with_policy<O>(
         &self,
         ctx: &RequestContext,
@@ -135,19 +166,33 @@ impl Client {
         evidence: &mut Evidence,
         reject_reflection: bool,
     ) -> Result<Server, Failure<O>> {
+        self.server_detail_with_attempt(ctx, id, evidence, reject_reflection, None)
+            .await
+    }
+
+    pub(super) async fn server_detail_with_attempt<O>(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        evidence: &mut Evidence,
+        reject_reflection: bool,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<Server, Failure<O>> {
         GET_SERVER.path("ServerID", id).map_err(failure)?;
         let ctx = self.server_deadline(ctx);
         let envelope = if reject_reflection {
-            self.read_guard(
+            self.read_guard_with_attempt(
                 &ctx,
                 super::wire::GuardRead(&GET_SERVER),
                 &[id],
                 &[],
                 evidence,
+                attempt_check,
             )
             .await?
         } else {
-            self.read(&ctx, &GET_SERVER, &[id], &[], evidence).await?
+            self.read_with_attempt(&ctx, &GET_SERVER, &[id], &[], evidence, attempt_check)
+                .await?
         };
         let server: Server = envelope.field("data", &GET_SERVER, evidence)?;
         if server.uuid != id {
@@ -196,7 +241,7 @@ impl Client {
                     &mut evidence,
                 )
                 .await?;
-            let page = parse_page(envelope, &LIST_KEYS, &evidence, false)?;
+            let page = parse_page(envelope, &LIST_KEYS, &evidence, false, false)?;
             retain_page(page, &LIST_KEYS, &evidence)
         })
     }
@@ -277,7 +322,7 @@ impl Client {
         if reject_reflection && envelope.reflects(evidence) {
             return Err(failure(group_read_error(LIST_GROUPS.id, evidence)));
         }
-        parse_page(envelope, &LIST_GROUPS, evidence, true)
+        parse_page(envelope, &LIST_GROUPS, evidence, true, false)
     }
 
     /// Reads the server group identified by the input.
@@ -419,7 +464,7 @@ impl Client {
                     &mut evidence,
                 )
                 .await?;
-            let page = parse_page(envelope, &LIST_USER_IMAGES, &evidence, false)?;
+            let page = parse_page(envelope, &LIST_USER_IMAGES, &evidence, false, false)?;
             retain_page(page, &LIST_USER_IMAGES, &evidence)
         })
     }
@@ -460,12 +505,24 @@ fn parse_page<T: WireField, O>(
     read: &Read,
     evidence: &Evidence,
     strict: bool,
+    guard: bool,
 ) -> Result<PagedList<T>, Failure<O>> {
     let items: Option<Vec<T>> = envelope.field("listData", read, evidence)?;
     let page: Option<i64> = envelope.field("page", read, evidence)?;
     let page_size: Option<i64> = envelope.field("pageSize", read, evidence)?;
     let total_page: Option<i64> = envelope.field("totalPage", read, evidence)?;
     let total_item: Option<i64> = envelope.field("totalItem", read, evidence)?;
+    if guard
+        && (items.is_none()
+            || page.is_none()
+            || page_size.is_none()
+            || total_page.is_none()
+            || total_item.is_none())
+    {
+        return Err(failure(super::wire::invalid_input(
+            "compute.CreateServer: could not confirm no server has the requested name: incomplete inventory",
+        )));
+    }
     if strict && !valid_page(items.as_deref(), page, page_size, total_page, total_item) {
         return Err(failure(read.invalid(evidence)));
     }

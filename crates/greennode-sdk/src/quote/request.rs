@@ -6,7 +6,7 @@ use crate::wire::product::{
     DiscoveryDocument,
     evidence::Evidence,
     operation::{self, Operation, Output},
-    options::{Options, Pacing},
+    options::{AttemptCheck, Options, Pacing},
     redirect::{Classification, Retry},
     retry, screened_discovery_stream, sender,
 };
@@ -195,9 +195,39 @@ pub(crate) async fn exchange(
     pacing: Option<&Pacing>,
 ) -> Result<Box<RawValue>, Box<Error>> {
     let operation = req.operation;
-    exchange_validated(session, ctx, evidence, req, pacing, operation, |_| Ok(()))
-        .await
-        .map(|(raw, _)| raw)
+    exchange_validated_with_attempt(
+        session,
+        ctx,
+        evidence,
+        req,
+        pacing,
+        (operation, |_| Ok(())),
+        None,
+    )
+    .await
+    .map(|(raw, _)| raw)
+}
+
+pub(crate) async fn exchange_with_attempt(
+    session: &Session,
+    ctx: &RequestContext,
+    evidence: &mut Evidence,
+    req: Request<'_>,
+    pacing: Option<&Pacing>,
+    attempt_check: Option<AttemptCheck<'_>>,
+) -> Result<Box<RawValue>, Box<Error>> {
+    let operation = req.operation;
+    exchange_validated_with_attempt(
+        session,
+        ctx,
+        evidence,
+        req,
+        pacing,
+        (operation, |_| Ok(())),
+        attempt_check,
+    )
+    .await
+    .map(|(raw, _)| raw)
 }
 
 pub(super) async fn exchange_validated(
@@ -208,6 +238,27 @@ pub(super) async fn exchange_validated(
     pacing: Option<&Pacing>,
     validation_op: &'static str,
     check_budget: impl FnOnce(usize) -> Result<(), Box<Error>>,
+) -> Result<(Box<RawValue>, usize), Box<Error>> {
+    exchange_validated_with_attempt(
+        session,
+        ctx,
+        evidence,
+        req,
+        pacing,
+        (validation_op, check_budget),
+        None,
+    )
+    .await
+}
+
+async fn exchange_validated_with_attempt(
+    session: &Session,
+    ctx: &RequestContext,
+    evidence: &mut Evidence,
+    req: Request<'_>,
+    pacing: Option<&Pacing>,
+    (validation_op, check_budget): (&'static str, impl FnOnce(usize) -> Result<(), Box<Error>>),
+    attempt_check: Option<AttemptCheck<'_>>,
 ) -> Result<(Box<RawValue>, usize), Box<Error>> {
     let direct = pacing.is_none();
     let vnetwork = matches!(req.product, Product::Vnetwork(_));
@@ -234,6 +285,7 @@ pub(super) async fn exchange_validated(
     let headers = region.map(|id| [("region", id), ("region_id", id)]);
     let options = Options {
         pacing,
+        attempt_check,
         response_guard: (!direct && !vnetwork).then_some(guard_catalogue),
         headers: headers.as_ref().map_or(&[], |headers| headers.as_slice()),
         ..Options::DEFAULT

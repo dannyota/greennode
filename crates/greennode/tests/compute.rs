@@ -1,3 +1,6 @@
+#[path = "compute/floating.rs"]
+mod floating;
+
 #[cfg(unix)]
 #[path = "compute/ssh_keys.rs"]
 mod ssh_keys;

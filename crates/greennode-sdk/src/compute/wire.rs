@@ -8,7 +8,7 @@ use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, GuardOperation, Operation, RouteAuth},
-    options::{Options, PathIds},
+    options::{AttemptCheck, Options, PathIds},
     redirect::{Classification, Retry},
     retry,
 };
@@ -147,6 +147,10 @@ impl Envelope {
         !self.original.is_empty() && !evidence.go_peer_body_screen(&self.original).is_clean()
     }
 
+    pub(super) fn guard_reflects(&self, evidence: &Evidence) -> bool {
+        self.reflects(evidence)
+    }
+
     pub(super) fn field<T: WireField, O>(
         &self,
         name: &str,
@@ -199,7 +203,7 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
     ) -> Result<Envelope, Failure<O>> {
-        self.read_with_policy(ctx, read, ids, query, evidence, false)
+        self.read_with_policy(ctx, read, ids, query, evidence, (false, None))
             .await
     }
 
@@ -211,7 +215,33 @@ impl Client {
         query: &[(&str, &str)],
         evidence: &mut Evidence,
     ) -> Result<Envelope, Failure<O>> {
-        self.read_with_policy(ctx, guard.0, ids, query, evidence, true)
+        self.read_with_policy(ctx, guard.0, ids, query, evidence, (true, None))
+            .await
+    }
+
+    pub(super) async fn read_with_attempt<O>(
+        &self,
+        ctx: &RequestContext,
+        read: &Read,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, read, ids, query, evidence, (false, attempt_check))
+            .await
+    }
+
+    pub(super) async fn read_guard_with_attempt<O>(
+        &self,
+        ctx: &RequestContext,
+        guard: GuardRead<'_>,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<Envelope, Failure<O>> {
+        self.read_with_policy(ctx, guard.0, ids, query, evidence, (true, attempt_check))
             .await
     }
 
@@ -222,7 +252,7 @@ impl Client {
         ids: &[&str],
         query: &[(&str, &str)],
         evidence: &mut Evidence,
-        guard: bool,
+        (guard, attempt_check): (bool, Option<AttemptCheck<'_>>),
     ) -> Result<Envelope, Failure<O>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
@@ -290,7 +320,10 @@ impl Client {
             runtime,
             base,
             operation,
-            &Options::DEFAULT,
+            &Options {
+                attempt_check,
+                ..Options::DEFAULT
+            },
             &path,
             query,
             RouteAuth::Bearer(session.bearer_source()),

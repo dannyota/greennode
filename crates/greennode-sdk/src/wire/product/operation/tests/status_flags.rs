@@ -83,6 +83,7 @@ const GO_FLAGS: &[(&str, &str, u8)] = &[
     ("globalloadbalancer.DeletePool", "DELETE", KEEP | NO_FOLLOW),
     ("globalloadbalancer.DeletePool", "GET", NO_FOLLOW),
     ("globalloadbalancer.WriteDetail", "GET", NO_FOLLOW),
+    ("floatingip.Exposure", "GET", NO_FOLLOW),
     ("iam.CreateGroup", "POST", REPORT_REDIRECT),
     ("iam.CreatePolicy", "POST", REPORT_REDIRECT),
     ("iam.CreateServiceAccount", "POST", REPORT_REDIRECT),

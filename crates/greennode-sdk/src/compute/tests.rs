@@ -1,4 +1,5 @@
 mod actions;
+mod floating;
 mod groups;
 mod paid;
 mod ssh_keys;

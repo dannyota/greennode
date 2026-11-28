@@ -2,22 +2,27 @@ use crate::wire::product::guard::{Decision, decide};
 use crate::wire::product::operation::RefusedGuard;
 use std::collections::HashSet;
 
+use crate::model::wire::{Field, go_json};
+use crate::wire::strict_json;
 use http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::model::wire::{Field, go_json};
-use crate::wire::{
-    product::{evidence::Evidence, redirect::Retry},
-    strict_json,
-};
+use crate::wire::product::{evidence::Evidence, options::AttemptCheck, redirect::Retry};
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch, error::SafeText};
 
-use super::mutation::{Mutation, Settlement, not_sent, safe_server, settlement_error, status};
-use super::quotes::{add_user_data, encoded_user_data, encrypted, path_id, required, server_info};
+use super::floating;
+use super::mutation::{
+    Mutation, ReplyPolicy, Settlement, not_sent, safe_server, settlement_error, status,
+    with_screened_advice,
+};
+use super::quotes::{add_user_data, path_id, required, server_info};
 use super::wire::{api, invalid_input};
-use super::{Client, CreateServerInput, Server};
+use super::{Client, CreateServerInput, Server, UnexpectedStatus};
+
+mod create;
+use create::{create_body, create_error};
 
 const CREATE: Mutation = Mutation {
     id: "compute.CreateServer",
@@ -121,6 +126,14 @@ impl Client {
                     "compute.CreateServer: MaxPrice must be finite and non-negative",
                 )));
             }
+            let floating_groups = input
+                .attach_floating_ip
+                .then(|| floating::groups(CREATE.id, &input.security_group_ids))
+                .transpose()
+                .map_err(|error| not_sent(*error))?;
+            let watch = floating::FloatingWatch::default();
+            let observer = |credentials: &_| watch.check(credentials);
+            let attempt_check = input.attach_floating_ip.then_some(AttemptCheck(&observer));
             let info = server_info(CREATE.id, &input).map_err(|error| not_sent(*error))?;
             let body = create_body(&input).map_err(|error| not_sent(*error))?;
             self.guard_write(
@@ -134,27 +147,87 @@ impl Client {
             )
             .map_err(|error| not_sent(*error))?;
             add_user_data(&input, &mut evidence);
-            self.refuse_server_name(ctx, &input.name, &mut evidence)
+            let preflight = self.server_deadline(ctx);
+            self.refuse_server_name(&preflight, &input.name, &mut evidence, attempt_check)
                 .await?;
+            let snapshot = if let Some(ids) = &floating_groups {
+                Some(
+                    self.exposure_snapshot(
+                        &preflight,
+                        ids,
+                        input.allow_open_login,
+                        &mut evidence,
+                        attempt_check,
+                    )
+                    .await
+                    .map_err(|error| not_sent(*error))?,
+                )
+            } else {
+                None
+            };
             let quote = self
-                .create_quote(ctx, &input, info, &mut evidence)
+                .create_quote(ctx, &input, info, &mut evidence, attempt_check)
                 .await
                 .map_err(|error| not_sent(*error))?;
+            if input.attach_floating_ip {
+                watch
+                    .retain_quote(&quote, &evidence)
+                    .map_err(|error| not_sent(*error))?;
+            }
             check_price(
                 CREATE.id,
                 quote.optimum_price,
                 input.max_price,
                 &mut evidence,
             )
-            .map_err(|error| not_sent(*error))?;
+            .map_err(|error| {
+                let error = *error;
+                if input.attach_floating_ip
+                    && (error.has_class(ErrorClass::PriceAboveMax)
+                        || error.has_class(ErrorClass::Unpriced))
+                {
+                    let reason = error.api_error().map_or("", ApiError::message);
+                    let message = format!("conservative monthly estimate: {reason}");
+                    not_sent(with_screened_advice(error, &message, &evidence))
+                } else {
+                    not_sent(error)
+                }
+            })?;
+            if let (Some(ids), Some(snapshot)) = (&floating_groups, snapshot) {
+                let current = self
+                    .exposure_snapshot(
+                        ctx,
+                        ids,
+                        input.allow_open_login,
+                        &mut evidence,
+                        attempt_check,
+                    )
+                    .await
+                    .map_err(|error| not_sent(*error))?;
+                if current != snapshot {
+                    let error = api(
+                        "",
+                        None,
+                        "UnexpectedStatus",
+                        "compute: unexpected status: security group snapshot changed",
+                        &evidence,
+                    )
+                    .with_detail(UnexpectedStatus);
+                    return Err(not_sent(error));
+                }
+            }
             let sensitive = input
                 .user_data
                 .as_ref()
                 .is_some_and(|data| !data.expose_secret().is_empty());
+            let policy =
+                attempt_check.map_or_else(|| ReplyPolicy::from(sensitive), ReplyPolicy::Floating);
             let body = self
-                .send_mutation(ctx, &CREATE, &[], Some(&body), sensitive, &mut evidence)
+                .send_mutation(ctx, &CREATE, &[], Some(&body), policy, &mut evidence)
                 .await
-                .map_err(|failed| create_error(failed, sensitive, &evidence))?;
+                .map_err(|failed| {
+                    create_error(failed, sensitive, input.attach_floating_ip, &evidence)
+                })?;
             let receipt = create_id(&body, &evidence)
                 .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let id = receipt
@@ -169,29 +242,58 @@ impl Client {
                 name: input.name,
                 ..Server::default()
             };
-            let settlement = if input.no_wait {
+            let mut settlement = if input.no_wait {
                 Ok(())
             } else {
-                self.settle_server(
+                self.settle_server_with_attempt(
                     ctx,
                     &id,
                     Settlement::Created(&receipt),
                     &mut server,
                     &mut evidence,
+                    attempt_check,
                 )
                 .await
             };
+            if !input.no_wait
+                && input.attach_floating_ip
+                && settlement.is_ok()
+                && !floating::address_settled(&server, &evidence)
+            {
+                settlement = self
+                    .settle_server_with_attempt(
+                        ctx,
+                        &id,
+                        Settlement::FloatingAddress(&receipt),
+                        &mut server,
+                        &mut evidence,
+                        attempt_check,
+                    )
+                    .await;
+            }
+            let safe_floating =
+                !input.attach_floating_ip || floating::can_return_server(&server, &evidence);
             let output = receipt
                 .recheck(&evidence)
                 .ok()
                 .and_then(|_| safe_server(server, &evidence))
                 .filter(|_| {
-                    !evidence.output_reflects(&json!(quote.optimum_price))
+                    safe_floating
+                        && !evidence.output_reflects(&json!(quote.optimum_price))
                         && !evidence.reflects_fixed_two(quote.optimum_price)
+                        && (!input.attach_floating_ip
+                            || !evidence.identifier_output_reflects(&json!(quote.optimum_price)))
+                        && (!input.attach_floating_ip
+                            || !evidence.text_reflects(&crate::output_number::fixed_two(
+                                quote.optimum_price,
+                            )))
                 })
                 .map(|server| CreateServerOutput {
                     server,
                     monthly_price: quote.optimum_price,
+                })
+                .filter(|output| {
+                    !input.attach_floating_ip || !evidence.serialized_output_reflects(output)
                 });
             match (settlement, output) {
                 (Ok(()), Some(output)) => Ok(output),
@@ -358,6 +460,7 @@ impl Client {
         ctx: &RequestContext,
         name: &str,
         evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
     ) -> Result<(), Failure<CreateServerOutput>> {
         let ctx = self.server_deadline(ctx);
         let invalid = || {
@@ -368,16 +471,11 @@ impl Client {
         let mut metadata = None;
         let mut ids = HashSet::<[u8; 32]>::new();
         for page in 1..=50 {
-            let results = self.server_page::<()>(&ctx, page, 10_000, evidence).await;
+            let results = self
+                .server_page_with_attempt::<()>(&ctx, page, 10_000, evidence, attempt_check, true)
+                .await;
             decide(evidence, |_| ()).map_err(|error| not_sent(*error))?;
-            let results = results.map_err(|error| {
-                let error = error.into_parts().0;
-                if status(&error) == Some(200) {
-                    invalid()
-                } else {
-                    not_sent(error)
-                }
-            })?;
+            let results = results.map_err(|error| not_sent(error.into_parts().0))?;
             let totals = (results.total_page, results.total_item, results.page_size);
             if results.page != page
                 || results.total_page > 50
@@ -416,68 +514,6 @@ impl Client {
         }
         Err(invalid())
     }
-}
-
-fn create_body(input: &CreateServerInput) -> Result<Value, Box<Error>> {
-    let invalid = |message: &str| Box::new(invalid_input(&format!("{}: {message}", CREATE.id)));
-    if input.allow_open_login && !input.attach_floating_ip {
-        return Err(invalid("AllowOpenLogin requires AttachFloatingIP"));
-    }
-    if input.attach_floating_ip {
-        return Err(invalid(
-            "floating IP creation requires security group exposure checks",
-        ));
-    }
-    let data = input
-        .user_data
-        .as_ref()
-        .filter(|data| !data.expose_secret().is_empty());
-    match (input.ssh_key_id.is_empty(), data.is_some()) {
-        (true, false) => {
-            return Err(invalid(
-                "login is required: an SSH key, or user data that installs keys",
-            ));
-        }
-        (false, true) => {
-            return Err(invalid(
-                "GreenNode refuses user data together with an SSH key; put the key in the cloud-config",
-            ));
-        }
-        _ => {}
-    }
-    let mut value = json!({
-        "name": input.name, "zoneId": input.zone_id, "flavorId": input.flavor_id,
-        "imageId": input.image_id, "networkId": input.vpc_id, "subnetId": input.subnet_id,
-        "securityGroup": input.security_group_ids, "rootDiskSize": input.root_disk_size,
-        "rootDiskTypeId": input.root_disk_type_id, "encryptionVolume": encrypted(input),
-        "isEnableAutoRenew": input.auto_renew, "attachFloating": input.attach_floating_ip,
-    });
-    for (key, text) in [
-        ("sshKeyId", &input.ssh_key_id),
-        ("dataDiskName", &input.data_disk_name),
-        ("dataDiskTypeId", &input.data_disk_type_id),
-        (
-            "rootDiskEncryptionType",
-            &input.root_disk_encryption_type_id,
-        ),
-        (
-            "dataDiskEncryptionType",
-            &input.data_disk_encryption_type_id,
-        ),
-        ("serverGroupId", &input.server_group_id),
-    ] {
-        if !text.is_empty() {
-            value[key] = json!(text);
-        }
-    }
-    if input.data_disk_size != 0 {
-        value["dataDiskSize"] = json!(input.data_disk_size);
-    }
-    if let Some(data) = data {
-        value["userData"] = json!(encoded_user_data(data).expose_secret());
-        value["userDataBase64Encoded"] = json!(true);
-    }
-    Ok(value)
 }
 
 fn create_id(
@@ -550,68 +586,6 @@ fn delete_inventory_error(evidence: &Evidence) -> Error {
         "invalid attached volume inventory; body withheld",
         evidence,
     )
-}
-
-fn create_error(
-    failed: Failure<CreateServerOutput>,
-    sensitive: bool,
-    evidence: &Evidence,
-) -> Failure<CreateServerOutput> {
-    let (error, _, dispatch) = failed.into_parts();
-    let remote_status = status(&error);
-    let error = if remote_status == Some(400)
-        || (sensitive && remote_status.is_some_and(|status| (400..600).contains(&status)))
-    {
-        let observed = error.api_error();
-        let code = observed.map_or("", ApiError::code);
-        let message = if sensitive {
-            USER_DATA_WITHHELD
-        } else {
-            observed.map_or("Bad Request", ApiError::message)
-        };
-        let message = if remote_status == Some(400) {
-            let end = message.floor_char_boundary(512 - DISK_ADVICE.len() - 2);
-            format!("{}; {DISK_ADVICE}", &message[..end])
-        } else {
-            message.to_owned()
-        };
-        evidence.screen_error(Error::from_api(ApiError::new(
-            CREATE.id,
-            remote_status,
-            SafeText::new(code, &[]),
-            SafeText::new(&message, &[]),
-            observed.is_some_and(ApiError::retryable),
-        )))
-    } else {
-        error
-    };
-    let error = if dispatch == WriteDispatch::MayHaveBeenSent
-        && !remote_status.is_some_and(|status| (400..500).contains(&status))
-        && !evidence.text_reflects(CREATE_AMBIGUOUS)
-    {
-        let reason = error
-            .api_error()
-            .map_or_else(String::new, ApiError::go_text);
-        let reason = if evidence.text_reflects(&reason) {
-            ""
-        } else {
-            reason.as_str()
-        };
-        let end = reason.floor_char_boundary(512 - CREATE_AMBIGUOUS.len() - CREATE.id.len() - 4);
-        let advice = if reason.is_empty() {
-            format!("{}: {CREATE_AMBIGUOUS}", CREATE.id)
-        } else {
-            format!("{}: {CREATE_AMBIGUOUS}: {}", CREATE.id, &reason[..end])
-        };
-        if evidence.text_reflects(&advice) {
-            error
-        } else {
-            error.with_outer_detail(crate::error::RecoveryAdvice::new(&advice))
-        }
-    } else {
-        error
-    };
-    Failure::new(error, None, dispatch)
 }
 
 fn delete_output(

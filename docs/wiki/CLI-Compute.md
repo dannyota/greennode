@@ -7,7 +7,21 @@
 Kind: Write.
 
 Checks inventory and price before placing one order. Supply an SSH key or
-`--user-data-file` for cloud-init login. Floating IP attachment is unavailable.
+`--user-data-file` for cloud-init login.
+
+With `--attach-floating-ip`, create checks the named security groups before the
+quote and again before ordering. The `OpenLogin` refusal covers unrestricted TCP
+login on ports 22, 234, 3389, and 3490. `--allow-open-login` requires
+`--attach-floating-ip` and bypasses only the login-exposure check. Use narrow
+source prefixes and consider disabling password login in the guest. Rules can
+still change after the final check.
+
+The monthly server quote includes the IP in `han-1` and `hcm-3`. Other regions
+add a conservative Elastic IP estimate in the same zone. `--max-price` caps the
+estimate. After `ACTIVE`, create allows up to two more minutes to confirm the
+address and IP ID. With `--no-wait`, the address remains unobserved. Verify
+console detach/release controls and permissions before creating. IP management
+commands are unavailable; server deletion does not prove release.
 
 | Flag                             | Type       | Required |
 | -------------------------------- | ---------- | -------- |
@@ -360,7 +374,10 @@ greennode compute list-user-images
 
 Kind: Read.
 
-Quotes the priced server fields without ordering.
+Quotes the priced server fields without ordering. With `--attach-floating-ip`,
+the server quote includes the IP for monthly creates in `han-1` and `hcm-3`. In
+other regions the quote adds a conservative Elastic IP estimate from the same
+zone.
 
 | Flag                                           | Type       | Required |
 | ---------------------------------------------- | ---------- | -------- |

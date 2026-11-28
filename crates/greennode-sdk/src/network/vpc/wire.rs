@@ -75,6 +75,11 @@ impl Read {
         }
     }
 
+    pub(super) const fn with_operation(mut self, id: &'static str) -> Self {
+        self.id = id;
+        self
+    }
+
     pub(super) fn path(self, field: &str, id: &str) -> Result<(), Error> {
         if PathIds::Strict.allows(id) {
             return Ok(());
@@ -252,132 +257,13 @@ impl<'a> Reads<'a> {
         ids: &[&str],
         query: &[(&str, &str)],
     ) -> Result<String, Error> {
-        let reflects_inputs = |evidence: &Evidence| {
-            ids.iter().any(|id| evidence.id_reflects(id))
-                || query.iter().any(|(_, value)| evidence.text_reflects(value))
-        };
-        if reflects_inputs(&self.evidence) {
-            return Err(Error::new(ErrorClass::InvalidInput));
+        RawRead {
+            session: &self.client.session,
+            ctx: self.ctx,
+            evidence: &mut self.evidence,
         }
-        let session = &self.client.session;
-        let scoped;
-        let ctx = if read.style == Style::Plain {
-            self.ctx
-        } else {
-            scoped = self
-                .ctx
-                .child_with_deadline(session.clock().monotonic_now() + read_deadline());
-            &scoped
-        };
-        let project = session
-            .require_project_id_with_evidence(ctx, &mut self.evidence)
-            .await
-            .map_err(|err| self.screen(*err))?;
-        if self.evidence.id_reflects(&project) || reflects_inputs(&self.evidence) {
-            return Err(Error::new(ErrorClass::InvalidInput));
-        }
-        let path: Vec<_> = std::iter::once(project.as_str())
-            .chain(ids.iter().copied())
-            .collect();
-        let base = session
-            .endpoints()
-            .vserver
-            .as_ref()
-            .ok_or_else(|| Error::new(ErrorClass::InvalidConfig))?;
-        let mut jitter = || session.retry_jitter();
-        let runtime = session
-            .runtime(ctx, &mut jitter)
-            .map_err(|err| self.screen(*err))?;
-        let protected = read.style != Style::Plain;
-        let operation = Operation {
-            id: read.id,
-            template: read.template,
-            method: Method::GET,
-            class: Classification::Read,
-            retry: Retry::Repeatable,
-            success: &[StatusCode::OK],
-            cap: CAP,
-            allow_recovery: true,
-            allow_empty: !protected,
-            no_output: false,
-            keep_status: false,
-            raw_body: false,
-            overflow_overrides_status: false,
-            sensitive: protected,
-            reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: protected,
-            report_redirect: protected,
-            retry_config: retry::Config::default(),
-        };
-        let reply = operation::execute_raw(
-            runtime,
-            base,
-            &operation,
-            &Options::DEFAULT,
-            &path,
-            query,
-            RouteAuth::Bearer(session.bearer_source()),
-            Bytes::new(),
-            &mut self.evidence,
-        )
+        .request(read, ids, query, &Options::DEFAULT)
         .await
-        .map_err(|err| {
-            let err = err.into_parts().0;
-            if protected {
-                if err.is_body_too_large() {
-                    return self.screen(read.protected_invalid()).with_body_too_large();
-                }
-                if let Some(api) = err.api_error()
-                    && api.is_for_operation(read.id)
-                    && let Some(status) = api.observed_status()
-                {
-                    return self.screen(
-                        read.api(Some(status), api.code(), WITHHELD, api.retryable())
-                            .retaining_response_proof(&err),
-                    );
-                }
-            }
-            self.screen(err)
-        })?;
-        if reply.status != StatusCode::OK {
-            let Err(error) = reply.classify_normalized_json(
-                read.id,
-                operation.success,
-                (true, false, operation.retry),
-            ) else {
-                return Err(self.invalid(read));
-            };
-            let error = if protected && let Some(api) = error.api_error() {
-                read.api(api.observed_status(), api.code(), WITHHELD, api.retryable())
-                    .retaining_response_proof(&error)
-            } else {
-                *error
-            };
-            return Err(self.screen(error));
-        }
-        let text = reply
-            .decode_projection(|body| Ok(go_json(body).into_owned()))
-            .map_err(|error| self.screen(*error))?;
-        if text.is_empty() {
-            return if protected {
-                Err(self.screen(read.protected_invalid()))
-            } else {
-                Ok("null".into())
-            };
-        }
-        let raw =
-            serde_json::from_str::<&RawValue>(&text).map_err(|_| self.screen(read.syntax()))?;
-        strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| {
-            self.screen(if protected {
-                read.protected_invalid()
-            } else {
-                read.invalid()
-            })
-        })?;
-        if protected && self.evidence.text_reflects(&text) {
-            return Err(self.screen(read.protected_invalid()));
-        }
-        Ok(text)
     }
 
     pub(super) async fn get<T: WireField>(&mut self, read: Read, ids: &[&str]) -> Result<T, Error> {
@@ -486,6 +372,158 @@ impl<'a> Reads<'a> {
             items: self.sanitize(read, page.items)?,
             ..page
         })
+    }
+}
+
+pub(super) struct RawRead<'a> {
+    pub(super) session: &'a crate::config::Session,
+    pub(super) ctx: &'a RequestContext,
+    pub(super) evidence: &'a mut Evidence,
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+impl RawRead<'_> {
+    fn screen(&self, error: Error) -> Error {
+        self.evidence.screen_error(error)
+    }
+
+    fn invalid(&self, read: Read) -> Error {
+        self.screen(read.invalid())
+    }
+
+    pub(super) async fn request(
+        &mut self,
+        read: Read,
+        ids: &[&str],
+        query: &[(&str, &str)],
+        options: &Options<'_>,
+    ) -> Result<String, Error> {
+        let reflects_inputs = |evidence: &Evidence| {
+            ids.iter().any(|id| evidence.id_reflects(id))
+                || query.iter().any(|(_, value)| evidence.text_reflects(value))
+        };
+        if reflects_inputs(self.evidence) {
+            return Err(Error::new(ErrorClass::InvalidInput));
+        }
+        let session = self.session;
+        let scoped;
+        let ctx = if read.style == Style::Plain {
+            self.ctx
+        } else {
+            scoped = self
+                .ctx
+                .child_with_deadline(session.clock().monotonic_now() + read_deadline());
+            &scoped
+        };
+        let project = session
+            .require_project_id_with_evidence(ctx, self.evidence)
+            .await
+            .map_err(|err| self.screen(*err))?;
+        if self.evidence.id_reflects(&project) || reflects_inputs(self.evidence) {
+            return Err(Error::new(ErrorClass::InvalidInput));
+        }
+        let path: Vec<_> = std::iter::once(project.as_str())
+            .chain(ids.iter().copied())
+            .collect();
+        let base = session
+            .endpoints()
+            .vserver
+            .as_ref()
+            .ok_or_else(|| Error::new(ErrorClass::InvalidConfig))?;
+        let mut jitter = || session.retry_jitter();
+        let runtime = session
+            .runtime(ctx, &mut jitter)
+            .map_err(|err| self.screen(*err))?;
+        let protected = read.style != Style::Plain;
+        let operation = Operation {
+            id: read.id,
+            template: read.template,
+            method: Method::GET,
+            class: Classification::Read,
+            retry: Retry::Repeatable,
+            success: &[StatusCode::OK],
+            cap: CAP,
+            allow_recovery: true,
+            allow_empty: !protected,
+            no_output: false,
+            keep_status: false,
+            raw_body: false,
+            overflow_overrides_status: false,
+            sensitive: protected,
+            reflection: crate::wire::product::operation::Reflection::Redact,
+            no_redirect: protected,
+            report_redirect: protected,
+            retry_config: retry::Config::default(),
+        };
+        let reply = operation::execute_raw(
+            runtime,
+            base,
+            &operation,
+            options,
+            &path,
+            query,
+            RouteAuth::Bearer(session.bearer_source()),
+            Bytes::new(),
+            self.evidence,
+        )
+        .await
+        .map_err(|err| {
+            let err = err.into_parts().0;
+            if protected {
+                if err.is_body_too_large() {
+                    return self.screen(read.protected_invalid()).with_body_too_large();
+                }
+                if let Some(api) = err.api_error()
+                    && api.is_for_operation(read.id)
+                    && let Some(status) = api.observed_status()
+                {
+                    return self.screen(
+                        read.api(Some(status), api.code(), WITHHELD, api.retryable())
+                            .retaining_response_proof(&err),
+                    );
+                }
+            }
+            self.screen(err)
+        })?;
+        if reply.status != StatusCode::OK {
+            let Err(error) = reply.classify_normalized_json(
+                read.id,
+                operation.success,
+                (true, false, operation.retry),
+            ) else {
+                return Err(self.invalid(read));
+            };
+            let error = if protected && let Some(api) = error.api_error() {
+                read.api(api.observed_status(), api.code(), WITHHELD, api.retryable())
+                    .retaining_response_proof(&error)
+            } else {
+                *error
+            };
+            return Err(self.screen(error));
+        }
+        let text = reply
+            .decode_projection(|body| Ok(go_json(body).into_owned()))
+            .map_err(|error| self.screen(*error))?;
+        if text.is_empty() {
+            return if protected {
+                Err(self.screen(read.protected_invalid()))
+            } else {
+                Ok("null".into())
+            };
+        }
+        let raw =
+            serde_json::from_str::<&RawValue>(&text).map_err(|_| self.screen(read.syntax()))?;
+        strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| {
+            self.screen(if protected {
+                read.protected_invalid()
+            } else {
+                read.invalid()
+            })
+        })?;
+        if protected && self.evidence.text_reflects(&text) {
+            return Err(self.screen(read.protected_invalid()));
+        }
+        Ok(text)
     }
 }
 

@@ -317,3 +317,43 @@ func TestComputeSSHPortGoldens(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeFloatingPortGoldens(t *testing.T) {
+	for _, format := range []string{"json", "table", "text"} {
+		t.Run(format, func(t *testing.T) {
+			reply := func(w http.ResponseWriter, status int, name string) {
+				body, err := os.ReadFile(filepath.Join(os.Getenv("COMPUTE_WIRE_DIR"), name+".json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.WriteHeader(status)
+				_, _ = w.Write(body)
+			}
+			routes := map[string]func(http.ResponseWriter, *http.Request){
+				"/v2/proj-1/servers": func(w http.ResponseWriter, r *http.Request) {
+					if r.Method == "POST" {
+						reply(w, 202, "server-order-accepted")
+						return
+					}
+					reply(w, 200, "server-order-inventory")
+				},
+				"/v2/proj-1/secgroups/sg-1":               func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-floating-group") },
+				"/v2/proj-1/secgroups/sg-1/secGroupRules": func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-floating-rules") },
+				"/v1/price":                   func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-order-quote") },
+				"/v2/proj-1/servers/server-1": func(w http.ResponseWriter, _ *http.Request) { reply(w, 200, "server-floating-active") },
+			}
+			root, stdout, stderr := newSvcRoot(t, newSvcFixture(routes))
+			root.SetArgs([]string{"--region", "hcm-3", "--project-id", "proj-1", "--output", format, "compute", "create-server",
+				"--name", "web-1", "--zone-id", "zone-1", "--flavor-id", "flavor-1", "--image-id", "image-1", "--vpc-id", "vpc-1", "--subnet-id", "subnet-1", "--security-group-id", "sg-1", "--ssh-key-id", "key-1", "--root-disk-size", "20", "--root-disk-type-id", "disk-1", "--max-price", "20", "--attach-floating-ip"})
+			if err := root.ExecuteContext(computeDiscoveryCLIContext()); err != nil {
+				t.Fatal(err)
+			}
+			if stderr.Len() != 0 {
+				t.Fatal("unexpected stderr")
+			}
+			if err := os.WriteFile(filepath.Join(os.Getenv("COMPUTE_GOLDEN_DIR"), fmt.Sprintf("create-server-floating-ip.%s.golden", format)), stdout.Bytes(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -9,7 +9,7 @@ use crate::model::wire::WireField;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{self, Operation, RouteAuth},
-    options::Options,
+    options::{AttemptCheck, Options},
     redirect::{Classification, Retry},
     retry,
 };
@@ -30,14 +30,15 @@ pub(super) struct Mutation {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum ReplyPolicy {
+pub(super) enum ReplyPolicy<'a> {
     Ordinary,
     UserData,
     PrivateKey,
     SshPublic,
+    Floating(AttemptCheck<'a>),
 }
 
-impl From<bool> for ReplyPolicy {
+impl From<bool> for ReplyPolicy<'_> {
     fn from(sensitive: bool) -> Self {
         if sensitive {
             Self::UserData
@@ -49,6 +50,7 @@ impl From<bool> for ReplyPolicy {
 
 pub(super) enum Settlement<'a> {
     Created(&'a crate::wire::product::guard::AcknowledgedId),
+    FloatingAddress(&'a crate::wire::product::guard::AcknowledgedId),
     Deleted,
     Status(&'static str),
     Rebooted(tokio::time::Instant),
@@ -60,6 +62,7 @@ impl Settlement<'_> {
         let has_status = |status| server.status.eq_ignore_ascii_case(status);
         match self {
             Self::Created(_) => has_status("ACTIVE"),
+            Self::FloatingAddress(_) => false,
             Self::Deleted => has_status("DELETED"),
             Self::Status(status) => has_status(status),
             Self::Rebooted(earliest) => has_status("ACTIVE") && now >= *earliest,
@@ -76,13 +79,13 @@ impl Settlement<'_> {
     reason = "The public API returns Failure by value"
 )]
 impl Client {
-    pub(super) async fn send_mutation<O>(
+    pub(super) async fn send_mutation<'a, O>(
         &self,
         ctx: &RequestContext,
         mutation: &Mutation,
         ids: &[&str],
         body: Option<&Value>,
-        policy: impl Into<ReplyPolicy>,
+        policy: impl Into<ReplyPolicy<'a>>,
         evidence: &mut Evidence,
     ) -> Result<crate::wire::product::sender::Response, Failure<O>> {
         let policy = policy.into();
@@ -158,18 +161,24 @@ impl Client {
             ),
             retry_config: retry::Config::default(),
         };
+        let options = Options {
+            attempt_check: if let ReplyPolicy::Floating(check) = policy {
+                Some(check)
+            } else {
+                None
+            },
+            receipt_policy: if matches!(policy, ReplyPolicy::PrivateKey) {
+                crate::wire::product::guard::ReceiptPolicy::Transport
+            } else {
+                crate::wire::product::guard::ReceiptPolicy::All
+            },
+            ..Options::DEFAULT
+        };
         let reply = operation::execute_raw(
             runtime,
             base,
             &operation,
-            &Options {
-                receipt_policy: if matches!(policy, ReplyPolicy::PrivateKey) {
-                    crate::wire::product::guard::ReceiptPolicy::Transport
-                } else {
-                    crate::wire::product::guard::ReceiptPolicy::All
-                },
-                ..Options::DEFAULT
-            },
+            &options,
             &path,
             &[],
             RouteAuth::Bearer(self.session.bearer_source()),
@@ -255,22 +264,37 @@ impl Client {
         latest: &mut Server,
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
+        self.settle_server_with_attempt(ctx, id, mode, latest, evidence, None)
+            .await
+    }
+
+    pub(super) async fn settle_server_with_attempt(
+        &self,
+        ctx: &RequestContext,
+        id: &str,
+        mode: Settlement<'_>,
+        latest: &mut Server,
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<(), Box<Error>> {
         let clock = self.session.clock();
-        let minutes = match mode {
-            Settlement::Created(_) | Settlement::Resized(_) => 15,
-            Settlement::Deleted => 10,
-            Settlement::Status(_) | Settlement::Rebooted(_) => 5,
+        let duration = match mode {
+            Settlement::Created(_) | Settlement::Resized(_) => Duration::from_secs(15 * 60),
+            Settlement::Deleted => Duration::from_secs(10 * 60),
+            Settlement::Status(_) | Settlement::Rebooted(_) => Duration::from_secs(5 * 60),
+            Settlement::FloatingAddress(_) => super::floating::ADDRESS_WAIT,
         };
-        let wait =
-            ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(minutes * 60));
+        let wait = ctx.child_with_deadline(clock.monotonic_now() + duration);
         guarded_poll!(evidence, {
             check(&wait, clock)?;
-            if let Settlement::Created(receipt) = mode {
+            if let Settlement::Created(receipt) | Settlement::FloatingAddress(receipt) = mode {
                 receipt.recheck(evidence)?;
             }
-            let result = self.server_guard::<()>(&wait, id, evidence).await;
+            let result = self
+                .server_guard_with_attempt::<()>(&wait, id, evidence, attempt_check)
+                .await;
             check(&wait, clock)?;
-            if let Settlement::Created(receipt) = mode {
+            if let Settlement::Created(receipt) | Settlement::FloatingAddress(receipt) = mode {
                 receipt.recheck(evidence)?;
             }
             match result {
@@ -310,7 +334,10 @@ impl Client {
                     if latest.status.eq_ignore_ascii_case("ERROR") {
                         return Err(Box::new(Error::new(ErrorClass::Failed)));
                     }
-                    if mode.matches(latest, clock.monotonic_now()) {
+                    if mode.matches(latest, clock.monotonic_now())
+                        || (matches!(mode, Settlement::FloatingAddress(_))
+                            && super::floating::address_settled(latest, evidence))
+                    {
                         return Ok(());
                     }
                 }

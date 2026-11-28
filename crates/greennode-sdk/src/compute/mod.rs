@@ -2,6 +2,7 @@
 
 mod aggregates;
 mod flavors;
+mod floating;
 mod inventory;
 mod models;
 mod mutation;
@@ -19,6 +20,7 @@ mod tests;
 pub use crate::model::server::{
     Flavor, Image, NetworkInterface, PackageLimit, Server, ServerSecgroup, Zone,
 };
+pub use floating::OpenLogin;
 pub use models::*;
 pub use prices::{
     FlavorPrice, FlavorPriceReference, ListFlavorPricesInput, ListFlavorPricesOutput,

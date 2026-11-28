@@ -9,6 +9,7 @@ mod deadlines;
 mod tests;
 
 pub use models::*;
+pub(crate) use policy::{exposure_invalid, exposure_reflects, read_security_group_exposure};
 
 use crate::{Failure, RequestContext};
 

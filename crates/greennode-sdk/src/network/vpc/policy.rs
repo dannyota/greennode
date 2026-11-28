@@ -1,12 +1,18 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use crate::config::Session;
 use crate::error::SafeText;
-use crate::wire::product::options::PathIds;
+use crate::wire::product::{
+    evidence::Evidence,
+    options::{AttemptCheck, Options, PathIds},
+};
+use crate::wire::strict_json;
 use crate::{ApiError, Error, ErrorClass, Failure, List, RequestContext};
+use serde_json::value::RawValue;
 
 use super::super::{Client, failure};
 use super::models::*;
-use super::wire::{Read, Reads, Style, field, objects};
+use super::wire::{RawRead, Read, Reads, Style, field, objects};
 
 const LIST_ACLS: Read = Read::new(
     "network.ListNetworkACLs",
@@ -257,4 +263,148 @@ pub(super) fn parse_acl(raw: &str, id: &str) -> Result<Option<NetworkAcl>, ()> {
 fn unique_type_ids<'a>(mut ids: impl Iterator<Item = &'a str>) -> bool {
     let mut seen = HashSet::new();
     ids.all(|id| PathIds::Strict.allows(id) && seen.insert(id))
+}
+
+const EXPOSURE: &str = "floatingip.Exposure";
+
+pub(crate) struct SecurityGroupExposure {
+    pub(crate) group: Box<RawValue>,
+    pub(crate) rules: Vec<Box<RawValue>>,
+}
+
+pub(crate) async fn read_security_group_exposure(
+    session: &Session,
+    ctx: &RequestContext,
+    id: &str,
+    evidence: &mut Evidence,
+    attempt_check: Option<AttemptCheck<'_>>,
+    max_rules: usize,
+) -> Result<SecurityGroupExposure, Box<Error>> {
+    let mut read = RawRead {
+        session,
+        ctx,
+        evidence,
+    };
+    let options = Options {
+        attempt_check,
+        ..Options::DEFAULT
+    };
+    let group = read
+        .request(GET_GROUP.with_operation(EXPOSURE), &[id], &[], &options)
+        .await
+        .map_err(Box::new)?;
+    let group_doc =
+        checked_data(&group, read.evidence).map_err(|()| exposure_invalid(read.evidence))?;
+    let fields = objects(group_doc.get()).map_err(|()| exposure_invalid(read.evidence))?;
+    let group_id = exact_raw(&fields, "id")
+        .and_then(|raw| serde_json::from_str::<String>(raw.get()).map_err(|_| ()))
+        .map_err(|()| exposure_invalid(read.evidence))?;
+    if group_id != id || !PathIds::Strict.allows(&group_id) || read.evidence.id_reflects(&group_id)
+    {
+        return Err(exposure_invalid(read.evidence));
+    }
+    let rules = read
+        .request(LIST_RULES.with_operation(EXPOSURE), &[id], &[], &options)
+        .await
+        .map_err(Box::new)?;
+    let fields = objects(&rules).map_err(|()| exposure_invalid(read.evidence))?;
+    let rules_doc = exact_raw(&fields, "data").map_err(|()| exposure_invalid(read.evidence))?;
+    use serde::de::DeserializeSeed;
+    let mut decoder = serde_json::Deserializer::from_str(rules_doc.get());
+    let decoded_rules = BoundedRules(max_rules)
+        .deserialize(&mut decoder)
+        .map_err(|_| exposure_invalid(read.evidence))?;
+    if exposure_reflects(&rules, read.evidence)
+        || decoded_rules.iter().any(|row| !row.get().starts_with('{'))
+    {
+        return Err(exposure_invalid(read.evidence));
+    }
+    Ok(SecurityGroupExposure {
+        group: group_doc.to_owned(),
+        rules: decoded_rules,
+    })
+}
+
+struct BoundedRules(usize);
+
+impl<'de> serde::de::DeserializeSeed<'de> for BoundedRules {
+    type Value = Vec<Box<RawValue>>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        struct Visitor(usize);
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Vec<Box<RawValue>>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a bounded array of rules")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut rules = Vec::new();
+                while let Some(rule) = sequence.next_element::<&RawValue>()? {
+                    if rules.len() == self.0 {
+                        return Err(serde::de::Error::custom("too many rules"));
+                    }
+                    rules.push(rule.to_owned());
+                }
+                Ok(rules)
+            }
+        }
+        deserializer.deserialize_seq(Visitor(self.0))
+    }
+}
+
+pub(crate) fn exposure_reflects(raw: &str, evidence: &Evidence) -> bool {
+    !evidence.go_peer_body_screen(raw.as_bytes()).is_clean()
+}
+
+fn checked_data<'a>(text: &'a str, evidence: &Evidence) -> Result<&'a RawValue, ()> {
+    if exposure_reflects(text, evidence) {
+        return Err(());
+    }
+    let document = objects(text)?;
+    exact_raw(&document, "data")
+}
+
+fn exact_raw<'a>(fields: &BTreeMap<String, &'a RawValue>, field: &str) -> Result<&'a RawValue, ()> {
+    if fields
+        .keys()
+        .any(|key| key != field && strict_json::field_matches(key, field))
+    {
+        return Err(());
+    }
+    fields.get(field).copied().ok_or(())
+}
+
+pub(crate) fn exposure_invalid(evidence: &Evidence) -> Box<Error> {
+    Box::new(
+        Error::from_api(ApiError::without_fallback(
+            EXPOSURE,
+            None,
+            SafeText::new("InvalidResponse", &[]),
+            SafeText::new("invalid floating IP response; body withheld", &[]),
+            false,
+        ))
+        .screen_api(&|text| evidence.text_reflects(text)),
+    )
+}
+
+#[cfg(test)]
+mod bounded_rules_tests {
+    use super::*;
+    use serde::de::DeserializeSeed;
+
+    #[test]
+    fn refuses_at_rule_cap_before_decoding_malformed_tail() {
+        let input = format!("[{},{{", vec!["{}"; 4097].join(","));
+        let mut decoder = serde_json::Deserializer::from_str(&input);
+        let error = BoundedRules(4096).deserialize(&mut decoder).unwrap_err();
+        assert!(error.to_string().contains("too many rules"));
+    }
 }
