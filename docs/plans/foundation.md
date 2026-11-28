@@ -8,12 +8,12 @@ The primary is the integration owner of the workspace `Cargo.toml`, `Cargo.lock`
 
 ## Order
 
-Task 14 runs now. Task 10 waits for the owner. Task 12 follows task 14 reaching the latest vngcloud release. Task 13 lands before the first CI publish.
+Task 14 runs now. Task 10 waits for the owner. Task 12 runs once #118 merges, alongside task 14. Task 13 lands before the first CI publish.
 
 ## Tasks
 
 - [ ] **10. Live read check.** The billing template, its reads and the frame have landed. The owner approves one read-only live billing run; until then live behavior stays unverified.
-- [ ] **12. First release.** The primary does the one-time GitHub setup. The owner approves the `v0.1.0` tag and publishes both crates by hand as the [first release design](../design/release-first.md) describes, then adds the two Trusted Publishers.
+- [ ] **12. First release.** After #118 merges, release `v0.1.0` from the owner's Mac as the [Mac release design](../design/release-first.md) describes. Later `0.x` releases follow the same steps until task 13 proves the CI publish workflow; `1.0.0` comes when every baseline operation ships and the owner judges it stable.
 - [ ] **13. Release proof on Ubuntu.** Run `scripts/test/loopback-registry-proof.py` on Ubuntu with Cargo 1.100.0 before the first CI publish, as the [release design](../design/release.md#unverified) requires.
 - [ ] **14. Services.** In waves. Before each wave the primary registers the wave's services in both crates and lands any shared model or quote and discovery code they need. One implementer and one worktree per service or slice, reads before writes, each write with adversarial review. A slice owns its service's paths in both crates as the [layout](../design/architecture.md#layout) lists them. Baseline additions from `v1.2.0` to `v1.7.0` to build with their service: backup and volume list reads refuse reflected credentials and cover han-1; compute create-server adds disk-zone advice on HTTP 400; monitor adds dashboard list and get and HTTP check response-time reads; network adds NAT detail and inbound-rule reads, hcm-3 Public NAT create and delete, and clears stale partial IDs on an ambiguous create. Landed: waves 1 and 2, the shared quote code, and the globalloadbalancer and cdn reads. Baseline additions from `v1.7.0` to `v1.8.1` to build with their service:
   - Compute: flavor price discovery accepts a root disk type and quotes explicitly selected disabled zones.

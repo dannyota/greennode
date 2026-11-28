@@ -2,8 +2,9 @@
 
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
-exactly `=VERSION` of the SDK. The owner publishes the first pair from the Mac,
-later ones through GitHub Actions. Uploads are permanent ([Cargo publishing]).
+exactly `=VERSION` of the SDK. The owner publishes from the Mac until the CI
+publish workflow is proven, then through GitHub Actions. Uploads are permanent
+([Cargo publishing]).
 
 ## Approaches
 
@@ -31,10 +32,11 @@ A version-only release commit changes the root and tool `Cargo.toml` plus
 `Cargo.lock`. Refresh with `cargo +1.100.0 check --workspace --all-targets`,
 then repeat with `--locked`. Do not edit a member's inherited version.
 
-## First release from the owner's Mac
+## Releases from the owner's Mac
 
-The owner publishes the first pair by hand, as the
-[first release](release-first.md) design specifies.
+Every `0.x.y` release is published by hand, as the
+[Mac release](release-first.md) design specifies, until the CI publish workflow
+is proven.
 
 ## Release workflow
 

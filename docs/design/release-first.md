@@ -1,77 +1,31 @@
-# First release from the owner's Mac
+# Releases from the owner's Mac
 
-The first `greennode-sdk` and `greennode` versions are published from the
-owner's Mac, because Trusted Publishing needs each crate to exist first. The
-[release design](release.md) owns versions, the workflows, evidence, packaging
-and recovery.
+Until the CI publish workflow is proven, every `0.x.y` release of
+`greennode-sdk` and `greennode` is published from the owner's Mac with
+`cargo publish`; Trusted Publishing also needs each crate to exist first. The
+owner decides each release and declares `1.0.0` once every baseline operation
+ships and the owner judges it stable. The [release design](release.md) owns
+versions, packaging and recovery.
 
-1. The approved tag and immutable GitHub Release must already exist. Use Bash,
-   Python 3.11 or later, `jq`, and `gh` as `dannyota`. Start in a clean,
-   reviewed checkout of protected `master` used only for release helpers, never
-   to compile the tag. Gather the
-   [release evidence](release.md#release-evidence) into a fresh owner-only
-   directory per attempt and check it in a separate `bash -euo pipefail`
-   process, so any failure stops it; `COMMIT` is set only when it succeeds.
-   Tracing and `gh` debug output are off, and `gh` gets the owner's token per
-   command. An owners file is `null` only for crates.io's exact not-found body.
+1. The release commit is on protected `master` with the `ci` check green, and
+   its version commit has landed as [versions](release.md#versions) describes.
+   With the owner's approval for this release, the primary creates the signed
+   annotated tag `vX.Y.Z` on that commit and pushes it. Use Bash, Python 3.11 or
+   later, `jq`, and `gh` as `dannyota`, from a clean checkout of protected
+   `master` used only for release helpers, never to compile the tag:
 
    ```bash
    set +x
-   export TAG=v0.1.0 REPO=dannyota/greennode TRUSTED_SCRIPTS="$PWD/scripts"
-   mkdir -p "$HOME/.local/state/greennode/evidence"
-   export EVIDENCE=$(mktemp -d "$HOME/.local/state/greennode/evidence/$TAG.XXXXXX")
-   unset COMMIT
-   if bash -euo pipefail <<'EOF'; then COMMIT=$(< "$EVIDENCE/commit"); fi
-   set +x
-   umask 077
-   unset GH_DEBUG
-   gh() {
-     local token
-     token=$(command gh auth token -u dannyota) && test -n "$token" || return 1
-     GH_TOKEN="$token" command gh "$@"
-   }
+   export TAG=vX.Y.Z TRUSTED_SCRIPTS="$PWD/scripts"
    git fetch origin master --tags
    COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
    git merge-base --is-ancestor "$COMMIT" origin/master
-   gh release view "$TAG" --repo "$REPO" \
-     --json tagName,isDraft,publishedAt,isImmutable,assets > "$EVIDENCE/release.json"
-   gh api --paginate --slurp \
-     "repos/$REPO/actions/workflows/release.yml/runs?event=push&head_sha=$COMMIT" |
-     jq --arg tag "$TAG" '[.[].workflow_runs[] | select(.head_branch == $tag) |
-       {databaseId: .id, headBranch: .head_branch, headSha: .head_sha, path,
-        conclusion, event}]' > "$EVIDENCE/runs.json"
-   RUN=$(jq -er 'if length == 1 then .[0].databaseId else error("runs") end' \
-     "$EVIDENCE/runs.json")
-   for NAME in darwin-arm64 linux-amd64 linux-arm64 windows-amd64 crate-checksums; do
-     gh run download "$RUN" --repo "$REPO" --name "$NAME" --dir "$EVIDENCE/artifacts/$NAME"
-   done
-   git ls-tree -r -z --full-tree "$COMMIT" > "$EVIDENCE/tree"
-   for PAIR in greennode-sdk:sdk greennode:tool; do
-     CRATE=${PAIR%%:*}
-     OUT="$EVIDENCE/${PAIR##*:}-owners.json"
-     CODE=$(curl -sS -A greennode-release -o "$OUT.body" -w '%{http_code}' \
-       "https://crates.io/api/v1/crates/$CRATE/owners")
-     case "$CODE" in
-       200) jq -e '.users | type == "array"' "$OUT.body" > /dev/null
-            mv "$OUT.body" "$OUT" ;;
-       404) jq -e --arg d "crate \`$CRATE\` does not exist" \
-              '. == {errors: [{detail: $d}]}' "$OUT.body" > /dev/null
-            printf 'null\n' > "$OUT" ;;
-       *) exit 1 ;;
-     esac
-   done
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" evidence "$TAG" "$COMMIT" \
-     "$EVIDENCE/release.json" "$EVIDENCE/runs.json" "$EVIDENCE/sdk-owners.json" \
-     "$EVIDENCE/tool-owners.json" "$EVIDENCE/artifacts" "$EVIDENCE/tree"
-   printf '%s\n' "$COMMIT" > "$EVIDENCE/commit"
-   EOF
-   test -n "${COMMIT:-}"
    ```
 
-   An agent may check the evidence, but only the owner authorizes the tag and
-   Release. Later steps run commands one at a time without abort-on-error, so
-   the wait checks and step 7 cleanup always run. After login always clean up in
-   step 7.
+   The tag push also runs the release workflow, which may build the GitHub
+   Release; crates.io publication below does not depend on it. Later steps run
+   commands one at a time without abort-on-error, so the wait checks and step 7
+   cleanup always run. After login always clean up in step 7.
 
 2. In a disposable macOS checkout of `$COMMIT`, with no credentials or write
    access to the owner's trusted checkout or receipt directory, run
@@ -104,12 +58,14 @@ and recovery.
 
    The owner keeps this receipt and its archives. Do not overwrite them on
    recovery. The Mac receipt approves Mac bytes, not the Linux Release bytes.
-   `--first` requires both crate names to be unregistered.
+   `--first` requires both crate names to be unregistered; omit it after the
+   first release, when both names must exist and both new versions be absent.
 
-3. **Owner only.** Confirm the release evidence again after the dry run. In
+3. **Owner only.** Confirm the tag and receipt again after the dry run. In
    crates.io Settings → API Tokens, create a short-lived token with
-   `publish-new` only and exact patterns `greennode-sdk` and `greennode`. No
-   wildcard, update, owner or yank scope ([Token scopes]).
+   `publish-new` for the first release, or `publish-update` after it, and exact
+   patterns `greennode-sdk` and `greennode`. No wildcard, update, owner or yank
+   scope ([Token scopes]).
 
 4. **Owner only.** In the fresh checkout, log in with the built-in provider. The
    token lives only in the form, the hidden prompt, Cargo, and the isolated
@@ -167,16 +123,17 @@ and recovery.
    unset CARGO_HOME GREENNODE_RELEASE_CARGO_HOME
    ```
 
-8. **Owner only.** Set up both Trusted Publishers after confirming the pair.
-   Follow [one-time setup](release.md#one-time-setup).
+8. **Owner only.** After the first release, set up both Trusted Publishers once
+   the CI publish workflow is proven. Follow
+   [one-time setup](release.md#one-time-setup).
 
-## Resume the first release
+## Resume a release
 
-Repeat the release evidence check. Use the saved Mac receipt and another fresh
-checkout that never built the tag. Run `state` without `--first`. If both match,
-do not upload. If the SDK matches and the tool name is unregistered, create a
-new `publish-new` token scoped only to `greennode`. Repeat steps 4, 6 and 7 and
-set `PROVIDER` as in step 5 without uploading the SDK. Do not retry an unknown
+Repeat the step 1 checks. Use the saved Mac receipt and another fresh checkout
+that never built the tag. Run `state` without `--first`. If both match, do not
+upload. If the SDK matches and the tool name is unregistered, create a new
+`publish-new` token scoped only to `greennode`. Repeat steps 4, 6 and 7 and set
+`PROVIDER` as in step 5 without uploading the SDK. Do not retry an unknown
 upload. Stop without the original receipt or exact-run evidence. If the evidence
 expired and only the SDK exists, cut a new shared tag. Omit `--first` for that
 bootstrap, check SDK ownership and both new versions absent, and use separate
