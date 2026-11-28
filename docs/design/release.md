@@ -257,7 +257,11 @@ proof is a prerequisite for the first CI upload and is still to run.
    Publishing, select GitHub. Set owner `dannyota`, repository `greennode`,
    workflow `publish-crates.yml` and environment `crates-io`. CI uses OIDC. Keep
    the Mac token out of GitHub secrets.
-3. For a release chosen by the owner, confirm the `gh` Release and exact-run
+3. The first CI candidate must pass `check-crate-release.py previous` and
+   `shipped` against the latest tool release on crates.io, not the latest GitHub
+   tag, before its upload is authorized, so a Mac release whose GitHub Release
+   failed is still compared.
+4. For a release chosen by the owner, confirm the `gh` Release and exact-run
    fields against live output in a preflight-only dispatch. Pass that preflight
    and obtain the owner's approval for the first live CI dispatch. Prove both
    uploads, their approved checksums and ownership. Recover a partial CI upload

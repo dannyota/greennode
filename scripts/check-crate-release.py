@@ -529,8 +529,8 @@ def tagged_tree(tree, mac=False):
                 or any(part in (b"", b".", b"..") for part in parts)):
             raise GateError("greennode: unsafe tagged tree")
         paths.add(path)
-        if (parts[-1].lower() in (b"config", b"config.toml")
-                and b".cargo" in [part.lower() for part in (parts[-2:-1] if mac else parts[:-1])]):
+        if (len(parts) >= 2 and (not mac or len(parts) == 2)
+                and parts[-2].lower() == b".cargo" and parts[-1].lower() in (b"config", b"config.toml")):
             raise GateError("greennode: Cargo config in tagged tree")
 
 
@@ -724,7 +724,8 @@ def previous_release(tag, fetch=None):
         raise GateError("greennode: invalid version list")
     rows, meta = payload.get("versions"), payload.get("meta")
     if (not isinstance(rows, list) or not isinstance(meta, dict) or type(meta.get("total")) is not int
-            or meta["total"] <= 0 or meta["total"] != len(rows) or meta.get("next_page") is not None):
+            or meta["total"] <= 0 or meta["total"] != len(rows) or "next_page" not in meta
+            or meta["next_page"] is not None):
         raise GateError("greennode: invalid version list")
     seen = set()
     for row in rows:

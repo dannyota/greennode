@@ -135,14 +135,18 @@ file settings.
 )
 ```
 
-Stop on guard failure before invoking Cargo. Only one publish attempt may run at
-a time. Immediately before the command, record the crate, version and approved
-checksum as `unknown` in the durable Mac upload record. Retain that entry until
-reconciliation confirms the outcome, even if the shell exits.
+Set `PUBLISH_TARGET` to a new empty directory outside the checkout, so Cargo's
+build output never lands under the checkout's ignored `target/` and the tool
+upload still sees a checkout with no ignored files. Stop on guard failure before
+invoking Cargo. Only one publish attempt may run at a time. Immediately before
+the command, record the crate, version and approved checksum as `unknown` in the
+durable Mac upload record. Retain that entry until reconciliation confirms the
+outcome, even if the shell exits.
 
 ```bash
 /usr/bin/env -i HOME="$PUBLISH_HOME" PATH="$PUBLISH_PATH" \
   "$PUBLISH_CARGO" +1.100.0 publish --no-verify --locked --registry crates-io \
+  --target-dir "$PUBLISH_TARGET" \
   --package greennode-sdk --config net.retry=0
 ```
 
@@ -167,6 +171,7 @@ environment. Record the pending tool upload as in step 3 and run:
 ```bash
 /usr/bin/env -i HOME="$PUBLISH_HOME" PATH="$PUBLISH_PATH" \
   "$PUBLISH_CARGO" +1.100.0 publish --no-verify --locked --registry crates-io \
+  --target-dir "$PUBLISH_TARGET" \
   --package greennode --config net.retry=0
 ```
 
