@@ -20,7 +20,8 @@ npm ci --ignore-scripts
 make hooks-install
 ```
 
-`make reference` clones the Go CLI this project ports into `.reference/`.
+`make reference` clones the compatibility baseline, the Go CLI greennode
+matches, into `.reference/`.
 
 ## Making a change
 

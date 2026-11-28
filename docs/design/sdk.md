@@ -371,7 +371,7 @@ Core owns the first billing read through both crates to prove the interfaces.
 Land shared model and quote/discovery prerequisites before releasing those
 services to parallel work. Split large domains such as network by disjoint
 concerns; their service owner integrates `mod.rs` and fixtures. A new common
-contract goes through the integration owner before dependent ports.
+contract goes through the integration owner before dependent implementations.
 
 ## Public docs and checks
 

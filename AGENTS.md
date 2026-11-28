@@ -4,7 +4,7 @@ Shared rules live here and in `instructions/`. [CLAUDE.md](CLAUDE.md) adds Claud
 
 ## State
 
-`greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. It is compatible with [vngcloud](https://github.com/dannyota/vngcloud), the Go SDK and CLI it replaces. It is licensed under Apache-2.0 and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
+`greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. Its compatibility baseline is [vngcloud](https://github.com/dannyota/vngcloud), the Go SDK and CLI whose commands, flags and output it matches. It is licensed under Apache-2.0 and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
 
 The SDK has configuration, both sign-in kinds with the token cache, the request stack, project discovery and the shared quote code. The tool ships `version`, `configure`, and the services of waves 1 to 3 that have landed (billing, project, backup, portal, tagging, vks, dns, database, containerregistry, globalloadbalancer reads, cdn reads); the rest is in the [foundation plan](docs/plans/foundation.md).
 

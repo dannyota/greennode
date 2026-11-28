@@ -352,21 +352,21 @@ Use a `services` array of named services with `operations` arrays. Each op has
 (exact field `name`, Go `type` and boolean `required`). A flag row is not a
 JSON-only field. Compare each registered declaration and actual clap argument
 inventory against the applicable baseline entries, handling persistent flags and
-implicit help/JSON arguments separately. An absent unported op is fine; extra,
-duplicate or mismatched entries are failures.
+implicit help/JSON arguments separately. An absent operation not yet built is
+fine; extra, duplicate or mismatched entries are failures.
 
 The wiki proves inventory and stated metadata, not parser defaults, exclusive
-flags, side effects or output. Independently build root, version and hidden
-`gen-docs` tests; verify positional counts, global flags before and after the
-leaf, implicit flag presence/absence, empty input, real parser types, defaults
-(such as quota `--max-days-left=7`), and mutually exclusive options (such as
-`--zone-id` and `--volume-type-zone-id` on `volume list-volume-types`). Run
-`gen-docs` twice and compare bytes to committed generated pages. Run dedicated
-`configure` syntax and behavior tests, including all key positions and masking.
-Generate `crates/greennode/tests/parity/shipped-commands.json` with the built
-candidate's hidden `__command-inventory` command. It prints a JSON array of
-command lines as typed, each starting with `greennode`, sorted by UTF-8 bytes,
-with hidden commands excluded. The built-ins are exactly `greennode`,
+flags, side effects or output. Adapt the pinned baseline's root, version and
+hidden `gen-docs` tests; verify positional counts, global flags before and after
+the leaf, implicit flag presence/absence, empty input, real parser types,
+defaults (such as quota `--max-days-left=7`), and mutually exclusive options
+(such as `--zone-id` and `--volume-type-zone-id` on `volume list-volume-types`).
+Run `gen-docs` twice and compare bytes to committed generated pages. Run
+dedicated `configure` syntax and behavior tests, including all key positions and
+masking. Generate `crates/greennode/tests/parity/shipped-commands.json` with the
+built candidate's hidden `__command-inventory` command. It prints a JSON array
+of command lines as typed, each starting with `greennode`, sorted by UTF-8
+bytes, with hidden commands excluded. The built-ins are exactly `greennode`,
 `greennode --help`, `greennode --version`, `greennode -h`, `greennode -v`,
 `greennode help`, and `greennode version`; each visible service adds
 `greennode <service>`, and each operation adds

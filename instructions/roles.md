@@ -36,7 +36,7 @@ Report: exact new, changed, and deleted files; red-then-green evidence per chang
 
 ## Reviewer
 
-Review; never implement. Read-only: no edits, no writing commands, no Git changes, no live calls. Run `git status --short` before and after and report both. Read the diff, the base and head commits, the gate output the brief supplies, every touched file, its design, and the baseline code it ports. Never review work you wrote.
+Review; never implement. Read-only: no edits, no writing commands, no Git changes, no live calls. Run `git status --short` before and after and report both. Read the diff, the base and head commits, the gate output the brief supplies, every touched file, its design, and the baseline code it must match. Never review work you wrote.
 
 Code review covers correctness against the design and the baseline, tests that prove the change, error handling, bounds, hostile input, and the threats in the [security design](../docs/design/security.md#threats) wherever the change touches auth, credentials, or writes. For an operation built from the baseline, compare the request method, path, query, and body, the output keys, the guards, and the exit code against the baseline source, not against the implementer's summary.
 
