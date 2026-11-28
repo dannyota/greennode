@@ -117,10 +117,10 @@ impl<'a> FieldScan<'a> {
         }
     }
 
-    fn number(&self, number: f64, text: &str, identifier: bool) -> bool {
+    fn number(&self, number: f64, text: &str, identifier: bool, include_sdk_float: bool) -> bool {
         self.text(text, identifier)
             || (number.is_finite()
-                && crate::output_number::any_spelling(number, true, |spelling| {
+                && crate::output_number::any_spelling(number, include_sdk_float, |spelling| {
                     spelling != text && self.text(spelling, identifier)
                 }))
     }
@@ -211,22 +211,26 @@ display_values!(
     i32,
     u16,
     u32,
-    u64,
-    usize,
     f32,
     serde_json::Number,
     time::OffsetDateTime
 );
 
-impl PublicOutput for i64 {
-    fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
-        scan.number(*self as f64, &self.to_string(), identifier)
-    }
+macro_rules! wide_integers {
+    ($($ty:ty),*) => {$(
+        impl PublicOutput for $ty {
+            fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
+                scan.number(*self as f64, &self.to_string(), identifier, false)
+            }
+        }
+    )*};
 }
+
+wide_integers!(i64, u64, usize);
 
 impl PublicOutput for f64 {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
-        scan.number(*self, &self.to_string(), identifier)
+        scan.number(*self, &self.to_string(), identifier, true)
     }
 }
 
@@ -265,6 +269,52 @@ impl PublicOutput for serde_json::value::RawValue {
 mod tests {
     use regex_lite::Regex;
     use std::{collections::BTreeSet, path::Path};
+
+    #[test]
+    fn numeric_fields_screen_and_record_their_declared_type_spellings() {
+        use super::{BodyMatcher, Evidence, FieldScan, PublicOutput};
+        use serde_json::value::RawValue;
+
+        let check = |value: &dyn PublicOutput, marker: &str, reflected| {
+            let mut evidence = Evidence::new();
+            evidence.add_secret(&crate::Secret::new(marker));
+            let scan = FieldScan::new(&evidence);
+            assert_eq!(value.public_reflects(&scan, false), reflected);
+            let operands = FieldScan::record(&value, 4096).unwrap();
+            let matcher = BodyMatcher::with_work(evidence.credentials(), 4096);
+            assert_eq!(!operands.screen(&matcher).is_clean(), reflected);
+        };
+        for value in [
+            &403_i64 as &dyn PublicOutput,
+            &403_u64,
+            &403_i32,
+            &403_u32,
+            &403_u16,
+            &403_usize,
+            &Some(403_i64),
+            &Some(403_u64),
+            &Some(403_i32),
+            &Some(403_u32),
+        ] {
+            check(value, "403.0", false);
+            check(value, "403", true);
+        }
+        for value in [&403.0_f64 as &dyn PublicOutput, &Some(403.0_f64)] {
+            check(value, "403.0", true);
+        }
+        check(&Some(9_007_199_254_740_993_i64), "9007199254740992", true);
+        check(&Some(u64::MAX), "18446744073709551615", true);
+        check(&Some(u64::MAX), "18446744073709552000", true);
+        let raw: &RawValue = serde_json::from_str("18446744073709551617").unwrap();
+        check(&raw, "18446744073709551617", true);
+        check(&raw, "18446744073709552000", true);
+        let raw: &RawValue = serde_json::from_str("7.8e1").unwrap();
+        check(&raw, "78", true);
+        check(&raw, "78.0", false);
+        let raw: &RawValue = serde_json::from_str("1e400").unwrap();
+        check(&raw, "1e400", true);
+        check(&raw, "inf", false);
+    }
 
     #[test]
     fn public_debug_does_not_use_flag_forwarding_derives() {
