@@ -6,7 +6,7 @@ async fn resource_rows_refuse_credentials_acquired_since_the_list() {
     for (field, value, late_bearer) in [
         ("artifactName", json!(SECOND), SECOND),
         ("artifactId", json!(SECOND), SECOND),
-        ("cost", json!(1000000), "e+06"),
+        ("cost", json!(5.050505e30), "PPPP"),
     ] {
         let resource = json!({"code":200,"data":{"data":[{(field):value}]}}).to_string();
         let server = Server::start(vec![
@@ -135,7 +135,9 @@ async fn get_401_refresh_failure_preserves_the_screened_service_account_detail()
     );
     let (error, _, _) = failure.into_parts();
     let screened = withheld_error(&op, error, &evidence);
-    assert_eq!(screened.api_error().unwrap().status(), Some(401));
+    assert!(screened.has_identity(ErrorClass::Auth));
+    assert!(screened.api_error().is_none());
+    assert!(screened.http_status().is_none());
     let detail = screened.service_account_login_error().unwrap();
     assert!(!detail.reason().contains("synthetic-auth-reason"));
     assert_eq!(detail.status(), None);

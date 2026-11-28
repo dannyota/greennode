@@ -312,8 +312,11 @@ impl<'a> JsonSource<'a> {
         let end = start.checked_add(token.len())?;
         text.get(start..end)?;
         let original_offset = |index: usize| {
-            let runs = self.replacement_runs.partition_point(|&(end, _)| end <= index);
-            let replacements = runs.checked_sub(1)
+            let runs = self
+                .replacement_runs
+                .partition_point(|&(end, _)| end <= index);
+            let replacements = runs
+                .checked_sub(1)
                 .and_then(|last| self.replacement_runs.get(last))
                 .map_or(0, |&(_, total)| total);
             index.checked_add(replacements.checked_mul(6 - char::REPLACEMENT_CHARACTER.len_utf8())?)

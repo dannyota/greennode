@@ -21,46 +21,6 @@ pub struct ListResourcesInput {}
 
 crate::error::debug_record!(ListResourcesInput {});
 
-crate::wire::product::output::public_fields!(ListResourcesOutput {
-    items,
-    total_auto_renews,
-    total_good_resources,
-    total_warning_resources,
-    total_alerted_resources,
-    total_expired_resources,
-    extra
-});
-
-crate::wire::product::output::public_fields!(Resource {
-    artifact_id,
-    artifact_name,
-    artifact_type,
-    product,
-    renew_type,
-    billing_type,
-    start_billing_time,
-    end_billing_time,
-    date_left,
-    renew_period,
-    channel,
-    is_renewing,
-    cost,
-    status,
-    status_ui,
-    billing_elements
-});
-
-crate::wire::product::output::public_fields!(ResourceBillingElement {
-    sku,
-    quantity,
-    meta_key
-});
-
-crate::wire::product::output::public_fields!(ResourceThresholds {
-    warning_thresholds,
-    alarm_thresholds
-});
-
 #[expect(
     clippy::result_large_err,
     reason = "The public API returns Failure by value"

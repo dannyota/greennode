@@ -11,10 +11,11 @@ use crate::error::SafeText;
 use crate::model::wire::{JsonSource, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    operation::{self, Operation, Reflection, RouteAuth},
     options::{AttemptCheck, Options},
     redirect::{Classification, Retry},
     response, retry,
+    sender::Response,
 };
 use crate::{
     ApiError, Error, ErrorClass, Failure, LoginError, RequestContext, Secret,
@@ -79,18 +80,24 @@ pub(crate) async fn list(
     evidence: &mut Evidence,
 ) -> Result<ResourceList, Box<Error>> {
     let op = operation(LIST, "gateway/api/v1/resources", Method::GET);
-    let body = exchange(session, ctx, &op, &Options::DEFAULT, Bytes::new(), evidence)
+    let reply = exchange(session, ctx, &op, &Options::DEFAULT, Bytes::new(), evidence)
         .await
         .map_err(|failure| Box::new(failure.into_parts().0))?;
-    let source = JsonSource::new(&body);
-    let data = decode_data(&op, source.text(), evidence)?;
-    let mut output = decode::list(data).map_err(|()| invalid(&op, evidence))?;
-    if credentials::resources_reflect(&output.projection, evidence) {
-        return Err(invalid(&op, evidence));
-    }
-    if source.has_replacements() {
-        decode::restore_raw_fields(&source, data, &mut output.projection)
-            .map_err(|()| invalid(&op, evidence))?;
+    let output = reply.decode_projection(|body| {
+        let source = JsonSource::new(body);
+        let data = decode_data(&op, source.text(), evidence)?;
+        let mut output = decode::list(data).map_err(|()| invalid(&op, evidence))?;
+        if source.has_replacements() {
+            decode::restore_raw_fields(&source, data, &mut output.projection)
+                .map_err(|()| invalid(&op, evidence))?;
+        }
+        if credentials::resources_reflect(&output.projection, evidence) {
+            return Err(invalid(&op, evidence));
+        }
+        Ok(output)
+    })?;
+    if evidence.guards_reads() {
+        evidence.keep_decoded_operands(op.id, &output.projection)?;
     }
     Ok(output)
 }
@@ -106,17 +113,20 @@ pub(crate) async fn account(
     ctx: &RequestContext,
     evidence: &mut Evidence,
 ) -> Result<AccountId, Box<Error>> {
-    let op = operation(ACCOUNT, "gateway/api/v1/home/user-info", Method::GET);
-    let body = exchange(session, ctx, &op, &Options::DEFAULT, Bytes::new(), evidence)
+    let mut op = operation(ACCOUNT, "gateway/api/v1/home/user-info", Method::GET);
+    op.reflection = Reflection::Guard;
+    let reply = exchange(session, ctx, &op, &Options::DEFAULT, Bytes::new(), evidence)
         .await
         .map_err(|failure| Box::new(failure.into_parts().0))?;
-    let text = go_json(&body);
-    let data = decode_data(&op, &text, evidence)?;
-    let id = decode::account(data).map_err(|()| invalid(&op, evidence))?;
-    if evidence.id_reflects(&id) {
-        return Err(invalid(&op, evidence));
-    }
-    Ok(AccountId(Secret::new(id)))
+    reply.decode_projection(|body| {
+        let text = go_json(body);
+        let data = decode_data(&op, &text, evidence)?;
+        let id = decode::account(data).map_err(|()| invalid(&op, evidence))?;
+        if evidence.id_reflects(&id) {
+            return Err(invalid(&op, evidence));
+        }
+        Ok(AccountId(Secret::new(id)))
+    })
 }
 
 /// Identifies one resource and its requested renewal setting.
@@ -181,7 +191,7 @@ pub(crate) async fn put(
     };
     let mut account_redaction = Evidence::new();
     account_redaction.add_redaction(&account.0);
-    let body = exchange(session, ctx, &op, &options, body, evidence)
+    let reply = exchange(session, ctx, &op, &options, body, evidence)
         .await
         .map_err(|failure| {
             let (error, _, dispatch) = failure.into_parts();
@@ -191,7 +201,6 @@ pub(crate) async fn put(
                 dispatch,
             )
         })?;
-    let text = go_json(&body);
     let rejected = |error: Error| {
         Failure::new(
             screen_account_error(error, &account_redaction),
@@ -199,24 +208,28 @@ pub(crate) async fn put(
             WriteDispatch::MayHaveBeenSent,
         )
     };
-    let data = decode_data(&op, &text, evidence).map_err(|error| rejected(*error))?;
-    if let Some(count) = decode::renewal(data).map_err(|()| rejected(*invalid(&op, evidence)))? {
-        let message = format!("server refused auto-renew setting; error count {count}");
-        return Err(rejected(api(
-            &op,
-            Some(StatusCode::OK),
-            "AutoRenewRejected",
-            &message,
-            false,
-            evidence,
-        )));
-    }
-    Ok(())
+    reply
+        .decode_projection(|body| {
+            let text = go_json(body);
+            let data = decode_data(&op, &text, evidence)?;
+            let Some(count) = decode::renewal(data).map_err(|()| invalid(&op, evidence))? else {
+                return Ok(());
+            };
+            let message = format!("server refused auto-renew setting; error count {count}");
+            Err(Box::new(api(
+                &op,
+                Some(StatusCode::OK),
+                "AutoRenewRejected",
+                &message,
+                false,
+                evidence,
+            )))
+        })
+        .map_err(|error| rejected(*error))
 }
 
 fn screen_account_error(error: Error, account_redaction: &Evidence) -> Error {
-    let reflects = |text: &str| account_redaction.text_reflects(text);
-    error.screen_api(&reflects).screen_sign_in(&reflects)
+    account_redaction.screen_error(error)
 }
 
 fn decode_data<'a>(
@@ -237,11 +250,7 @@ fn decode_data<'a>(
             evidence,
         ))
     })?;
-    let data = decode::envelope(raw).map_err(|()| invalid(op, evidence))?;
-    if credentials::reflected(raw, evidence) {
-        return Err(invalid(op, evidence));
-    }
-    Ok(data)
+    decode::envelope(raw).map_err(|()| invalid(op, evidence))
 }
 
 fn operation(id: &'static str, template: &'static str, method: Method) -> Operation {
@@ -266,10 +275,12 @@ fn operation(id: &'static str, template: &'static str, method: Method) -> Operat
         allow_empty: true,
         no_output: false,
         keep_status: true,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
-        reject_reflected_credentials: false,
+        reflection: Reflection::Redact,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }
@@ -285,7 +296,7 @@ async fn exchange(
     options: &Options<'_>,
     body: Bytes,
     evidence: &mut Evidence,
-) -> Result<Bytes, Failure<()>> {
+) -> Result<Response, Failure<()>> {
     let dispatch = if op.method == Method::PUT {
         WriteDispatch::NotSent
     } else {
@@ -316,12 +327,12 @@ async fn exchange(
         let (error, _, dispatch) = failure.into_parts();
         Failure::new(withheld_error(op, error, evidence), None, dispatch)
     })?;
+    let dispatch = if op.method == Method::PUT {
+        WriteDispatch::MayHaveBeenSent
+    } else {
+        WriteDispatch::NotAWrite
+    };
     if reply.status != StatusCode::OK {
-        let dispatch = if op.method == Method::PUT {
-            WriteDispatch::MayHaveBeenSent
-        } else {
-            WriteDispatch::NotAWrite
-        };
         return Err(Failure::new(
             if reply.status.is_success() {
                 api(
@@ -339,7 +350,22 @@ async fn exchange(
             dispatch,
         ));
     }
-    Ok(Bytes::copy_from_slice(&reply.body))
+    if evidence.credentials().has_numeric_product_credential() || !reply.reflection.is_clean() {
+        let error = if reply.malformed_json() {
+            api(
+                op,
+                Some(StatusCode::OK),
+                "InvalidResponse",
+                WITHHELD,
+                false,
+                evidence,
+            )
+        } else {
+            *invalid(op, evidence)
+        };
+        return Err(Failure::new(error, None, dispatch));
+    }
+    Ok(reply)
 }
 
 fn invalid(op: &Operation, evidence: &Evidence) -> Box<Error> {
@@ -398,10 +424,20 @@ fn status_error(
 }
 
 fn withheld_error(op: &Operation, error: Error, evidence: &Evidence) -> Error {
+    if error.class() == ErrorClass::InvalidInput {
+        return evidence.screen_error(error);
+    }
     let api_error = error.api_error();
     let sign_in = screened_sign_in(&error, evidence);
-    let observed = error.detail::<StatusCode>().copied();
-    let status = observed.or_else(|| StatusCode::from_u16(api_error?.status()?).ok());
+    let observed = error.http_status();
+    let status = observed.or_else(|| StatusCode::from_u16(api_error?.observed_status()?).ok());
+    if status == Some(StatusCode::OK)
+        && error.detail::<operation::RefusedGuard>().is_some()
+        && error.detail::<operation::MalformedGuard>().is_none()
+        && !error.is_body_too_large()
+    {
+        return *invalid(op, evidence);
+    }
     let overflow = error.is_body_too_large();
     let class = error.class();
     let mut safe = if status.is_some_and(|status| status.is_success()) || overflow {
@@ -419,7 +455,7 @@ fn withheld_error(op: &Operation, error: Error, evidence: &Evidence) -> Error {
     if let Some(status) = observed
         && !evidence.text_reflects(status.as_str())
     {
-        safe = safe.with_outer_detail(status);
+        safe = safe.with_http_status(status);
     }
     if let Some(sign_in) = sign_in {
         safe = safe.with_cause(sign_in);

@@ -228,13 +228,10 @@ impl PublicOutput for serde_json::value::RawValue {
     fn public_reflects(&self, scan: &FieldScan<'_>, identifier: bool) -> bool {
         let body = self.get().as_bytes();
         match &scan.0 {
-            Scan::Screen(matcher) if identifier => {
-                !super::evidence::identifier_projection_reflects(matcher, body).is_clean()
-            }
             Scan::Screen(matcher) => {
-                !super::evidence::retained_projection_reflects(matcher, body).is_clean()
+                !super::evidence::raw_output_reflects(matcher, body, identifier).is_clean()
             }
-            Scan::Record(_, _) => serde_json::from_slice::<Value>(body)
+            Scan::Record(_, _) => serde_json::from_str::<Value>(&crate::model::wire::go_json(body))
                 .map_or(true, |value| value.public_reflects(scan, identifier)),
         }
     }

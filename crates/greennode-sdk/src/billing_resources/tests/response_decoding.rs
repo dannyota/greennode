@@ -44,10 +44,10 @@ async fn billing_resources_preserve_raw_surrogate_escapes_and_normalize_typed_st
     let body = format!(
         r#"{{"code":200,"data":{{"data":[{{"artifactName":"typed{unpaired}","status":{status},"billingElements":[{{"metaKey":{metadata}}}]}}]}}}}"#
     );
-    let server = Server::start(vec![reply("200 OK", body)]);
+    let server = Server::start(vec![reply("200 OK", &body), reply("200 OK", &body)]);
     let config = static_config(&server);
     let (ctx, _) = RequestContext::new();
-    let mut evidence = Evidence::new();
+    let mut evidence = Evidence::for_write();
     let list = list(config.session(), &ctx, &mut evidence).await.unwrap();
     let (row, _) = list.rows(&evidence).unwrap().next().unwrap();
     assert_eq!(row.artifact_name, "typed�");
@@ -56,6 +56,12 @@ async fn billing_resources_preserve_raw_surrogate_escapes_and_normalize_typed_st
         row.billing_elements[0].meta_key.as_deref().unwrap().get(),
         metadata
     );
+    let public = crate::billing::Client::new(&config)
+        .list_resources(&ctx, crate::billing::ListResourcesInput::default())
+        .await
+        .unwrap();
+    assert_eq!(public.items[0].status.as_deref().unwrap().get(), status);
+    assert!(serde_json::to_string(&public).unwrap().contains(&status));
 }
 
 #[tokio::test]

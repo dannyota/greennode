@@ -138,7 +138,7 @@ async fn resource_successful_credential_echo_withholds_each_typed_and_raw_field(
             let error = refusal(list(config.session(), &ctx, &mut Evidence::new()).await);
             invalid_at(&error, 200);
             assert_eq!(error.api_error().unwrap().message(), INVALID);
-            assert!(error.detail::<StatusCode>().is_none());
+            assert!(error.detail::<crate::HttpStatus>().is_none());
             assert_no_echo(&error, &[FIRST, SECOND]);
             let heads = server.heads();
             assert_eq!(heads.len(), 2);
@@ -182,27 +182,33 @@ async fn malformed_and_truncated_resources_keep_status_and_only_the_safe_read_de
         invalid_at(&failure, 200);
         assert_eq!(failure.api_error().unwrap().message(), WITHHELD);
         assert_eq!(
-            failure.detail::<StatusCode>().copied(),
-            truncated.then_some(StatusCode::OK)
+            failure
+                .detail::<crate::HttpStatus>()
+                .map(|status| status.as_u16()),
+            truncated.then_some(200)
         );
     }
 }
 
 #[tokio::test]
-async fn decoded_resource_cost_reflection_is_checked_against_earlier_bearers() {
-    let server = Server::start(vec![
-        reply("401 Unauthorized", ""),
-        reply(
-            "200 OK",
-            r#"{"code":200,"data":{"data":[{"artifactId":"resource-1","cost":1e6}]}}"#,
-        ),
-    ]);
-    let config = rotating_config(&server, ["e+06", SECOND]);
-    let (ctx, _) = RequestContext::new();
-    let error = refusal(list(config.session(), &ctx, &mut Evidence::new()).await);
-    invalid_at(&error, 200);
-    assert_no_echo(&error, &["e+06", SECOND]);
-    assert_eq!(server.heads().len(), 2);
+async fn resource_cost_reflection_checks_the_wire_exponent_against_earlier_bearers() {
+    for (cost, reflected) in [("1e6", false), ("1e+06", true)] {
+        let body = format!(
+            r#"{{"code":200,"data":{{"data":[{{"artifactId":"resource-1","cost":{cost}}}]}}}}"#
+        );
+        let server = Server::start(vec![reply("401 Unauthorized", ""), reply("200 OK", body)]);
+        let config = rotating_config(&server, ["e+06", SECOND]);
+        let (ctx, _) = RequestContext::new();
+        let result = list(config.session(), &ctx, &mut Evidence::new()).await;
+        if reflected {
+            let error = refusal(result);
+            invalid_at(&error, 200);
+            assert_no_echo(&error, &["e+06", SECOND]);
+        } else {
+            assert_eq!(result.unwrap().projection.items[0].cost, Some(1_000_000.0));
+        }
+        assert_eq!(server.heads().len(), 2);
+    }
 }
 
 #[tokio::test]
@@ -313,7 +319,7 @@ async fn overlapping_bearers_and_malformed_types_do_not_retain_peer_errors() {
             let error = refusal(list(config.session(), &ctx, &mut Evidence::new()).await);
             invalid_at(&error, 200);
             assert_eq!(error.api_error().unwrap().message(), INVALID);
-            assert!(error.detail::<StatusCode>().is_none());
+            assert!(error.detail::<crate::HttpStatus>().is_none());
             assert_no_echo(&error, &[first, second, "123456789e999"]);
             assert_eq!(server.heads().len(), 2);
         }

@@ -1,6 +1,8 @@
 mod peer;
 mod roles;
 
+pub(super) use peer::raw_output_with_matcher as raw_output_reflects;
+
 use super::options::PasswordSlot;
 use super::response::{self, Screen};
 use crate::{Failure, Secret, WriteDispatch};
