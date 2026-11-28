@@ -94,12 +94,26 @@ impl Error {
         }
     }
 
-    pub(crate) fn with_api_diagnostic(mut self, code: SafeText, message: SafeText) -> Self {
+    pub(crate) fn with_api_diagnostic(self, code: SafeText, message: SafeText) -> Self {
+        self.update_api(|api| {
+            api.code = code.0;
+            api.message = message.0;
+        })
+    }
+
+    pub(crate) fn with_api_operation(self, operation: &'static str) -> Self {
+        self.update_api(|api| {
+            if !api.operation.is_empty() {
+                api.operation = operation;
+            }
+        })
+    }
+
+    fn update_api(mut self, update: impl FnOnce(&mut ApiError)) -> Self {
         let mut layer = Some(&mut self);
         while let Some(error) = layer {
             if let Some(api) = error.api.as_mut() {
-                api.code = code.0;
-                api.message = message.0;
+                update(api);
                 break;
             }
             layer = error.cause.0.as_deref_mut();

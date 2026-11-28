@@ -2,7 +2,12 @@ use super::*;
 use greennode_sdk::testing::{ResponseBodyClock, with_clock};
 use std::{sync::Arc, time::Duration};
 
-async fn interrupt_project_discovery(bearer: &str, status: &str) -> Vec<u8> {
+async fn interrupt_project_discovery(
+    bearer: &str,
+    status: &str,
+    command: &str,
+    flags: &[&str],
+) -> Vec<u8> {
     let (head, _) = tokio::sync::oneshot::channel();
     let (eof, _) = tokio::sync::oneshot::channel();
     let vserver = Server::start(vec![Response::ObserveStall {
@@ -16,8 +21,13 @@ async fn interrupt_project_discovery(bearer: &str, status: &str) -> Vec<u8> {
         ConfigOptions::default().with_static_token(Secret::new(bearer)),
         clock.clone(),
     );
-    let options = with_product_loopback(Product::Vserver, options, &vserver);
-    let options = with_product_loopback(Product::Vnetwork, options, &vnetwork);
+    let fixture = if command == "quote-create-endpoint" {
+        with_product_loopback
+    } else {
+        greennode_sdk::testing::with_write_loopback
+    };
+    let options = fixture(Product::Vserver, options, &vserver);
+    let options = fixture(Product::Vnetwork, options, &vnetwork);
     let (context, cancel) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let work = run_invocation(Invocation {
@@ -25,17 +35,13 @@ async fn interrupt_project_discovery(bearer: &str, status: &str) -> Vec<u8> {
             "greennode",
             "--region",
             "hcm-3",
-            "--read-only",
             "network",
-            "quote-create-endpoint",
-            "--name",
-            "edge",
+            command,
             "--vpc-id",
             "net-00000000-0000-0000-0000-000000000002",
-            "--subnet-id",
-            "sub-00000000-0000-0000-0000-000000000003",
         ]
         .into_iter()
+        .chain(flags.iter().copied())
         .map(OsString::from)
         .collect(),
         source: &Source,
@@ -65,9 +71,19 @@ async fn interrupt_project_discovery(bearer: &str, status: &str) -> Vec<u8> {
     stderr
 }
 
+const QUOTE_FLAGS: &[&str] = &[
+    "--read-only",
+    "--name",
+    "edge",
+    "--subnet-id",
+    "sub-00000000-0000-0000-0000-000000000003",
+];
+
 #[tokio::test]
 async fn endpoint_quote_cli_keeps_the_outer_joined_interruption_diagnostic() {
-    let stderr = interrupt_project_discovery(TOKEN, "403 Forbidden").await;
+    let stderr =
+        interrupt_project_discovery(TOKEN, "403 Forbidden", "quote-create-endpoint", QUOTE_FLAGS)
+            .await;
     assert_eq!(stderr, concat!(
         r#"{"error":{"code":"Forbidden","message":"network.QuoteCreateEndpoint: endpoint response withheld (status 403)\nnetwork.QuoteCreateEndpoint: context canceled","status":403,"operation":"network.QuoteCreateEndpoint"}}"#,
         "\n",
@@ -77,7 +93,13 @@ async fn endpoint_quote_cli_keeps_the_outer_joined_interruption_diagnostic() {
 #[tokio::test]
 async fn endpoint_quote_cli_screens_the_rebuilt_context_reason() {
     let bearer = "canceled";
-    let stderr = interrupt_project_discovery(bearer, "403 Forbidden").await;
+    let stderr = interrupt_project_discovery(
+        bearer,
+        "403 Forbidden",
+        "quote-create-endpoint",
+        QUOTE_FLAGS,
+    )
+    .await;
     assert!(!String::from_utf8_lossy(&stderr).contains(bearer));
     let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(error["error"]["status"], 403);
@@ -87,9 +109,48 @@ async fn endpoint_quote_cli_screens_the_rebuilt_context_reason() {
 #[tokio::test]
 async fn endpoint_quote_cli_screens_context_only_after_an_interrupted_200() {
     let bearer = "canceled";
-    let stderr = interrupt_project_discovery(bearer, "200 OK").await;
+    let stderr =
+        interrupt_project_discovery(bearer, "200 OK", "quote-create-endpoint", QUOTE_FLAGS).await;
     assert!(!String::from_utf8_lossy(&stderr).contains(bearer));
     let value: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
     assert_eq!(value["error"]["code"], "RequestFailed");
     assert!(value["error"].get("status").is_none());
+}
+
+#[tokio::test]
+async fn endpoint_write_cli_names_the_write_in_both_preflight_interruption_causes() {
+    for (command, flags, operation) in [
+        (
+            "create-endpoint",
+            &[
+                "--yes",
+                "--name",
+                "edge",
+                "--max-price",
+                "1",
+                "--subnet-id",
+                "sub-00000000-0000-0000-0000-000000000003",
+            ][..],
+            "network.CreateEndpoint",
+        ),
+        (
+            "delete-endpoint",
+            &[
+                "--yes",
+                "--endpoint-id",
+                "enp-00000000-0000-0000-0000-0000000000c1",
+            ][..],
+            "network.DeleteEndpoint",
+        ),
+    ] {
+        let stderr = interrupt_project_discovery(TOKEN, "403 Forbidden", command, flags).await;
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["operation"], operation);
+        assert_eq!(
+            error["error"]["message"],
+            format!(
+                "{operation}: endpoint response withheld (status 403)\n{operation}: context canceled"
+            )
+        );
+    }
 }

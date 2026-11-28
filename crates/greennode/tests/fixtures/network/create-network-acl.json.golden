@@ -1,0 +1,16 @@
+{
+  "ACL": {
+    "UUID": "acl-1",
+    "ID": "",
+    "Name": "\u003cname\u003e",
+    "Description": "",
+    "Status": "ACTIVE",
+    "NetworkID": "",
+    "SubnetID": "",
+    "CreatedAt": "2026-01-01T00:00:00Z",
+    "DefaultACL": false,
+    "VPCID": "vpc-1",
+    "Rules": [],
+    "SubnetIDs": []
+  }
+}

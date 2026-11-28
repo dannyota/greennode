@@ -3,7 +3,11 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::Base;
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds, response};
+use crate::wire::product::{
+    evidence::Evidence,
+    options::{Options, PathIds},
+    response,
+};
 use crate::{ApiError, Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
 use super::inventory::{Selection, screen};
@@ -287,7 +291,10 @@ impl Client {
             Selection {
                 path: &[&scope.zone, &scope.project],
                 query,
-                headers: &[],
+                options: Options {
+                    identifier_query_keys: &["zoneUuid"],
+                    ..Options::DEFAULT
+                },
             },
             evidence,
         )
@@ -309,7 +316,7 @@ impl Client {
         let text = go_json(&body);
         let invalid = || catalog_invalid(read, evidence);
         let raw = catalog_data(&text, 200, evidence).map_err(|()| invalid())?;
-        decode_rows(
+        let rows = decode_rows(
             raw,
             &["uuid", "zoneType", "isEnabled", "isDefault"],
             |row, item: &NatAvailabilityZone| {
@@ -325,7 +332,8 @@ impl Client {
             },
             evidence,
         )
-        .map_err(|()| invalid())
+        .map_err(|()| invalid())?;
+        super::mutations::guard_operands(read.id, rows, evidence)
     }
 
     pub(super) async fn nat_packages(
@@ -350,7 +358,7 @@ impl Client {
         let text = go_json(&body);
         let invalid = || catalog_invalid(read, evidence);
         let raw = catalog_data(&text, 200, evidence).map_err(|()| invalid())?;
-        decode_rows(
+        let rows = decode_rows(
             raw,
             &[
                 "uuid",
@@ -391,7 +399,8 @@ impl Client {
             },
             evidence,
         )
-        .map_err(|()| invalid())
+        .map_err(|()| invalid())?;
+        super::mutations::guard_operands(read.id, rows, evidence)
     }
 }
 
@@ -418,7 +427,7 @@ pub(super) fn catalog_data<'a>(
         .ok_or(())
 }
 
-fn numeric_code(raw: &str, expected: i64) -> bool {
+pub(super) fn numeric_code(raw: &str, expected: i64) -> bool {
     if raw.len() > 128 || !matches!(raw.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
         return false;
     }
@@ -505,6 +514,23 @@ pub(super) fn reflects(text: &str, evidence: &Evidence) -> bool {
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 fn decode_instances(text: &str, evidence: &Evidence) -> Result<ListNatInstancesOutput, Error> {
+    decode_instances_with_policy(text, evidence, false)
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+pub(super) fn decode_guard_instances(
+    text: &str,
+    evidence: &Evidence,
+) -> Result<ListNatInstancesOutput, Error> {
+    decode_instances_with_policy(text, evidence, true)
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+fn decode_instances_with_policy(
+    text: &str,
+    evidence: &Evidence,
+    guard: bool,
+) -> Result<ListNatInstancesOutput, Error> {
     let invalid = |message| INSTANCES.invalid_as(evidence, message);
     if reflects(text, evidence) {
         return Err(invalid("invalid list envelope"));
@@ -514,10 +540,17 @@ fn decode_instances(text: &str, evidence: &Evidence) -> Result<ListNatInstancesO
         .optional::<Option<bool>>("success")
         .map_err(|()| invalid("invalid list envelope"))?
         .flatten();
-    let code = fields
-        .optional::<Field<String>>("code")
-        .map_err(|()| invalid("invalid list envelope"))?
-        .map_or_else(String::new, |field| field.0);
+    let code = if guard {
+        fields
+            .raw("code")
+            .map_err(|()| invalid("invalid list envelope"))?;
+        String::new()
+    } else {
+        fields
+            .optional::<Field<String>>("code")
+            .map_err(|()| invalid("invalid list envelope"))?
+            .map_or_else(String::new, |field| field.0)
+    };
     let message = fields
         .optional::<Field<String>>("message")
         .map_err(|()| invalid("invalid list envelope"))?
@@ -631,23 +664,7 @@ fn decode_instances(text: &str, evidence: &Evidence) -> Result<ListNatInstancesO
         if !PathIds::WithUnderscore.allows(&item.uuid) || evidence.id_reflects(&item.uuid) {
             return Err(invalid("missing NAT uuid"));
         }
-        let package = &item.nat_package;
-        let image = &package.image;
-        let ids = [
-            &item.project_uuid,
-            &item.zone_uuid,
-            &package.id,
-            &package.uuid,
-            &package.package_id,
-            &image.id,
-            &image.uuid,
-            &item.vpc.uuid,
-            &item.vpc.region_id,
-            &item.vpc.project_id,
-        ]
-        .into_iter()
-        .chain(&image.flavor_zone_ids);
-        if ids.into_iter().any(|id| evidence.id_reflects(id)) {
+        if nat_ids_reflect(item, evidence) {
             return Err(invalid("invalid NAT identifier"));
         }
     }
@@ -658,4 +675,25 @@ fn decode_instances(text: &str, evidence: &Evidence) -> Result<ListNatInstancesO
         total_page,
         total_item,
     })
+}
+
+pub(super) fn nat_ids_reflect(item: &NatInstance, evidence: &Evidence) -> bool {
+    let package = &item.nat_package;
+    let image = &package.image;
+    [
+        &item.uuid,
+        &item.project_uuid,
+        &item.zone_uuid,
+        &package.id,
+        &package.uuid,
+        &package.package_id,
+        &image.id,
+        &image.uuid,
+        &item.vpc.uuid,
+        &item.vpc.region_id,
+        &item.vpc.project_id,
+    ]
+    .into_iter()
+    .chain(&image.flavor_zone_ids)
+    .any(|id| evidence.id_reflects(id))
 }

@@ -5,7 +5,7 @@ use super::route_inventory::{InventoryRead, paged_input};
 use super::{Client, failure};
 
 const WAN_IPS: InventoryRead = InventoryRead::standard("network.ListWANIPs", "v2/{}/wanIps");
-const INTERFACES: InventoryRead = InventoryRead::standard(
+pub(super) const INTERFACES: InventoryRead = InventoryRead::standard(
     "network.ListNetworkInterfaces",
     "v2/{}/network-interfaces-elastic",
 );

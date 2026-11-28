@@ -130,7 +130,10 @@ impl Session {
             || (cfg!(test)
                 && matches!(
                     product,
-                    crate::testing::Product::Database | crate::testing::Product::GlobalLoadBalancer
+                    crate::testing::Product::Database
+                        | crate::testing::Product::GlobalLoadBalancer
+                        | crate::testing::Product::Vnetwork
+                        | crate::testing::Product::Vserver
                 )
                 && self.auth_kind() == AuthKind::Custom))
             && self

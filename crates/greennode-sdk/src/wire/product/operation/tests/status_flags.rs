@@ -102,6 +102,22 @@ const GO_FLAGS: &[(&str, &str, u8)] = &[
     ("monitor.GetDashboard", "GET", NO_FOLLOW),
     ("monitor.ListDashboards", "GET", NO_FOLLOW),
     ("monitor.ListSyntheticPackages", "GET", NO_FOLLOW),
+    ("network.AddNetworkACLRule", "PUT", NO_FOLLOW),
+    ("network.AddRoute", "PUT", NO_FOLLOW),
+    ("network.AssociateNetworkACLSubnet", "PUT", NO_FOLLOW),
+    ("network.CreateEndpoint", "GET", KEEP | NO_FOLLOW),
+    ("network.CreateEndpoint", "POST", KEEP | NO_FOLLOW),
+    ("network.CreateNATInstance", "GET", NO_FOLLOW),
+    ("network.CreateNATInstance", "POST", NO_FOLLOW),
+    ("network.DeleteEndpoint", "DELETE", KEEP | NO_FOLLOW),
+    ("network.DeleteEndpoint", "GET", KEEP | NO_FOLLOW),
+    ("network.DeleteNATInstance", "DELETE", NO_FOLLOW),
+    ("network.DeleteNATInstance", "GET", NO_FOLLOW),
+    ("network.DeleteNetworkACL", "DELETE", NO_FOLLOW),
+    ("network.DisassociateNetworkACLSubnet", "PUT", NO_FOLLOW),
+    ("network.EnableVPCPrivateDNS", "PATCH", NO_FOLLOW),
+    ("network.RemoveNetworkACLRule", "PUT", NO_FOLLOW),
+    ("network.RemoveRoute", "PUT", NO_FOLLOW),
     ("network.GetNATInstance", "GET", KEEP | OVERFLOW | NO_FOLLOW),
     ("network.GetNetworkACL", "GET", NO_FOLLOW),
     ("network.GetRouteTable", "GET", NO_FOLLOW),
@@ -260,4 +276,112 @@ fn monitor_catalog_guard_cannot_use_the_post_quote_redirect_policy() {
         ..super::declaration()
     };
     assert_matches_go(&operation, &Options::DEFAULT);
+}
+
+#[test]
+fn sdk_status_decisions_use_private_response_evidence() {
+    use regex_lite::Regex;
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    let diagnostics = [
+        ("billing/budget_writes.rs", "reconcile", 1),
+        ("billing/history/security.rs", "safe_request_error", 2),
+        ("billing_resources/mod.rs", "screened_sign_in", 2),
+        ("containerregistry/mod.rs", "create_failure", 1),
+        ("containerregistry/mod.rs", "redact_failure", 1),
+        ("containerregistry/user_writes.rs", "create_user", 1),
+        ("database/write.rs", "preflight", 1),
+        ("database/write.rs", "safe_rejection", 1),
+        ("dns/writes/mod.rs", "create_failure", 1),
+        ("error/display.rs", "fmt", 3),
+        ("error/provenance.rs", "response_status", 1),
+        ("iam/mod.rs", "screen_error", 1),
+        ("iam/wire.rs", "account_error", 2),
+        ("monitor/quota/status.rs", "unavailable_row", 1),
+        ("monitor/quota/wire.rs", "get_status", 1),
+        ("network/mutations.rs", "error_description", 1),
+        ("network/wire.rs", "nat_safe_error", 1),
+        ("portal/envelope.rs", "withheld", 1),
+        ("pricing/failure.rs", "row", 1),
+        ("vks/mod.rs", "safe_error", 2),
+        ("wire/product/absence.rs", "keep_not_found_diagnostic", 1),
+    ];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let declarations = Regex::new(concat!(
+        r"(?m)^(?<attributes>(?:[ \t]*#\[[^\n]*\][ \t]*\n)*)[ \t]*",
+        r"(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|const|unsafe)\s+)*fn\s+(?<name>\w+)"
+    ))
+    .unwrap();
+    let test_attribute = Regex::new(r"#\[(?:\w+::)*test(?:\(|\])").unwrap();
+    let status = Regex::new(concat!(
+        r"\.\s*(?:response_)?status\s*\(\s*\)",
+        r"|\bApiError\s*::\s*(?:response_)?status\b"
+    ))
+    .unwrap();
+    let mut pending = vec![root.clone()];
+    let mut found = BTreeMap::new();
+    let mut unexpected = Vec::new();
+    while let Some(file) = pending.pop() {
+        if file.is_dir() {
+            pending.extend(file.read_dir().unwrap().map(|entry| entry.unwrap().path()));
+            continue;
+        }
+        let path = file.strip_prefix(&root).unwrap();
+        if file.extension().is_none_or(|ext| ext != "rs")
+            || path.iter().any(|part| part == "tests")
+            || path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with("tests.rs"))
+            || path == Path::new("quote/catalog/corpus.rs")
+        {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file).unwrap();
+        let mut functions = declarations.captures_iter(&source).peekable();
+        let mut function = "";
+        let mut is_test = false;
+        for call in status.find_iter(&source) {
+            while functions
+                .peek()
+                .is_some_and(|declaration| declaration.get(0).unwrap().start() < call.start())
+            {
+                let declaration = functions.next().unwrap();
+                function = declaration.name("name").unwrap().as_str();
+                is_test = test_attribute.is_match(&declaration["attributes"]);
+            }
+            if is_test {
+                continue;
+            }
+            if path == Path::new("error/parts.rs")
+                && source[..call.start()].ends_with(r#".field("status", &self"#)
+            {
+                continue;
+            }
+            let expected = diagnostics
+                .iter()
+                .find(|&&(file, name, _)| path == Path::new(file) && name == function);
+            let permitted = if let Some(&(file, name, expected)) = expected {
+                let count = found.entry((file, name)).or_insert(0_usize);
+                *count += 1;
+                *count <= expected
+            } else {
+                false
+            };
+            if !permitted {
+                let line = source[..call.start()]
+                    .bytes()
+                    .filter(|&byte| byte == b'\n')
+                    .count()
+                    + 1;
+                unexpected.push(format!("{}:{line} ({function})", path.display()));
+            }
+        }
+    }
+    unexpected.sort();
+    assert!(
+        unexpected.is_empty(),
+        "public status used outside diagnostics at {}",
+        unexpected.join(", ")
+    );
 }

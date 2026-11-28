@@ -191,3 +191,40 @@ async fn endpoint_quote_body_interruption_retains_context_at_discovery_and_price
         }
     }
 }
+
+#[tokio::test]
+async fn endpoint_price_retains_permission_denied_when_status_is_withheld() {
+    let vserver = Server::start(vec![response(
+        "200 OK",
+        include_str!("../../../tests/fixtures/network/endpoint_quote_projects.json"),
+    )]);
+    let vnetwork = Server::start(
+        endpoint_quote_fixtures()
+            .into_iter()
+            .take(7)
+            .map(|body| response("200 OK", body))
+            .chain([response("403 Forbidden", "{}")])
+            .collect(),
+    );
+    let options = with_product_loopback(
+        Product::Vserver,
+        options().with_static_token(Secret::new("403")),
+        &vserver,
+    );
+    let options = with_product_loopback(Product::Vnetwork, options, &vnetwork);
+    let client = Client::new(&Config::new(options).unwrap());
+    let input = QuoteCreateEndpointInput::new(
+        "edge",
+        "net-00000000-0000-0000-0000-000000000002",
+        "sub-00000000-0000-0000-0000-000000000003",
+    );
+    let failure = client
+        .quote_create_endpoint(&RequestContext::new().0, input)
+        .await
+        .unwrap_err();
+    assert_eq!(vnetwork.requests(), 8);
+    assert!(failure.error().has_class(ErrorClass::PermissionDenied));
+    let api = failure.error().api_error().unwrap();
+    assert!(api.status().is_none());
+    assert!(api.observed_response_status() == Some(http::StatusCode::FORBIDDEN.as_u16()));
+}

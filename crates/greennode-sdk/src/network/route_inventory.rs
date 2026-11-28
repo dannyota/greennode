@@ -33,7 +33,7 @@ pub(super) enum ResponseKind {
 
 #[derive(Clone, Copy)]
 pub(super) struct InventoryRead {
-    id: &'static str,
+    pub(in crate::network) id: &'static str,
     template: &'static str,
     kind: ResponseKind,
 }
@@ -394,8 +394,13 @@ impl Client {
         let text = go_json(&raw);
         let fields = read.fields(&text, evidence)?;
         let output = (|| {
+            let items = if read.id == "network.ListVirtualIPAddresses" {
+                crate::model::wire::decode_lenient(|| field(&fields, "listData"))?
+            } else {
+                field(&fields, "listData")?
+            };
             Ok(PagedList {
-                items: field(&fields, "listData")?,
+                items,
                 page: field(&fields, "page")?,
                 page_size: field(&fields, "pageSize")?,
                 total_page: field(&fields, "totalPage")?,

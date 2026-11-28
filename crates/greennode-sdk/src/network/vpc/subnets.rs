@@ -5,14 +5,14 @@ use super::super::{Client, failure};
 use super::models::*;
 use super::wire::{Read, Reads, Style};
 
-const GET_VPC: Read = Read::new("network.GetVPC", "v2/{}/networks/{}", Style::Plain);
+pub(super) const GET_VPC: Read = Read::new("network.GetVPC", "v2/{}/networks/{}", Style::Plain);
 const LIST_VPCS: Read = Read::new("network.ListVPCs", "v2/{}/networks", Style::Plain);
-const GET_SUBNET: Read = Read::new(
+pub(super) const GET_SUBNET: Read = Read::new(
     "network.GetSubnet",
     "v2/{}/networks/{}/subnets/{}",
     Style::Plain,
 );
-const BY_VPC: Read = Read::new(
+pub(super) const BY_VPC: Read = Read::new(
     "network.ListSubnetsByVPC",
     "v2/{}/networks/{}/subnets",
     Style::Plain,
@@ -20,7 +20,7 @@ const BY_VPC: Read = Read::new(
 
 model! {
     @ true;
-    struct SubnetWire {
+    pub(super) struct SubnetWire {
         uuid: String => "uuid", "UUID";
         status: String => "status", "Status";
         cidr: String => "cidr", "CIDR";
@@ -36,7 +36,7 @@ model! {
 
 model! {
     @ true;
-    struct SubnetZone {
+    pub(super) struct SubnetZone {
         uuid: String => "uuid", "UUID";
     }
 }

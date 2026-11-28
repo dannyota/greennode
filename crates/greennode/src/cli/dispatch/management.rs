@@ -18,6 +18,7 @@ struct ManagementAdapter<'a, T> {
     source: &'a dyn ConfigSource,
     view: OutputView,
     error_rules: &'static [errors::Rule],
+    read_only_code: &'static str,
     file_input: Option<FileInput<'a, T>>,
 }
 
@@ -49,6 +50,7 @@ struct ManagementInput<'a, T: 'static> {
     source: &'a dyn ConfigSource,
     operation: &'static crate::cli::op::Operation,
     confirmation: Option<&'static str>,
+    read_only_code: &'static str,
     value: Option<ParsedOperationInput<T>>,
 }
 
@@ -192,15 +194,19 @@ impl<T: Send + 'static> ParsedInput for ManagementInput<'_, T> {
             latch(value.as_deref())
         };
         let (greennode, vngcloud) = (on("GREENNODE_READ_ONLY")?, on("VNGCLOUD_READ_ONLY")?);
-        if self.matches.get_one::<bool>("read-only") == Some(&true) {
-            Err(LocalError::read_only("--read-only"))
+        let source = if self.matches.get_one::<bool>("read-only") == Some(&true) {
+            "--read-only"
         } else if greennode {
-            Err(LocalError::read_only("GREENNODE_READ_ONLY"))
+            "GREENNODE_READ_ONLY"
         } else if vngcloud {
-            Err(LocalError::read_only("VNGCLOUD_READ_ONLY"))
+            "VNGCLOUD_READ_ONLY"
         } else {
-            Ok(())
-        }
+            return Ok(());
+        };
+        Err(LocalError {
+            code: self.read_only_code,
+            ..LocalError::read_only(source)
+        })
     }
 
     fn query(&self) -> Option<&str> {
@@ -242,7 +248,10 @@ impl<T: Send + 'static> Adapter<ManagementInput<'_, T>> for ManagementAdapter<'_
 
     fn check_profile_read_only(&self, settings: &Config) -> Result<(), LocalError> {
         if latch(settings.profile_setting("read_only"))? {
-            return Err(LocalError::read_only("config"));
+            return Err(LocalError {
+                code: self.read_only_code,
+                ..LocalError::read_only("config")
+            });
         }
         Ok(())
     }
@@ -362,6 +371,7 @@ pub(crate) async fn management_custom<T: Send + 'static>(
             check_json,
             bind: None,
             confirmation: None,
+            read_only_code: "ReadOnly",
         },
     )
     .await
@@ -386,6 +396,7 @@ pub(crate) async fn management_with_password<T: Send + 'static>(
             check_json: None,
             bind: Some(FileBinding::Password(bind)),
             confirmation: None,
+            read_only_code: "ReadOnly",
         },
     )
     .await
@@ -410,6 +421,7 @@ pub(crate) async fn management_with_input_preparation<T: Send + 'static>(
             check_json: None,
             bind: Some(FileBinding::Custom(prepare)),
             confirmation: None,
+            read_only_code: "ReadOnly",
         },
     )
     .await
@@ -434,6 +446,32 @@ pub(crate) async fn management_with_confirmation<T: Send + 'static>(
             check_json: None,
             bind: None,
             confirmation: Some(confirmation),
+            read_only_code: "ReadOnly",
+        },
+    )
+    .await
+}
+
+pub(crate) async fn management_with_read_only_code<T: Send + 'static>(
+    invocation: &mut Invocation<'_>,
+    selected: SelectedOperation,
+    matches: &ArgMatches,
+    descriptor: &'static InputDescriptor<T>,
+    execute: ManagementOperation<T>,
+    read_only_code: &'static str,
+) -> u8 {
+    run_management(
+        invocation,
+        selected,
+        matches,
+        descriptor,
+        execute,
+        Hooks {
+            view: OutputView::default(),
+            check_json: None,
+            bind: None,
+            confirmation: None,
+            read_only_code,
         },
     )
     .await
@@ -444,6 +482,7 @@ struct Hooks<T> {
     check_json: Option<input::JsonChecks>,
     bind: Option<FileBinding<T>>,
     confirmation: Option<&'static str>,
+    read_only_code: &'static str,
 }
 
 async fn run_management<T: Send + 'static>(
@@ -462,6 +501,7 @@ async fn run_management<T: Send + 'static>(
         source: invocation.source,
         operation,
         confirmation: hooks.confirmation,
+        read_only_code: hooks.read_only_code,
         value: None,
     };
     let mut adapter = ManagementAdapter {
@@ -471,6 +511,7 @@ async fn run_management<T: Send + 'static>(
         source: invocation.source,
         view: hooks.view,
         error_rules: selected.error_rules,
+        read_only_code: hooks.read_only_code,
         file_input: hooks.bind.map(|bind| FileInput {
             stdin: invocation.stdin,
             terminal: invocation.stdin_terminal,

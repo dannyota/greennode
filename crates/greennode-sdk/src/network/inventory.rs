@@ -22,6 +22,7 @@ pub(super) enum InventoryStyle {
     Plain,
     Region,
     Server,
+    ServerGuard,
 }
 
 #[derive(Clone, Copy)]
@@ -34,7 +35,7 @@ pub(super) struct InventoryRead {
 pub(super) struct Selection<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
-    pub(super) headers: &'a [(&'static str, &'a str)],
+    pub(super) options: Options<'a>,
 }
 
 impl<'a> Selection<'a> {
@@ -42,7 +43,7 @@ impl<'a> Selection<'a> {
         Self {
             path,
             query: &[],
-            headers: &[],
+            options: Options::DEFAULT,
         }
     }
 }
@@ -76,7 +77,7 @@ impl InventoryRead {
                 "InvalidResponse",
                 "invalid or incomplete inventory; body withheld",
             ),
-            InventoryStyle::Server => api(
+            InventoryStyle::Server | InventoryStyle::ServerGuard => api(
                 self.id,
                 "InvalidResponse",
                 "invalid server response; body withheld",
@@ -137,6 +138,7 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<Vec<u8>, Error> {
         let protected = !matches!(read.style, InventoryStyle::Plain);
+        let guarded_server = matches!(read.style, InventoryStyle::ServerGuard);
         let operation = Operation {
             id: read.id,
             template: read.template,
@@ -152,33 +154,48 @@ impl Client {
             raw_body: false,
             overflow_overrides_status: false,
             sensitive: protected,
-            reflection: crate::wire::product::operation::Reflection::Redact,
+            reflection: if guarded_server {
+                operation::Reflection::Guard
+            } else {
+                operation::Reflection::Redact
+            },
             no_redirect: protected,
             report_redirect: protected,
             retry_config: retry::Config::default(),
-        };
-        let options = Options {
-            headers: selection.headers,
-            ..Options::DEFAULT
         };
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
             .runtime(ctx, &mut jitter)
             .map_err(|error| *error)?;
-        let response = operation::execute_raw(
+        let result = operation::execute_raw(
             runtime,
             base,
             &operation,
-            &options,
+            &selection.options,
             selection.path,
             selection.query,
             RouteAuth::Bearer(self.session.bearer_source()),
             bytes::Bytes::new(),
             evidence,
         )
-        .await
-        .map_err(|error| screen(error.into_parts().0, evidence))?;
+        .await;
+        let map_error = |error: Error| {
+            if guarded_server
+                && let Some(api) = error.api_error()
+                && api.observed_status().is_some()
+            {
+                return super::mutations::with_write_message(
+                    read.id,
+                    error,
+                    "server response withheld",
+                    evidence,
+                );
+            }
+            screen(error, evidence)
+        };
+        let response =
+            result.map_err(|error: crate::Failure<()>| map_error(error.into_parts().0))?;
         response
             .classify(
                 read.id,
@@ -186,7 +203,7 @@ impl Client {
                 (true, protected, operation.retry),
                 false,
             )
-            .map_err(|error| screen(*error, evidence))?;
+            .map_err(|error| map_error(*error))?;
         if protected && response.clean_receipt().is_none() {
             return Err(read.shape(evidence));
         }

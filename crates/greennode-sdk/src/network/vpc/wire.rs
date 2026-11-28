@@ -60,7 +60,7 @@ pub(super) enum Style {
 
 #[derive(Clone, Copy)]
 pub(super) struct Read {
-    id: &'static str,
+    pub(in crate::network) id: &'static str,
     template: &'static str,
     style: Style,
 }
@@ -159,6 +159,22 @@ impl<'a> Reads<'a> {
         })
     }
 
+    pub(super) fn with_evidence(
+        client: &'a Client,
+        ctx: &'a RequestContext,
+        evidence: Evidence,
+    ) -> Self {
+        Self {
+            client,
+            ctx,
+            evidence,
+        }
+    }
+
+    pub(super) fn into_evidence(self) -> Evidence {
+        self.evidence
+    }
+
     pub(super) fn screen(&self, error: Error) -> Error {
         self.evidence.screen_error(error)
     }
@@ -252,6 +268,24 @@ impl<'a> Reads<'a> {
         ids: &[&str],
         query: &[(&str, &str)],
     ) -> Result<String, Error> {
+        self.request_in(self.ctx, read, ids, query).await
+    }
+
+    pub(super) fn evidence(&self) -> &Evidence {
+        &self.evidence
+    }
+
+    pub(super) fn evidence_mut(&mut self) -> &mut Evidence {
+        &mut self.evidence
+    }
+
+    pub(super) async fn request_in(
+        &mut self,
+        ctx: &RequestContext,
+        read: Read,
+        ids: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<String, Error> {
         let reflects_inputs = |evidence: &Evidence| {
             ids.iter().any(|id| evidence.id_reflects(id))
                 || query.iter().any(|(_, value)| evidence.text_reflects(value))
@@ -262,11 +296,9 @@ impl<'a> Reads<'a> {
         let session = &self.client.session;
         let scoped;
         let ctx = if read.style == Style::Plain {
-            self.ctx
+            ctx
         } else {
-            scoped = self
-                .ctx
-                .child_with_deadline(session.clock().monotonic_now() + read_deadline());
+            scoped = ctx.child_with_deadline(session.clock().monotonic_now() + read_deadline());
             &scoped
         };
         let project = session
@@ -406,16 +438,36 @@ impl<'a> Reads<'a> {
         page: i64,
         size: i64,
     ) -> Result<PagedList<T>, Error> {
+        self.page_in(self.ctx, read, name, page, size, |_| Ok(()))
+            .await
+    }
+
+    async fn page_in<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        read: Read,
+        name: &str,
+        page: i64,
+        size: i64,
+        validate: fn(&str) -> Result<(), ()>,
+    ) -> Result<PagedList<T>, Error> {
         let page = if page > 0 { page } else { DEFAULT_PAGE }.to_string();
         let size = if size > 0 { size } else { DEFAULT_PAGE_SIZE }.to_string();
         let raw = self
-            .request(
+            .request_in(
+                ctx,
                 read,
                 &[],
                 &[("name", name), ("page", &page), ("size", &size)],
             )
             .await?;
-        parse_page(&raw, read.style == Style::Inventory).map_err(|()| self.invalid(read))
+        validate(&raw).map_err(|()| self.invalid(read))?;
+        parse_page(
+            &raw,
+            read.style == Style::Inventory,
+            read.id == "network.ListSecurityGroups",
+        )
+        .map_err(|()| self.invalid(read))
     }
 
     pub(super) async fn complete<T: WireField>(
@@ -425,11 +477,26 @@ impl<'a> Reads<'a> {
         path_ids: PathIds,
         identity: fn(&T) -> &str,
     ) -> Result<Vec<T>, Error> {
+        self.complete_in(self.ctx, read, invalid_read, path_ids, identity, |_| Ok(()))
+            .await
+    }
+
+    pub(super) async fn complete_in<T: WireField>(
+        &mut self,
+        ctx: &RequestContext,
+        read: Read,
+        invalid_read: Read,
+        path_ids: PathIds,
+        identity: fn(&T) -> &str,
+        validate: fn(&str) -> Result<(), ()>,
+    ) -> Result<Vec<T>, Error> {
         let mut items = Vec::new();
         let mut seen = HashSet::new();
         let mut metadata = None;
         for page in 1..=MAX_PAGES {
-            let out = self.page::<T>(read, "", page, DEFAULT_PAGE_SIZE).await?;
+            let out = self
+                .page_in::<T>(ctx, read, "", page, DEFAULT_PAGE_SIZE, validate)
+                .await?;
             let invalid = || self.invalid(invalid_read);
             let current = (out.total_page, out.total_item, out.page_size);
             let count = i64::try_from(out.items.len()).map_err(|_| invalid())?;
@@ -514,9 +581,17 @@ pub(super) fn field<T: WireField>(
         .map(Option::unwrap_or_default)
 }
 
-fn parse_page<T: WireField>(raw: &str, guarded: bool) -> Result<PagedList<T>, ()> {
+fn parse_page<T: WireField>(
+    raw: &str,
+    guarded: bool,
+    lenient_rows: bool,
+) -> Result<PagedList<T>, ()> {
     let fields = objects(raw)?;
-    let list: Option<Vec<T>> = field(&fields, "listData")?;
+    let list: Option<Vec<T>> = if lenient_rows {
+        crate::model::wire::decode_lenient(|| field(&fields, "listData"))?
+    } else {
+        field(&fields, "listData")?
+    };
     let page: Option<i64> = field(&fields, "page")?;
     let size: Option<i64> = field(&fields, "pageSize")?;
     let pages: Option<i64> = field(&fields, "totalPage")?;

@@ -352,7 +352,14 @@ fn guard_bandwidth(
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     pub(super) fn request_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Error> {
-        let mut evidence = Evidence::new();
+        self.request_evidence_from(ctx, Evidence::new())
+    }
+
+    pub(super) fn request_evidence_from(
+        &self,
+        ctx: &RequestContext,
+        mut evidence: Evidence,
+    ) -> Result<Evidence, Error> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -457,7 +464,7 @@ impl Client {
                 | Style::BandwidthProject => None,
                 Style::Bandwidth => Some(guard_bandwidth),
             },
-            ..Options::DEFAULT
+            ..selection.options
         };
         let screen = |error: Error, evidence: &Evidence| evidence.screen_error(error);
         let response = operation::execute_raw(
@@ -479,14 +486,18 @@ impl Client {
             }
             if read.style == Style::EndpointQuote
                 && let Some(interruption) =
-                    super::endpoint_quote::endpoint_interruption(&error, evidence)
+                    super::endpoint_quote::endpoint_interruption(read.id, &error, evidence)
             {
                 return interruption;
             }
             let api = error.api_error();
-            let status = api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
+            let status = error
+                .http_status()
+                .or_else(|| api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok()));
             let error = if error.is_body_too_large() {
-                if read.style == Style::EndpointQuote {
+                if read.style == Style::EndpointQuote
+                    && status.is_none_or(|status| status.is_success())
+                {
                     read.invalid(evidence)
                 } else {
                     read.withheld(status, false).with_body_too_large()
@@ -610,6 +621,14 @@ impl<'a> Fields<'a> {
             return Err(());
         }
         Ok(self.0.get(name).copied())
+    }
+
+    pub(super) fn check_ack_paging(&self) -> Result<(), ()> {
+        for key in ["page", "size", "total", "totalPage"] {
+            self.optional::<crate::model::wire::Field<Option<i64>>>(key)?;
+        }
+        self.raw("data")?;
+        Ok(())
     }
 
     pub(super) fn output_raw(&self, name: &str) -> Result<Option<&'a RawValue>, ()> {

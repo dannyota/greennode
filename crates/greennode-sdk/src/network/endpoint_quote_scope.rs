@@ -1,15 +1,18 @@
 use std::{collections::HashSet, time::Duration};
 
-use serde::Serialize;
 use serde_json::value::RawValue;
 
 use crate::config::session::AuthKind;
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds};
+use crate::wire::product::{
+    evidence::{Evidence, SentCredentials},
+    options::{AttemptCheck, Options, PathIds},
+};
 use crate::{Error, ErrorClass, RequestContext};
 
 use super::Client;
+use super::endpoint_filters::{Filter, FilterField};
 use super::endpoint_quote::{OP, QuoteCreateEndpointInput, fields, local_error};
 use super::inventory::Selection;
 use super::nat_catalog::reflects;
@@ -40,6 +43,7 @@ const OTHER_ORIGIN: &str = "https://han-1-vnetwork.console.greennode.ai";
 
 pub(super) struct EndpointQuote<'a> {
     pub(super) client: &'a Client,
+    pub(super) operation: &'static str,
     pub(super) ctx: &'a RequestContext,
     pub(super) evidence: &'a mut Evidence,
     pub(super) base: Base,
@@ -52,7 +56,8 @@ pub(super) struct Offer {
     pub(super) service: String,
     pub(super) package: String,
     pub(super) package_name: String,
-    zone: String,
+    pub(super) zone: String,
+    pub(super) service_name: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -62,16 +67,10 @@ struct Page {
     pages: i64,
 }
 
-#[derive(Serialize)]
-struct Filter<'a> {
-    field: &'a str,
-    value: &'a str,
-}
-
 struct Scan<'a> {
     read: Read,
     suffix: &'a [&'a str],
-    filters: &'a [(&'a str, &'a str)],
+    filters: &'a [Filter<'a>],
     query: &'a [(&'a str, &'a str)],
     required: &'a [&'a str],
     require_paging: bool,
@@ -96,7 +95,9 @@ impl<'a> EndpointQuote<'a> {
         client: &'a Client,
         ctx: &'a RequestContext,
         evidence: &'a mut Evidence,
+        operation: &'static str,
     ) -> Result<Self, Error> {
+        let write = operation != OP;
         let session = &client.session;
         let endpoints = session.endpoints();
         let defaults = session.default_endpoints();
@@ -110,11 +111,19 @@ impl<'a> EndpointQuote<'a> {
         let trusted_fixture = {
             #[cfg(any(test, feature = "test-support"))]
             {
-                session.has_product_fixture(crate::testing::Product::Vserver)
-                    && session.has_product_fixture(crate::testing::Product::Vnetwork)
+                use crate::testing::Product;
+                let fixture = |product| {
+                    if write {
+                        session.is_write_fixture(product)
+                    } else {
+                        session.has_product_fixture(product)
+                    }
+                };
+                fixture(Product::Vserver) && fixture(Product::Vnetwork)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
+                let _ = write;
                 false
             }
         };
@@ -145,15 +154,38 @@ impl<'a> EndpointQuote<'a> {
         if configured.is_some_and(|id| evidence.id_reflects(id)) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
-        let project_body = client.read(ctx, vserver, PROJECTS, &[], evidence).await?;
+        let projects = Read {
+            id: operation,
+            ..PROJECTS
+        };
+        let regions = Read {
+            id: operation,
+            ..REGIONS
+        };
+        let project_body = client.read(ctx, vserver, projects, &[], evidence).await?;
         let project = project(&go_json(&project_body), configured, evidence)?;
-        let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
-        let zone = region(&go_json(&zone_body), evidence)?;
+        let project = super::mutations::guard_operands(projects.id, project, evidence)?;
+        let zone = if write {
+            let zone_body = client.read(ctx, &base, regions, &[], evidence).await?;
+            let zone = region(&go_json(&zone_body), evidence)?;
+            super::mutations::guard_operands(regions.id, zone, evidence)?
+        } else if let Some(zone) = client.endpoint_verified_zone.get() {
+            zone.clone()
+        } else {
+            let zone_body = client.read(ctx, &base, regions, &[], evidence).await?;
+            let zone = region(&go_json(&zone_body), evidence)?;
+            if client.endpoint_verified_zone.get_or_init(|| zone.clone()) != &zone {
+                return Err(REGIONS.invalid(evidence));
+            }
+            let _ = client.endpoint_zone.set(zone.clone());
+            zone
+        };
         if evidence.id_reflects(&project) || evidence.id_reflects(&zone) {
             return Err(PROJECTS.invalid(evidence));
         }
         Ok(Self {
             client,
+            operation,
             ctx,
             evidence,
             base,
@@ -262,6 +294,7 @@ impl<'a> EndpointQuote<'a> {
             package,
             package_name,
             zone: zone.into(),
+            service_name,
         })
     }
 
@@ -274,9 +307,9 @@ impl<'a> EndpointQuote<'a> {
             .scan(Scan {
                 require_paging: true,
                 filters: &[
-                    ("status", "ACTIVE"),
-                    ("endpointServiceId", &offer.service),
-                    ("zoneType", "AVAILABILITY"),
+                    Filter::new(FilterField::Status, "ACTIVE"),
+                    Filter::new(FilterField::EndpointServiceId, &offer.service),
+                    Filter::new(FilterField::ZoneType, "AVAILABILITY"),
                 ],
                 ..Scan::new(VPCS, &["uuid", "status", "projectUuid", "regionUuid"])
             })
@@ -304,7 +337,10 @@ impl<'a> EndpointQuote<'a> {
         let subnets = self
             .scan(Scan {
                 suffix: &[&input.vpc_id],
-                filters: &[("isEndpointUsable", "true"), ("zoneUuid", &offer.zone)],
+                filters: &[
+                    Filter::new(FilterField::IsEndpointUsable, "true"),
+                    Filter::new(FilterField::ZoneUuid, &offer.zone),
+                ],
                 ..Scan::new(SUBNETS, &["uuid", "status", "vpcUuid", "zone"])
             })
             .await?;
@@ -337,7 +373,26 @@ impl<'a> EndpointQuote<'a> {
         Ok(())
     }
 
+    pub(super) async fn endpoint_inventory(&mut self) -> Result<Vec<Box<RawValue>>, Error> {
+        self.scan(Scan {
+            require_paging: true,
+            ..Scan::new(
+                Read::new(
+                    self.operation,
+                    "vnetwork/v1/{}/{}/endpoints",
+                    Style::EndpointQuote,
+                ),
+                &[],
+            )
+        })
+        .await
+    }
+
     async fn scan(&mut self, spec: Scan<'_>) -> Result<Vec<Box<RawValue>>, Error> {
+        let read = Read {
+            id: self.operation,
+            ..spec.read
+        };
         let ctx = self.ctx.child_with_deadline(
             self.client.session.clock().monotonic_now() + Duration::from_secs(30),
         );
@@ -349,13 +404,9 @@ impl<'a> EndpointQuote<'a> {
             .into_iter()
             .chain(spec.suffix.iter().copied())
             .collect();
-        let filters: Vec<_> = spec
-            .filters
-            .iter()
-            .map(|(field, value)| Filter { field, value })
-            .collect();
-        let filters =
-            serde_json::to_string(&filters).map_err(|_| Error::new(ErrorClass::InvalidInput))?;
+        let filters = serde_json::to_string(spec.filters)
+            .map_err(|_| Error::new(ErrorClass::InvalidInput))?;
+        let check = |credentials: &SentCredentials| Filter::check(spec.filters, credentials);
         for page in 1..=50 {
             let params = format!(r#"{{"search":{filters},"sort":{{}},"page":{page},"size":1000}}"#);
             let query: Vec<_> = [("params", params.as_str())]
@@ -367,16 +418,24 @@ impl<'a> EndpointQuote<'a> {
                 .read_query(
                     &ctx,
                     &self.base,
-                    spec.read,
+                    read,
                     Selection {
                         path: &path,
                         query: &query,
-                        headers: &[],
+                        options: Options {
+                            identifier_query_keys: &["zoneUuid"],
+                            attempt_check: Some(AttemptCheck(&check)),
+                            ..Options::DEFAULT
+                        },
                     },
                     self.evidence,
                 )
                 .await?;
-            let invalid = || spec.read.invalid(self.evidence);
+            let invalid = || read.invalid(self.evidence);
+            retained = retained.saturating_add(body.len());
+            if retained > 4 << 20 {
+                return Err(invalid());
+            }
             let text = go_json(&body);
             let envelope = endpoint_envelope(&text, self.evidence).map_err(|()| invalid())?;
             if !envelope.only(&[
@@ -414,6 +473,8 @@ impl<'a> EndpointQuote<'a> {
             }) {
                 return Err(invalid());
             }
+            let data = super::mutations::guard_operands(read.id, data, self.evidence)?;
+            let invalid = || read.invalid(self.evidence);
             for raw in data {
                 let row = fields(raw).map_err(|()| invalid())?;
                 for key in spec.required {
@@ -436,7 +497,7 @@ impl<'a> EndpointQuote<'a> {
                 {
                     return Err(invalid());
                 }
-                retained = retained.saturating_add(raw.get().len().saturating_add(128));
+                retained = retained.saturating_add(128);
                 if retained > 4 << 20 {
                     return Err(invalid());
                 }
@@ -446,7 +507,7 @@ impl<'a> EndpointQuote<'a> {
                 return Ok(rows);
             }
         }
-        Err(spec.read.invalid(self.evidence))
+        Err(read.invalid(self.evidence))
     }
 }
 
@@ -475,7 +536,7 @@ fn page_info(envelope: &Fields<'_>, page: i64, require: bool) -> Result<Option<P
 }
 
 fn endpoint_envelope<'a>(text: &'a str, evidence: &Evidence) -> Result<Fields<'a>, ()> {
-    if reflects(text, evidence) {
+    if !evidence.guards_reads() && reflects(text, evidence) {
         return Err(());
     }
     let fields = Fields::decode(text)?;

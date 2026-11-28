@@ -1,0 +1,1919 @@
+[
+  {
+    "command": "create-vpc",
+    "args": [
+      "--name",
+      "sample",
+      "--cidr",
+      "10.2.0.0/16",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "networks",
+        "status": 200,
+        "response": {
+          "data": {
+            "id": "vpc-1",
+            "displayName": "<name>",
+            "cidr": "<cidr>",
+            "status": "ACTIVE",
+            "dnsStatus": "DISABLED",
+            "dnsId": "dns-vpc-1",
+            "routeTableId": "rt-1",
+            "routeTableName": "<name>",
+            "mtu": 1450,
+            "zone": {
+              "uuid": "zone-a"
+            }
+          }
+        },
+        "body": {
+          "name": "sample",
+          "cidr": "10.2.0.0/16"
+        }
+      }
+    ]
+  },
+  {
+    "command": "update-vpc",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--name",
+      "renamed"
+    ],
+    "requests": [
+      {
+        "method": "PATCH",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "body": {
+          "name": "renamed"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "renamed",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "ENABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "delete-vpc",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--yes",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "ENABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets",
+        "status": 200,
+        "response": []
+      },
+      {
+        "method": "DELETE",
+        "path": "networks/vpc-1",
+        "status": 200
+      }
+    ]
+  },
+  {
+    "command": "enable-vpc-private-dns",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "DISABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "networks/vpc-1/enableDns",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "ENABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "create-dhcp-options",
+    "args": [
+      "--name",
+      "example",
+      "--dns-servers",
+      "10.166.12.196",
+      "--dns-servers",
+      "10.166.12.197",
+      "--mtu",
+      "1450"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "dhcp_option",
+        "status": 201,
+        "response": {
+          "data": {
+            "uuid": "dop-1",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "dnsServers": [
+              "10.166.12.196",
+              "10.166.12.197"
+            ],
+            "mtu": 1450,
+            "associatedNetworks": [],
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "body": {
+          "name": "example",
+          "dnsServers": [
+            "10.166.12.196",
+            "10.166.12.197"
+          ],
+          "mtu": 1450
+        }
+      }
+    ]
+  },
+  {
+    "command": "delete-dhcp-options",
+    "args": [
+      "--dhcp-options-id",
+      "dop-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "dhcp_option/dop-1",
+        "status": 200,
+        "response": {
+          "uuid": "dop-1",
+          "name": "<name>",
+          "status": "ACTIVE",
+          "dnsServers": [
+            "10.166.12.196",
+            "10.166.12.197"
+          ],
+          "mtu": 1450,
+          "associatedNetworks": [],
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-01T00:00:00Z"
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "dhcp_option/dop-1",
+        "status": 204
+      }
+    ]
+  },
+  {
+    "command": "set-vpc-dhcp-options",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--dhcp-options-id",
+      "dop-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "DISABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "dhcp_option/dop-1",
+        "status": 200,
+        "response": {
+          "uuid": "dop-1",
+          "name": "<name>",
+          "status": "ACTIVE",
+          "dnsServers": [
+            "10.166.12.196",
+            "10.166.12.197"
+          ],
+          "mtu": 1450,
+          "associatedNetworks": [],
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-01T00:00:00Z"
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "networks/vpc-1/updateDhcpOption",
+        "status": 200,
+        "body": {
+          "dhcpOptionId": "dop-1"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "DISABLED",
+          "dhcpOptionId": "dop-1",
+          "dhcpOptionName": "<name>",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "clear-vpc-dhcp-options",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "DISABLED",
+          "dhcpOptionId": "dop-1",
+          "dhcpOptionName": "<name>",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "networks/vpc-1/updateDhcpOption",
+        "status": 200,
+        "body": {}
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "DISABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "create-subnet",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--zone-id",
+      "zone-a",
+      "--name",
+      "sample",
+      "--cidr",
+      "10.2.1.0/24",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "networks/vpc-1/subnets",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "subnet-1",
+            "name": "<name>",
+            "networkUuid": "vpc-1",
+            "cidr": "<cidr>",
+            "status": "ACTIVE",
+            "routeTableUuid": "rt-1",
+            "interfaceAclPolicyUuid": "netPolicy-1",
+            "secondarySubnets": [],
+            "zone": {
+              "uuid": "zone-a"
+            }
+          }
+        },
+        "body": {
+          "name": "sample",
+          "cidr": "10.2.1.0/24",
+          "zoneId": "zone-a"
+        }
+      }
+    ]
+  },
+  {
+    "command": "update-subnet",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--subnet-id",
+      "subnet-1",
+      "--name",
+      "renamed"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets/subnet-1",
+        "status": 200,
+        "response": {
+          "uuid": "subnet-1",
+          "name": "<name>",
+          "networkUuid": "vpc-1",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "PATCH",
+        "path": "networks/vpc-1/subnets/subnet-1",
+        "status": 200,
+        "body": {
+          "name": "renamed"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets/subnet-1",
+        "status": 200,
+        "response": {
+          "uuid": "subnet-1",
+          "name": "renamed",
+          "networkUuid": "vpc-1",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "delete-subnet",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--subnet-id",
+      "subnet-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets/subnet-1",
+        "status": 200,
+        "response": {
+          "uuid": "subnet-1",
+          "name": "<name>",
+          "networkUuid": "vpc-1",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "servers/subnets/subnet-1",
+        "status": 200,
+        "response": []
+      },
+      {
+        "method": "GET",
+        "path": "network-interfaces-elastic?name=&page=1&size=10000",
+        "status": 200,
+        "response": {
+          "listData": [],
+          "page": 1,
+          "pageSize": 10000,
+          "totalPage": 0,
+          "totalItem": 0
+        }
+      },
+      {
+        "method": "GET",
+        "path": "virtualIpAddress?name=&page=1&size=10000",
+        "status": 200,
+        "response": {
+          "listData": [],
+          "page": 1,
+          "pageSize": 10000,
+          "totalPage": 0,
+          "totalItem": 0
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/list?name=&page=1&size=10000",
+        "status": 200,
+        "response": {
+          "listData": [],
+          "page": 1,
+          "pageSize": 10000,
+          "totalPage": 0,
+          "totalItem": 0
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "networks/vpc-1/subnets/subnet-1",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets",
+        "status": 200,
+        "response": []
+      }
+    ]
+  },
+  {
+    "command": "create-route-table",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--name",
+      "sample",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "route-table",
+        "status": 202,
+        "response": {
+          "uuid": "rt-2"
+        },
+        "body": {
+          "name": "sample",
+          "networkId": "vpc-1"
+        }
+      }
+    ]
+  },
+  {
+    "command": "delete-route-table",
+    "args": [
+      "--route-table-id",
+      "rt-2",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": [
+              {
+                "uuid": "route-1",
+                "routeTableId": "rt-2",
+                "routingType": "internet",
+                "destinationCidrBlock": "10.2.2.0/24",
+                "target": "10.2.3.4",
+                "status": "ACTIVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1",
+        "status": 200,
+        "response": {
+          "id": "vpc-1",
+          "displayName": "<name>",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "dnsStatus": "ENABLED",
+          "dnsId": "dns-vpc-1",
+          "routeTableId": "rt-1",
+          "routeTableName": "<name>",
+          "mtu": 1450,
+          "zone": {
+            "uuid": "zone-a"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets",
+        "status": 200,
+        "response": []
+      },
+      {
+        "method": "DELETE",
+        "path": "route-table/rt-2",
+        "status": 202
+      },
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 404,
+        "response": {
+          "message": "route table missing"
+        }
+      }
+    ]
+  },
+  {
+    "command": "add-route",
+    "args": [
+      "--route-table-id",
+      "rt-2",
+      "--destination-cidr",
+      "10.3.0.0/24",
+      "--target",
+      "10.2.3.5",
+      "--yes",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": [
+              {
+                "uuid": "route-1",
+                "routeTableId": "rt-2",
+                "routingType": "internet",
+                "destinationCidrBlock": "10.2.2.0/24",
+                "target": "10.2.3.4",
+                "status": "ACTIVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": [
+              {
+                "uuid": "route-1",
+                "routeTableId": "rt-2",
+                "routingType": "internet",
+                "destinationCidrBlock": "10.2.2.0/24",
+                "target": "10.2.3.4",
+                "status": "ACTIVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "route-table/rt-2/routes",
+        "status": 200,
+        "body": {
+          "routes": [
+            {
+              "destinationCidrBlock": "10.2.2.0/24",
+              "target": "10.2.3.4"
+            },
+            {
+              "destinationCidrBlock": "10.3.0.0/24",
+              "target": "10.2.3.5"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "command": "remove-route",
+    "args": [
+      "--route-table-id",
+      "rt-2",
+      "--destination-cidr",
+      "10.2.2.0/24",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": [
+              {
+                "uuid": "route-1",
+                "routeTableId": "rt-2",
+                "routingType": "internet",
+                "destinationCidrBlock": "10.2.2.0/24",
+                "target": "10.2.3.4",
+                "status": "ACTIVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": [
+              {
+                "uuid": "route-1",
+                "routeTableId": "rt-2",
+                "routingType": "internet",
+                "destinationCidrBlock": "10.2.2.0/24",
+                "target": "10.2.3.4",
+                "status": "ACTIVE"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "route-table/rt-2/routes",
+        "status": 200,
+        "body": {
+          "routes": []
+        }
+      },
+      {
+        "method": "GET",
+        "path": "route-table/rt-2",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "rt-2",
+            "name": "<name>",
+            "status": "ACTIVE",
+            "networkId": "vpc-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "routes": []
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "create-network-acl",
+    "args": [
+      "--vpc-id",
+      "vpc-1",
+      "--name",
+      "sample"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path": "network-acl",
+        "status": 201,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z"
+          }
+        },
+        "body": {
+          "name": "sample",
+          "vpc": "vpc-1"
+        }
+      }
+    ]
+  },
+  {
+    "command": "delete-network-acl",
+    "args": [
+      "--network-acl-id",
+      "acl-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "DELETE",
+        "path": "network-acl/acl-1",
+        "status": 204
+      }
+    ]
+  },
+  {
+    "command": "add-network-acl-rule",
+    "args": [
+      "--network-acl-id",
+      "acl-1",
+      "--direction",
+      "inbound",
+      "--priority",
+      "123",
+      "--protocol",
+      "TCP",
+      "--cidr",
+      "10.3.0.0/24",
+      "--action",
+      "pass",
+      "--port-range-min",
+      "22",
+      "--yes",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "network-acl/acl-1/rules",
+        "status": 200,
+        "body": {
+          "aclId": "acl-1",
+          "detailAclRuleList": [
+            {
+              "type": "inbound",
+              "seqNumber": 0,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "pass",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "outbound",
+              "seqNumber": 0,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "pass",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "inbound",
+              "seqNumber": 100,
+              "protocol": "tcp",
+              "port": "443",
+              "source": "<cidr>",
+              "action": "pass",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "inbound",
+              "seqNumber": 2000,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "deny",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "outbound",
+              "seqNumber": 2000,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "deny",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": true
+            },
+            {
+              "type": "inbound",
+              "seqNumber": 123,
+              "protocol": "tcp",
+              "port": "22",
+              "source": "10.3.0.0/24",
+              "action": "pass",
+              "system": false,
+              "interfaceAclPolicyUuid": "acl-1"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "command": "remove-network-acl-rule",
+    "args": [
+      "--network-acl-id",
+      "acl-1",
+      "--direction",
+      "inbound",
+      "--priority",
+      "0",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "network-acl/acl-1/rules",
+        "status": 200,
+        "body": {
+          "aclId": "acl-1",
+          "detailAclRuleList": [
+            {
+              "type": "outbound",
+              "seqNumber": 0,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "pass",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "inbound",
+              "seqNumber": 100,
+              "protocol": "tcp",
+              "port": "443",
+              "source": "<cidr>",
+              "action": "pass",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "inbound",
+              "seqNumber": 2000,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "deny",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": false
+            },
+            {
+              "type": "outbound",
+              "seqNumber": 2000,
+              "protocol": "ANY",
+              "port": "0-65535",
+              "source": "0.0.0.0/0",
+              "action": "deny",
+              "interfaceAclPolicyUuid": "acl-1",
+              "system": true
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "command": "associate-network-acl-subnet",
+    "args": [
+      "--network-acl-id",
+      "acl-1",
+      "--subnet-id",
+      "subnet-3",
+      "--yes",
+      "--no-wait"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "networks/vpc-1/subnets/subnet-3",
+        "status": 200,
+        "response": {
+          "uuid": "subnet-3",
+          "name": "<name>",
+          "networkUuid": "vpc-1",
+          "cidr": "<cidr>",
+          "status": "ACTIVE",
+          "zone": {
+            "uuid": "zone-a"
+          },
+          "interfaceAclPolicyUuid": "acl-4"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "network-acl/acl-1/subnets",
+        "status": 200,
+        "body": {
+          "subnetUuids": [
+            "subnet-1",
+            "subnet-2",
+            "subnet-3"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "command": "disassociate-network-acl-subnet",
+    "args": [
+      "--network-acl-id",
+      "acl-1",
+      "--subnet-id",
+      "subnet-1",
+      "--yes"
+    ],
+    "requests": [
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-1",
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      },
+      {
+        "method": "PUT",
+        "path": "network-acl/acl-1/subnets",
+        "status": 200,
+        "body": {
+          "subnetUuids": [
+            "subnet-2"
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "network-acl/acl-1",
+        "status": 200,
+        "response": {
+          "data": {
+            "uuid": "acl-1",
+            "interfaceNetworkUuid": "vpc-1",
+            "name": "<name>",
+            "defaultAcl": false,
+            "status": "ACTIVE",
+            "projectUuid": "pro-1",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "subnetAssociationList": [
+              "subnet-2"
+            ],
+            "aclPolicyRules": [
+              {
+                "uuid": "aclr-1",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-2",
+                "seqNumber": 0,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-3",
+                "seqNumber": 100,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "tcp",
+                "type": "inbound",
+                "port": "443",
+                "source": "<cidr>",
+                "action": "pass"
+              },
+              {
+                "uuid": "aclr-4",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "inbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny"
+              },
+              {
+                "uuid": "aclr-5",
+                "seqNumber": 2000,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "interfaceAclPolicyUuid": "acl-1",
+                "protocol": "ANY",
+                "type": "outbound",
+                "port": "0-65535",
+                "source": "0.0.0.0/0",
+                "action": "deny",
+                "system": true
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+]

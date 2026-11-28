@@ -154,11 +154,32 @@ mod catalog;
 mod inventory;
 mod prices;
 mod quotes;
+mod resource_writes;
 
 pub(super) const SERVICE: Service = Service {
     name: "network",
-    error_rules: &[prices::DISCOVERY_INCOMPLETE],
+    error_rules: &[
+        prices::DISCOVERY_INCOMPLETE,
+        resource_writes::SYSTEM_GROUP,
+        resource_writes::GROUP_IN_USE,
+        resource_writes::RESOURCE_IN_USE,
+        writes::UNEXPECTEDSTATUS,
+        writes::DEFAULTRESOURCE,
+        writes::RESOURCEBUSY,
+    ],
     operations: &[
+        resource_writes::CREATE_SECURITY_GROUP,
+        resource_writes::UPDATE_SECURITY_GROUP,
+        resource_writes::DELETE_SECURITY_GROUP,
+        resource_writes::CREATE_SECURITY_GROUP_RULE,
+        resource_writes::DELETE_SECURITY_GROUP_RULE,
+        resource_writes::CREATE_VIRTUAL_IP_ADDRESS,
+        resource_writes::UPDATE_VIRTUAL_IP_ADDRESS,
+        resource_writes::DELETE_VIRTUAL_IP_ADDRESS,
+        resource_writes::CREATE_ENDPOINT,
+        resource_writes::DELETE_ENDPOINT,
+        resource_writes::CREATE_NAT_INSTANCE,
+        resource_writes::DELETE_NAT_INSTANCE,
         routes::GET_ROUTE_TABLE,
         routes::GET_VIRTUAL_IP_ADDRESS,
         routes::LIST_PAIRS_BY_VIP,
@@ -227,6 +248,27 @@ pub(super) const SERVICE: Service = Service {
         vpc::LIST_SUBNETS,
         vpc::LIST_SUBNETS_BY_VPC,
         vpc::LIST_VPCS,
+        writes::vpcs::CREATE_VPC,
+        writes::vpcs::UPDATE_VPC,
+        writes::vpcs::DELETE_VPC,
+        writes::vpcs::ENABLE_VPC_PRIVATE_DNS,
+        writes::dhcp::CREATE_DHCP_OPTIONS,
+        writes::dhcp::DELETE_DHCP_OPTIONS,
+        writes::dhcp::SET_VPC_DHCP_OPTIONS,
+        writes::dhcp::CLEAR_VPC_DHCP_OPTIONS,
+        writes::subnets::CREATE_SUBNET,
+        writes::subnets::UPDATE_SUBNET,
+        writes::subnets::DELETE_SUBNET,
+        writes::routes::CREATE_ROUTE_TABLE,
+        writes::routes::DELETE_ROUTE_TABLE,
+        writes::routes::ADD_ROUTE,
+        writes::routes::REMOVE_ROUTE,
+        writes::acls::CREATE_NETWORK_ACL,
+        writes::acls::DELETE_NETWORK_ACL,
+        writes::acls::ADD_NETWORK_ACL_RULE,
+        writes::acls::REMOVE_NETWORK_ACL_RULE,
+        writes::acls::ASSOCIATE_NETWORK_ACL_SUBNET,
+        writes::acls::DISASSOCIATE_NETWORK_ACL_SUBNET,
     ],
 };
 
@@ -235,3 +277,4 @@ run!(list_bandwidth_packages, ListBandwidthPackagesInput);
 run!(list_nat_inbound_rules, ListNatInboundRulesInput);
 
 mod vpc;
+mod writes;
