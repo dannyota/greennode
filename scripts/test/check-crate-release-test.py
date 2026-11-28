@@ -1517,7 +1517,11 @@ class Standalone(unittest.TestCase):
             entry = b"100644 blob " + b"a" * 40 + b"\t"
             path.write_bytes(entry + b"file\0")
             self.assertEqual(check.main(["tree", str(path)]), 0)
-            for bad in (entry + b".cargo/sub/config\0", entry + b"file", b"120000 blob " + b"a" * 40 + b"\tlink\0"):
+            path.write_bytes(entry + b".cargo/sub/config\0")
+            self.assertEqual(check.main(["tree", str(path)]), 0)
+            with self.assertRaises(ValueError):
+                check.tagged_tree(path.read_bytes())
+            for bad in (entry + b".CaRgO/CONFIG.toml\0", entry + b"file", b"120000 blob " + b"a" * 40 + b"\tlink\0"):
                 path.write_bytes(bad)
                 self.assertNotEqual(check.main(["tree", str(path)]), 0)
 
@@ -1542,18 +1546,59 @@ class Standalone(unittest.TestCase):
         index = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
         api = json.dumps({"version": {"crate": "greennode", "num": "0.2.0",
                                       "checksum": "a" * 64, "yanked": True}}).encode()
+        listing = json.dumps({"versions": [{"crate": r["name"], "num": r["vers"], "checksum": r["cksum"], "yanked": r["yanked"]} for r in rows], "meta": {"total": 2}}).encode()
         def fetch(url):
-            return (200, index if "index.crates.io" in url else api)
+            return (200, index if "index.crates.io" in url else listing if url.endswith("/versions") else api)
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             self.assertEqual(check.main(["previous", "v0.3.0"], fetch=fetch), 0)
         self.assertEqual(output.getvalue(), "v0.2.0\n")
+        for field, value in (("crate", "other"), ("num", "bad"), ("checksum", "BAD"), ("yanked", 1)):
+            bad_list = json.loads(listing); bad_list["versions"][0][field] = value
+            self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, json.dumps(bad_list).encode() if url.endswith("/versions") else index if "index.crates.io" in url else api)), 0)
+        bad_list = json.loads(listing); bad_list["versions"][0] = bad_list["versions"][1].copy()
+        self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, json.dumps(bad_list).encode() if url.endswith("/versions") else index if "index.crates.io" in url else api)), 0)
+        bad_list = json.loads(listing); bad_list["versions"][1]["checksum"] = "c" * 64
+        self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, json.dumps(bad_list).encode() if url.endswith("/versions") else index if "index.crates.io" in url else api)), 0)
+        for meta in ({"total": 1}, {"total": True}, {"total": 2, "next_page": "next"}):
+            bad_list = json.loads(listing); bad_list["meta"] = meta
+            self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, json.dumps(bad_list).encode() if url.endswith("/versions") else index if "index.crates.io" in url else api)), 0)
         self.assertNotEqual(check.main(["previous", "v0.2.0"], fetch=fetch), 0)
         self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda _: (200, index + index)), 0)
         for broken in (index[:-1], b"", index + b"{}\n"):
             self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda _: (200, broken)), 0)
         wrong = json.loads(api); wrong["version"]["yanked"] = False
         self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, index if "index.crates.io" in url else json.dumps(wrong).encode())), 0)
+
+    def test_checksum_mismatch_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "receipt"
+            records = [{"name": name, "version": "0.1.0", "filename": f"{name}-0.1.0.crate", "sha256": "a" * 64} for name in check.NAMES]
+            path.write_text(json.dumps({"tag": "v0.1.0", "commit": "a" * 40, "toolchain": "1.100.0", "crates": records}))
+            api = {"crate": "greennode", "num": "0.1.0", "checksum": "b" * 64, "yanked": True}
+            index = {"name": "greennode", "vers": "0.1.0", "cksum": "b" * 64, "yanked": True}
+            def fetch(url):
+                return (200, json.dumps(index).encode() + b"\n") if "index.crates.io" in url else (200, json.dumps({"version": api}).encode())
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(check.main(["checksum-mismatch", str(path), "greennode"], fetch=fetch), 0)
+            for value in ("greennode", "0.1.0", "a" * 64, "b" * 64, "true"):
+                self.assertIn(value, output.getvalue())
+            index["yanked"] = False
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertNotEqual(check.main(["checksum-mismatch", str(path), "greennode"], fetch=fetch), 0)
+            self.assertEqual(output.getvalue(), "")
+            index["yanked"] = True
+            for field, value in (("crate", "other"), ("num", "0.2.0"), ("checksum", "bad"), ("yanked", 1), ("checksum", "a" * 64)):
+                original = api[field]; api[field] = value
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertNotEqual(check.main(["checksum-mismatch", str(path), "greennode"], fetch=fetch), 0)
+                api[field] = original
+            data = json.dumps(index).encode() + b"\n"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertNotEqual(check.main(["checksum-mismatch", str(path), "greennode"], fetch=lambda url: (200, data + data) if "index.crates.io" in url else (200, json.dumps({"version": api}).encode())), 0)
+                self.assertNotEqual(check.main(["checksum-mismatch", str(path), "other"], fetch=fetch), 0)
 
 
 if __name__ == "__main__":

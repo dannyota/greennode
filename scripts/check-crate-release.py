@@ -513,7 +513,7 @@ def artifact_entries_match(entries, expected):
     return not remaining
 
 
-def tagged_tree(tree):
+def tagged_tree(tree, mac=False):
     if not isinstance(tree, bytes) or not tree or len(tree) > 8 * 1024 * 1024 or not tree.endswith(b"\0"):
         raise GateError("greennode: invalid tagged tree")
     paths = set()
@@ -530,7 +530,7 @@ def tagged_tree(tree):
             raise GateError("greennode: unsafe tagged tree")
         paths.add(path)
         if (parts[-1].lower() in (b"config", b"config.toml")
-                and b".cargo" in [part.lower() for part in parts[:-1]]):
+                and b".cargo" in [part.lower() for part in (parts[-2:-1] if mac else parts[:-1])]):
             raise GateError("greennode: Cargo config in tagged tree")
 
 
@@ -680,34 +680,83 @@ def check_owners(names, unregistered, fetch=None):
                 raise GateError(f"{name}: required owner missing")
 
 
+def api_record_valid(row, name):
+    return (isinstance(row, dict) and row.get("crate") == name and valid_semver(row.get("num"))
+            and isinstance(row.get("checksum"), str) and re.fullmatch(r"[0-9a-f]{64}", row["checksum"]) is not None
+            and type(row.get("yanked")) is bool)
+
+
+def index_records(name, fetch):
+    status, data = bounded_fetch(f"https://index.crates.io/{index_prefix(name)}/{name}", fetch)
+    if status != 200 or not data or not data.endswith(b"\n"):
+        raise GateError("greennode: invalid registry index")
+    rows = []
+    seen = set()
+    for line in data.split(b"\n")[:-1]:
+        row = read_json(line)
+        if not index_record_valid(row, name) or row["vers"] in seen:
+            raise GateError("greennode: invalid registry index")
+        seen.add(row["vers"])
+        rows.append(row)
+    return rows
+
+
+def exact_version(name, version, fetch):
+    status, data = bounded_fetch(f"https://crates.io/api/v1/crates/{name}/{version}", fetch)
+    payload = read_json(data) if status == 200 else None
+    row = payload.get("version") if isinstance(payload, dict) else None
+    if not api_record_valid(row, name) or row["num"] != version:
+        raise GateError("greennode: invalid registry version")
+    return row
+
+
+def same_version(api, index):
+    return (api["num"] == index["vers"] and api["checksum"] == index["cksum"]
+            and api["yanked"] == index["yanked"])
+
+
 def previous_release(tag, fetch=None):
     if not isinstance(tag, str) or not TAG.fullmatch(tag) or not valid_semver(tag[1:]):
         raise GateError("greennode: invalid candidate tag")
-    status, data = bounded_fetch("https://index.crates.io/gr/ee/greennode", fetch)
-    if status != 200 or not data or not data.endswith(b"\n"):
-        raise GateError("greennode: invalid registry index")
-    seen = set()
-    versions = []
-    for line in data.split(b"\n")[:-1]:
-        row = read_json(line)
-        if not index_record_valid(row, "greennode") or row["vers"] in seen:
-            raise GateError("greennode: invalid registry index")
-        seen.add(row["vers"])
-        if VERSION.fullmatch(row["vers"]):
-            versions.append((tuple(map(int, row["vers"].split("."))), row))
-    if not versions:
-        raise GateError("greennode: previous release missing")
-    version, row = max(versions, key=lambda item: item[0])
-    if version >= tuple(map(int, tag[1:].split("."))):
-        raise GateError("greennode: previous release is not below candidate")
-    status, data = bounded_fetch(f'https://crates.io/api/v1/crates/greennode/{row["vers"]}', fetch)
+    status, data = bounded_fetch("https://crates.io/api/v1/crates/greennode/versions", fetch)
     payload = read_json(data) if status == 200 else None
-    api = payload.get("version") if isinstance(payload, dict) else None
-    if (not isinstance(api, dict) or api.get("crate") != "greennode" or api.get("num") != row["vers"]
-            or api.get("checksum") != row["cksum"] or type(api.get("yanked")) is not bool
-            or api["yanked"] != row["yanked"]):
+    if not isinstance(payload, dict):
+        raise GateError("greennode: invalid version list")
+    rows, meta = payload.get("versions"), payload.get("meta")
+    if (not isinstance(rows, list) or not isinstance(meta, dict) or type(meta.get("total")) is not int
+            or meta["total"] <= 0 or meta["total"] != len(rows) or meta.get("next_page") is not None):
+        raise GateError("greennode: invalid version list")
+    seen = set()
+    for row in rows:
+        if not api_record_valid(row, "greennode") or row["num"] in seen:
+            raise GateError("greennode: invalid version list")
+        seen.add(row["num"])
+    index = index_records("greennode", fetch)
+    def maximum(records, key):
+        numeric = [row for row in records if VERSION.fullmatch(row[key])]
+        if not numeric:
+            raise GateError("greennode: previous release missing")
+        return max(numeric, key=lambda row: tuple(map(int, row[key].split("."))))
+    api = maximum(rows, "num")
+    row = maximum(index, "vers")
+    if not same_version(api, row) or tuple(map(int, row["vers"].split("."))) >= tuple(map(int, tag[1:].split("."))):
+        raise GateError("greennode: registry version mismatch")
+    if not same_version(exact_version("greennode", row["vers"], fetch), row):
         raise GateError("greennode: registry version mismatch")
     return "v" + row["vers"]
+
+
+def checksum_mismatch(path, name, fetch=None):
+    records = validate_receipt_data(read_json(evidence_file(path, 1024 * 1024)))
+    if name not in NAMES:
+        raise GateError("greennode: invalid crate name")
+    record = next(record for record in records if record["name"] == name)
+    api = exact_version(name, record["version"], fetch)
+    matches = [row for row in index_records(name, fetch) if row["vers"] == record["version"]]
+    if len(matches) != 1 or not same_version(api, matches[0]) or api["checksum"] == record["sha256"]:
+        raise GateError("greennode: checksum mismatch not confirmed")
+    print(f'{name}: version={record["version"]} approved={record["sha256"]} '
+          f'observed={api["checksum"]} yanked={str(api["yanked"]).lower()}')
 
 
 def main(args, root=None, fetch=None, sleep=None):
@@ -723,11 +772,14 @@ def main(args, root=None, fetch=None, sleep=None):
             return 1
     try:
         if len(args) == 2 and args[0] == "tree":
-            tagged_tree(evidence_file(args[1], 8 * 1024 * 1024))
+            tagged_tree(evidence_file(args[1], 8 * 1024 * 1024), mac=True)
             return 0
         if args and args[0] == "owners":
             unregistered = len(args) > 1 and args[1] == "--unregistered"
             check_owners(args[2:] if unregistered else args[1:], unregistered, fetch)
+            return 0
+        if len(args) == 3 and args[0] == "checksum-mismatch":
+            checksum_mismatch(args[1], args[2], fetch)
             return 0
         if len(args) == 2 and args[0] == "previous":
             print(previous_release(args[1], fetch))

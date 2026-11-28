@@ -35,9 +35,10 @@ then repeat with `--locked`. Do not edit a member's inherited version.
 ## Releases from the owner's Mac
 
 The [Mac release procedure](release-first.md) uses the owner's existing Cargo
-login, approved Mac archives and a saved local receipt. The tag push still runs
-the GitHub Release workflow. CI packaging evidence applies to the separate CI
-crates.io upload.
+login. It stages archives in the publish checkout and checks the uploaded
+checksums against the saved receipt before proceeding. The tag push runs the
+GitHub Release workflow. CI publishing uses that workflow's packaging evidence
+and checks the actual archive before upload.
 
 ## Release workflow
 
