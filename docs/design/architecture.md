@@ -210,8 +210,9 @@ does not need: no argument parser, no query language, and no terminal handling.
 Both crates carry one version and release together under one tag. The tool
 depends on that exact SDK version.
 
-Versions before `1.0.0` may change the command line and the SDK's interface, but
-a command that shipped in one release does not disappear in the next. `1.0.0` is
-the release in which every baseline operation ships. From then on, a change to a
-command name, flag, query key, or exit code, or a breaking change to a public
-SDK item, needs a new major version.
+Incremental `0.x.y` releases ship the operations that have landed. The command
+line and SDK interfaces may change, and each release keeps previously shipped
+commands. The owner releases `1.0.0` when every baseline operation has shipped
+and the owner judges the product stable. From then on, a change to a command
+name, flag, query key, or exit code, or a breaking change to a public SDK item,
+needs a new major version.
