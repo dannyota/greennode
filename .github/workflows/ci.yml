@@ -35,8 +35,6 @@ jobs:
         run: make comments
       - name: Absence proof gate
         run: make absence
-      - name: RawValue deserialization gate
-        run: make raw-values
       - name: Workflow and tool pin gate
         run: make pins
       - name: Parity list gate

@@ -192,7 +192,7 @@ pub(super) fn retained_request_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) 
     let Ok(text) = std::str::from_utf8(body) else {
         return true;
     };
-    let normalized = crate::model::wire::replace_surrogates(text, r"�");
+    let normalized = crate::model::wire::replace_surrogates(text);
     request_reflects(
         matcher,
         normalized.as_deref().unwrap_or(text).as_bytes(),

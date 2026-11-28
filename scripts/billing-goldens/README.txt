@@ -47,4 +47,5 @@ Copy lossy_goldens_test.go into internal/cli and run go test ./internal/cli
 -run '^TestBillingLossyGoldens$' -count=1. Copy lossy-go-v1.8.0.json to
 crates/greennode/tests/fixtures/billing/. The generator verifies that Go
 preserves invalid UTF-8 in direct RawMessage JSON. The Rust test expects
-U+FFFD in that output and uses the Go goldens for the agreeing cases.
+U+FFFD for invalid bytes and lone surrogate escapes in direct raw JSON.
+It compares the agreeing cases with the Go goldens byte for byte.

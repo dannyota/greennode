@@ -597,14 +597,14 @@ pub struct WebAccelerator {
     /// PageRules returned by the service.
     #[serde(
         rename(serialize = "PageRules", deserialize = "childrenRule"),
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_rule"
     )]
     pub page_rules: Option<Box<RawValue>>,
     /// AdvancedRule returned by the service.
     #[serde(
         rename(serialize = "AdvancedRule", deserialize = "childrenAdvanceRule"),
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_rule"
     )]
     pub advanced_rule: Option<Box<RawValue>>,

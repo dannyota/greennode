@@ -1,5 +1,4 @@
 use crate::model::wire::{exact_integer, null_default};
-use crate::wire::product::lossy;
 use crate::wire::strict_json::{self, Shape, ShapeField};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
@@ -80,14 +79,14 @@ pub struct Resource {
     pub cost: Option<f64>,
     /// Raw status value, when present.
     #[serde(
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub status: Option<Box<RawValue>>,
     /// Raw status display value, when present.
     #[serde(
         rename(deserialize = "statusUI", serialize = "StatusUI"),
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub status_ui: Option<Box<RawValue>>,
@@ -108,13 +107,13 @@ pub struct ResourceBillingElement {
     pub sku: String,
     /// Raw quantity value, when present.
     #[serde(
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub quantity: Option<Box<RawValue>>,
     /// Raw metadata, when present.
     #[serde(
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub meta_key: Option<Box<RawValue>>,
@@ -129,13 +128,13 @@ pub struct ResourceBillingElement {
 pub struct ResourceThresholds {
     /// Raw warning threshold data, when present.
     #[serde(
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub warning_thresholds: Option<Box<RawValue>>,
     /// Raw alarm threshold data, when present.
     #[serde(
-        deserialize_with = "lossy::present_boxed",
+        deserialize_with = "crate::model::wire::present",
         serialize_with = "serialize_raw"
     )]
     pub alarm_thresholds: Option<Box<RawValue>>,
@@ -244,9 +243,9 @@ pub(super) fn envelope(raw: &RawValue) -> Result<&RawValue, ()> {
     validate(raw, &ENVELOPE)?;
     #[derive(Deserialize)]
     struct Envelope<'a> {
-        #[serde(borrow, deserialize_with = "lossy::borrowed")]
+        #[serde(borrow)]
         code: &'a RawValue,
-        #[serde(borrow, deserialize_with = "lossy::borrowed")]
+        #[serde(borrow)]
         data: &'a RawValue,
     }
     let envelope: Envelope<'_> = serde_json::from_str(raw.get()).map_err(|_| ())?;

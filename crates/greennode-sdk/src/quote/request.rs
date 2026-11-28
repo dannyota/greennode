@@ -57,10 +57,6 @@ pub(crate) struct Request<'a> {
 
 #[derive(Default, Deserialize)]
 struct Document {
-    #[serde(
-        default,
-        deserialize_with = "crate::wire::product::lossy::optional_boxed"
-    )]
     raw: Option<Box<RawValue>>,
     #[serde(skip)]
     raw_len: usize,

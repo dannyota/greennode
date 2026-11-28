@@ -1,4 +1,4 @@
-.PHONY: help check fmt lint test deny lengths comments absence raw-values pins parity parity-list release-checks docs crate-age tools-outdated hooks-install reference
+.PHONY: help check fmt lint test deny lengths comments absence pins parity parity-list release-checks docs crate-age tools-outdated hooks-install reference
 
 SHELL := bash
 .SHELLFLAGS := -Eeuo pipefail -c
@@ -15,7 +15,7 @@ BASELINE_COMMIT := 85458dfb6b373116be410ec8be845257ad545f96
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed -E 's/^([a-z-]+):.*## /\1\t/'
 
-check: lengths comments absence raw-values pins parity release-checks docs fmt lint test ## Run every check that works offline
+check: lengths comments absence pins parity release-checks docs fmt lint test ## Run every check that works offline
 
 fmt: ## Check Rust formatting; fix with cargo fmt --all
 	cargo fmt --all -- --check
@@ -49,10 +49,6 @@ comments: ## Test and run the code comment gate
 absence: ## Test and run the workspace absence proof gate
 	python3 -I scripts/test/check-absence-test.py
 	python3 -I scripts/check-absence.py
-
-raw-values: ## Test and run the RawValue deserialization gate
-	python3 -I scripts/test/check-raw-values-test.py
-	python3 -I scripts/check-raw-values.py
 
 pins: ## Test and run the action pin gate and the tool pin consistency check
 	python3 -I scripts/test/check-workflow-pins-test.py

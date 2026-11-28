@@ -176,7 +176,7 @@ fn resources_list_matches_baseline_goldens() {
 }
 
 #[test]
-fn lossy_billing_strings_match_go_goldens() {
+fn lossy_billing_strings_match_go_goldens_and_recorded_differences() {
     #[derive(serde::Deserialize)]
     struct Golden {
         command: String,
@@ -243,9 +243,13 @@ fn lossy_billing_strings_match_go_goldens() {
             let other = resources.replacen(r#""status": 1"#, "\"status\": \"\0\"", 1);
             let mut other = other.into_bytes();
             *other.iter_mut().find(|byte| **byte == 0).unwrap() = 0xff;
-            run(other, &golden.stdout.replace(r#""\ud800""#, "\"�\""));
+            let expected = golden.stdout.replace(r#""\ud800""#, "\"�\"");
+            assert_ne!(expected, golden.stdout);
+            run(other, &expected);
+            run(bytes, &expected);
+        } else {
+            run(bytes, &golden.stdout);
         }
-        run(bytes, &golden.stdout);
     }
 }
 

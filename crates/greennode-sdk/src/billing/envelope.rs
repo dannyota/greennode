@@ -155,11 +155,11 @@ impl<T: BudgetData> Envelope<T> {
 
 #[derive(Deserialize)]
 pub(super) struct Header {
-    #[serde(default, deserialize_with = "lossy::present_boxed")]
+    #[serde(default, deserialize_with = "crate::model::wire::present")]
     code: Option<Box<RawValue>>,
     #[serde(rename = "message")]
     _message: Option<String>,
-    #[serde(default, deserialize_with = "lossy::present_boxed")]
+    #[serde(default, deserialize_with = "crate::model::wire::present")]
     data: Option<Box<RawValue>>,
 }
 

@@ -1,44 +1,13 @@
-use std::{cell::RefCell, collections::BTreeMap};
+use serde::de::DeserializeOwned;
 
-use serde::{Deserialize, Deserializer, de::DeserializeOwned};
-use serde_json::value::RawValue;
-use zeroize::Zeroizing;
-
-use crate::model::wire::{go_utf8, replace_surrogates};
-
-struct Source {
-    original: Zeroizing<String>,
-    normalized_start: usize,
-}
-
-thread_local! {
-    static SOURCE: RefCell<Option<Source>> = const { RefCell::new(None) };
-}
-
-struct Restore(Option<Source>);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        SOURCE.set(self.0.take());
-    }
-}
+use crate::model::wire::go_json;
 
 pub(crate) fn with_normalized<T>(body: &[u8], decode: impl FnOnce(&str) -> T) -> T {
-    let original = go_utf8(body);
-    let Some(normalized) = replace_surrogates(&original, "\\ufffd") else {
-        return decode(&original);
-    };
-    let normalized = Zeroizing::new(normalized);
-    let source = Source {
-        original: Zeroizing::new(original.into_owned()),
-        normalized_start: normalized.as_ptr().addr(),
-    };
-    let _restore = Restore(SOURCE.replace(Some(source)));
-    decode(&normalized)
+    decode(&go_json(body))
 }
 
 pub(crate) fn from_slice<T: DeserializeOwned>(body: &[u8]) -> serde_json::Result<T> {
-    with_normalized(body, |text| serde_json::from_str(text))
+    serde_json::from_str(&go_json(body))
 }
 
 pub(crate) fn validate(
@@ -49,76 +18,19 @@ pub(crate) fn validate(
     if body.len() > limit {
         return Err(crate::wire::strict_json::Error);
     }
-    let text = crate::model::wire::go_json(body);
+    let text = go_json(body);
     validate(text.as_bytes(), text.len())
-}
-
-pub(crate) fn boxed<'de, D: Deserializer<'de>>(decoder: D) -> Result<Box<RawValue>, D::Error> {
-    if SOURCE.with_borrow(Option::is_some) {
-        to_owned(<&RawValue>::deserialize(decoder)?).map_err(serde::de::Error::custom)
-    } else {
-        Box::<RawValue>::deserialize(decoder)
-    }
-}
-
-pub(crate) fn optional_boxed<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<Box<RawValue>>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(transparent)]
-    struct Present(#[serde(deserialize_with = "boxed")] Box<RawValue>);
-
-    Option::<Present>::deserialize(decoder).map(|value| value.map(|value| value.0))
-}
-
-pub(crate) fn present_boxed<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<Box<RawValue>>, D::Error> {
-    boxed(decoder).map(Some)
-}
-
-pub(crate) fn borrowed<'de, D: Deserializer<'de>>(decoder: D) -> Result<&'de RawValue, D::Error> {
-    <&RawValue>::deserialize(decoder)
-}
-
-pub(crate) fn optional_borrowed<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<Option<&'de RawValue>, D::Error> {
-    Option::<&RawValue>::deserialize(decoder)
-}
-
-pub(crate) fn borrowed_map<'de, D: Deserializer<'de>>(
-    decoder: D,
-) -> Result<BTreeMap<String, &'de RawValue>, D::Error> {
-    BTreeMap::deserialize(decoder)
-}
-
-pub(crate) fn to_owned(raw: &RawValue) -> serde_json::Result<Box<RawValue>> {
-    SOURCE.with_borrow(|source| {
-        let normalized = raw.get();
-        let original = source.as_ref().and_then(|source| {
-            let start = normalized
-                .as_ptr()
-                .addr()
-                .checked_sub(source.normalized_start)?;
-            let end = start.checked_add(normalized.len())?;
-            source.original.get(start..end)
-        });
-        match original {
-            Some(original) if original != normalized => RawValue::from_string(original.to_owned()),
-            _ => Ok(raw.to_owned()),
-        }
-    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::from_slice;
+    use serde::Deserialize;
+    use serde_json::value::RawValue;
     use std::collections::BTreeMap;
 
     #[derive(Deserialize)]
     struct Raw {
-        #[serde(deserialize_with = "boxed")]
         raw: Box<RawValue>,
     }
 
@@ -156,27 +68,11 @@ mod tests {
     }
 
     #[test]
-    fn raw_values_preserve_escape_spelling_and_replace_invalid_bytes() {
+    fn raw_values_use_the_normalized_input() {
         let input = b"{\"padding\":\"\xff\",\"raw\":{\"\\uD800\":\"\xe2\x82\\uDC00\"}}";
         let retained: Raw = from_slice(input).unwrap();
-        assert_eq!(retained.raw.get(), r#"{"\uD800":"��\uDC00"}"#);
+        assert_eq!(retained.raw.get(), r#"{"�":"���"}"#);
         let direct: Raw = serde_json::from_reader(br#"{"raw":"\uD800"}"#.as_slice()).unwrap();
         assert_eq!(direct.raw.get(), r#""\uD800""#);
-    }
-
-    #[test]
-    fn nested_decodes_and_unwinding_restore_the_previous_raw_source() {
-        let original = br#"{"raw":"\uD800"}"#;
-        with_normalized(original, |text| {
-            let nested: Raw = from_slice(br#"{"raw":"\udc00"}"#).unwrap();
-            assert_eq!(nested.raw.get(), r#""\udc00""#);
-            let panic = std::panic::catch_unwind(|| {
-                with_normalized(br#""\ud800""#, |_| panic!("probe"));
-            });
-            assert!(panic.is_err());
-            let outer: Raw = serde_json::from_str(text).unwrap();
-            assert_eq!(outer.raw.get(), r#""\uD800""#);
-        });
-        assert!(SOURCE.with_borrow(Option::is_none));
     }
 }

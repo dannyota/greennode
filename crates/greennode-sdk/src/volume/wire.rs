@@ -22,10 +22,7 @@ const WITHHELD: &str = "volume response withheld";
 
 #[derive(Default, Deserialize)]
 #[serde(transparent)]
-pub(super) struct Document(
-    #[serde(deserialize_with = "crate::wire::product::lossy::optional_boxed")]
-    pub(super)  Option<Box<RawValue>>,
-);
+pub(super) struct Document(pub(super) Option<Box<RawValue>>);
 
 impl Output for Document {
     const SCHEMA: Shape<'static> = Shape::Any;

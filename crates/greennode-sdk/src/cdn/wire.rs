@@ -217,10 +217,8 @@ pub(super) fn confirms_missing_detail(error: &Error, operation: &str) -> bool {
 #[derive(Deserialize)]
 struct Envelope {
     success: bool,
-    #[serde(default, deserialize_with = "lossy::optional_boxed")]
     code: Option<Box<RawValue>>,
     message: Option<String>,
-    #[serde(default, deserialize_with = "lossy::optional_boxed")]
     data: Option<Box<RawValue>>,
 }
 

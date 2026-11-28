@@ -46,7 +46,7 @@ impl<T: Data> Output for Envelope<T> {
         #[derive(Deserialize)]
         struct Header<'a> {
             code: i64,
-            #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed")]
+            #[serde(borrow)]
             data: &'a RawValue,
         }
         response.decode_projection(|body| {
@@ -62,7 +62,7 @@ impl<T: Data> Output for Envelope<T> {
             if operation.id == "ListDatabaseNetworks" {
                 #[derive(Deserialize)]
                 struct NetworkRow<'a> {
-                    #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed")]
+                    #[serde(borrow)]
                     subnets: &'a RawValue,
                 }
                 let rows: Vec<NetworkRow<'_>> =

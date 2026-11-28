@@ -511,7 +511,6 @@ where
 
 #[derive(Default, Deserialize)]
 struct HistoryEnvelope {
-    #[serde(default, deserialize_with = "lossy::optional_boxed")]
     data: Option<Box<RawValue>>,
     #[serde(skip)]
     bytes: usize,
@@ -565,7 +564,7 @@ impl Output for HistoryEnvelope {
                         match name {
                             "code" => code = envelope_code(raw),
                             "data" if raw.get() == "null" => data = None,
-                            "data" => data = Some(lossy::to_owned(raw)?),
+                            "data" => data = Some(raw.to_owned()),
                             _ => unreachable!(),
                         }
                         Ok(())

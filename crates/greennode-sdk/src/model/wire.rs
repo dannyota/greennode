@@ -269,10 +269,10 @@ impl Serialize for Detail<'_> {
 
 pub(crate) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     let text = go_utf8(bytes);
-    replace_surrogates(&text, "\u{fffd}").map_or(text, Cow::Owned)
+    replace_surrogates(&text).map_or(text, Cow::Owned)
 }
 
-pub(crate) fn replace_surrogates(text: &str, replacement: &str) -> Option<String> {
+pub(crate) fn replace_surrogates(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     if !bytes.contains(&b'\\') {
         return None;
@@ -321,9 +321,9 @@ pub(crate) fn replace_surrogates(text: &str, replacement: &str) -> Option<String
             }
             let count = (run_end - index) / spelling.len();
             if count == 1 {
-                normalized.push_str(replacement);
+                normalized.push(char::REPLACEMENT_CHARACTER);
             } else {
-                normalized.push_str(&replacement.repeat(count));
+                normalized.push_str(&"\u{fffd}".repeat(count));
             }
             start = run_end;
             index = run_end;
@@ -346,7 +346,7 @@ fn go_json_preserves_the_last_high_surrogate_in_a_run_when_it_pairs() {
     );
 }
 
-pub(crate) fn go_utf8(bytes: &[u8]) -> Cow<'_, str> {
+fn go_utf8(bytes: &[u8]) -> Cow<'_, str> {
     if let Ok(text) = str::from_utf8(bytes) {
         return Cow::Borrowed(text);
     }
@@ -477,6 +477,12 @@ macro_rules! model {
 }
 
 pub(crate) use model;
+
+pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
 
 pub(crate) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
     deserializer: D,

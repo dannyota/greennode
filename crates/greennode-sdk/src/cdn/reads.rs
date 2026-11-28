@@ -160,15 +160,6 @@ pub(super) struct WebDetail {
     pub(super) raw: Box<RawValue>,
     pub(super) status: i64,
     pub(super) model: WebAccelerator,
-    user_uuids: Vec<Secret>,
-}
-
-impl WebDetail {
-    pub(super) fn record_user_uuids(&self, evidence: &mut Evidence) {
-        for uuid in &self.user_uuids {
-            evidence.add_redaction(uuid);
-        }
-    }
 }
 
 fn screened<T: serde::Serialize>(
@@ -218,7 +209,6 @@ impl Client {
                 .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
                 .await
                 .map_err(convert)?;
-            detail.record_user_uuids(&mut evidence);
             detail.model.redact(&evidence);
             screened(
                 GetWebAcceleratorOutput {
@@ -241,7 +231,7 @@ impl Client {
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;
-        decode_web_detail(&call, cdn_id, data, evidence.field_names())
+        decode_web_detail(&call, cdn_id, data, evidence.field_names(), evidence)
     }
 
     pub(super) async fn read_guard_detail(
@@ -258,6 +248,7 @@ impl Client {
             cdn_id,
             data,
             crate::wire::strict_json::FieldNames::Canonical,
+            evidence,
         )?;
         crate::wire::product::guard::Guarded::latest(detail, evidence)
             .map_err(|error| read_failure(*error))
@@ -377,6 +368,7 @@ fn decode_web_detail(
     cdn_id: &str,
     data: Option<Box<serde_json::value::RawValue>>,
     names: crate::wire::strict_json::FieldNames,
+    evidence: &mut Evidence,
 ) -> Result<WebDetail, Failure<()>> {
     let malformed = || read_failure(call.unexpected(200));
     let raw = data.ok_or_else(malformed)?;
@@ -407,11 +399,13 @@ fn decode_web_detail(
             }
             Ok((state, model, user_uuids))
         })?;
+    for uuid in user_uuids {
+        evidence.add_redaction(&uuid);
+    }
     model.status = super::Field::Value(state.status);
     Ok(WebDetail {
         raw,
         status: state.status,
         model,
-        user_uuids,
     })
 }

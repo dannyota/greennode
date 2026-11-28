@@ -391,8 +391,7 @@ fn rejected(failure: &Failure<()>) -> bool {
             })
 }
 
-fn redact(mut detail: WebDetail, evidence: &mut Evidence) -> WebAccelerator {
-    detail.record_user_uuids(evidence);
+fn redact(mut detail: WebDetail, evidence: &Evidence) -> WebAccelerator {
     detail.model.redact(evidence);
     detail.model
 }

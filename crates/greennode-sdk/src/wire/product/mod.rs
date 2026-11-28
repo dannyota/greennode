@@ -45,10 +45,6 @@ pub(crate) fn screened_discovery_stream<'a>(
 
 #[derive(Default, Deserialize)]
 pub(crate) struct DiscoveryDocument {
-    #[serde(
-        default,
-        deserialize_with = "crate::wire::product::lossy::optional_boxed"
-    )]
     pub(crate) raw: Option<Box<RawValue>>,
     #[serde(skip)]
     pub(crate) raw_len: usize,

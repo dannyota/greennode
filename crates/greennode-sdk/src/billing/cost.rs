@@ -402,9 +402,9 @@ impl<'de> Deserialize<'de> for CostBreakdown {
         struct Fields {
             #[serde(deserialize_with = "null_default")]
             key: String,
-            #[serde(deserialize_with = "crate::wire::product::lossy::present_boxed")]
+            #[serde(deserialize_with = "crate::model::wire::present")]
             value: Option<Box<RawValue>>,
-            #[serde(deserialize_with = "crate::wire::product::lossy::present_boxed")]
+            #[serde(deserialize_with = "crate::model::wire::present")]
             cost: Option<Box<RawValue>>,
             #[serde(deserialize_with = "null_default")]
             percent: f64,

@@ -207,7 +207,7 @@ impl Client {
             .await
             .map_err(convert)?;
         if !send {
-            return Ok(output(redact(initial, &mut evidence), false));
+            return Ok(output(redact(initial, &evidence), false));
         }
         let write_error = match self
             .call_with_evidence(ctx, call, &[cdn_id], Bytes::new(), &mut evidence)
@@ -243,17 +243,17 @@ impl Client {
             }
         };
         if no_wait {
-            return Ok(output(redact(confirmed, &mut evidence), true));
+            return Ok(output(redact(confirmed, &evidence), true));
         }
         let (last, error) = poll.settle(target, confirmed, true).await;
-        finish(last, error, &mut evidence, |model| output(model, true))
+        finish(last, error, &evidence, |model| output(model, true))
     }
 }
 
 pub(super) fn finish<T>(
     detail: WebDetail,
     error: Option<Error>,
-    evidence: &mut Evidence,
+    evidence: &Evidence,
     output: impl FnOnce(WebAccelerator) -> T,
 ) -> Result<T, Failure<T>> {
     let output = output(redact(detail, evidence));

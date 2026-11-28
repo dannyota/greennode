@@ -582,8 +582,34 @@ async fn lossy_detail_redacts_user_uuid_in_returned_models() {
 }
 
 #[tokio::test]
-async fn lossy_update_compares_normalized_values_and_preserves_raw_fields() {
-    let body = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"cName":[],"childrenRule":{"note":"\ud800"}}}"#;
+async fn toggle_redacts_preflight_uuid_when_confirmation_omits_it() {
+    let preflight = r#"{"success":true,"data":{"cdnId":"cdn-1","status":0,"userUuid":"local-preflight-canary","\ud800":true}}"#;
+    let confirmed = r#"{"success":true,"data":{"cdnId":"cdn-1","status":3,"domainName":"local-preflight-canary.invalid"}}"#;
+    let server = Server::start(vec![
+        response(preflight, "application/json"),
+        response(
+            include_str!("fixtures/cdn/write-toggle.json"),
+            "application/json",
+        ),
+        response(confirmed, "application/json"),
+    ]);
+    let mut input = EnableWebAcceleratorInput::new("cdn-1");
+    input.no_wait = true;
+    let result = client(&server, Some(CDN_KEY))
+        .enable_web_accelerator(&RequestContext::new().0, input)
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 3);
+    assert!(result.changed);
+    assert!(result.web_accelerator.domain_name == "<redacted>");
+    let wire = serde_json::to_string(&result).unwrap();
+    assert!(!wire.contains("local-preflight-canary"));
+}
+
+#[tokio::test]
+async fn lossy_update_compares_normalized_values_and_sends_normalized_raw_fields() {
+    let body = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"cName":[],"userUuid":"local-update-canary","childrenRule":{"note":"\ud800"}}}"#;
+    let confirmed = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"domainName":"local-update-canary.invalid"}}"#;
     let server = Server::start(vec![
         response(body, "application/json"),
         response(body, "application/json"),
@@ -591,7 +617,7 @@ async fn lossy_update_compares_normalized_values_and_preserves_raw_fields() {
             include_str!("fixtures/cdn/write-update.json"),
             "application/json",
         ),
-        response(body, "application/json"),
+        response(confirmed, "application/json"),
     ]);
     let cdn = client(&server, Some(CDN_KEY));
     let (ctx, _) = RequestContext::new();
@@ -605,9 +631,12 @@ async fn lossy_update_compares_normalized_values_and_preserves_raw_fields() {
     let mut input = UpdateWebAcceleratorInput::new("cdn-1");
     input.c_names = Some(vec!["edge.invalid".into()]);
     input.no_wait = true;
-    cdn.update_web_accelerator(&ctx, input)
-        .await
-        .unwrap_or_else(|failure| panic!("{} requests: {}", server.requests(), failure.error()));
+    let output = cdn.update_web_accelerator(&ctx, input).await.unwrap();
     assert_eq!(server.requests(), 4);
-    assert!(server.bodies()[2].windows(6).any(|part| part == br"\ud800"));
+    assert!(output.web_accelerator.domain_name == "<redacted>");
+    assert!(
+        std::str::from_utf8(&server.bodies()[2])
+            .unwrap()
+            .contains(r#""childrenRule":{"note":"�"}"#)
+    );
 }

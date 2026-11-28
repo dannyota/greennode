@@ -102,7 +102,7 @@ impl Output for Detail {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         #[derive(Deserialize)]
         struct ConfigPresence<'a> {
-            #[serde(borrow, deserialize_with = "crate::wire::product::lossy::borrowed")]
+            #[serde(borrow)]
             config: &'a RawValue,
         }
 

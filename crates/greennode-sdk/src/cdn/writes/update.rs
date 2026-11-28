@@ -211,16 +211,16 @@ impl Client {
             let projected = lossy::from_slice(&body).map_err(malformed)?;
             let output = |web_accelerator| UpdateWebAcceleratorOutput { web_accelerator };
             if original == projected {
-                return finish(initial, None, &mut evidence, output);
+                return finish(initial, None, &evidence, output);
             }
-            if evidence.output_reflects(&projected)
-                || !evidence.go_peer_body_screen(&body).is_clean()
+            let transport = evidence.transport_only();
+            if transport.output_reflects(&projected)
+                || !transport.go_peer_body_screen(&body).is_clean()
             {
                 return Err(invalid(
                     "the merged CDN detail contains a configured credential",
                 ));
             }
-            initial.record_user_uuids(&mut evidence);
             if let Err(failure) = self
                 .call_with_evidence(ctx, &UPDATE, &[], body, &mut evidence)
                 .await
@@ -236,16 +236,14 @@ impl Client {
             } else {
                 poll.settle(Target::ACTIVE, initial, false).await
             };
-            finish(last, error, &mut evidence, output)
+            finish(last, error, &evidence, output)
         })
     }
 }
 
 fn merge_update(raw: &str, input: &UpdateWebAcceleratorInput) -> Result<Object, Failure<()>> {
-    let mut object = lossy::with_normalized(raw.as_bytes(), |text| {
-        serde_json::from_str(text).and_then(owned_object)
-    })
-    .map_err(|_| invalid("the CDN detail is not an object"))?;
+    let mut object: Object = lossy::from_slice(raw.as_bytes())
+        .map_err(|_| invalid("the CDN detail is not an object"))?;
     if !input.set_rule_actions.is_empty() || !input.remove_rule_actions.is_empty() {
         let actions = merge_actions(object.get("defaultRuleAction").map(Box::as_ref), input)?;
         set(&mut object, "defaultRuleAction", &actions)?;
@@ -277,22 +275,9 @@ fn merge_update(raw: &str, input: &UpdateWebAcceleratorInput) -> Result<Object, 
 fn collection(value: Option<&RawValue>) -> Result<Vec<Object>, Failure<()>> {
     match value.map(RawValue::get) {
         None | Some("null" | "\"\"") => Ok(Vec::new()),
-        Some(text) => lossy::with_normalized(text.as_bytes(), |text| {
-            let objects: Vec<BTreeMap<String, &RawValue>> = serde_json::from_str(text)?;
-            objects
-                .into_iter()
-                .map(owned_object)
-                .collect::<serde_json::Result<_>>()
-        })
-        .map_err(|_| invalid("the CDN detail does not have a valid list of rules or origins")),
+        Some(text) => lossy::from_slice(text.as_bytes())
+            .map_err(|_| invalid("the CDN detail does not have a valid list of rules or origins")),
     }
-}
-
-fn owned_object(fields: BTreeMap<String, &RawValue>) -> serde_json::Result<Object> {
-    fields
-        .into_iter()
-        .map(|(key, raw)| Ok((key, lossy::to_owned(raw)?)))
-        .collect()
 }
 
 fn set(object: &mut Object, key: &str, value: &impl Serialize) -> Result<(), Failure<()>> {
