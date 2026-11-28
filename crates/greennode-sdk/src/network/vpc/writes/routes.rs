@@ -100,54 +100,60 @@ impl Client {
         ctx: &RequestContext,
         input: AddRouteInput,
     ) -> Result<AddRouteOutput, Failure<AddRouteOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let op = ADD.id;
-        let id = &input.route_table_id;
-        write.check(
-            op,
-            &[
-                ("DestinationCIDR", &input.destination_cidr),
-                ("Target", &input.target),
-            ],
-            &[("RouteTableID", id)],
-        )?;
-        let want = route_destination(op, &input.destination_cidr)?;
-        let target = input
-            .target
-            .parse::<IpAddr>()
-            .map_err(|_| {
-                super::wire::input(op, "requires Target to be an IP address without a zone")
-            })?
-            .to_string();
-        let table = write.active_table(op, id).await.map_err(not_sent)?;
-        let mut entries: Vec<_> = table.routes.iter().map(Entry::from).collect();
-        if let Some(entry) = entries
-            .iter()
-            .find(|entry| destination(&entry.destination) == want)
-        {
-            if canonical_target(&entry.target) == target {
-                return write.unchanged(
-                    op,
-                    AddRouteOutput {
-                        route_table: table,
-                        changed: false,
-                    },
-                );
-            }
-            return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: route table {id} already has a route to {want} with target {}; remove it first", entry.target))));
-        }
-        entries.push(Entry {
-            destination: want,
-            target,
-        });
-        write
-            .replace_routes(ADD, id, table, entries, input.no_wait, |route_table| {
-                AddRouteOutput {
-                    route_table,
-                    changed: true,
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = ADD.id;
+            let id = &input.route_table_id;
+            write.check(
+                op,
+                &[
+                    ("DestinationCIDR", &input.destination_cidr),
+                    ("Target", &input.target),
+                ],
+                &[("RouteTableID", id)],
+            )?;
+            let want = route_destination(op, &input.destination_cidr)?;
+            let target = input
+                .target
+                .parse::<IpAddr>()
+                .map_err(|_| {
+                    super::wire::input(op, "requires Target to be an IP address without a zone")
+                })?
+                .to_string();
+            let table = write.active_table(op, id).await.map_err(not_sent)?;
+            let mut entries: Vec<_> = table.routes.iter().map(Entry::from).collect();
+            if let Some(entry) = entries
+                .iter()
+                .find(|entry| destination(&entry.destination) == want)
+            {
+                if canonical_target(&entry.target) == target {
+                    return write.unchanged(
+                        op,
+                        AddRouteOutput {
+                            route_table: table,
+                            changed: false,
+                        },
+                    );
                 }
-            })
-            .await
+                return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: route table {id} already has a route to {want} with target {}; remove it first", entry.target))));
+            }
+            entries.push(Entry {
+                destination: want,
+                target,
+            });
+            write
+                .replace_routes(ADD, id, table, entries, input.no_wait, |route_table| {
+                    AddRouteOutput {
+                        route_table,
+                        changed: true,
+                    }
+                })
+                .await
+        })
     }
 
     /// Removes the single route matching the destination prefix.
@@ -156,35 +162,41 @@ impl Client {
         ctx: &RequestContext,
         input: RemoveRouteInput,
     ) -> Result<RemoveRouteOutput, Failure<RemoveRouteOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let op = REMOVE.id;
-        let id = &input.route_table_id;
-        write.check(
-            op,
-            &[("DestinationCIDR", &input.destination_cidr)],
-            &[("RouteTableID", id)],
-        )?;
-        let want = route_destination(op, &input.destination_cidr)?;
-        let table = write.active_table(op, id).await.map_err(not_sent)?;
-        let entries: Vec<_> = table
-            .routes
-            .iter()
-            .filter(|route| destination(&route.destination_cidr_block) != want)
-            .map(Entry::from)
-            .collect();
-        match table.routes.len() - entries.len() {
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = REMOVE.id;
+            let id = &input.route_table_id;
+            write.check(
+                op,
+                &[("DestinationCIDR", &input.destination_cidr)],
+                &[("RouteTableID", id)],
+            )?;
+            let want = route_destination(op, &input.destination_cidr)?;
+            let table = write.active_table(op, id).await.map_err(not_sent)?;
+            let entries: Vec<_> = table
+                .routes
+                .iter()
+                .filter(|route| destination(&route.destination_cidr_block) != want)
+                .map(Entry::from)
+                .collect();
+            match table.routes.len() - entries.len() {
             0 => return Err(not_sent(write.local(ErrorClass::NotFound, &format!("vngcloud: resource not found: {op}: route table {id} has no route to {want}")))),
             1 => {},
             count => return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: route table {id} has {count} routes to {want}; remove is refused rather than guessing which to drop")))),
         }
-        write
-            .replace_routes(REMOVE, id, table, entries, input.no_wait, |route_table| {
-                RemoveRouteOutput {
-                    route_table,
-                    changed: true,
-                }
-            })
-            .await
+            write
+                .replace_routes(REMOVE, id, table, entries, input.no_wait, |route_table| {
+                    RemoveRouteOutput {
+                        route_table,
+                        changed: true,
+                    }
+                })
+                .await
+        })
     }
 }
 
@@ -285,7 +297,7 @@ impl Write<'_> {
             async |write, ctx| {
                 let row = match write.table(ctx, id).await {
                     Ok(row) => row,
-                    Err(error) if error.has_class(ErrorClass::NotFound) => return Ok(None),
+                    Err(error) if crate::confirms_absence(&error, "network.GetRouteTable", "GET", "v2/{}/route-table/{}") => return Ok(None),
                     Err(error) => return Err(write.settled_error(&format!("{op}: {resource}"), error)),
                 };
                 let status = row.status.clone();

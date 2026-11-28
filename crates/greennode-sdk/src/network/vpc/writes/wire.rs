@@ -10,10 +10,12 @@ use crate::error::SafeText;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::Evidence,
-    operation::{self, Operation, RouteAuth},
+    guard::AcknowledgedId,
+    operation::{self, Operation, Reflection, RouteAuth},
     options::{AttemptCheck, Options, PathIds},
     redirect::{Classification, Retry},
     response, retry,
+    sender::Response,
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch};
 
@@ -25,7 +27,7 @@ pub(super) const CREATE_BOUND: Duration = Duration::from_secs(180);
 pub(super) const INTERVAL: Duration = Duration::from_secs(2);
 
 /// Network write refusal reported as service-specific error detail.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum NetworkWriteError {
     /// The resource is managed by the service.
     DefaultResource,
@@ -39,6 +41,7 @@ pub(super) struct Write<'a> {
     pub(super) client: &'a Client,
     pub(super) ctx: &'a RequestContext,
     pub(super) reads: Reads<'a>,
+    acknowledged: Option<AcknowledgedId>,
 }
 
 #[derive(Clone, Copy)]
@@ -89,16 +92,36 @@ impl Request {
     reason = "SDK failures are returned by value"
 )]
 impl<'a> Write<'a> {
-    pub(super) fn new<O>(client: &'a Client, ctx: &'a RequestContext) -> Result<Self, Failure<O>> {
+    pub(super) fn new<O>(
+        client: &'a Client,
+        ctx: &'a RequestContext,
+        evidence: Evidence,
+    ) -> Result<Self, Failure<O>> {
         Ok(Self {
             client,
             ctx,
-            reads: Reads::new(client, ctx).map_err(not_sent)?,
+            reads: Reads::with_evidence(
+                client,
+                ctx,
+                client
+                    .request_evidence_from(ctx, evidence)
+                    .map_err(not_sent)?,
+            ),
+            acknowledged: None,
         })
     }
 
     pub(super) fn evidence(&self) -> &Evidence {
         self.reads.evidence()
+    }
+
+    pub(super) fn check_proofs(&self) -> Result<(), Error> {
+        if let Some(id) = &self.acknowledged {
+            id.recheck(self.evidence()).map_err(|error| *error)?;
+        }
+        self.evidence()
+            .recheck_read_proofs()
+            .map_err(|error| *error)
     }
 
     pub(super) fn screen(&self, error: Error) -> Error {
@@ -194,11 +217,11 @@ impl<'a> Write<'a> {
         request: Request,
         ids: &[&str],
         body: Option<Value>,
-    ) -> Result<(StatusCode, Vec<u8>), Failure<O>> {
+    ) -> Result<Response, Failure<O>> {
         let check = |evidence: &Evidence| {
             if ids.iter().any(|id| evidence.id_reflects(id))
                 || body.as_ref().is_some_and(|value| {
-                    evidence.reflected_in(value) || unsafe_value(value, evidence, false)
+                    evidence.output_reflects(value) || unsafe_value(value, evidence, false)
                 })
             {
                 Err(input(
@@ -216,6 +239,7 @@ impl<'a> Write<'a> {
             .await
             .map_err(|err| not_sent(self.screen(*err)))?;
         check(self.evidence())?;
+        self.check_proofs().map_err(not_sent)?;
         if self.evidence().id_reflects(&project) {
             return Err(input(
                 request.id,
@@ -247,10 +271,12 @@ impl<'a> Write<'a> {
             allow_empty: true,
             no_output: false,
             keep_status: false,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: request.withheld.is_some(),
-            reject_reflected_credentials: false,
-            no_redirect: true,
+            reflection: Reflection::Redact,
+            no_redirect: matches!(request.retry, Retry::Once),
+            report_redirect: matches!(request.retry, Retry::Once),
             retry_config: retry::Config::default(),
         };
         let attempt = |credentials: &crate::wire::product::evidence::SentCredentials| {
@@ -261,7 +287,6 @@ impl<'a> Write<'a> {
                 .map(|failure: Failure<O>| Box::new(failure.into_parts().0))
         };
         let options = Options {
-            report_redirect: matches!(request.retry, Retry::Once),
             attempt_check: Some(AttemptCheck(&attempt)),
             ..Options::DEFAULT
         };
@@ -279,33 +304,34 @@ impl<'a> Write<'a> {
         .await;
         let reply = result.map_err(|error| {
             let (mut error, _, dispatch) = error.into_parts();
-            if error.detail::<StatusCode>().is_some() {
+            if error.http_status().is_some()
+                && matches!(
+                    error.class(),
+                    ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
+                )
+            {
                 error = error.with_outer_detail(InterruptedResponse);
             }
             Failure::new(self.screen(withhold(error, request)), None, dispatch)
         })?;
-        if !request.success.contains(&reply.status) {
-            let classified = response::classify(
+        reply
+            .classify(
                 request.id,
-                reply.status,
-                reply.reply.body.into(),
                 request.success,
                 (true, request.withheld.is_some(), operation.retry),
-                self.evidence().credentials(),
-            );
-            let error = classified.err().map_or_else(
-                || self.invalid(request.id),
-                |error| self.screen(withhold(*error, request)),
-            );
-            return Err(sent(error, None));
-        }
-        Ok((reply.status, reply.reply.body))
+                false,
+            )
+            .map_err(|error| sent(self.screen(withhold(*error, request)), None))?;
+        reply
+            .check_discarded_acknowledgement(request.id)
+            .map_err(|error| sent(self.screen(*error), None))?;
+        Ok(reply)
     }
 
     pub(super) fn created<T: WireField + Serialize, O>(
-        &self,
+        &mut self,
         request: Request,
-        response: (StatusCode, Vec<u8>),
+        response: Response,
         data: bool,
         identity: fn(&T) -> &str,
         path_id: bool,
@@ -326,16 +352,22 @@ impl<'a> Write<'a> {
     }
 
     pub(super) fn created_with<T: WireField + Serialize, O>(
-        &self,
+        &mut self,
         request: Request,
-        response: (StatusCode, Vec<u8>),
+        response: Response,
         (data, path_id): (bool, bool),
         identity: fn(&T) -> &str,
         advice: &str,
         parse: fn(&str) -> Result<T, ()>,
     ) -> Result<T, Failure<O>> {
-        let (status, bytes) = response;
-        let text = go_json(&bytes);
+        let status = response.status;
+        let receipt = response.clean_receipt().ok_or_else(|| {
+            sent(
+                Error::new(ErrorClass::NotSettled).with_cause(self.invalid(request.id)),
+                None,
+            )
+        })?;
+        let text = go_json(receipt.body());
         let text = if text.is_empty() { "null" } else { &text };
         let invalid = || sent(self.invalid(request.id), None);
         serde_json::from_str::<&RawValue>(text).map_err(|_| {
@@ -347,7 +379,8 @@ impl<'a> Write<'a> {
                 advice,
             )
         })?;
-        crate::wire::strict_json::validate(text.as_bytes(), &[], 8 << 20).map_err(|_| invalid())?;
+        crate::wire::strict_json::validate(text.as_bytes(), &[], text.len())
+            .map_err(|_| invalid())?;
         let row = if data && text != "null" {
             let fields: Fields<'_> = serde_json::from_str(text).map_err(|_| invalid())?;
             fields
@@ -374,12 +407,18 @@ impl<'a> Write<'a> {
         if !allowed.allows(id) || self.evidence().id_reflects(id) {
             return Err(invalid());
         }
+        let acknowledged = receipt.bind_id(id.to_owned());
         let value = serde_json::to_value(&out).map_err(|_| invalid())?;
         if unsafe_value(&value, self.evidence(), false) || !out.redact(self.evidence()) {
             return Err(invalid());
         }
         self.safe(request.id, &out)
             .map_err(|error| sent(error, None))?;
+        self.reads
+            .evidence_mut()
+            .keep_acknowledgement(&acknowledged)
+            .map_err(|error| sent(*error, None))?;
+        self.acknowledged = Some(acknowledged);
         Ok(out)
     }
 
@@ -410,7 +449,7 @@ impl<'a> Write<'a> {
         build: impl FnOnce(T) -> O,
     ) -> Result<O, Failure<O>> {
         let output = build(state);
-        let checked = self.safe(op, &output);
+        let checked = self.check_proofs().and_then(|()| self.safe(op, &output));
         match result {
             Ok(()) => checked.map(|()| output).map_err(|error| sent(error, None)),
             Err(error) => Err(sent(
@@ -443,6 +482,7 @@ impl<'a> Write<'a> {
         op: &'static str,
         output: O,
     ) -> Result<O, Failure<O>> {
+        self.check_proofs().map_err(not_sent)?;
         self.safe(op, &output).map_err(not_sent)?;
         Ok(output)
     }
@@ -479,7 +519,7 @@ impl<'a> Write<'a> {
 
 pub(super) fn screen_value<T: Serialize>(row: &T, evidence: &Evidence) -> Result<(), ()> {
     let value = serde_json::to_value(row).map_err(|_| ())?;
-    if unsafe_value(&value, evidence, false) || evidence.reflected_in(&value) {
+    if unsafe_value(&value, evidence, false) || evidence.output_reflects(&value) {
         return Err(());
     }
     Ok(())
@@ -545,6 +585,7 @@ pub(super) fn api(op: &'static str, status: Option<u16>, code: &str, message: &s
     ))
 }
 
+#[derive(Debug)]
 struct InterruptedResponse;
 
 pub(super) fn can_confirm(error: &Error) -> bool {
@@ -554,14 +595,14 @@ pub(super) fn can_confirm(error: &Error) -> bool {
 pub(super) fn is_4xx(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::status)
+        .and_then(ApiError::observed_status)
         .is_some_and(|status| (400..500).contains(&status))
 }
 
 pub(super) fn is_5xx(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::status)
+        .and_then(ApiError::observed_status)
         .is_some_and(|status| status >= 500)
 }
 
@@ -626,3 +667,5 @@ pub(super) fn ipv4_prefix<T>(op: &'static str, value: &str) -> Result<(), Failur
         _ => Err(input(op, "requires CIDR to be an IPv4 CIDR prefix")),
     }
 }
+
+crate::error::debug_record!(NetworkWriteError; DefaultResource, Busy, UnexpectedStatus);

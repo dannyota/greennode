@@ -185,10 +185,14 @@ impl EndpointQuote<'_> {
         {
             return Err(invalid());
         }
-        Ok(QuoteCreateEndpointOutput {
-            monthly_price: optimum,
-            currency: "VND".into(),
-        })
+        super::mutations::guard_operands(
+            OP,
+            QuoteCreateEndpointOutput {
+                monthly_price: optimum,
+                currency: "VND".into(),
+            },
+            self.evidence,
+        )
     }
 }
 

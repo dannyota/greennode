@@ -157,9 +157,11 @@ impl<'a> EndpointQuote<'a> {
         }
         let project_body = client.read(ctx, vserver, PROJECTS, &[], evidence).await?;
         let project = project(&go_json(&project_body), configured, evidence)?;
+        let project = super::mutations::guard_operands(PROJECTS.id, project, evidence)?;
         let zone = if write {
             let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
-            region(&go_json(&zone_body), evidence)?
+            let zone = region(&go_json(&zone_body), evidence)?;
+            super::mutations::guard_operands(REGIONS.id, zone, evidence)?
         } else if let Some(zone) = client.endpoint_verified_zone.get() {
             zone.clone()
         } else {
@@ -455,6 +457,8 @@ impl<'a> EndpointQuote<'a> {
             }) {
                 return Err(invalid());
             }
+            let data = super::mutations::guard_operands(spec.read.id, data, self.evidence)?;
+            let invalid = || spec.read.invalid(self.evidence);
             for raw in data {
                 let row = fields(raw).map_err(|()| invalid())?;
                 for key in spec.required {

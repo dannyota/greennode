@@ -11,6 +11,7 @@ mod inventory;
 mod mutations;
 mod nat;
 mod nat_catalog;
+mod nat_create;
 mod nat_models;
 mod nat_quote;
 mod nat_writes;
@@ -57,6 +58,7 @@ pub use vpn::{
 };
 
 pub use nat_catalog::*;
+pub use nat_create::{CreateNatInstanceInput, CreateNatInstanceOutput};
 pub use nat_models::*;
 pub use nat_quote::*;
 pub use nat_writes::*;

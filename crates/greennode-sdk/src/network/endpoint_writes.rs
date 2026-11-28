@@ -6,8 +6,9 @@ use serde_json::{json, value::RawValue};
 
 use crate::model::wire::go_json;
 use crate::wire::product::{
-    evidence::{Evidence, SentCredentials},
-    options::{AttemptCheck, Options},
+    evidence::Evidence,
+    guard::{AcknowledgedId, guarded_poll},
+    options::Options,
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
@@ -17,7 +18,7 @@ use super::mutations::{
     Destination, Mutation, api, check_context, check_quote, input_error, not_sent, safe_output,
     screen, tick, typed_error,
 };
-use super::nat_catalog::{numeric_code, reflects};
+use super::nat_catalog::numeric_code;
 use super::wire::Fields;
 use super::{Client, QuoteCreateEndpointInput, ResourceInUse};
 
@@ -41,7 +42,7 @@ const RECOVERY: &str = "Run network list-endpoints and network get-endpoint in t
 pub type CreateEndpointInput = QuoteCreateEndpointInput;
 
 /// The result of an endpoint order.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct CreateEndpointOutput {
     /// Unambiguous endpoint identifier returned by the order.
     #[serde(rename = "EndpointID")]
@@ -58,7 +59,7 @@ pub struct CreateEndpointOutput {
 }
 
 /// Selects the endpoint and its owning VPC for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteEndpointInput {
     /// Endpoint identifier in the form enp-UUID.
     pub endpoint_id: String,
@@ -77,7 +78,7 @@ impl DeleteEndpointInput {
 }
 
 /// The result of an endpoint delete.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteEndpointOutput {
     /// Endpoint selected for deletion.
     #[serde(rename = "EndpointID")]
@@ -113,113 +114,119 @@ impl Client {
         ctx: &RequestContext,
         input: CreateEndpointInput,
     ) -> Result<CreateEndpointOutput, Failure<CreateEndpointOutput>> {
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        check_input(&input, &evidence)
-            .map_err(|error| not_sent(scope_error(CREATE.id, error, &evidence)))?;
-        let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
-            Ok(scope) => scope,
-            Err(error) => return Err(not_sent(scope_error(CREATE.id, error, &evidence))),
-        };
-        let offer = scope
-            .offer(&input)
-            .await
-            .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
-        scope
-            .check_placement(&input, &offer)
-            .await
-            .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
-        let before = endpoint_rows(&mut scope, CREATE.id, true)
-            .await
-            .map_err(not_sent)?;
-        if before
-            .iter()
-            .any(|row| row.name == input.name && row.vpc == input.vpc_id)
-        {
-            return Err(not_sent(input_error(
-                CREATE.id,
-                ": an endpoint with this name exists in the VPC",
-            )));
-        }
-        let quote = scope
-            .endpoint_price(&input, &offer)
-            .await
-            .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
-        let price = quote.monthly_price;
-        check_quote(
-            CREATE.id,
-            "quote",
-            price,
-            input.max_price,
-            scope.evidence.credentials(),
-            &[price],
-        )
-        .map_err(not_sent)?;
-        let final_check = |credentials: &SentCredentials| {
+        crate::wire::product::exit::finish!(async {
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            check_input(&input, &evidence)
+                .map_err(|error| not_sent(scope_error(CREATE.id, error, &evidence)))?;
+            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
+                Ok(scope) => scope,
+                Err(error) => return Err(not_sent(scope_error(CREATE.id, error, &evidence))),
+            };
+            let offer = scope
+                .offer(&input)
+                .await
+                .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
+            scope
+                .check_placement(&input, &offer)
+                .await
+                .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
+            let before = endpoint_rows(&mut scope, CREATE.id, true)
+                .await
+                .map_err(not_sent)?;
+            if before
+                .iter()
+                .any(|row| row.name == input.name && row.vpc == input.vpc_id)
+            {
+                return Err(not_sent(input_error(
+                    CREATE.id,
+                    ": an endpoint with this name exists in the VPC",
+                )));
+            }
+            let quote = scope
+                .endpoint_price(&input, &offer)
+                .await
+                .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
+            let price = quote.monthly_price;
             check_quote(
                 CREATE.id,
                 "quote",
                 price,
                 input.max_price,
-                credentials,
+                scope.evidence,
                 &[price],
             )
-            .err()
-            .map(Box::new)
-        };
-        let mut body = scope.purchase_body(&input, &offer);
-        if let Some(fields) = body.as_object_mut() {
-            fields.insert("tagDetails".into(), json!([]));
-        }
-        let path = [&*scope.zone, &*scope.project];
-        let target = Destination {
-            base: &scope.base,
-            path: &path,
-            options: Options {
-                attempt_check: Some(AttemptCheck(&final_check)),
-                ..Options::DEFAULT
-            },
-        };
-        let result = self
-            .mutate(ctx, &CREATE, target, Some(&body), scope.evidence)
-            .await;
-        let mut output = CreateEndpointOutput {
-            endpoint_id: String::new(),
-            status: String::new(),
-            monthly_price: price,
-            currency: quote.currency,
-        };
-        let result = match result {
-            Ok(raw) => raw,
-            Err(failure) if definite(&failure) => return Err(failure),
-            Err(failure) => {
-                return Err(endpoint_failure(
-                    CREATE.id,
-                    Some(failure.into_parts().0),
-                    output,
-                    scope.evidence,
-                ));
+            .map_err(not_sent)?;
+            let mut body = scope.purchase_body(&input, &offer);
+            if let Some(fields) = body.as_object_mut() {
+                fields.insert("tagDetails".into(), json!([]));
             }
-        };
-        let response_text = go_json(&result);
-        let accepted = response_data(CREATE.id, &response_text, scope.evidence).and_then(|row| {
-            let id: String = row
-                .required("uuid")
-                .map_err(|()| invalid(CREATE.id, scope.evidence))?;
-            let name: String = row
-                .required("name")
-                .map_err(|()| invalid(CREATE.id, scope.evidence))?;
-            if !qualified(&id, "enp-")
-                || scope.evidence.id_reflects(&id)
-                || name != input.name
-                || before.iter().any(|row| row.id == id)
+            let path = [&*scope.zone, &*scope.project];
+            let target = Destination {
+                base: &scope.base,
+                path: &path,
+                options: Options::DEFAULT,
+            };
+            let result = self
+                .mutate(ctx, &CREATE, target, Some(&body), scope.evidence)
+                .await;
+            let mut output = CreateEndpointOutput {
+                endpoint_id: String::new(),
+                status: String::new(),
+                monthly_price: price,
+                currency: quote.currency,
+            };
+            let result = match result {
+                Ok(raw) => raw,
+                Err(failure) if definite(&failure) => return Err(failure),
+                Err(failure) => {
+                    return Err(endpoint_failure(
+                        CREATE.id,
+                        Some(failure.into_parts().0),
+                        output,
+                        scope.evidence,
+                    ));
+                }
+            };
+            let accepted = result.decode_projection(|body| {
+                let text = go_json(body);
+                let row = response_data(CREATE.id, &text, scope.evidence).map_err(Box::new)?;
+                let invalid = || Box::new(invalid(CREATE.id, scope.evidence));
+                let id: String = row.required("uuid").map_err(|()| invalid())?;
+                let name: String = row.required("name").map_err(|()| invalid())?;
+                if !qualified(&id, "enp-")
+                    || scope.evidence.id_reflects(&id)
+                    || name != input.name
+                    || before.iter().any(|row| row.id == id)
+                {
+                    return Err(invalid());
+                }
+                Ok(id)
+            });
+            let acknowledged = match accepted.map_err(|error| *error).and_then(|id| {
+                let acknowledged =
+                    super::mutations::bind_acknowledgement(&CREATE, &result, &id, scope.evidence)?;
+                output.endpoint_id = id;
+                Ok(acknowledged)
+            }) {
+                Ok(id) => id,
+                Err(error) => {
+                    return Err(endpoint_failure(
+                        CREATE.id,
+                        Some(error),
+                        output,
+                        scope.evidence,
+                    ));
+                }
+            };
+            let wait = ctx.child_with_deadline(
+                self.session.clock().monotonic_now() + Duration::from_secs(900),
+            );
+            scope.ctx = &wait;
+            if let Err(error) =
+                wait_for_create(&mut scope, &input, &offer, &acknowledged, &mut output).await
             {
-                return Err(invalid(CREATE.id, scope.evidence));
-            }
-            Ok(id)
-        });
-        output.endpoint_id = match accepted {
-            Ok(id) => id,
-            Err(error) => {
                 return Err(endpoint_failure(
                     CREATE.id,
                     Some(error),
@@ -227,19 +234,8 @@ impl Client {
                     scope.evidence,
                 ));
             }
-        };
-        let wait = ctx
-            .child_with_deadline(self.session.clock().monotonic_now() + Duration::from_secs(900));
-        scope.ctx = &wait;
-        if let Err(error) = wait_for_create(&mut scope, &input, &offer, &mut output).await {
-            return Err(endpoint_failure(
-                CREATE.id,
-                Some(error),
-                output,
-                scope.evidence,
-            ));
-        }
-        Ok(output)
+            Ok(output)
+        })
     }
 
     /// Deletes an unattached ACTIVE Gateway endpoint and confirms its absence.
@@ -248,124 +244,132 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteEndpointInput,
     ) -> Result<DeleteEndpointOutput, Failure<DeleteEndpointOutput>> {
-        for (field, id, prefix) in [
-            ("EndpointID", &input.endpoint_id, "enp-"),
-            ("VPCID", &input.vpc_id, "net-"),
-        ] {
-            if id.is_empty() {
-                return Err(not_sent(input_error(
-                    DELETE.id,
-                    &format!(" requires {field}"),
-                )));
+        crate::wire::product::exit::finish!(async {
+            for (field, id, prefix) in [
+                ("EndpointID", &input.endpoint_id, "enp-"),
+                ("VPCID", &input.vpc_id, "net-"),
+            ] {
+                if id.is_empty() {
+                    return Err(not_sent(input_error(
+                        DELETE.id,
+                        &format!(" requires {field}"),
+                    )));
+                }
+                if !qualified(id, prefix) {
+                    return Err(not_sent(input_error(
+                        DELETE.id,
+                        &format!(" requires {field} in the form {prefix}<uuid>"),
+                    )));
+                }
             }
-            if !qualified(id, prefix) {
-                return Err(not_sent(input_error(
-                    DELETE.id,
-                    &format!(" requires {field} in the form {prefix}<uuid>"),
-                )));
-            }
-        }
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        super::mutations::check_input(
-            DELETE.id,
-            &evidence,
-            &[],
-            &[&input.endpoint_id, &input.vpc_id],
-            None,
-        )
-        .map_err(not_sent)?;
-        let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
-            Ok(scope) => scope,
-            Err(error) => return Err(not_sent(scope_error(DELETE.id, error, &evidence))),
-        };
-        let before = endpoint_rows(&mut scope, DELETE.id, false)
-            .await
-            .map_err(not_sent)?;
-        let Some(row) = before.iter().find(|row| row.id == input.endpoint_id) else {
-            return Err(not_sent(typed_error(
-                ErrorClass::NotFound,
-                "NotFound",
-                "vngcloud: resource not found: network.DeleteEndpoint",
-                scope.evidence,
-            )));
-        };
-        if row.vpc != input.vpc_id || row.status != "ACTIVE" || !row.gateway || row.dns {
-            return Err(not_sent(input_error(
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            super::mutations::check_input(
                 DELETE.id,
-                ": endpoint is not an eligible ACTIVE Gateway endpoint of the named VPC",
-            )));
-        }
-        match row.attached {
+                &evidence,
+                &[],
+                &[&input.endpoint_id, &input.vpc_id],
+                None,
+            )
+            .map_err(not_sent)?;
+            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
+                Ok(scope) => scope,
+                Err(error) => return Err(not_sent(scope_error(DELETE.id, error, &evidence))),
+            };
+            let before = endpoint_rows(&mut scope, DELETE.id, false)
+                .await
+                .map_err(not_sent)?;
+            let Some(row) = before.iter().find(|row| row.id == input.endpoint_id) else {
+                return Err(not_sent(typed_error(
+                    ErrorClass::NotFound,
+                    "NotFound",
+                    "vngcloud: resource not found: network.DeleteEndpoint",
+                    scope.evidence,
+                )));
+            };
+            if row.vpc != input.vpc_id || row.status != "ACTIVE" || !row.gateway || row.dns {
+                return Err(not_sent(input_error(
+                    DELETE.id,
+                    ": endpoint is not an eligible ACTIVE Gateway endpoint of the named VPC",
+                )));
+            }
+            match row.attached {
             None => return Err(not_sent(invalid(DELETE.id, scope.evidence))),
             Some(true) => return Err(not_sent(typed_error(ErrorClass::Api, "ResourceInUse", "network: resource in use: network.DeleteEndpoint: endpoint has a resource or domain attached", scope.evidence).with_detail(ResourceInUse))),
             Some(false) => {}
         }
-        let body = json!({"endpointUuid": row.id, "vpcUuid": row.vpc, "endpointServiceUuid": row.service, "regionUuid": scope.zone, "projectUuid": scope.project});
-        let path = [&*scope.zone, &*scope.project, &*row.id];
-        let target = Destination {
-            base: &scope.base,
-            path: &path,
-            options: Options::DEFAULT,
-        };
-        let result = self
-            .mutate(ctx, &DELETE, target, Some(&body), scope.evidence)
-            .await;
-        let mut output = DeleteEndpointOutput {
-            endpoint_id: input.endpoint_id,
-            deleted: false,
-        };
-        match result {
-            Ok(raw) => {
-                if let Err(error) = verify_response(DELETE.id, &raw, scope.evidence) {
+            let body = json!({"endpointUuid": row.id, "vpcUuid": row.vpc, "endpointServiceUuid": row.service, "regionUuid": scope.zone, "projectUuid": scope.project});
+            let path = [&*scope.zone, &*scope.project, &*row.id];
+            let target = Destination {
+                base: &scope.base,
+                path: &path,
+                options: Options::DEFAULT,
+            };
+            let result = self
+                .mutate(ctx, &DELETE, target, Some(&body), scope.evidence)
+                .await;
+            let mut output = DeleteEndpointOutput {
+                endpoint_id: input.endpoint_id,
+                deleted: false,
+            };
+            match result {
+                Ok(raw) => {
+                    if let Err(error) = raw.decode_projection(|body| {
+                        checked_response(DELETE.id, &go_json(body), scope.evidence)
+                            .map(|_| ())
+                            .map_err(Box::new)
+                    }) {
+                        return Err(endpoint_failure(
+                            DELETE.id,
+                            Some(*error),
+                            output,
+                            scope.evidence,
+                        ));
+                    }
+                }
+                Err(failure) if definite(&failure) => return Err(failure),
+                Err(failure) => {
                     return Err(endpoint_failure(
                         DELETE.id,
-                        Some(error),
+                        Some(failure.into_parts().0),
                         output,
                         scope.evidence,
                     ));
                 }
             }
-            Err(failure) if definite(&failure) => return Err(failure),
-            Err(failure) => {
+            let clock = self.session.clock();
+            let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600));
+            scope.ctx = &wait;
+            let result = async {
+                guarded_poll!(scope.evidence, {
+                    check_context(&wait, clock)?;
+                    let rows = endpoint_rows(&mut scope, DELETE.id, false).await?;
+                    check_context(&wait, clock)?;
+                    let Some(row) = rows.iter().find(|row| row.id == output.endpoint_id) else {
+                        return Ok(());
+                    };
+                    if !matches!(row.status.as_str(), "ACTIVE" | "DELETING") {
+                        return Err(invalid(DELETE.id, scope.evidence));
+                    }
+                    tick(&wait, clock, Duration::from_secs(5)).await?;
+                })
+            }
+            .await;
+            if let Err(error) = result {
                 return Err(endpoint_failure(
                     DELETE.id,
-                    Some(failure.into_parts().0),
+                    Some(error),
                     output,
                     scope.evidence,
                 ));
             }
-        }
-        let clock = self.session.clock();
-        let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600));
-        scope.ctx = &wait;
-        let result = async {
-            loop {
-                check_context(&wait, clock)?;
-                let rows = endpoint_rows(&mut scope, DELETE.id, false).await?;
-                check_context(&wait, clock)?;
-                let Some(row) = rows.iter().find(|row| row.id == output.endpoint_id) else {
-                    return Ok(());
-                };
-                if !matches!(row.status.as_str(), "ACTIVE" | "DELETING") {
-                    return Err(invalid(DELETE.id, scope.evidence));
-                }
-                tick(&wait, clock, Duration::from_secs(5)).await?;
+            output.deleted = true;
+            if !safe_output(&output, scope.evidence) {
+                return Err(endpoint_failure(DELETE.id, None, output, scope.evidence));
             }
-        }
-        .await;
-        if let Err(error) = result {
-            return Err(endpoint_failure(
-                DELETE.id,
-                Some(error),
-                output,
-                scope.evidence,
-            ));
-        }
-        output.deleted = true;
-        if !safe_output(&output, scope.evidence) {
-            return Err(endpoint_failure(DELETE.id, None, output, scope.evidence));
-        }
-        Ok(output)
+            Ok(output)
+        })
     }
 }
 
@@ -374,13 +378,20 @@ async fn wait_for_create(
     scope: &mut EndpointQuote<'_>,
     input: &CreateEndpointInput,
     offer: &Offer,
+    acknowledged: &AcknowledgedId,
     output: &mut CreateEndpointOutput,
 ) -> Result<(), Error> {
     let ctx = scope.ctx;
     let clock = scope.client.session.clock();
-    loop {
+    guarded_poll!(scope.evidence, {
         check_context(ctx, clock)?;
-        let rows = endpoint_rows(scope, CREATE.id, true).await?;
+        let rows = endpoint_rows(scope, CREATE.id, true).await;
+        if let Err(error) = acknowledged.recheck(scope.evidence) {
+            output.endpoint_id.clear();
+            output.status.clear();
+            return Err(*error);
+        }
+        let rows = rows?;
         check_context(ctx, clock)?;
         if let Some(row) = rows.into_iter().find(|row| row.id == output.endpoint_id) {
             if row.vpc != input.vpc_id
@@ -403,7 +414,7 @@ async fn wait_for_create(
             }
         }
         tick(ctx, clock, Duration::from_secs(5)).await?;
-    }
+    })
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
@@ -522,20 +533,12 @@ fn response_data<'a>(
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
-fn verify_response(op: &'static str, raw: &[u8], evidence: &Evidence) -> Result<(), Error> {
-    checked_response(op, &go_json(raw), evidence).map(|_| ())
-}
-
-#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 fn checked_response<'a>(
     op: &'static str,
     text: &'a str,
     evidence: &Evidence,
 ) -> Result<Fields<'a>, Error> {
     let rejected = |()| invalid(op, evidence);
-    if reflects(text, evidence) {
-        return Err(rejected(()));
-    }
     let fields = Fields::decode(text).map_err(rejected)?;
     fields.check_ack_paging().map_err(rejected)?;
     let code: &RawValue = fields.required("code").map_err(rejected)?;
@@ -584,7 +587,7 @@ fn definite<T>(failure: &Failure<T>) -> bool {
         || failure
             .error()
             .api_error()
-            .and_then(ApiError::status)
+            .and_then(ApiError::observed_status)
             .is_some_and(|status| (400..500).contains(&status) && status != 408)
 }
 
@@ -596,7 +599,7 @@ fn endpoint_failure<T: Serialize>(
 ) -> Failure<T> {
     let message = format!("{op}: write outcome is unconfirmed; {RECOVERY}");
     let mut error = typed_error(ErrorClass::NotSettled, "NotSettled", &message, evidence);
-    if let Some(cause) = cause.filter(|cause| !cause.has_class(ErrorClass::NotFound)) {
+    if let Some(cause) = cause {
         error = error.with_cause(cause);
     }
     let partial = safe_output(&output, evidence).then_some(output);
@@ -606,3 +609,19 @@ fn endpoint_failure<T: Serialize>(
         WriteDispatch::MayHaveBeenSent,
     )
 }
+
+crate::wire::product::output::public_fields!(CreateEndpointOutput {
+    endpoint_id,
+    status,
+    monthly_price,
+    currency
+});
+crate::wire::product::output::public_fields!(DeleteEndpointOutput {
+    endpoint_id,
+    deleted
+});
+
+crate::error::debug_record!(DeleteEndpointInput {
+    endpoint_id,
+    vpc_id
+});

@@ -220,6 +220,7 @@
   "greennode network clear-vpc-dhcp-options",
   "greennode network create-dhcp-options",
   "greennode network create-endpoint",
+  "greennode network create-nat-instance",
   "greennode network create-network-acl",
   "greennode network create-route-table",
   "greennode network create-security-group",

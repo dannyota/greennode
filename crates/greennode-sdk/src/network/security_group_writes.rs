@@ -5,7 +5,10 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::model::wire::model;
-use crate::wire::product::evidence::Evidence;
+use crate::wire::product::{
+    evidence::Evidence,
+    guard::{AcknowledgedId, guarded_poll},
+};
 use crate::{Error, ErrorClass, Failure, RequestContext};
 
 use super::mutations::{
@@ -52,7 +55,7 @@ const GROUP_RECOVERY: &str =
 const RULE_RECOVERY: &str = "list the group's rules before creating it again";
 
 /// Names and describes a security group to create.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateSecurityGroupInput {
     /// Display name.
     pub name: String,
@@ -74,7 +77,7 @@ impl CreateSecurityGroupInput {
 }
 
 /// The created group.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateSecurityGroupOutput {
     /// The last observed group state.
@@ -82,7 +85,7 @@ pub struct CreateSecurityGroupOutput {
 }
 
 /// Changes selected fields of an existing security group.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct UpdateSecurityGroupInput {
     /// Group identifier.
     pub security_group_id: String,
@@ -104,7 +107,7 @@ impl UpdateSecurityGroupInput {
 }
 
 /// The group after an update.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateSecurityGroupOutput {
     /// Confirmed group, or submitted fields if confirmation failed.
@@ -118,11 +121,11 @@ super::route_inventory::required_id_input!(
 );
 
 /// Confirms that the service accepted the group deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteSecurityGroupOutput {}
 
 /// Defines a new security group rule.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CreateSecurityGroupRuleInput {
     /// Group identifier.
     pub security_group_id: String,
@@ -164,7 +167,7 @@ impl CreateSecurityGroupRuleInput {
 }
 
 /// The created security group rule.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateSecurityGroupRuleOutput {
     /// Rule identifier and submitted properties.
@@ -172,7 +175,7 @@ pub struct CreateSecurityGroupRuleOutput {
 }
 
 /// Selects a rule for deletion within its parent group.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteSecurityGroupRuleInput {
     /// Group identifier.
     pub security_group_id: String,
@@ -194,15 +197,15 @@ impl DeleteSecurityGroupRuleInput {
 }
 
 /// Confirms that the service accepted the rule deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteSecurityGroupRuleOutput {}
 
 /// The selected group belongs to the project system.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SystemSecurityGroup;
 
 /// The selected group is still in use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SecurityGroupInUse;
 
 model! {
@@ -232,59 +235,72 @@ impl Client {
         ctx: &RequestContext,
         input: CreateSecurityGroupInput,
     ) -> Result<CreateSecurityGroupOutput, Failure<CreateSecurityGroupOutput>> {
-        let op = &CREATE_GROUP;
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        let body = json!({"name": input.name, "description": input.description});
-        check_input(op.id, &evidence, &[("Name", &input.name)], &[], Some(&body))
-            .map_err(not_sent)?;
-        let raw = self
-            .mutate_vserver(ctx, op, &[], Some(&body), &mut evidence)
-            .await
-            .map_err(|failure| advise(failure, op.id, GROUP_RECOVERY, &evidence))?;
-        let row: CreatedGroup = op
-            .decode(&raw, &evidence)
-            .map_err(|error| advise(sent(error), op.id, GROUP_RECOVERY, &evidence))?;
-        create_id(op, &row.uuid, !input.no_wait, "create response had no id; the group may exist, list security groups and match the name exactly before creating it again", &evidence).map_err(sent)?;
-        let mut group = SecurityGroup {
-            id: row.uuid,
-            name: row.name,
-            description: input.description,
-            ..Default::default()
-        };
-        let id = group.id.clone();
-        let result = if input.no_wait {
-            Ok(())
-        } else {
-            self.wait_security_group(ctx, &id, &mut group, &mut evidence)
+        crate::wire::product::exit::finish!(async {
+            let op = &CREATE_GROUP;
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            let body = json!({"name": input.name, "description": input.description});
+            check_input(op.id, &evidence, &[("Name", &input.name)], &[], Some(&body))
+                .map_err(not_sent)?;
+            let raw = self
+                .mutate_vserver(ctx, op, &[], Some(&body), &mut evidence)
                 .await
-        };
-        let output = retain(group, &evidence)
-            .map(|security_group| CreateSecurityGroupOutput { security_group });
-        match result {
-            Ok(()) => output.ok_or_else(|| sent(op.invalid(&evidence))),
-            Err(error) => Err(settlement(
-                op.id,
-                "security group",
-                &id,
-                error,
-                output,
-                &evidence,
-            )),
-        }
+                .map_err(|failure| advise(failure, op.id, GROUP_RECOVERY, &evidence))?;
+            let row: CreatedGroup = op
+                .decode(&raw, &evidence)
+                .map_err(|error| advise(sent(error), op.id, GROUP_RECOVERY, &evidence))?;
+            create_id(op, &row.uuid, !input.no_wait, "create response had no id; the group may exist, list security groups and match the name exactly before creating it again", &evidence).map_err(sent)?;
+            let acknowledged =
+                super::mutations::bind_acknowledgement(op, &raw, &row.uuid, &mut evidence)
+                    .map_err(sent)?;
+            let mut group = SecurityGroup {
+                id: row.uuid,
+                name: row.name,
+                description: input.description,
+                ..Default::default()
+            };
+            let result = if input.no_wait {
+                Ok(())
+            } else {
+                self.wait_security_group(ctx, &acknowledged, &mut group, &mut evidence)
+                    .await
+            };
+            let id = acknowledged
+                .recheck(&evidence)
+                .map_err(|error| sent(Error::new(ErrorClass::NotSettled).with_cause(*error)))?;
+            let output = retain(group, &evidence)
+                .map(|security_group| CreateSecurityGroupOutput { security_group });
+            match result {
+                Ok(()) => output.ok_or_else(|| sent(op.invalid(&evidence))),
+                Err(error) => Err(settlement(
+                    op.id,
+                    "security group",
+                    id,
+                    error,
+                    output,
+                    &evidence,
+                )),
+            }
+        })
     }
 
     async fn wait_security_group(
         &self,
         ctx: &RequestContext,
-        id: &str,
+        acknowledged: &AcknowledgedId,
         latest: &mut SecurityGroup,
         evidence: &mut Evidence,
     ) -> Result<(), Error> {
         let clock = self.session.clock();
         let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(60));
-        loop {
+        guarded_poll!(evidence, {
             check_active_wait(&wait, ctx, clock)?;
-            match self.guard_security_group(&wait, id, evidence).await {
+            let id = acknowledged.recheck(evidence).map_err(|error| *error)?;
+            let result = self.guard_security_group(&wait, id, evidence).await;
+            acknowledged.recheck(evidence).map_err(|error| *error)?;
+            evidence.recheck_read_proofs().map_err(|error| *error)?;
+            match result {
                 Ok(group) => {
                     *latest = group;
                     match latest.status.as_str() {
@@ -293,11 +309,17 @@ impl Client {
                         _ => {}
                     }
                 }
-                Err(error) if !error.has_class(ErrorClass::NotFound) => return Err(error),
-                Err(_) => {}
+                Err(error)
+                    if crate::confirms_absence(
+                        &error,
+                        "network.GetSecurityGroup",
+                        "GET",
+                        "v2/{}/secgroups/{}",
+                    ) => {}
+                Err(error) => return Err(error),
             }
             tick_active_wait(&wait, ctx, clock).await?;
-        }
+        })
     }
 
     /// Sends one update and confirms the group by reading its detail.
@@ -306,58 +328,63 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateSecurityGroupInput,
     ) -> Result<UpdateSecurityGroupOutput, Failure<UpdateSecurityGroupOutput>> {
-        let op = &UPDATE_GROUP;
-        let id = input.security_group_id.as_str();
-        path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
-        if input.name.is_none() && input.description.is_none() {
-            return Err(not_sent(input_error(
-                op.id,
-                " requires at least one field to change",
-            )));
-        }
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        check_input(
-            op.id,
-            &evidence,
-            &[],
-            &[id],
-            Some(&json!([input.name, input.description])),
-        )
-        .map_err(not_sent)?;
-        let current = self
-            .guard_security_group(ctx, id, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        check_system(op.id, &current, &evidence).map_err(not_sent)?;
-        let name = input.name.unwrap_or(current.name);
-        let description = input.description.unwrap_or(current.description);
-        let body = json!({"name": name, "description": description});
-        self.mutate_vserver(ctx, op, &[id], Some(&body), &mut evidence)
-            .await?;
-        let confirmed = self.guard_security_group(ctx, id, &mut evidence).await;
-        match confirmed {
-            Ok(group) => retain(group, &evidence)
-                .map(|security_group| UpdateSecurityGroupOutput { security_group })
-                .ok_or_else(|| sent(op.invalid(&evidence))),
-            Err(error) => {
-                let fallback = SecurityGroup {
-                    id: id.to_owned(),
-                    name,
-                    description,
-                    ..Default::default()
-                };
-                let partial = retain(fallback, &evidence)
-                    .map(|security_group| UpdateSecurityGroupOutput { security_group });
-                Err(settlement(
+        crate::wire::product::exit::finish!(async {
+            let op = &UPDATE_GROUP;
+            let id = input.security_group_id.as_str();
+            path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
+            if input.name.is_none() && input.description.is_none() {
+                return Err(not_sent(input_error(
                     op.id,
-                    "security group",
-                    id,
-                    error,
-                    partial,
-                    &evidence,
-                ))
+                    " requires at least one field to change",
+                )));
             }
-        }
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            check_input(
+                op.id,
+                &evidence,
+                &[],
+                &[id],
+                Some(&json!([input.name, input.description])),
+            )
+            .map_err(not_sent)?;
+            let current = self
+                .guard_security_group(ctx, id, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            check_system(op.id, &current, &evidence).map_err(not_sent)?;
+            let name = input.name.unwrap_or(current.name);
+            let description = input.description.unwrap_or(current.description);
+            let body = json!({"name": name, "description": description});
+            let _ = self
+                .mutate_vserver(ctx, op, &[id], Some(&body), &mut evidence)
+                .await?;
+            let confirmed = self.guard_security_group(ctx, id, &mut evidence).await;
+            match confirmed {
+                Ok(group) => retain(group, &evidence)
+                    .map(|security_group| UpdateSecurityGroupOutput { security_group })
+                    .ok_or_else(|| sent(op.invalid(&evidence))),
+                Err(error) => {
+                    let fallback = SecurityGroup {
+                        id: id.to_owned(),
+                        name,
+                        description,
+                        ..Default::default()
+                    };
+                    let partial = retain(fallback, &evidence)
+                        .map(|security_group| UpdateSecurityGroupOutput { security_group });
+                    Err(settlement(
+                        op.id,
+                        "security group",
+                        id,
+                        error,
+                        partial,
+                        &evidence,
+                    ))
+                }
+            }
+        })
     }
 
     /// Deletes a non-system security group after checking server membership.
@@ -366,54 +393,58 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteSecurityGroupInput,
     ) -> Result<DeleteSecurityGroupOutput, Failure<DeleteSecurityGroupOutput>> {
-        let op = &DELETE_GROUP;
-        let id = input.security_group_id.as_str();
-        path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        check_input(op.id, &evidence, &[], &[id], None).map_err(not_sent)?;
-        let group = self
-            .guard_security_group(ctx, id, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        check_system(op.id, &group, &evidence).map_err(not_sent)?;
-        let servers = self
-            .guard_servers_by_security_group(ctx, id, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        if !servers.items.is_empty() {
-            let message = format!(
-                "network: security group in use: {}: security group {id} has {} server(s) attached",
-                op.id,
-                servers.items.len()
-            );
-            return Err(not_sent(
-                typed_error(ErrorClass::Api, "SecurityGroupInUse", &message, &evidence)
-                    .with_detail(SecurityGroupInUse),
-            ));
-        }
-        let result = self
-            .mutate_vserver(ctx, op, &[id], None, &mut evidence)
-            .await;
-        result.map_err(|failure| {
-            let (error, partial, dispatch) = failure.into_parts();
-            let error = if error.api_error().is_some_and(|api| {
-                api.message()
-                    .to_ascii_lowercase()
-                    .contains("securitygroupinuse")
-            }) {
+        crate::wire::product::exit::finish!(async {
+            let op = &DELETE_GROUP;
+            let id = input.security_group_id.as_str();
+            path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            check_input(op.id, &evidence, &[], &[id], None).map_err(not_sent)?;
+            let group = self
+                .guard_security_group(ctx, id, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            check_system(op.id, &group, &evidence).map_err(not_sent)?;
+            let servers = self
+                .guard_servers_by_security_group(ctx, id, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            if !servers.items.is_empty() {
                 let message = format!(
-                    "network: security group in use: {}",
-                    error_description(&error)
+                    "network: security group in use: {}: security group {id} has {} server(s) attached",
+                    op.id,
+                    servers.items.len()
                 );
-                typed_error(ErrorClass::Api, "SecurityGroupInUse", &message, &evidence)
-                    .with_detail(SecurityGroupInUse)
-                    .with_cause(error)
-            } else {
-                error
-            };
-            Failure::new(screen(error, &evidence), partial, dispatch)
-        })?;
-        Ok(DeleteSecurityGroupOutput {})
+                return Err(not_sent(
+                    typed_error(ErrorClass::Api, "SecurityGroupInUse", &message, &evidence)
+                        .with_detail(SecurityGroupInUse),
+                ));
+            }
+            let result = self
+                .mutate_vserver(ctx, op, &[id], None, &mut evidence)
+                .await;
+            let _ = result.map_err(|failure| {
+                let (error, partial, dispatch) = failure.into_parts();
+                let error = if error.api_error().is_some_and(|api| {
+                    api.message()
+                        .to_ascii_lowercase()
+                        .contains("securitygroupinuse")
+                }) {
+                    let message = format!(
+                        "network: security group in use: {}",
+                        error_description(&error)
+                    );
+                    typed_error(ErrorClass::Api, "SecurityGroupInUse", &message, &evidence)
+                        .with_detail(SecurityGroupInUse)
+                        .with_cause(error)
+                } else {
+                    error
+                };
+                Failure::new(screen(error, &evidence), partial, dispatch)
+            })?;
+            Ok(DeleteSecurityGroupOutput {})
+        })
     }
 
     /// Creates a CIDR-based rule for the selected group.
@@ -422,54 +453,60 @@ impl Client {
         ctx: &RequestContext,
         input: CreateSecurityGroupRuleInput,
     ) -> Result<CreateSecurityGroupRuleOutput, Failure<CreateSecurityGroupRuleOutput>> {
-        let op = &CREATE_RULE;
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        let id = input.security_group_id.as_str();
-        check_input(
-            op.id,
-            &evidence,
-            &[
-                ("SecurityGroupID", id),
-                ("Direction", &input.direction),
-                ("Protocol", &input.protocol),
-                ("RemoteIPPrefix", &input.remote_ip_prefix),
-            ],
-            &[id],
-            None,
-        )
-        .map_err(not_sent)?;
-        path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
-        let (ether_type, port_max) = rule_shape(&input).map_err(not_sent)?;
-        let body = json!({"securityGroupId": id, "direction": input.direction, "etherType": ether_type, "protocol": input.protocol,
+        crate::wire::product::exit::finish!(async {
+            let op = &CREATE_RULE;
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            let id = input.security_group_id.as_str();
+            check_input(
+                op.id,
+                &evidence,
+                &[
+                    ("SecurityGroupID", id),
+                    ("Direction", &input.direction),
+                    ("Protocol", &input.protocol),
+                    ("RemoteIPPrefix", &input.remote_ip_prefix),
+                ],
+                &[id],
+                None,
+            )
+            .map_err(not_sent)?;
+            path_id(op.id, "SecurityGroupID", id).map_err(not_sent)?;
+            let (ether_type, port_max) = rule_shape(&input).map_err(not_sent)?;
+            let body = json!({"securityGroupId": id, "direction": input.direction, "etherType": ether_type, "protocol": input.protocol,
             "portRangeMin": input.port_range_min, "portRangeMax": port_max, "remoteIpPrefix": input.remote_ip_prefix, "description": input.description});
-        let raw = self
-            .mutate_vserver(ctx, op, &[id], Some(&body), &mut evidence)
-            .await
-            .map_err(|failure| advise(failure, op.id, RULE_RECOVERY, &evidence))?;
-        let row: CreatedRule = op
-            .decode(&raw, &evidence)
-            .map_err(|error| advise(sent(error), op.id, RULE_RECOVERY, &evidence))?;
-        create_id(op, &row.uuid, false, "create response had no id; the rule may exist, list the group's rules before creating it again", &evidence).map_err(sent)?;
-        if evidence.id_reflects(&row.group_uuid) {
-            return Err(sent(op.invalid(&evidence)));
-        }
-        let rule = SecurityGroupRule {
-            id: row.uuid,
-            security_group_id: input.security_group_id,
-            direction: input.direction,
-            ether_type: ether_type.to_owned(),
-            protocol: input.protocol,
-            port_range_min: input.port_range_min,
-            port_range_max: port_max,
-            remote_ip_prefix: input.remote_ip_prefix,
-            description: input.description,
-            ..Default::default()
-        };
-        retain(rule, &evidence)
-            .map(|security_group_rule| CreateSecurityGroupRuleOutput {
-                security_group_rule,
-            })
-            .ok_or_else(|| sent(op.invalid(&evidence)))
+            let raw = self
+                .mutate_vserver(ctx, op, &[id], Some(&body), &mut evidence)
+                .await
+                .map_err(|failure| advise(failure, op.id, RULE_RECOVERY, &evidence))?;
+            let row: CreatedRule = op
+                .decode(&raw, &evidence)
+                .map_err(|error| advise(sent(error), op.id, RULE_RECOVERY, &evidence))?;
+            create_id(op, &row.uuid, false, "create response had no id; the rule may exist, list the group's rules before creating it again", &evidence).map_err(sent)?;
+            super::mutations::bind_acknowledgement(op, &raw, &row.uuid, &mut evidence)
+                .map_err(sent)?;
+            if evidence.id_reflects(&row.group_uuid) {
+                return Err(sent(op.invalid(&evidence)));
+            }
+            let rule = SecurityGroupRule {
+                id: row.uuid,
+                security_group_id: input.security_group_id,
+                direction: input.direction,
+                ether_type: ether_type.to_owned(),
+                protocol: input.protocol,
+                port_range_min: input.port_range_min,
+                port_range_max: port_max,
+                remote_ip_prefix: input.remote_ip_prefix,
+                description: input.description,
+                ..Default::default()
+            };
+            retain(rule, &evidence)
+                .map(|security_group_rule| CreateSecurityGroupRuleOutput {
+                    security_group_rule,
+                })
+                .ok_or_else(|| sent(op.invalid(&evidence)))
+        })
     }
 
     /// Deletes a rule only after finding it in the selected group.
@@ -478,34 +515,39 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteSecurityGroupRuleInput,
     ) -> Result<DeleteSecurityGroupRuleOutput, Failure<DeleteSecurityGroupRuleOutput>> {
-        let op = &DELETE_RULE;
-        let (group, rule) = (
-            input.security_group_id.as_str(),
-            input.security_group_rule_id.as_str(),
-        );
-        path_id(op.id, "SecurityGroupID", group).map_err(not_sent)?;
-        path_id(op.id, "SecurityGroupRuleID", rule).map_err(not_sent)?;
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        check_input(op.id, &evidence, &[], &[group, rule], None).map_err(not_sent)?;
-        let rules = self
-            .guard_security_group_rules(ctx, group, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        if rules.iter().all(|row| row.id != rule) {
-            let message = format!(
-                "vngcloud: resource not found: {}: security group rule {rule} not found in security group {group}",
-                op.id
+        crate::wire::product::exit::finish!(async {
+            let op = &DELETE_RULE;
+            let (group, rule) = (
+                input.security_group_id.as_str(),
+                input.security_group_rule_id.as_str(),
             );
-            return Err(not_sent(typed_error(
-                ErrorClass::NotFound,
-                "NotFound",
-                &message,
-                &evidence,
-            )));
-        }
-        self.mutate_vserver(ctx, op, &[group, rule], None, &mut evidence)
-            .await?;
-        Ok(DeleteSecurityGroupRuleOutput {})
+            path_id(op.id, "SecurityGroupID", group).map_err(not_sent)?;
+            path_id(op.id, "SecurityGroupRuleID", rule).map_err(not_sent)?;
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            check_input(op.id, &evidence, &[], &[group, rule], None).map_err(not_sent)?;
+            let rules = self
+                .guard_security_group_rules(ctx, group, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            if rules.iter().all(|row| row.id != rule) {
+                let message = format!(
+                    "vngcloud: resource not found: {}: security group rule {rule} not found in security group {group}",
+                    op.id
+                );
+                return Err(not_sent(typed_error(
+                    ErrorClass::NotFound,
+                    "NotFound",
+                    &message,
+                    &evidence,
+                )));
+            }
+            let _ = self
+                .mutate_vserver(ctx, op, &[group, rule], None, &mut evidence)
+                .await?;
+            Ok(DeleteSecurityGroupRuleOutput {})
+        })
     }
 }
 
@@ -582,3 +624,41 @@ fn rule_shape(input: &CreateSecurityGroupRuleInput) -> Result<(&'static str, i64
     }
     Ok((family, port_max))
 }
+
+crate::wire::product::output::public_fields!(DeleteSecurityGroupOutput {});
+crate::wire::product::output::public_fields!(DeleteSecurityGroupRuleOutput {});
+
+crate::wire::product::output::public_fields!(CreateSecurityGroupOutput { security_group });
+
+crate::wire::product::output::public_fields!(UpdateSecurityGroupOutput { security_group });
+
+crate::wire::product::output::public_fields!(CreateSecurityGroupRuleOutput {
+    security_group_rule
+});
+
+crate::error::debug_record!(CreateSecurityGroupInput {
+    name,
+    description,
+    no_wait
+});
+crate::error::debug_record!(UpdateSecurityGroupInput {
+    security_group_id,
+    name,
+    description
+});
+crate::error::debug_record!(CreateSecurityGroupRuleInput {
+    security_group_id,
+    direction,
+    protocol,
+    remote_ip_prefix,
+    ether_type,
+    port_range_min,
+    port_range_max,
+    description
+});
+crate::error::debug_record!(DeleteSecurityGroupRuleInput {
+    security_group_id,
+    security_group_rule_id
+});
+crate::error::debug_record!(SystemSecurityGroup unit);
+crate::error::debug_record!(SecurityGroupInUse unit);

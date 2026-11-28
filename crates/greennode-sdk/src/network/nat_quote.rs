@@ -168,26 +168,42 @@ impl Client {
             self.check_nat_placement(ctx, &scope, &input, OP, &mut evidence)
                 .await
                 .map_err(|error| failure(screen(error, &evidence)))?;
-            let body = nat_purchase_body(&scope, &input);
-            if evidence.output_reflects(&body) {
-                return Err(failure(Error::new(ErrorClass::InvalidInput)));
-            }
-            let body = serde_json::to_vec(&body)
-                .map_err(|_| failure(Error::new(ErrorClass::InvalidInput)))?;
-            let raw = self
-                .exchange(
-                    ctx,
-                    &scope.base,
-                    PRICE,
-                    super::inventory::Selection::path(&[&scope.zone, &scope.project]),
-                    (http::Method::POST, body.into()),
-                    &mut evidence,
-                )
+            self.nat_purchase_price(ctx, &scope, &input, OP, &mut evidence)
                 .await
-                .map_err(failure)?;
-            decode_quote(&go_json(&raw), &evidence)
-                .map_err(|error| failure(screen(error, &evidence)))
+                .map_err(failure)
         })
+    }
+
+    pub(super) async fn nat_purchase_price(
+        &self,
+        ctx: &RequestContext,
+        scope: &NatScope,
+        input: &QuoteCreateNatInstanceInput,
+        operation: &'static str,
+        evidence: &mut Evidence,
+    ) -> Result<QuoteCreateNatInstanceOutput, Error> {
+        let read = Read {
+            id: operation,
+            ..PRICE
+        };
+        let body = nat_purchase_body(scope, input);
+        if evidence.output_reflects(&body) {
+            return Err(Error::new(ErrorClass::InvalidInput));
+        }
+        let body = serde_json::to_vec(&body).map_err(|_| Error::new(ErrorClass::InvalidInput))?;
+        let raw = self
+            .exchange(
+                ctx,
+                &scope.base,
+                read,
+                super::inventory::Selection::path(&[&scope.zone, &scope.project]),
+                (http::Method::POST, body.into()),
+                evidence,
+            )
+            .await?;
+        let quote =
+            decode_quote(&go_json(&raw), evidence).map_err(|error| screen(error, evidence))?;
+        super::mutations::guard_operands(operation, quote, evidence)
     }
 
     pub(super) async fn check_nat_placement(
@@ -214,10 +230,10 @@ impl Client {
         let text = go_json(&body);
         let raw = placement_data(&text, evidence).map_err(|()| invalid())?;
         let data: Fields<'_> = raw.required("data").map_err(|()| invalid())?;
-        if !data
+        let enabled = data
             .required::<bool>("enabledForAll")
-            .map_err(|()| invalid())?
-        {
+            .map_err(|()| invalid())?;
+        if !super::mutations::guard_operands(operation, enabled, evidence)? {
             return Err(local_error(
                 ErrorClass::InvalidConfig,
                 "requires NAT V3 enabledForAll",
@@ -287,7 +303,7 @@ impl Client {
     ) -> Result<(), Error> {
         let mut seen = HashSet::new();
         let mut totals = None;
-        let mut selected = None;
+        let mut selected = false;
         for page in 1..=50 {
             let query = params(page, 1000);
             let body = self
@@ -369,9 +385,7 @@ impl Client {
                         return Err(invalid());
                     }
                 }
-                if vpc.uuid == vpc_id {
-                    selected = Some(());
-                }
+                selected |= vpc.uuid == vpc_id;
             }
             let count = i64::try_from(seen.len()).map_err(|_| invalid())?;
             if count > info.total {
@@ -381,13 +395,15 @@ impl Client {
                 if count != info.total {
                     return Err(invalid());
                 }
-                return match selected {
-                    Some(()) => Ok(()),
-                    None => Err(local_error(
+                evidence.recheck_read_proofs().map_err(|error| *error)?;
+                return if selected {
+                    Ok(())
+                } else {
+                    Err(local_error(
                         ErrorClass::NotFound,
                         ": VPC absent from selected scope",
                         evidence,
-                    )),
+                    ))
                 };
             }
         }

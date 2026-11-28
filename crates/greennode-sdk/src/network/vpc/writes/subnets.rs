@@ -43,46 +43,51 @@ impl Client {
         ctx: &RequestContext,
         input: CreateSubnetInput,
     ) -> Result<CreateSubnetOutput, Failure<CreateSubnetOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let vpc_id = &input.vpc_id;
-        let op = CREATE.id;
-        write.check(
-            op,
-            &[
-                ("ZoneID", &input.zone_id),
-                ("Name", &input.name),
-                ("CIDR", &input.cidr),
-            ],
-            &[("VPCID", vpc_id)],
-        )?;
-        ipv4_prefix(op, &input.cidr)?;
-        let reply = write
-            .send(
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let vpc_id = &input.vpc_id;
+            let op = CREATE.id;
+            write.check(
+                op,
+                &[
+                    ("ZoneID", &input.zone_id),
+                    ("Name", &input.name),
+                    ("CIDR", &input.cidr),
+                ],
+                &[("VPCID", vpc_id)],
+            )?;
+            ipv4_prefix(op, &input.cidr)?;
+            let reply = write
+                .send(
+                    CREATE,
+                    &[vpc_id],
+                    Some(json!({"name": input.name, "cidr": input.cidr, "zoneId": input.zone_id})),
+                )
+                .await
+                .map_err(|error| write.advise(error, CREATE_ADVICE))?;
+            let mut subnet = write.created_with(
                 CREATE,
-                &[vpc_id],
-                Some(json!({"name": input.name, "cidr": input.cidr, "zoneId": input.zone_id})),
-            )
-            .await
-            .map_err(|error| write.advise(error, CREATE_ADVICE))?;
-        let mut subnet = write.created_with(
-            CREATE,
-            reply,
-            (true, !input.no_wait),
-            |row: &Subnet| &row.uuid,
-            CREATE_ADVICE,
-            subnet_created,
-        )?;
-        if input.no_wait {
-            return Ok(CreateSubnetOutput { subnet });
-        }
-        let id = subnet.uuid.clone();
-        let resource = format!("subnet {id}");
-        let result = write.settle(CREATE_BOUND, INTERVAL,
+                reply,
+                (true, !input.no_wait),
+                |row: &Subnet| &row.uuid,
+                CREATE_ADVICE,
+                subnet_created,
+            )?;
+            if input.no_wait {
+                return Ok(CreateSubnetOutput { subnet });
+            }
+            let id = subnet.uuid.clone();
+            let resource = format!("subnet {id}");
+            let result = write.settle(CREATE_BOUND, INTERVAL,
             &format!("{op}: {resource} did not reach ACTIVE within 3m0s; the subnet exists and this create must not be repeated"),
             async |write, ctx| {
                 subnet = match write.subnet(ctx, vpc_id, &id).await {
                     Ok(row) => row,
-                    Err(error) if error.has_class(ErrorClass::NotFound) => return Ok(None),
+                    Err(error) if crate::confirms_absence(&error, "network.GetSubnet", "GET", "v2/{}/networks/{}/subnets/{}") => return Ok(None),
                     Err(error) => return Err(write.settled_error(&format!("{op}: {resource}"), error)),
                 };
                 match subnet.status.as_str() {
@@ -91,7 +96,8 @@ impl Client {
                     _ => Ok(None),
                 }
             }).await;
-        write.outcome(op, subnet, result, |subnet| CreateSubnetOutput { subnet })
+            write.outcome(op, subnet, result, |subnet| CreateSubnetOutput { subnet })
+        })
     }
 
     /// Renames a subnet with no secondary subnets and reads the result.
@@ -100,31 +106,37 @@ impl Client {
         ctx: &RequestContext,
         input: UpdateSubnetInput,
     ) -> Result<UpdateSubnetOutput, Failure<UpdateSubnetOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let (vpc, id) = (&input.vpc_id, &input.subnet_id);
-        let op = UPDATE.id;
-        write.check(
-            op,
-            &[("Name", &input.name)],
-            &[("VPCID", vpc), ("SubnetID", id)],
-        )?;
-        let mut subnet = write.subnet(ctx, vpc, id).await.map_err(not_sent)?;
-        if !subnet.secondary_subnets.is_empty() {
-            return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: subnet {id} has {} secondary subnet(s); rename is refused until the rename body's effect on them is confirmed live", subnet.secondary_subnets.len()))));
-        }
-        write
-            .send(UPDATE, &[vpc, id], Some(json!({"name": input.name})))
-            .await?;
-        match write.renamed_subnet(vpc, id).await {
-            Ok(subnet) => Ok(UpdateSubnetOutput { subnet }),
-            Err(error) => {
-                subnet.name = input.name;
-                let error = write.settled_error(&format!("{op}: subnet {id}"), error);
-                write.outcome(op, subnet, Err(error), |subnet| UpdateSubnetOutput {
-                    subnet,
-                })
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let (vpc, id) = (&input.vpc_id, &input.subnet_id);
+            let op = UPDATE.id;
+            write.check(
+                op,
+                &[("Name", &input.name)],
+                &[("VPCID", vpc), ("SubnetID", id)],
+            )?;
+            let mut subnet = write.subnet(ctx, vpc, id).await.map_err(not_sent)?;
+            if !subnet.secondary_subnets.is_empty() {
+                return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: subnet {id} has {} secondary subnet(s); rename is refused until the rename body's effect on them is confirmed live", subnet.secondary_subnets.len()))));
             }
-        }
+            let _ = write
+                .send(UPDATE, &[vpc, id], Some(json!({"name": input.name})))
+                .await?;
+            match write.renamed_subnet(vpc, id).await {
+                Ok(subnet) => Ok(UpdateSubnetOutput { subnet }),
+                Err(error) => {
+                    subnet.name = input.name;
+                    let error = write.settled_error(&format!("{op}: subnet {id}"), error);
+                    write.outcome(op, subnet, Err(error), |subnet| UpdateSubnetOutput {
+                        subnet,
+                    })
+                }
+            }
+        })
     }
 
     /// Deletes a subnet after checking that no servers, interfaces, VIPs or ACLs use it.
@@ -133,51 +145,56 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteSubnetInput,
     ) -> Result<DeleteSubnetOutput, Failure<DeleteSubnetOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let (vpc, id) = (&input.vpc_id, &input.subnet_id);
-        let op = DELETE.id;
-        write.check(op, &[], &[("VPCID", vpc), ("SubnetID", id)])?;
-        let current = write.subnet(ctx, vpc, id).await.map_err(not_sent)?;
-        if current.status == "DELETED" {
-            return Err(not_sent(write.local(
-                ErrorClass::NotFound,
-                &format!("vngcloud: resource not found: {op}: subnet {id} is already DELETED"),
-            )));
-        }
-        if !current.network_id.is_empty() && current.network_id != *vpc {
-            return Err(not_sent(write.local(
-                ErrorClass::InvalidInput,
-                &format!(
-                    "vngcloud: invalid input: {op}: subnet {id} belongs to VPC {}, not {vpc}",
-                    current.network_id
-                ),
-            )));
-        }
-        write.subnet_unused(vpc, id).await.map_err(not_sent)?;
-        if let Err(failure) = write
-            .send::<DeleteSubnetOutput>(DELETE, &[vpc, id], None)
-            .await
-        {
-            let error = failure.error();
-            let network = error.class() == ErrorClass::Api
-                && error.api_error().is_some_and(|api| api.status().is_none());
-            if failure.write_dispatch() == WriteDispatch::MayHaveBeenSent
-                && super::wire::can_confirm(error)
-                && (network || is_5xx(error))
-                && write
-                    .subnets(ctx, vpc)
-                    .await
-                    .is_ok_and(|rows| rows.iter().all(|row| row.uuid != *id))
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let (vpc, id) = (&input.vpc_id, &input.subnet_id);
+            let op = DELETE.id;
+            write.check(op, &[], &[("VPCID", vpc), ("SubnetID", id)])?;
+            let current = write.subnet(ctx, vpc, id).await.map_err(not_sent)?;
+            if current.status == "DELETED" {
+                return Err(not_sent(write.local(
+                    ErrorClass::NotFound,
+                    &format!("vngcloud: resource not found: {op}: subnet {id} is already DELETED"),
+                )));
+            }
+            if !current.network_id.is_empty() && current.network_id != *vpc {
+                return Err(not_sent(write.local(
+                    ErrorClass::InvalidInput,
+                    &format!(
+                        "vngcloud: invalid input: {op}: subnet {id} belongs to VPC {}, not {vpc}",
+                        current.network_id
+                    ),
+                )));
+            }
+            write.subnet_unused(vpc, id).await.map_err(not_sent)?;
+            if let Err(failure) = write
+                .send::<DeleteSubnetOutput>(DELETE, &[vpc, id], None)
+                .await
             {
+                let error = failure.error();
+                let network = error.class() == ErrorClass::Api
+                    && error.api_error().is_some_and(|api| api.status().is_none());
+                if failure.write_dispatch() == WriteDispatch::MayHaveBeenSent
+                    && super::wire::can_confirm(error)
+                    && (network || is_5xx(error))
+                    && write
+                        .subnets(ctx, vpc)
+                        .await
+                        .is_ok_and(|rows| rows.iter().all(|row| row.uuid != *id))
+                {
+                    return Ok(DeleteSubnetOutput {});
+                }
+                let (error, _, dispatch) = failure.into_parts();
+                return Err(Failure::new(write.screen(error), None, dispatch));
+            }
+            if input.no_wait {
                 return Ok(DeleteSubnetOutput {});
             }
-            let (error, _, dispatch) = failure.into_parts();
-            return Err(Failure::new(write.screen(error), None, dispatch));
-        }
-        if input.no_wait {
-            return Ok(DeleteSubnetOutput {});
-        }
-        let result = write.settle(CREATE_BOUND, INTERVAL,
+            let result = write.settle(CREATE_BOUND, INTERVAL,
             &format!("{op}: subnet {id} still listed under VPC {vpc} after 3m0s; delete was sent and a rerun is safe"),
             async |write, ctx| {
                 let rows = write.subnets(ctx, vpc).await.map_err(|error| write.settled_error(&format!("{op}: subnet {id}"), error))?;
@@ -187,7 +204,8 @@ impl Client {
                     Some(_) => Ok(None),
                 }
             }).await;
-        write.outcome(op, (), result, |()| DeleteSubnetOutput {})
+            write.outcome(op, (), result, |()| DeleteSubnetOutput {})
+        })
     }
 }
 
@@ -233,7 +251,16 @@ impl Write<'_> {
             let detail =
                 match self.acl(self.ctx, &acl.uuid).await {
                     Ok(detail) => detail,
-                    Err(error) if error.has_class(ErrorClass::NotFound) => continue,
+                    Err(error)
+                        if crate::confirms_absence(
+                            &error,
+                            "network.GetSubnet",
+                            "GET",
+                            "v2/{}/networks/{}/subnets/{}",
+                        ) =>
+                    {
+                        continue;
+                    }
                     Err(error) => return Err(self
                         .local(
                             ErrorClass::Api,

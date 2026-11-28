@@ -178,6 +178,7 @@ pub(super) const SERVICE: Service = Service {
         resource_writes::DELETE_VIRTUAL_IP_ADDRESS,
         resource_writes::CREATE_ENDPOINT,
         resource_writes::DELETE_ENDPOINT,
+        resource_writes::CREATE_NAT_INSTANCE,
         resource_writes::DELETE_NAT_INSTANCE,
         routes::GET_ROUTE_TABLE,
         routes::GET_VIRTUAL_IP_ADDRESS,

@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::value::RawValue;
 
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{operation, options::PathIds};
+use crate::wire::product::{guard::guarded_poll, options::PathIds, output::PublicOutput};
 use crate::{DEFAULT_PAGE, DEFAULT_PAGE_SIZE, Error, ErrorClass, RequestContext};
 
 use super::super::super::{
@@ -199,7 +199,7 @@ pub(super) fn subnet_created(raw: &str) -> Result<Subnet, ()> {
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl<'a> Write<'a> {
-    async fn guard<T: Serialize>(
+    async fn guard<T: Serialize + PublicOutput>(
         &mut self,
         ctx: &RequestContext,
         op: &'static str,
@@ -207,10 +207,12 @@ impl<'a> Write<'a> {
         ids: &[&str],
         parse: impl FnOnce(&str) -> Result<T, ()>,
     ) -> Result<T, Error> {
-        let raw = self.reads.request_in(ctx, read, ids, &[]).await?;
+        let raw = self.reads.request_in(ctx, read, ids, &[]).await;
+        self.check_proofs()?;
+        let raw = raw?;
         let row = parse(&raw).map_err(|()| self.invalid(op))?;
         self.safe(op, &row)?;
-        Ok(row)
+        crate::network::mutations::guard_operands(read.id, row, self.reads.evidence_mut())
     }
 
     pub(super) async fn vpc(&mut self, ctx: &RequestContext, id: &str) -> Result<Vpc, Error> {
@@ -237,18 +239,20 @@ impl<'a> Write<'a> {
         .await
     }
 
-    async fn rename_output<T: WireField + Serialize>(
+    async fn rename_output<T: WireField + Serialize + PublicOutput>(
         &mut self,
         op: &'static str,
         read: Read,
         ids: &[&str],
         parse: impl FnOnce(&str) -> Result<T, ()>,
     ) -> Result<T, Error> {
-        let raw = self.reads.request_in(self.ctx, read, ids, &[]).await?;
+        let raw = self.reads.request_in(self.ctx, read, ids, &[]).await;
+        self.check_proofs()?;
+        let raw = raw?;
         let row = parse(&raw).map_err(|()| self.invalid(op))?;
         let row = self.reads.sanitize(read, row)?;
         self.safe(op, &row)?;
-        Ok(row)
+        crate::network::mutations::guard_operands(read.id, row, self.reads.evidence_mut())
     }
 
     pub(super) async fn dhcp(&mut self, id: &str) -> Result<DhcpOptions, Error> {
@@ -309,7 +313,7 @@ impl<'a> Write<'a> {
             )
             .await?;
         self.safe("network.ListNetworkACLs", &rows)?;
-        Ok(rows)
+        crate::network::mutations::guard_operands(LIST_ACLS.id, rows, self.reads.evidence_mut())
     }
 
     pub(super) async fn acl(
@@ -385,9 +389,6 @@ impl<'a> Write<'a> {
             )
             .await?;
         let text = go_json(&response);
-        if operation::reflects_json_forms(text.as_bytes(), evidence.credentials()) == Some(true) {
-            return Err(ROUTE_TABLE.invalid(evidence));
-        }
         ROUTE_TABLE.fields(&text, evidence)?;
         let parse = || {
             let (data, fields) = nested(&text, &["routes"], TABLE)?;
@@ -400,7 +401,7 @@ impl<'a> Write<'a> {
         };
         let row = parse().map_err(|()| ROUTE_TABLE.incomplete(evidence))?;
         self.safe("network.GetRouteTable", &row)?;
-        Ok(row)
+        crate::network::mutations::guard_operands(ROUTE_TABLE.id, row, self.reads.evidence_mut())
     }
 
     pub(super) async fn interfaces(&mut self, subnet: &str) -> Result<usize, Error> {
@@ -454,7 +455,7 @@ impl<'a> Write<'a> {
         .await
     }
 
-    async fn dependents<T: WireField + Serialize>(
+    async fn dependents<T: WireField + Serialize + PublicOutput>(
         &mut self,
         read: InventoryRead,
         keys: &[&str],
@@ -517,6 +518,7 @@ impl<'a> Write<'a> {
             }
             let rows: Vec<T> = decode(raw).map_err(|()| read.invalid(evidence))?;
             super::wire::screen_value(&rows, evidence).map_err(|()| read.invalid(evidence))?;
+            let rows = crate::network::mutations::guard_operands(read.id, rows, evidence)?;
             found += rows.iter().filter(|row| attached(row)).count();
             if page >= pages {
                 return Ok(found);
@@ -541,8 +543,12 @@ impl<'a> Write<'a> {
         status: fn(&T) -> &str,
     ) -> Result<T, Error> {
         let ctx = self.scoped(BOUND);
-        while !self.ended(&ctx) {
+        guarded_poll!(self.reads.evidence_mut(), {
+            if self.ended(&ctx) {
+                break;
+            }
             let row = read(self, &ctx).await;
+            self.check_proofs()?;
             if self.ended(&ctx) {
                 break;
             }
@@ -551,7 +557,7 @@ impl<'a> Write<'a> {
                 return Ok(row);
             }
             self.tick(&ctx, INTERVAL).await;
-        }
+        });
         if let Some(end) = self.ctx.check(self.client.session.clock()) {
             return Err(end.into());
         }
@@ -572,8 +578,12 @@ impl<'a> Write<'a> {
         ) -> Result<Option<T>, Error>,
     ) -> Result<T, Error> {
         let ctx = self.scoped(bound);
-        while !self.ended(&ctx) {
+        guarded_poll!(self.reads.evidence_mut(), {
+            if self.ended(&ctx) {
+                break;
+            }
             let result = step(self, &ctx).await;
+            self.check_proofs()?;
             if self.ended(&ctx) {
                 break;
             }
@@ -581,7 +591,7 @@ impl<'a> Write<'a> {
                 return Ok(result);
             }
             self.tick(&ctx, interval).await;
-        }
+        });
         let error = if let Some(end) = self.ctx.check(self.client.session.clock()) {
             self.settled_error(timeout.split(';').next().unwrap_or(timeout), end.into())
         } else {

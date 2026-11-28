@@ -626,50 +626,5 @@ pub(super) const DELETE_ENDPOINT: Operation = operation!(
     ]
 );
 
-const DELETE_NAT_INSTANCE_INPUT: InputDescriptor<DeleteNatInstanceInput> = InputDescriptor {
-    defaults: || DeleteNatInstanceInput::new("", "", ""),
-    fields: &[
-        text!("ZoneID", ZONE_ID_REQUIRED, zone_id, required),
-        text!("VPCID", VPC_ID_REQUIRED, vpc_id, required),
-        text!("NATID", NAT_ID_REQUIRED, nat_id, required),
-        boolean!("NoWait", NO_WAIT, no_wait),
-    ],
-    allow_json: true,
-    allow_query: true,
-    project_binding: None,
-    pre_guard: Some(check_file),
-    guard: None,
-};
-run!(delete_nat_instance, DeleteNatInstanceInput);
-pub(super) const DELETE_NAT_INSTANCE: Operation = Operation {
-    handler: Some(Handler::new(
-        &DELETE_NAT_INSTANCE_INPUT,
-        |operation, matches, invocation| {
-            Box::pin(dispatch::management_with_read_only_code(
-                invocation,
-                operation,
-                matches,
-                &DELETE_NAT_INSTANCE_INPUT,
-                delete_nat_instance,
-                "InvalidUsage",
-            ))
-        },
-    )),
-    ..operation!(
-        "delete-nat-instance",
-        "network.DeleteNATInstance",
-        DestructiveWrite,
-        "Delete nat instance",
-        "greennode network delete-nat-instance --region han-1 --zone-id <region-uuid> --vpc-id <disposable-vpc-id> --nat-id <nat-id> --yes",
-        delete_nat_instance,
-        DELETE_NAT_INSTANCE_INPUT,
-        &[ZONE_ID_REQUIRED, VPC_ID_REQUIRED, NAT_ID_REQUIRED, NO_WAIT],
-        &[],
-        &[
-            "Requires --yes: egress can stop for every VM in the named VPC, and prior routes are not restored by the CLI.",
-            "--zone-id is the required region-level vNetwork ID. greennode network list-v-network-regions lists it: use the uuid of the selected region's row.",
-            "NAT writes support HCM (hcm-3) and HAN (han-1) with IAM-user login only; The Rust port uses hermetic verification. Unsupported auth or region returns InvalidConfig (exit 2); create also returns it when the account's NAT V3 mode is not enabled for all users.",
-            "Requires explicit --vpc-id and --nat-id and refuses read-only profiles before any request. Confirms the NAT belongs to the named VPC, then sends one delete. Waits for absence, polling every 5 seconds for up to 10 minutes; a shorter context deadline wins. --no-wait confirms acceptance only, not absence, refund, or route restoration. NotFound exits 4. After NotSettled, inspect network list-nat-instances in the same scope before taking another action."
-        ]
-    )
-};
+mod nat;
+pub(super) use nat::{CREATE_NAT_INSTANCE, DELETE_NAT_INSTANCE};

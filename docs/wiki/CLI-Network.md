@@ -226,6 +226,55 @@ endpoints documentation.
 greennode network create-endpoint --region hcm-3 --name demo --vpc-id <net-id> --subnet-id <sub-id> --max-price <VND-per-month> --yes
 ```
 
+## create-nat-instance
+
+Kind: Write.
+
+Creates a 0.0.0.0/0 route in the named VPC. Every VM in that VPC uses this NAT
+for egress. Use a disposable VPC for testing; never test in a production VPC.
+
+The purchase starts with auto-renew enabled. After the NAT is ACTIVE, this
+command disables renewal through billing and confirms it. The command waits for
+both steps. If it fails after purchase, renewal may remain enabled; inspect the
+NAT and billing before taking another action.
+
+--zone-id is the required region-level vNetwork ID. greennode network
+list-v-network-regions lists it: use the uuid of the selected region's row.
+--availability-zone-id is a distinct availability-zone UUID, for example
+HAN01-1B, from greennode network list-nat-zones. --package-id is the package
+UUID from list-nat-packages, not the offer's separate packageId field. NAT
+writes support HCM (hcm-3) and HAN (han-1) with IAM-user login only; the Rust
+port uses hermetic verification. Unsupported auth or region returns
+InvalidConfig (exit 2); create also returns it when the account's NAT V3 mode is
+not enabled for all users. Requires --yes and explicit --max-price consent (or
+non-null JSON MaxPrice) before any request. Read-only profiles refuse this
+command. Buys one month prepaid in VND, using a fresh quote. Unpriced or
+PriceAboveMax stops before purchase. The cap is not a server price lock. Waits
+up to 15 minutes after the order attempt, including renewal confirmation; a
+shorter context deadline wins. There is no --no-wait, period, renewal toggle, or
+raw request body. NotSettled or WriteFailed prints safe partial output on
+stdout, ignoring --query. Run network list-nat-instances in the same scope and
+billing list-resources, matching the known NAT ID. If no NAT appears, inspect
+payment history without ordering again. If renewal is true or unknown, renewal
+may remain enabled; use the billing console for a deliberate disable and confirm
+by a billing read. Do not repeat create while purchase or renewal is unresolved.
+Deletion is a separate deliberate action.
+
+| Flag                     | Type       | Required |
+| ------------------------ | ---------- | -------- |
+| `--name`                 | `string`   | yes      |
+| `--zone-id`              | `string`   | yes      |
+| `--availability-zone-id` | `string`   | yes      |
+| `--package-id`           | `string`   | yes      |
+| `--vpc-id`               | `string`   | yes      |
+| `--max-price`            | `*float64` | yes      |
+
+```sh
+greennode network create-nat-instance --region han-1 --name example \
+  --zone-id <region-uuid> --availability-zone-id HAN01-1B \
+  --package-id <package-uuid> --vpc-id <disposable-vpc-id> --max-price <VND> --yes
+```
+
 ## create-network-acl
 
 Kind: Write.

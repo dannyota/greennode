@@ -309,7 +309,7 @@ impl Client {
         let text = go_json(&body);
         let invalid = || catalog_invalid(read, evidence);
         let raw = catalog_data(&text, 200, evidence).map_err(|()| invalid())?;
-        decode_rows(
+        let rows = decode_rows(
             raw,
             &["uuid", "zoneType", "isEnabled", "isDefault"],
             |row, item: &NatAvailabilityZone| {
@@ -325,7 +325,8 @@ impl Client {
             },
             evidence,
         )
-        .map_err(|()| invalid())
+        .map_err(|()| invalid())?;
+        super::mutations::guard_operands(read.id, rows, evidence)
     }
 
     pub(super) async fn nat_packages(
@@ -350,7 +351,7 @@ impl Client {
         let text = go_json(&body);
         let invalid = || catalog_invalid(read, evidence);
         let raw = catalog_data(&text, 200, evidence).map_err(|()| invalid())?;
-        decode_rows(
+        let rows = decode_rows(
             raw,
             &[
                 "uuid",
@@ -391,7 +392,8 @@ impl Client {
             },
             evidence,
         )
-        .map_err(|()| invalid())
+        .map_err(|()| invalid())?;
+        super::mutations::guard_operands(read.id, rows, evidence)
     }
 }
 

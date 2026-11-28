@@ -167,49 +167,55 @@ impl Client {
         ctx: &RequestContext,
         settings: AddNetworkAclRuleInput,
     ) -> Result<AddNetworkAclRuleOutput, Failure<AddNetworkAclRuleOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let op = ADD.id;
-        let id = &settings.network_acl_id;
-        required(op, "NetworkACLID", !id.is_empty())?;
-        required(op, "Direction", !settings.direction.is_empty())?;
-        required(op, "Priority", settings.priority != 0)?;
-        write.check(
-            op,
-            &[
-                ("Direction", &settings.direction),
-                ("Protocol", &settings.protocol),
-                ("CIDR", &settings.cidr),
-                ("Action", &settings.action),
-            ],
-            &[("NetworkACLID", id)],
-        )?;
-        let rule = new_rule(&settings)?;
-        let acl = write.active_acl(op, id).await.map_err(not_sent)?;
-        if let Some(existing) = acl.rules.iter().find(|row| {
-            row.direction.eq_ignore_ascii_case(&rule.direction) && row.priority == rule.priority
-        }) {
-            if existing.protocol == rule.protocol
-                && existing.port == rule.port
-                && canonical_cidr(&existing.cidr) == rule.cidr
-                && existing.action.eq_ignore_ascii_case(&rule.action)
-            {
-                return write.unchanged(
-                    op,
-                    AddNetworkAclRuleOutput {
-                        acl,
-                        changed: false,
-                    },
-                );
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = ADD.id;
+            let id = &settings.network_acl_id;
+            required(op, "NetworkACLID", !id.is_empty())?;
+            required(op, "Direction", !settings.direction.is_empty())?;
+            required(op, "Priority", settings.priority != 0)?;
+            write.check(
+                op,
+                &[
+                    ("Direction", &settings.direction),
+                    ("Protocol", &settings.protocol),
+                    ("CIDR", &settings.cidr),
+                    ("Action", &settings.action),
+                ],
+                &[("NetworkACLID", id)],
+            )?;
+            let rule = new_rule(&settings)?;
+            let acl = write.active_acl(op, id).await.map_err(not_sent)?;
+            if let Some(existing) = acl.rules.iter().find(|row| {
+                row.direction.eq_ignore_ascii_case(&rule.direction) && row.priority == rule.priority
+            }) {
+                if existing.protocol == rule.protocol
+                    && existing.port == rule.port
+                    && canonical_cidr(&existing.cidr) == rule.cidr
+                    && existing.action.eq_ignore_ascii_case(&rule.action)
+                {
+                    return write.unchanged(
+                        op,
+                        AddNetworkAclRuleOutput {
+                            acl,
+                            changed: false,
+                        },
+                    );
+                }
+                return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: network ACL {id} already has a {} rule at priority {} with different fields; remove it first", rule.direction, rule.priority))));
             }
-            return Err(not_sent(write.local(ErrorClass::InvalidInput, &format!("vngcloud: invalid input: {op}: network ACL {id} already has a {} rule at priority {} with different fields; remove it first", rule.direction, rule.priority))));
-        }
-        let mut rules = acl.rules.clone();
-        rules.push(rule);
-        let output = |acl| AddNetworkAclRuleOutput { acl, changed: true };
-        let result = write
-            .replace_acl_rules(ADD, id, acl, rules, settings.no_wait)
-            .await;
-        write.map_result(op, result, output)
+            let mut rules = acl.rules.clone();
+            rules.push(rule);
+            let output = |acl| AddNetworkAclRuleOutput { acl, changed: true };
+            let result = write
+                .replace_acl_rules(ADD, id, acl, rules, settings.no_wait)
+                .await;
+            write.map_result(op, result, output)
+        })
     }
 
     /// Removes a rule by direction and priority, preserving service-managed rules.
@@ -218,35 +224,41 @@ impl Client {
         ctx: &RequestContext,
         settings: RemoveNetworkAclRuleInput,
     ) -> Result<RemoveNetworkAclRuleOutput, Failure<RemoveNetworkAclRuleOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let op = REMOVE.id;
-        let id = &settings.network_acl_id;
-        let (direction, priority) = (&settings.direction, settings.priority);
-        write.check(op, &[("Direction", direction)], &[("NetworkACLID", id)])?;
-        if priority < 0 {
-            return Err(input(op, "requires Priority to be zero or greater"));
-        }
-        let acl = write.active_acl(op, id).await.map_err(not_sent)?;
-        let Some((index, row)) = acl.rules.iter().enumerate().find(|(_, row)| {
-            row.direction.eq_ignore_ascii_case(direction) && row.priority == priority
-        }) else {
-            return Err(not_sent(write.local(ErrorClass::NotFound, &format!("vngcloud: resource not found: {op}: network ACL {id} has no {direction} rule at priority {priority}"))));
-        };
-        if row.system || row.priority >= 2000 {
-            return Err(not_sent(write.guard_error(NetworkWriteError::DefaultResource, &format!("{op}: network ACL {id}'s {direction} rule at priority {priority} is a default rule and cannot be removed"))));
-        }
-        let rules = acl
-            .rules
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != index)
-            .map(|(_, rule)| rule.clone())
-            .collect();
-        let output = |acl| RemoveNetworkAclRuleOutput { acl, changed: true };
-        let result = write
-            .replace_acl_rules(REMOVE, id, acl, rules, settings.no_wait)
-            .await;
-        write.map_result(op, result, output)
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = REMOVE.id;
+            let id = &settings.network_acl_id;
+            let (direction, priority) = (&settings.direction, settings.priority);
+            write.check(op, &[("Direction", direction)], &[("NetworkACLID", id)])?;
+            if priority < 0 {
+                return Err(input(op, "requires Priority to be zero or greater"));
+            }
+            let acl = write.active_acl(op, id).await.map_err(not_sent)?;
+            let Some((index, row)) = acl.rules.iter().enumerate().find(|(_, row)| {
+                row.direction.eq_ignore_ascii_case(direction) && row.priority == priority
+            }) else {
+                return Err(not_sent(write.local(ErrorClass::NotFound, &format!("vngcloud: resource not found: {op}: network ACL {id} has no {direction} rule at priority {priority}"))));
+            };
+            if row.system || row.priority >= 2000 {
+                return Err(not_sent(write.guard_error(NetworkWriteError::DefaultResource, &format!("{op}: network ACL {id}'s {direction} rule at priority {priority} is a default rule and cannot be removed"))));
+            }
+            let rules = acl
+                .rules
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != index)
+                .map(|(_, rule)| rule.clone())
+                .collect();
+            let output = |acl| RemoveNetworkAclRuleOutput { acl, changed: true };
+            let result = write
+                .replace_acl_rules(REMOVE, id, acl, rules, settings.no_wait)
+                .await;
+            write.map_result(op, result, output)
+        })
     }
 }
 

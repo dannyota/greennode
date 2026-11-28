@@ -496,3 +496,79 @@ fn nat_read_only_refusals_use_invalid_usage() {
         assert!(server.heads().is_empty());
     }
 }
+
+#[test]
+fn nat_create_matches_go_goldens() {
+    const INPUT: &str = r#"{"Name":"example","ZoneID":"66b500000000000000000001","AvailabilityZoneID":"az-1","PackageID":"package-1","VPCID":"vpc-1","MaxPrice":712400}"#;
+    const BILLING: &str = r#"{"code":200,"data":{"data":[{"product":"vserver","artifactType":"nat","artifactId":"nat-1","status":"active","billingType":"PREPAID","channel":3,"renewType":"MANUAL","renewPeriod":null,"billingElements":[{"sku":"nat.s-standard","quantity":1}]}]}}"#;
+    let picker = fixture!("nat_quote_vpcs")
+        .replace("proj-1", PROJECT)
+        .replace("zone-1", "66b500000000000000000001");
+    for format in ["json", "table", "text"] {
+        let vnetwork = Server::start(vec![
+            response("200 OK", fixture!("nat_quote_whitelist")),
+            response("200 OK", fixture!("list_nat_zones")),
+            response("200 OK", fixture!("list_nat_packages")),
+            response("200 OK", &picker),
+            response("200 OK", EMPTY),
+            response("200 OK", fixture!("quote_create_nat")),
+            response("201 Created", ACK),
+            response("200 OK", fixture!("nat_write_inventory")),
+        ]);
+        let billing = Server::start(vec![response("200 OK", BILLING)]);
+        let options = with_write_loopback(
+            Product::Billing,
+            options(Product::Vnetwork, &vnetwork),
+            &billing,
+        );
+        let command = "create-nat-instance";
+        assert_golden(
+            invoke_in_project(
+                options,
+                PROJECT,
+                format,
+                command,
+                &["--yes", "--cli-input-json", INPUT],
+            ),
+            command,
+            format,
+        );
+        assert_eq!(vnetwork.heads().len(), 8);
+        assert_eq!(billing.heads().len(), 1);
+    }
+}
+
+#[test]
+fn nat_create_requires_egress_and_explicit_price_consent() {
+    let vnetwork = Server::start(vec![]);
+    let args = [
+        "--name",
+        "example",
+        "--zone-id",
+        "zone-1",
+        "--availability-zone-id",
+        "az-1",
+        "--package-id",
+        "package-1",
+        "--vpc-id",
+        "vpc-1",
+    ];
+    for (extra, reason) in [
+        (&["--max-price", "0"][..], "pass --yes"),
+        (&["--yes"][..], "--max-price is required"),
+        (&["--yes", "--max-price=-1"][..], "finite and nonnegative"),
+    ] {
+        let flags: Vec<_> = args.into_iter().chain(extra.iter().copied()).collect();
+        let (exit, stdout, stderr) = invoke_in_project(
+            options(Product::Vnetwork, &vnetwork),
+            PROJECT,
+            "json",
+            "create-nat-instance",
+            &flags,
+        );
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(stdout.is_empty());
+        assert!(String::from_utf8_lossy(&stderr).contains(reason));
+    }
+    assert!(vnetwork.heads().is_empty());
+}

@@ -387,3 +387,108 @@ async fn nat_delete_guard_omits_the_status_of_truncated_vpc_inventory() {
     assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
     assert_eq!(server.heads().len(), 1);
 }
+
+const NAT_AUTO: &str = r#"{"code":200,"data":{"data":[{"product":"vserver","artifactType":"nat","artifactId":"nat-1","status":"active","billingType":"PREPAID","channel":3,"renewType":"AUTO-RENEW","renewPeriod":1,"billingElements":[{"sku":"nat.s-standard","quantity":1}]}]}}"#;
+const NAT_MANUAL: &str = r#"{"code":200,"data":{"data":[{"product":"vserver","artifactType":"nat","artifactId":"nat-1","status":"active","billingType":"PREPAID","channel":3,"renewType":"MANUAL","renewPeriod":null,"billingElements":[{"sku":"nat.s-standard","quantity":1}]}]}}"#;
+
+fn nat_order_server(acknowledgement: &str) -> Server {
+    Server::start(vec![
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/nat_quote_whitelist.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/list_nat_zones.json"),
+        ),
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/list_nat_packages.json"),
+        ),
+        response(
+            "200 OK",
+            &include_str!("../../../tests/fixtures/network/nat_quote_vpcs.json")
+                .replace("proj-1", PAID_PROJECT)
+                .replace("zone-1", PAID_ZONE)
+                .replace("az-1", "az-home"),
+        ),
+        response("200 OK", NO_NATS),
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/quote_create_nat.json"),
+        ),
+        response("201 Created", acknowledgement),
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/nat_write_inventory.json"),
+        ),
+    ])
+}
+
+async fn create_nat(
+    vnetwork: &Server,
+    billing: &Server,
+) -> Result<CreateNatInstanceOutput, Box<crate::Failure<CreateNatInstanceOutput>>> {
+    use crate::testing::with_write_loopback;
+    let options = with_write_loopback(
+        Product::Vnetwork,
+        options().with_project_id(PAID_PROJECT.into()),
+        vnetwork,
+    );
+    let config = Config::new(with_write_loopback(Product::Billing, options, billing)).unwrap();
+    let mut input = CreateNatInstanceInput::new("example", PAID_ZONE, "az-1", "package-1", "vpc-1");
+    input.max_price = 712400.0;
+    Client::new(&config)
+        .create_nat_instance(&RequestContext::new().0, input)
+        .await
+        .map_err(Box::new)
+}
+
+#[tokio::test]
+async fn nat_create_reconciles_without_mutating_billing_after_unconfirmed_acceptance() {
+    let vnetwork = nat_order_server(r#"{"success":false,"code":0}"#);
+    let billing = Server::start(vec![response("200 OK", NAT_AUTO)]);
+    let failure = create_nat(&vnetwork, &billing).await.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(failure.error().class(), ErrorClass::NotSettled);
+    assert_eq!(failure.partial().unwrap().auto_renew, Some(true));
+    assert_eq!(vnetwork.requests(), 8);
+    assert_eq!(billing.requests(), 1);
+}
+
+#[tokio::test]
+async fn nat_create_orders_once_and_confirms_manual_billing_after_renewal_write() {
+    let vnetwork = nat_order_server(r#"{"success":true,"code":0}"#);
+    let billing = Server::start(vec![
+        response("200 OK", NAT_AUTO),
+        response("200 OK", r#"{"code":200,"data":{"accountId":123456}}"#),
+        response(
+            "200 OK",
+            r#"{"code":200,"data":{"successAll":true,"errorAutoRenewResources":[]}}"#,
+        ),
+        response("200 OK", NAT_MANUAL),
+    ]);
+    let output = create_nat(&vnetwork, &billing).await.unwrap();
+    assert_eq!(output.nat_instance.unwrap().uuid, "nat-1");
+    assert_eq!(output.total_price, 712400.0);
+    assert_eq!(output.auto_renew, Some(false));
+    let requests = vnetwork.heads();
+    assert_eq!(requests.len(), 8);
+    assert!(
+        requests[6]
+            .starts_with(format!("POST /vnetwork/v1/{PAID_ZONE}/{PAID_PROJECT}/nats ").as_bytes())
+    );
+    let order: serde_json::Value = serde_json::from_slice(&vnetwork.bodies()[6]).unwrap();
+    assert_eq!(
+        order,
+        serde_json::json!({"resourceType":"nat","action":"create","resourceInfo":{"isPoc":false,"isEnableAutoRenew":false,"isBuyMorePoc":false,"natName":"example","packageUuid":"package-1","vpcUuid":"vpc-1","regionUuid":PAID_ZONE,"projectUuid":PAID_PROJECT},"tagDetails":[]})
+    );
+    let requests = billing.heads();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2].starts_with(b"PUT /gateway/api/v1/resources/autoRenew "));
+    let update: serde_json::Value = serde_json::from_slice(&billing.bodies()[2]).unwrap();
+    assert_eq!(
+        update,
+        serde_json::json!([{"product":"vserver","artifactType":"nat","artifactId":"nat-1","channel":3,"autoRenewInfo":{"isEnable":false,"period":43200}}])
+    );
+}

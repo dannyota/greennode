@@ -60,7 +60,7 @@ pub(super) enum Style {
 
 #[derive(Clone, Copy)]
 pub(super) struct Read {
-    id: &'static str,
+    pub(in crate::network) id: &'static str,
     template: &'static str,
     style: Style,
 }

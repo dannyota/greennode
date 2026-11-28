@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use super::super::{mutations::strict_field, wire::Fields};
+use super::super::{
+    mutations::{guard_operands, strict_field},
+    wire::Fields,
+};
 use crate::error::SafeText;
 use crate::model::wire::decode_lenient;
 use crate::wire::product::evidence::Evidence;
@@ -178,8 +181,7 @@ impl Client {
         let mut reads = Reads::with_evidence(self, ctx, std::mem::take(evidence));
         let result = reads
             .decode(GET_GROUP, &[id], |raw| {
-                let group: SecurityGroup =
-                    strict_field(&Fields::decode_with_limit(raw, 8 << 20)?, "data")?;
+                let group: SecurityGroup = strict_field(&Fields::decode(raw)?, "data")?;
                 if group.id != id {
                     return Err(());
                 }
@@ -188,7 +190,7 @@ impl Client {
             .await
             .and_then(|group| reads.sanitize(GET_GROUP, group));
         *evidence = reads.into_evidence();
-        result
+        guard_operands(GET_GROUP.id, result?, evidence)
     }
 
     pub(in crate::network) async fn guard_security_group_rules(
@@ -200,8 +202,7 @@ impl Client {
         let mut reads = Reads::with_evidence(self, ctx, std::mem::take(evidence));
         let result = reads
             .decode(LIST_RULES, &[id], |raw| {
-                let rows: Vec<SecurityGroupRule> =
-                    strict_field(&Fields::decode_with_limit(raw, 8 << 20)?, "data")?;
+                let rows: Vec<SecurityGroupRule> = strict_field(&Fields::decode(raw)?, "data")?;
                 if !unique_ids(
                     rows.iter().map(|rule| rule.id.as_str()),
                     PathIds::WithUnderscore,
@@ -213,7 +214,7 @@ impl Client {
             .await
             .and_then(|rows| reads.sanitize(LIST_RULES, rows));
         *evidence = reads.into_evidence();
-        result
+        guard_operands(LIST_RULES.id, result?, evidence)
     }
 
     /// Lists rules across the project's complete security group inventory.

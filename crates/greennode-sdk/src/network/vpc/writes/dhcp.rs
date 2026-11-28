@@ -51,50 +51,56 @@ impl Client {
         ctx: &RequestContext,
         input: CreateDhcpOptionsInput,
     ) -> Result<CreateDhcpOptionsOutput, Failure<CreateDhcpOptionsOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        write.check(CREATE.id, &[("Name", &input.name)], &[])?;
-        if input.dns_servers.is_empty() {
-            return Err(super::wire::input(
-                CREATE.id,
-                "requires at least one DNS server",
-            ));
-        }
-        if input
-            .dns_servers
-            .iter()
-            .any(|value| value.parse::<Ipv4Addr>().is_err())
-        {
-            return Err(super::wire::input(
-                CREATE.id,
-                "requires DNSServers to be IPv4 addresses",
-            ));
-        }
-        if input.name.starts_with(SYSTEM) {
-            return Err(super::wire::input(
-                CREATE.id,
-                "requires Name without the reserved dhcp-option-dns- prefix",
-            ));
-        }
-        let mut body = serde_json::Map::from_iter([
-            ("name".into(), json!(input.name)),
-            ("dnsServers".into(), json!(input.dns_servers)),
-        ]);
-        if let Some(mtu) = input.mtu {
-            body.insert("mtu".into(), json!(mtu));
-        }
-        let reply = write
-            .send(CREATE, &[], Some(body.into()))
-            .await
-            .map_err(|error| write.advise(error, CREATE_ADVICE))?;
-        let dhcp_options = write.created(
-            CREATE,
-            reply,
-            true,
-            |row: &DhcpOptions| &row.uuid,
-            false,
-            CREATE_ADVICE,
-        )?;
-        Ok(CreateDhcpOptionsOutput { dhcp_options })
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            write.check(CREATE.id, &[("Name", &input.name)], &[])?;
+            if input.dns_servers.is_empty() {
+                return Err(super::wire::input(
+                    CREATE.id,
+                    "requires at least one DNS server",
+                ));
+            }
+            if input
+                .dns_servers
+                .iter()
+                .any(|value| value.parse::<Ipv4Addr>().is_err())
+            {
+                return Err(super::wire::input(
+                    CREATE.id,
+                    "requires DNSServers to be IPv4 addresses",
+                ));
+            }
+            if input.name.starts_with(SYSTEM) {
+                return Err(super::wire::input(
+                    CREATE.id,
+                    "requires Name without the reserved dhcp-option-dns- prefix",
+                ));
+            }
+            let mut body = serde_json::Map::from_iter([
+                ("name".into(), json!(input.name)),
+                ("dnsServers".into(), json!(input.dns_servers)),
+            ]);
+            if let Some(mtu) = input.mtu {
+                body.insert("mtu".into(), json!(mtu));
+            }
+            let reply = write
+                .send(CREATE, &[], Some(body.into()))
+                .await
+                .map_err(|error| write.advise(error, CREATE_ADVICE))?;
+            let dhcp_options = write.created(
+                CREATE,
+                reply,
+                true,
+                |row: &DhcpOptions| &row.uuid,
+                false,
+                CREATE_ADVICE,
+            )?;
+            Ok(CreateDhcpOptionsOutput { dhcp_options })
+        })
     }
 
     /// Deletes an options set after verifying it has no VPC attachments.
@@ -103,18 +109,24 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteDhcpOptionsInput,
     ) -> Result<DeleteDhcpOptionsOutput, Failure<DeleteDhcpOptionsOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let id = &input.dhcp_options_id;
-        write.check(DELETE.id, &[], &[("DHCPOptionsID", id)])?;
-        let current = write.dhcp(id).await.map_err(not_sent)?;
-        if current.uuid != *id {
-            return Err(not_sent(write.local(ErrorClass::Api, &format!("{}: get returned DHCP options set {:?} instead of the requested {id:?}; refusing to delete an unexpected set", DELETE.id, current.uuid))));
-        }
-        if !current.vpc_ids.is_empty() {
-            return Err(not_sent(write.in_use(&format!("{}: DHCP options set {id} is attached to VPC(s) {}; detach it from every VPC first", DELETE.id, current.vpc_ids.join(", ")))));
-        }
-        write.send(DELETE, &[id], None).await?;
-        Ok(DeleteDhcpOptionsOutput {})
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let id = &input.dhcp_options_id;
+            write.check(DELETE.id, &[], &[("DHCPOptionsID", id)])?;
+            let current = write.dhcp(id).await.map_err(not_sent)?;
+            if current.uuid != *id {
+                return Err(not_sent(write.local(ErrorClass::Api, &format!("{}: get returned DHCP options set {:?} instead of the requested {id:?}; refusing to delete an unexpected set", DELETE.id, current.uuid))));
+            }
+            if !current.vpc_ids.is_empty() {
+                return Err(not_sent(write.in_use(&format!("{}: DHCP options set {id} is attached to VPC(s) {}; detach it from every VPC first", DELETE.id, current.vpc_ids.join(", ")))));
+            }
+            let _ = write.send(DELETE, &[id], None).await?;
+            Ok(DeleteDhcpOptionsOutput {})
+        })
     }
 
     /// Attaches a DHCP options set and waits for the VPC to report it.
@@ -123,23 +135,29 @@ impl Client {
         ctx: &RequestContext,
         input: SetVpcDhcpOptionsInput,
     ) -> Result<SetVpcDhcpOptionsOutput, Failure<SetVpcDhcpOptionsOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        write.check(
-            SET.id,
-            &[],
-            &[
-                ("VPCID", &input.vpc_id),
-                ("DHCPOptionsID", &input.dhcp_options_id),
-            ],
-        )?;
-        write
-            .change_dhcp(
-                SET,
-                &input.vpc_id,
-                Some(&input.dhcp_options_id),
-                |vpc, changed| SetVpcDhcpOptionsOutput { vpc, changed },
-            )
-            .await
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            write.check(
+                SET.id,
+                &[],
+                &[
+                    ("VPCID", &input.vpc_id),
+                    ("DHCPOptionsID", &input.dhcp_options_id),
+                ],
+            )?;
+            write
+                .change_dhcp(
+                    SET,
+                    &input.vpc_id,
+                    Some(&input.dhcp_options_id),
+                    |vpc, changed| SetVpcDhcpOptionsOutput { vpc, changed },
+                )
+                .await
+        })
     }
 
     /// Detaches the VPC's DHCP options set and waits for the change to appear.
@@ -148,13 +166,19 @@ impl Client {
         ctx: &RequestContext,
         input: ClearVpcDhcpOptionsInput,
     ) -> Result<ClearVpcDhcpOptionsOutput, Failure<ClearVpcDhcpOptionsOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        write.check(CLEAR.id, &[], &[("VPCID", &input.vpc_id)])?;
-        write
-            .change_dhcp(CLEAR, &input.vpc_id, None, |vpc, changed| {
-                ClearVpcDhcpOptionsOutput { vpc, changed }
-            })
-            .await
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            write.check(CLEAR.id, &[], &[("VPCID", &input.vpc_id)])?;
+            write
+                .change_dhcp(CLEAR, &input.vpc_id, None, |vpc, changed| {
+                    ClearVpcDhcpOptionsOutput { vpc, changed }
+                })
+                .await
+        })
     }
 }
 
@@ -218,7 +242,7 @@ impl Write<'_> {
         } else {
             json!({})
         };
-        self.send(request, &[id], Some(body)).await.map_err(|failure| {
+        let _ = self.send(request, &[id], Some(body)).await.map_err(|failure| {
             self.advise(failure, &format!("the change may already be in place; run get-vpc to see VPC {id}'s current DHCP options set"))
         })?;
         let want = options.map_or_else(

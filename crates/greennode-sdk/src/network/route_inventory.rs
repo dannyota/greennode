@@ -33,7 +33,7 @@ pub(super) enum ResponseKind {
 
 #[derive(Clone, Copy)]
 pub(super) struct InventoryRead {
-    id: &'static str,
+    pub(in crate::network) id: &'static str,
     template: &'static str,
     kind: ResponseKind,
 }

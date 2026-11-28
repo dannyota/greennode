@@ -174,7 +174,7 @@ async fn write_retry_policies_on_503() {
 #[tokio::test]
 async fn write_retry_policies_on_failed_dial() {
     const REQUEST: Request = Request::new(
-        "network.CreateVPC",
+        "test.FailedDial",
         "v2/{}/networks",
         &Method::POST,
         &[StatusCode::OK],
@@ -194,11 +194,15 @@ async fn write_retry_policies_on_failed_dial() {
         .unwrap();
         let client = crate::network::Client::new(&config);
         let (ctx, _) = RequestContext::new();
-        let error = Write::new::<()>(&client, &ctx)
-            .unwrap()
-            .send::<()>(request, &[], None)
-            .await
-            .unwrap_err();
+        let error = Write::new::<()>(
+            &client,
+            &ctx,
+            crate::wire::product::evidence::Evidence::for_write(),
+        )
+        .unwrap()
+        .send::<()>(request, &[], None)
+        .await
+        .unwrap_err();
         assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
         assert_eq!(clock.delays.load(Ordering::SeqCst), delays);
     }
@@ -440,13 +444,13 @@ async fn write_refuses_a_body_with_an_encoded_credential() {
 }
 
 #[tokio::test]
-async fn vpc_create_redacts_a_reflecting_display_name() {
+async fn vpc_create_rejects_an_acknowledgement_with_a_reflecting_display_name() {
     let server = Server::start(vec![reply(
         "200 OK",
         r#"{"data":{"id":"vpc-1","displayName":"toy%2dcredential"}}"#,
     )]);
     let (ctx, _) = RequestContext::new();
-    let result = client(&server)
+    let failure = client(&server)
         .create_vpc(
             &ctx,
             CreateVpcInput {
@@ -456,8 +460,11 @@ async fn vpc_create_redacts_a_reflecting_display_name() {
             },
         )
         .await
-        .unwrap();
-    assert_eq!(result.vpc.name, "<redacted>");
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
 }
 
 #[tokio::test]

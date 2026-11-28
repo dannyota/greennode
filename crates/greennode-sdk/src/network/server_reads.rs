@@ -150,7 +150,8 @@ impl Client {
             .optional::<Field<Vec<Server>>>("data")
             .map_err(|()| read.shape(evidence))?
             .map_or_else(Vec::new, |field| field.0);
-        finish(read, items, evidence).map_err(|failure| failure.into_parts().0)
+        let output = finish(read, items, evidence).map_err(|failure| failure.into_parts().0)?;
+        super::mutations::guard_operands(read.id, output, evidence)
     }
 
     #[allow(dead_code)]
@@ -164,7 +165,9 @@ impl Client {
         let text = go_json(&body);
         let items: Field<Vec<Server>> =
             BY_SUBNET.decode(if text.is_empty() { "null" } else { &text }, evidence)?;
-        finish(BY_SUBNET, items.0, evidence).map_err(|failure| failure.into_parts().0)
+        let output =
+            finish(BY_SUBNET, items.0, evidence).map_err(|failure| failure.into_parts().0)?;
+        super::mutations::guard_operands(BY_SUBNET.id, output, evidence)
     }
 
     async fn server_inventory(

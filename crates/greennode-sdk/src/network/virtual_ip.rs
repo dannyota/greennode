@@ -11,7 +11,7 @@ use super::route_inventory::{
 };
 use super::{
     Client, Zone, failure,
-    mutations::{retain, strict_field},
+    mutations::{guard_operands, retain, strict_field},
 };
 
 const VIRTUAL_IP: InventoryRead =
@@ -157,7 +157,8 @@ impl Client {
         if guarded && row.uuid != id {
             return Err(invalid(()));
         }
-        retain(row, evidence).ok_or_else(|| invalid(()))
+        let row = retain(row, evidence).ok_or_else(|| invalid(()))?;
+        guard_operands(VIRTUAL_IP.id, row, evidence)
     }
 
     pub(super) async fn guard_vip_pairs(
@@ -171,7 +172,8 @@ impl Client {
         let (items, _) = self
             .read_address_pairs(ctx, &project, Parent::VirtualIp(id), true, evidence)
             .await?;
-        retain(items, evidence).ok_or_else(|| VIP_PAIRS.invalid(evidence))
+        let items = retain(items, evidence).ok_or_else(|| VIP_PAIRS.invalid(evidence))?;
+        guard_operands(VIP_PAIRS.id, items, evidence)
     }
 
     /// Lists one page of virtual IP addresses for the selected project.

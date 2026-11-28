@@ -36,46 +36,52 @@ impl Client {
         ctx: &RequestContext,
         input: AssociateNetworkAclSubnetInput,
     ) -> Result<AssociateNetworkAclSubnetOutput, Failure<AssociateNetworkAclSubnetOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let op = ASSOCIATE.id;
-        let (id, subnet_id) = (&input.network_acl_id, &input.subnet_id);
-        write.check(op, &[], &[("NetworkACLID", id), ("SubnetID", subnet_id)])?;
-        let acl = write.active_acl(op, id).await.map_err(not_sent)?;
-        if acl.subnet_ids.contains(subnet_id) {
-            return write.unchanged(
-                op,
-                AssociateNetworkAclSubnetOutput {
-                    acl,
-                    changed: false,
-                    previous_network_acl_id: String::new(),
-                },
-            );
-        }
-        let subnet = write
-            .subnet(ctx, &acl.vpc_id, subnet_id)
-            .await
-            .map_err(not_sent)?;
-        if !subnet.network_id.is_empty() && subnet.network_id != acl.vpc_id {
-            return Err(not_sent(write.local(
-                ErrorClass::NotFound,
-                &format!(
-                    "vngcloud: resource not found: {op}: subnet {subnet_id} in VPC {}",
-                    acl.vpc_id
-                ),
-            )));
-        }
-        let previous = subnet.interface_acl_policy_id;
-        let mut subnet_ids = acl.subnet_ids.clone();
-        subnet_ids.push(subnet_id.clone());
-        let result = write
-            .replace_acl_subnets(ASSOCIATE, id, acl, subnet_ids, input.no_wait)
-            .await;
-        let output = |acl| AssociateNetworkAclSubnetOutput {
-            acl,
-            changed: true,
-            previous_network_acl_id: previous.clone(),
-        };
-        write.map_result(op, result, output)
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = ASSOCIATE.id;
+            let (id, subnet_id) = (&input.network_acl_id, &input.subnet_id);
+            write.check(op, &[], &[("NetworkACLID", id), ("SubnetID", subnet_id)])?;
+            let acl = write.active_acl(op, id).await.map_err(not_sent)?;
+            if acl.subnet_ids.contains(subnet_id) {
+                return write.unchanged(
+                    op,
+                    AssociateNetworkAclSubnetOutput {
+                        acl,
+                        changed: false,
+                        previous_network_acl_id: String::new(),
+                    },
+                );
+            }
+            let subnet = write
+                .subnet(ctx, &acl.vpc_id, subnet_id)
+                .await
+                .map_err(not_sent)?;
+            if !subnet.network_id.is_empty() && subnet.network_id != acl.vpc_id {
+                return Err(not_sent(write.local(
+                    ErrorClass::NotFound,
+                    &format!(
+                        "vngcloud: resource not found: {op}: subnet {subnet_id} in VPC {}",
+                        acl.vpc_id
+                    ),
+                )));
+            }
+            let previous = subnet.interface_acl_policy_id;
+            let mut subnet_ids = acl.subnet_ids.clone();
+            subnet_ids.push(subnet_id.clone());
+            let result = write
+                .replace_acl_subnets(ASSOCIATE, id, acl, subnet_ids, input.no_wait)
+                .await;
+            let output = |acl| AssociateNetworkAclSubnetOutput {
+                acl,
+                changed: true,
+                previous_network_acl_id: previous.clone(),
+            };
+            write.map_result(op, result, output)
+        })
     }
 
     /// Removes a subnet association from an ACL.
@@ -85,31 +91,37 @@ impl Client {
         input: DisassociateNetworkAclSubnetInput,
     ) -> Result<DisassociateNetworkAclSubnetOutput, Failure<DisassociateNetworkAclSubnetOutput>>
     {
-        let mut write = Write::new(self, ctx)?;
-        let op = DISASSOCIATE.id;
-        let (id, subnet_id) = (&input.network_acl_id, &input.subnet_id);
-        write.check(op, &[], &[("NetworkACLID", id), ("SubnetID", subnet_id)])?;
-        let acl = write.active_acl(op, id).await.map_err(not_sent)?;
-        if !acl.subnet_ids.contains(subnet_id) {
-            return write.unchanged(
-                op,
-                DisassociateNetworkAclSubnetOutput {
-                    acl,
-                    changed: false,
-                },
-            );
-        }
-        let subnet_ids = acl
-            .subnet_ids
-            .iter()
-            .filter(|id| *id != subnet_id)
-            .cloned()
-            .collect();
-        let output = |acl| DisassociateNetworkAclSubnetOutput { acl, changed: true };
-        let result = write
-            .replace_acl_subnets(DISASSOCIATE, id, acl, subnet_ids, input.no_wait)
-            .await;
-        write.map_result(op, result, output)
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let op = DISASSOCIATE.id;
+            let (id, subnet_id) = (&input.network_acl_id, &input.subnet_id);
+            write.check(op, &[], &[("NetworkACLID", id), ("SubnetID", subnet_id)])?;
+            let acl = write.active_acl(op, id).await.map_err(not_sent)?;
+            if !acl.subnet_ids.contains(subnet_id) {
+                return write.unchanged(
+                    op,
+                    DisassociateNetworkAclSubnetOutput {
+                        acl,
+                        changed: false,
+                    },
+                );
+            }
+            let subnet_ids = acl
+                .subnet_ids
+                .iter()
+                .filter(|id| *id != subnet_id)
+                .cloned()
+                .collect();
+            let output = |acl| DisassociateNetworkAclSubnetOutput { acl, changed: true };
+            let result = write
+                .replace_acl_subnets(DISASSOCIATE, id, acl, subnet_ids, input.no_wait)
+                .await;
+            write.map_result(op, result, output)
+        })
     }
 }
 
@@ -177,7 +189,8 @@ impl Write<'_> {
             return Err(not_sent(self.guard_error(NetworkWriteError::Busy,
                 &format!("{op}: network ACL {id} changed since it was read; nothing sent, run the call again"))));
         }
-        self.send(request, &[id], Some(body))
+        let _ = self
+            .send(request, &[id], Some(body))
             .await
             .map_err(|failure| self.acl_send_failure(op, id, failure))?;
         if no_wait {

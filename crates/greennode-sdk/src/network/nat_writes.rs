@@ -9,6 +9,7 @@ use crate::error::SafeText;
 use crate::model::wire::go_json;
 use crate::wire::product::{
     evidence::Evidence,
+    guard::guarded_poll,
     options::{Options, PathIds},
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
@@ -17,7 +18,7 @@ use super::mutations::{
     Destination, Mutation, api, check_context, check_input, not_sent, path_id, safe_output, screen,
     tick, typed_error,
 };
-use super::nat_catalog::{NatScope, decode_guard_instances, numeric_code, params, reflects};
+use super::nat_catalog::{NatScope, decode_guard_instances, numeric_code, params};
 use super::wire::{Fields, Read, Style};
 use super::{Client, NatInstance};
 
@@ -31,7 +32,7 @@ const DELETE: Mutation = Mutation::new(
 const RECOVERY: &str = "Run network list-nat-instances in the same scope and billing list-resources, matching the known NAT ID. If no NAT appears, inspect payment history without ordering again. Renewal may remain enabled; use the billing console for a deliberate disable and confirm by a billing read. Do not repeat create while purchase or renewal is unresolved. Deletion requires a separate deliberate action with VPC consent.";
 
 /// Selects a NAT instance and its owning VPC for deletion.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DeleteNatInstanceInput {
     /// Regional vNetwork zone.
     pub zone_id: String,
@@ -60,7 +61,7 @@ impl DeleteNatInstanceInput {
 }
 
 /// A successful NAT deletion.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DeleteNatInstanceOutput {}
 
 #[expect(
@@ -74,121 +75,129 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteNatInstanceInput,
     ) -> Result<DeleteNatInstanceOutput, Failure<DeleteNatInstanceOutput>> {
-        let op = DELETE.id;
-        let mut evidence = self.request_evidence(ctx).map_err(not_sent)?;
-        self.nat_write_auth(op, &evidence).map_err(not_sent)?;
-        for (field, id) in [
-            ("ZoneID", &input.zone_id),
-            ("VPCID", &input.vpc_id),
-            ("NATID", &input.nat_id),
-        ] {
-            path_id(op, field, id).map_err(not_sent)?;
-        }
-        check_input(
-            op,
-            &evidence,
-            &[],
-            &[&input.zone_id, &input.vpc_id, &input.nat_id],
-            None,
-        )
-        .map_err(not_sent)?;
-        let read = Read::new(op, "vnetwork/v1/{}/{}/nats", Style::NatCatalog);
-        let scope = self
-            .nat_scope(ctx, read, input.zone_id, &mut evidence, false)
-            .await
-            .map_err(not_sent)?;
-        self.check_nat_vpc(ctx, &scope, &input.vpc_id, op, &mut evidence)
-            .await
-            .map_err(|error| not_sent(nat_error(op, error, &evidence)))?;
-        let rows = self
-            .nat_write_inventory(ctx, &scope, read, &mut evidence)
-            .await
-            .map_err(not_sent)?;
-        let Some(row) = rows.iter().find(|row| row.uuid == input.nat_id) else {
-            return Err(not_sent(typed_error(
-                ErrorClass::NotFound,
-                "NotFound",
-                &format!("vngcloud: resource not found: {op}"),
-                &evidence,
-            )));
-        };
-        if row.vpc.uuid != input.vpc_id {
-            return Err(not_sent(super::mutations::input_error(
+        crate::wire::product::exit::finish!(async {
+            let op = DELETE.id;
+            let mut evidence = self
+                .request_evidence_from(ctx, Evidence::for_write())
+                .map_err(not_sent)?;
+            self.nat_write_auth(op, &evidence).map_err(not_sent)?;
+            for (field, id) in [
+                ("ZoneID", &input.zone_id),
+                ("VPCID", &input.vpc_id),
+                ("NATID", &input.nat_id),
+            ] {
+                path_id(op, field, id).map_err(not_sent)?;
+            }
+            check_input(
                 op,
-                ": NAT does not belong to the named VPC",
-            )));
-        }
-        let path = [&*scope.zone, &*scope.project, &*input.nat_id];
-        let target = Destination {
-            base: &scope.base,
-            path: &path,
-            options: Options::DEFAULT,
-        };
-        let sent = self
-            .mutate::<DeleteNatInstanceOutput>(
-                ctx,
-                &DELETE,
-                target,
-                Some(&json!({})),
-                &mut evidence,
+                &evidence,
+                &[],
+                &[&input.zone_id, &input.vpc_id, &input.nat_id],
+                None,
             )
-            .await;
-        let send_error = match sent {
-            Ok(raw) => nat_ack(op, &raw, &evidence).err(),
-            Err(failure) if failure.write_dispatch() == WriteDispatch::NotSent => {
-                return Err(failure);
-            }
-            Err(failure) => Some(nat_error(op, failure.into_parts().0, &evidence)),
-        };
-        let output = DeleteNatInstanceOutput {};
-        let interrupted = send_error.as_ref().is_some_and(|error| {
-            error
-                .detail::<StatusCode>()
-                .is_some_and(|status| !status.is_redirection())
-                && error.api_error().is_none_or(|api| api.status().is_none())
-        });
-        if input.no_wait {
-            return match send_error {
-                None => Ok(output),
-                Some(error) => Err(nat_failure(op, Some(error), None, output, &evidence)),
+            .map_err(not_sent)?;
+            let read = Read::new(op, "vnetwork/v1/{}/{}/nats", Style::NatCatalog);
+            let scope = self
+                .nat_scope(ctx, read, input.zone_id, &mut evidence, false)
+                .await
+                .map_err(not_sent)?;
+            self.check_nat_vpc(ctx, &scope, &input.vpc_id, op, &mut evidence)
+                .await
+                .map_err(|error| not_sent(nat_error(op, error, &evidence)))?;
+            let rows = self
+                .nat_write_inventory(ctx, &scope, read, &mut evidence)
+                .await
+                .map_err(not_sent)?;
+            let Some(row) = rows.iter().find(|row| row.uuid == input.nat_id) else {
+                return Err(not_sent(typed_error(
+                    ErrorClass::NotFound,
+                    "NotFound",
+                    &format!("vngcloud: resource not found: {op}"),
+                    &evidence,
+                )));
             };
-        }
-        let clock = self.session.clock();
-        let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600));
-        let result = async {
-            loop {
-                check_context(&wait, clock)?;
-                let rows = self
-                    .nat_write_inventory(&wait, &scope, read, &mut evidence)
-                    .await?;
-                check_context(&wait, clock)?;
-                let present = rows.iter().any(|row| row.uuid == input.nat_id);
-                if interrupted || send_error.as_ref().is_some_and(definite_refusal) {
-                    return Ok(present);
-                }
-                if !present {
-                    return Ok(false);
-                }
-                tick(&wait, clock, Duration::from_secs(5)).await?;
+            if row.vpc.uuid != input.vpc_id {
+                return Err(not_sent(super::mutations::input_error(
+                    op,
+                    ": NAT does not belong to the named VPC",
+                )));
             }
-        }
-        .await;
-        match result {
-            Ok(_) if interrupted => Err(nat_failure(op, send_error, None, output, &evidence)),
-            Ok(true) => match send_error {
-                Some(error) => Err(Failure::new(
-                    error,
-                    Some(output),
-                    WriteDispatch::MayHaveBeenSent,
-                )),
-                None => Err(nat_failure(op, None, None, output, &evidence)),
-            },
-            Ok(false) if !interrupted && !send_error.as_ref().is_some_and(definite_refusal) => {
-                Ok(output)
+            let path = [&*scope.zone, &*scope.project, &*input.nat_id];
+            let target = Destination {
+                base: &scope.base,
+                path: &path,
+                options: Options::DEFAULT,
+            };
+            let sent = self
+                .mutate::<DeleteNatInstanceOutput>(
+                    ctx,
+                    &DELETE,
+                    target,
+                    Some(&json!({})),
+                    &mut evidence,
+                )
+                .await;
+            let send_error = match sent {
+                Ok(raw) => raw
+                    .decode_projection(|body| nat_ack(op, body, &evidence).map_err(Box::new))
+                    .err()
+                    .map(|error| *error),
+                Err(failure) if failure.write_dispatch() == WriteDispatch::NotSent => {
+                    return Err(failure);
+                }
+                Err(failure) => Some(nat_error(op, failure.into_parts().0, &evidence)),
+            };
+            let output = DeleteNatInstanceOutput {};
+            let interrupted = send_error.as_ref().is_some_and(|error| {
+                error
+                    .http_status()
+                    .as_ref()
+                    .is_some_and(|status| !status.is_redirection())
+                    && error.api_error().is_none_or(|api| api.status().is_none())
+            });
+            if input.no_wait {
+                return match send_error {
+                    None => Ok(output),
+                    Some(error) => Err(nat_failure(op, Some(error), None, output, &evidence)),
+                };
             }
-            Ok(false) => Err(nat_failure(op, send_error, None, output, &evidence)),
-            Err(error) => Err(nat_failure(op, send_error, Some(error), output, &evidence)),
-        }
+            let clock = self.session.clock();
+            let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600));
+            let result = async {
+                guarded_poll!(evidence, {
+                    check_context(&wait, clock)?;
+                    let rows = self
+                        .nat_write_inventory(&wait, &scope, read, &mut evidence)
+                        .await?;
+                    check_context(&wait, clock)?;
+                    let present = rows.iter().any(|row| row.uuid == input.nat_id);
+                    if interrupted || send_error.as_ref().is_some_and(definite_refusal) {
+                        return Ok(present);
+                    }
+                    if !present {
+                        return Ok(false);
+                    }
+                    tick(&wait, clock, Duration::from_secs(5)).await?;
+                })
+            }
+            .await;
+            match result {
+                Ok(_) if interrupted => Err(nat_failure(op, send_error, None, output, &evidence)),
+                Ok(true) => match send_error {
+                    Some(error) => Err(Failure::new(
+                        error,
+                        Some(output),
+                        WriteDispatch::MayHaveBeenSent,
+                    )),
+                    None => Err(nat_failure(op, None, None, output, &evidence)),
+                },
+                Ok(false) if !interrupted && !send_error.as_ref().is_some_and(definite_refusal) => {
+                    Ok(output)
+                }
+                Ok(false) => Err(nat_failure(op, send_error, None, output, &evidence)),
+                Err(error) => Err(nat_failure(op, send_error, Some(error), output, &evidence)),
+            }
+        })
     }
 
     pub(super) fn nat_write_auth(
@@ -239,13 +248,15 @@ impl Client {
                 .nat_catalog_request(ctx, read, scope, &[("params", &query)], evidence)
                 .await?;
             retained = retained.saturating_add(raw.len());
-            let invalid = || invalid(read.id, evidence);
+            let invalid_page = || invalid(read.id, evidence);
             if retained > 4 << 20 {
-                return Err(invalid());
+                return Err(invalid_page());
             }
             let text = go_json(&raw);
-            check_inventory_members(&text).map_err(|()| invalid())?;
-            let output = decode_guard_instances(&text, evidence).map_err(|_| invalid())?;
+            check_inventory_members(&text).map_err(|()| invalid_page())?;
+            let output = decode_guard_instances(&text, evidence).map_err(|_| invalid_page())?;
+            let output = super::mutations::guard_operands(read.id, output, evidence)?;
+            let invalid = || invalid(read.id, evidence);
             let page_info = (output.page_size, output.total_page, output.total_item);
             if page != output.page
                 || !(0..=50).contains(&output.total_page)
@@ -315,9 +326,6 @@ fn check_inventory_members(text: &str) -> Result<(), ()> {
 pub(super) fn nat_ack(op: &'static str, raw: &[u8], evidence: &Evidence) -> Result<(), Error> {
     let text = go_json(raw);
     let fail = |()| invalid(op, evidence);
-    if reflects(&text, evidence) {
-        return Err(fail(()));
-    }
     let fields = Fields::decode(&text).map_err(fail)?;
     fields.check_ack_paging().map_err(fail)?;
     let code: &RawValue = fields.required("code").map_err(fail)?;
@@ -347,7 +355,7 @@ pub(super) fn nat_error(op: &'static str, error: Error, evidence: &Evidence) -> 
         op
     };
     let message = detail.message().replace(super::nat_quote::OP, op);
-    let observed = error.detail::<StatusCode>().copied();
+    let observed = error.http_status().as_ref().copied();
     let mut mapped = screen(
         Error::from_api(ApiError::without_fallback(
             operation,
@@ -371,7 +379,7 @@ pub(super) fn nat_error(op: &'static str, error: Error, evidence: &Evidence) -> 
 pub(super) fn definite_refusal(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::status)
+        .and_then(ApiError::observed_status)
         .is_some_and(|status| (400..500).contains(&status) && !matches!(status, 408 | 429))
 }
 
@@ -394,3 +402,12 @@ pub(super) fn nat_failure<T: Serialize>(
         WriteDispatch::MayHaveBeenSent,
     )
 }
+
+crate::wire::product::output::public_fields!(DeleteNatInstanceOutput {});
+
+crate::error::debug_record!(DeleteNatInstanceInput {
+    zone_id,
+    vpc_id,
+    nat_id,
+    no_wait
+});

@@ -2,7 +2,7 @@ use http::{Method, StatusCode};
 use serde_json::json;
 
 use crate::network::NetworkAcl;
-use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{Error, Failure, RequestContext, WriteDispatch};
 
 use super::super::super::Client;
 use super::models::*;
@@ -34,29 +34,35 @@ impl Client {
         ctx: &RequestContext,
         input: CreateNetworkAclInput,
     ) -> Result<CreateNetworkAclOutput, Failure<CreateNetworkAclOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        write.check(
-            CREATE.id,
-            &[("VPCID", &input.vpc_id), ("Name", &input.name)],
-            &[],
-        )?;
-        let reply = write
-            .send(
-                CREATE,
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            write.check(
+                CREATE.id,
+                &[("VPCID", &input.vpc_id), ("Name", &input.name)],
                 &[],
-                Some(json!({"name": input.name, "vpc": input.vpc_id})),
-            )
-            .await
-            .map_err(|error| write.advise(error, CREATE_ADVICE))?;
-        let acl = write.created(
-            CREATE,
-            reply,
-            true,
-            |row: &NetworkAcl| &row.uuid,
-            false,
-            CREATE_ADVICE,
-        )?;
-        Ok(CreateNetworkAclOutput { acl })
+            )?;
+            let reply = write
+                .send(
+                    CREATE,
+                    &[],
+                    Some(json!({"name": input.name, "vpc": input.vpc_id})),
+                )
+                .await
+                .map_err(|error| write.advise(error, CREATE_ADVICE))?;
+            let acl = write.created(
+                CREATE,
+                reply,
+                true,
+                |row: &NetworkAcl| &row.uuid,
+                false,
+                CREATE_ADVICE,
+            )?;
+            Ok(CreateNetworkAclOutput { acl })
+        })
     }
 
     /// Deletes a nondefault network ACL with no subnet associations.
@@ -65,56 +71,62 @@ impl Client {
         ctx: &RequestContext,
         input: DeleteNetworkAclInput,
     ) -> Result<DeleteNetworkAclOutput, Failure<DeleteNetworkAclOutput>> {
-        let mut write = Write::new(self, ctx)?;
-        let id = &input.network_acl_id;
-        let op = DELETE.id;
-        write.check(op, &[], &[("NetworkACLID", id)])?;
-        let acl = write.acl(ctx, id).await.map_err(not_sent)?;
-        if acl.default_acl {
-            return Err(not_sent(write.guard_error(
-                NetworkWriteError::DefaultResource,
-                &format!("{op}: network ACL {id} is a default ACL"),
-            )));
-        }
-        if !acl.subnet_ids.is_empty() {
-            return Err(not_sent(write.in_use(&format!(
-                "{op}: network ACL {id} has {} associated subnet(s); disassociate them first",
-                acl.subnet_ids.len()
-            ))));
-        }
-        let Err(failure) = write
-            .send::<DeleteNetworkAclOutput>(DELETE, &[id], None)
-            .await
-        else {
-            return Ok(DeleteNetworkAclOutput {});
-        };
-        let (error, _, dispatch) = failure.into_parts();
-        if let Some(busy) = write.acl_busy(&error) {
-            return Err(Failure::new(busy.with_cause(error), None, dispatch));
-        }
-        if dispatch == WriteDispatch::MayHaveBeenSent
-            && is_5xx(&error)
-            && super::wire::can_confirm(&error)
-        {
-            let absent = write
-                .settle(
-                    BOUND,
-                    INTERVAL,
-                    &format!("network ACL {id} still listed 1m0s after the delete"),
-                    async |write, ctx| {
-                        let acls = write.all_acls(ctx).await?;
-                        Ok(acls
-                            .iter()
-                            .all(|acl| acl.uuid != *id && acl.id != *id)
-                            .then_some(()))
-                    },
-                )
-                .await;
-            if absent.is_ok() {
-                return Ok(DeleteNetworkAclOutput {});
+        crate::wire::product::exit::finish!(async {
+            let mut write = Write::new(
+                self,
+                ctx,
+                crate::wire::product::evidence::Evidence::for_write(),
+            )?;
+            let id = &input.network_acl_id;
+            let op = DELETE.id;
+            write.check(op, &[], &[("NetworkACLID", id)])?;
+            let acl = write.acl(ctx, id).await.map_err(not_sent)?;
+            if acl.default_acl {
+                return Err(not_sent(write.guard_error(
+                    NetworkWriteError::DefaultResource,
+                    &format!("{op}: network ACL {id} is a default ACL"),
+                )));
             }
-        }
-        Err(Failure::new(write.screen(error), None, dispatch))
+            if !acl.subnet_ids.is_empty() {
+                return Err(not_sent(write.in_use(&format!(
+                    "{op}: network ACL {id} has {} associated subnet(s); disassociate them first",
+                    acl.subnet_ids.len()
+                ))));
+            }
+            let Err(failure) = write
+                .send::<DeleteNetworkAclOutput>(DELETE, &[id], None)
+                .await
+            else {
+                return Ok(DeleteNetworkAclOutput {});
+            };
+            let (error, _, dispatch) = failure.into_parts();
+            if let Some(busy) = write.acl_busy(&error) {
+                return Err(Failure::new(busy.with_cause(error), None, dispatch));
+            }
+            if dispatch == WriteDispatch::MayHaveBeenSent
+                && is_5xx(&error)
+                && super::wire::can_confirm(&error)
+            {
+                let absent = write
+                    .settle(
+                        BOUND,
+                        INTERVAL,
+                        &format!("network ACL {id} still listed 1m0s after the delete"),
+                        async |write, ctx| {
+                            let acls = write.all_acls(ctx).await?;
+                            Ok(acls
+                                .iter()
+                                .all(|acl| acl.uuid != *id && acl.id != *id)
+                                .then_some(()))
+                        },
+                    )
+                    .await;
+                if absent.is_ok() {
+                    return Ok(DeleteNetworkAclOutput {});
+                }
+            }
+            Err(Failure::new(write.screen(error), None, dispatch))
+        })
     }
 }
 
@@ -174,7 +186,7 @@ impl Write<'_> {
             async |write, ctx| {
                 let row = match write.acl(ctx, id).await {
                     Ok(row) => row,
-                    Err(error) if error.has_class(ErrorClass::NotFound) => return Ok(None),
+                    Err(error) if crate::confirms_absence(&error, "network.GetNetworkACL", "GET", "v2/{}/network-acl/{}") => return Ok(None),
                     Err(error) => return Err(write.settled_error(&format!("{op}: network ACL {id}"), error)),
                 };
                 let active = row.status == "ACTIVE";

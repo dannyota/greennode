@@ -125,7 +125,7 @@ async fn vpc_delete_rejects_a_nested_zone_alias_before_any_write() {
 }
 
 #[tokio::test]
-async fn rename_confirmation_redacts_display_fields_without_losing_the_result() {
+async fn rename_confirmation_refuses_reflecting_display_fields() {
     let (ctx, _) = RequestContext::new();
     let server = Server::start(vec![
         reply("200 OK", ""),
@@ -134,12 +134,15 @@ async fn rename_confirmation_redacts_display_fields_without_losing_the_result() 
             r#"{"id":"vpc-1","displayName":"renamed","zone":{"description":"toy%2dcredential"}}"#,
         ),
     ]);
-    let output = client(&server)
+    let failure = client(&server)
         .update_vpc(&ctx, UpdateVpcInput::new("vpc-1", "renamed"))
         .await
-        .unwrap();
-    assert_eq!(output.vpc.name, "renamed");
-    assert!(output.vpc.zone.description == "<redacted>");
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    let partial = failure.partial().unwrap();
+    assert_eq!(partial.vpc.name, "renamed");
+    assert!(partial.vpc.zone.description.is_empty());
     assert_eq!(server.requests(), 2);
 
     let server = Server::start(vec![
@@ -150,12 +153,15 @@ async fn rename_confirmation_redacts_display_fields_without_losing_the_result() 
             r#"{"uuid":"subnet-1","name":"renamed","interfaceAclPolicyName":"toy%2dcredential"}"#,
         ),
     ]);
-    let output = client(&server)
+    let failure = client(&server)
         .update_subnet(&ctx, UpdateSubnetInput::new("vpc-1", "subnet-1", "renamed"))
         .await
-        .unwrap();
-    assert_eq!(output.subnet.name, "renamed");
-    assert!(output.subnet.interface_acl_policy_name == "<redacted>");
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_class(ErrorClass::NotSettled));
+    let partial = failure.partial().unwrap();
+    assert_eq!(partial.subnet.name, "renamed");
+    assert!(partial.subnet.interface_acl_policy_name.is_empty());
     assert_eq!(server.requests(), 3);
 }
 
@@ -202,7 +208,12 @@ async fn prewrite_wait_preserves_a_shorter_caller_deadline() {
     let (ctx, _) = RequestContext::new();
     let timeout = Duration::from_secs(1);
     let ctx = ctx.child_with_deadline(clock.monotonic_now() + timeout);
-    let mut write = Write::new::<()>(&client, &ctx).unwrap();
+    let mut write = Write::new::<()>(
+        &client,
+        &ctx,
+        crate::wire::product::evidence::Evidence::for_write(),
+    )
+    .unwrap();
     let error = write
         .active(
             "network.AddRoute",

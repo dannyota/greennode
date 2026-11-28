@@ -10,10 +10,13 @@ use crate::error::SafeText;
 use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{
     evidence::{Evidence, SentCredentials},
-    operation::{self, Operation, RouteAuth},
-    options::{Options, PathIds},
+    guard::{AcknowledgedId, Guarded},
+    operation::{self, Operation, Reflection, RouteAuth},
+    options::{AttemptCheck, Options, PathIds},
+    output::PublicOutput,
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
+    sender::Response,
 };
 use crate::{
     ApiError, ContextEnd, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch,
@@ -83,10 +86,13 @@ impl Mutation {
     #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
     pub(super) fn decode<T: WireField>(
         &self,
-        body: &[u8],
+        response: &Response,
         evidence: &Evidence,
     ) -> Result<T, Error> {
-        let text = go_json(body);
+        let receipt = response
+            .clean_receipt()
+            .ok_or_else(|| Error::new(ErrorClass::NotSettled).with_cause(self.invalid(evidence)))?;
+        let text = go_json(receipt.body());
         if !text.is_empty() && serde_json::from_str::<&RawValue>(&text).is_err() {
             return Err(api(
                 self.id,
@@ -97,14 +103,11 @@ impl Mutation {
             ));
         }
         let invalid = |()| self.invalid(evidence);
-        let fields = Fields::decode_with_limit(
-            if text.is_empty() || text == "null" {
-                "{}"
-            } else {
-                &text
-            },
-            8 << 20,
-        )
+        let fields = Fields::decode(if text.is_empty() || text == "null" {
+            "{}"
+        } else {
+            &text
+        })
         .map_err(invalid)?;
         strict_field(&fields, "data").map_err(invalid)
     }
@@ -128,7 +131,7 @@ impl Client {
         ids: &[&str],
         body: Option<&Value>,
         evidence: &mut Evidence,
-    ) -> Result<Bytes, Failure<O>> {
+    ) -> Result<Response, Failure<O>> {
         check_input(write.id, evidence, &[], ids, body).map_err(not_sent)?;
         let project = self
             .session
@@ -160,7 +163,7 @@ impl Client {
         target: Destination<'_>,
         body: Option<&Value>,
         evidence: &mut Evidence,
-    ) -> Result<Bytes, Failure<O>> {
+    ) -> Result<Response, Failure<O>> {
         check_input(write.id, evidence, &[], target.path, body).map_err(not_sent)?;
         let encoded = body
             .map(serde_json::to_vec)
@@ -187,14 +190,33 @@ impl Client {
             allow_empty: true,
             no_output: false,
             keep_status: write.keep_status,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: write.withhold.is_some(),
-            reject_reflected_credentials: false,
-            no_redirect: true,
+            reflection: Reflection::Redact,
+            no_redirect: matches!(write.retry, Retry::Once),
+            report_redirect: write.report_redirect,
             retry_config: retry::Config::default(),
         };
+        let attempt = |credentials: &SentCredentials| {
+            check_input(
+                write.id,
+                &Evidence::from_credentials(credentials),
+                &[],
+                target.path,
+                body,
+            )
+            .err()
+            .map(Box::new)
+            .or_else(|| {
+                target
+                    .options
+                    .attempt_check
+                    .and_then(|check| (check.0)(credentials))
+            })
+        };
         let options = Options {
-            report_redirect: write.report_redirect,
+            attempt_check: Some(AttemptCheck(&attempt)),
             ..target.options
         };
         let result = operation::execute_raw(
@@ -227,23 +249,26 @@ impl Client {
             };
             Failure::new(error, None, dispatch)
         })?;
-        response::classify(
-            write.id,
-            reply.status,
-            Bytes::from(reply.reply.body),
-            op.success,
-            (true, write.withhold.is_some(), write.retry),
-            evidence.credentials(),
-        )
-        .map_err(|error| {
-            let error = match (write.withhold, error.api_error()) {
-                (Some(message), Some(detail)) => {
-                    with_write_message(write.id, detail, message, evidence)
-                }
-                _ => screen(*error, evidence),
-            };
-            sent(error)
-        })
+        reply
+            .classify(
+                write.id,
+                op.success,
+                (true, write.withhold.is_some(), write.retry),
+                false,
+            )
+            .map_err(|error| {
+                let error = match (write.withhold, error.api_error()) {
+                    (Some(message), Some(detail)) => {
+                        with_write_message(write.id, detail, message, evidence)
+                    }
+                    _ => screen(*error, evidence),
+                };
+                sent(error)
+            })?;
+        reply
+            .check_discarded_acknowledgement(write.id)
+            .map_err(|error| sent(screen(*error, evidence)))?;
+        Ok(reply)
     }
 }
 
@@ -285,7 +310,7 @@ pub(super) fn api(
 }
 
 pub(super) fn screen(error: Error, evidence: &Evidence) -> Error {
-    error.screen_api(&|text| evidence.text_reflects(text))
+    evidence.screen_error(error)
 }
 
 pub(super) fn typed_error(
@@ -322,7 +347,7 @@ pub(super) fn check_input(
         || fields
             .iter()
             .any(|(_, value)| evidence.text_reflects(value))
-        || body.is_some_and(|value| evidence.reflected_in(value))
+        || body.is_some_and(|value| evidence.output_reflects(value))
     {
         return Err(input_error(op, " received a credential in the request"));
     }
@@ -486,6 +511,7 @@ pub(super) fn error_description(error: &Error) -> String {
     error.to_string()
 }
 
+#[derive(Debug)]
 struct ActiveWaitExpired;
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
@@ -517,7 +543,7 @@ pub(super) async fn tick_active_wait(
 pub(super) fn safe_output<T: Serialize>(output: &T, evidence: &Evidence) -> bool {
     evidence.can_retain_partial()
         && !super::route_inventory::ids_reflect(output, evidence)
-        && serde_json::to_value(output).is_ok_and(|value| !evidence.reflected_in(&value))
+        && serde_json::to_value(output).is_ok_and(|value| !evidence.output_reflects(&value))
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
@@ -526,11 +552,14 @@ pub(super) fn check_quote(
     kind: &str,
     price: f64,
     cap: f64,
-    credentials: &SentCredentials,
+    evidence: &mut Evidence,
     amounts: &[f64],
 ) -> Result<(), Error> {
-    let mut evidence = Evidence::new();
-    evidence.absorb(credentials);
+    evidence.recheck_read_proofs().map_err(|error| *error)?;
+    let (price, cap) = Guarded::price(evidence, price, cap)
+        .and_then(|guarded| guarded.into_checked(evidence))
+        .map_err(|error| *error)?;
+    let credentials = evidence.credentials();
     if !evidence.can_retain_partial()
         || evidence.text_reflects("VND")
         || amounts.iter().chain([&cap]).any(|value| {
@@ -543,7 +572,7 @@ pub(super) fn check_quote(
             Some(200),
             "InvalidResponse",
             "price response withheld",
-            &evidence,
+            evidence,
         ));
     }
     if price > cap {
@@ -554,7 +583,7 @@ pub(super) fn check_quote(
             ErrorClass::PriceAboveMax,
             "PriceAboveMax",
             &message,
-            &evidence,
+            evidence,
         ));
     }
     Ok(())
@@ -563,4 +592,37 @@ pub(super) fn check_quote(
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 pub(super) fn check_context(ctx: &RequestContext, clock: &dyn crate::Clock) -> Result<(), Error> {
     ctx.check(clock).map_or(Ok(()), |end| Err(end.into()))
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+pub(super) fn bind_acknowledgement(
+    mutation: &Mutation,
+    reply: &Response,
+    id: &str,
+    evidence: &mut Evidence,
+) -> Result<AcknowledgedId, Error> {
+    let receipt = reply
+        .clean_receipt()
+        .ok_or_else(|| mutation.invalid(evidence))?;
+    let id = receipt.bind_id(id.to_owned());
+    evidence.keep_acknowledgement(&id).map_err(|error| *error)?;
+    Ok(id)
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+pub(super) fn guard_operands<T: PublicOutput>(
+    op: &'static str,
+    value: T,
+    evidence: &mut Evidence,
+) -> Result<T, Error> {
+    if evidence.guards_reads() {
+        evidence.recheck_read_proofs().map_err(|error| *error)?;
+        evidence
+            .keep_decoded_operands(op, &value)
+            .map_err(|error| *error)?;
+        return Guarded::latest_direct(value, evidence, op)
+            .and_then(|proof| proof.into_checked(evidence))
+            .map_err(|error| *error);
+    }
+    Ok(value)
 }

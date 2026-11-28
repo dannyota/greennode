@@ -290,12 +290,15 @@ async fn vip_guard_refuses_alias_inside_zone() {
 }
 
 #[tokio::test]
-async fn vip_create_accepts_the_vserver_eight_mib_decoding_limit() {
-    let body = format!(
-        r#"{{"data":{{"uuid":"vip-1","status":"ACTIVE","unused":"{}"}}}}"#,
-        "x".repeat(4 << 20)
-    );
-    let (server, client, ctx) = session(vec![response("201 Created", &body)]);
+async fn vip_create_counts_original_bytes_before_lossy_decoding() {
+    let mut body = br#"{"data":{"uuid":"vip-1","status":"ACTIVE","unused":""#.to_vec();
+    body.resize(body.len() + (3 << 20), 0xff);
+    body.extend_from_slice(br#""}}"#);
+    let (server, client, ctx) = session(vec![Response::Http {
+        status: "201 Created".into(),
+        headers: vec![("Content-Length".into(), body.len().to_string())],
+        body,
+    }]);
     let output = client
         .create_virtual_ip_address(
             &ctx,
@@ -366,4 +369,59 @@ fn update_confirmation_deadline_reports_the_confirmation_timeout() {
         "vngcloud: write outcome not confirmed: network.UpdateSecurityGroup: security group sg-1: context deadline exceeded"
     );
     assert!(failure.error().has_class(ErrorClass::DeadlineExceeded));
+}
+
+#[tokio::test]
+async fn group_delete_rechecks_an_earlier_guard_with_the_final_read_credential() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{future::Future, pin::Pin, sync::Arc};
+
+    struct Tokens(AtomicUsize);
+    impl crate::CredentialsProvider for Tokens {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            let token = if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                "first-toy-token"
+            } else {
+                "later-toy-token"
+            };
+            Box::pin(async move { Ok(crate::Token::new(Secret::new(token), None)) })
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    let server = Server::start(vec![
+        response(
+            "200 OK",
+            r#"{"data":{"id":"sg-1","system":false},"unmodeled":"later-toy-token"}"#,
+        ),
+        response("200 OK", r#"{"data":[]}"#),
+    ]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_project_id("proj-1".into())
+        .with_credentials_provider(Arc::new(Tokens(AtomicUsize::new(0))));
+    let config = Config::new(with_product_loopback(Product::Vserver, options, &server)).unwrap();
+    let failure = Client::new(&config)
+        .delete_security_group(
+            &RequestContext::new().0,
+            DeleteSecurityGroupInput::new("sg-1"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert_eq!(server.requests(), 2);
 }

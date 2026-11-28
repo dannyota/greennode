@@ -352,7 +352,14 @@ fn guard_bandwidth(
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
     pub(super) fn request_evidence(&self, ctx: &RequestContext) -> Result<Evidence, Error> {
-        let mut evidence = Evidence::new();
+        self.request_evidence_from(ctx, Evidence::new())
+    }
+
+    pub(super) fn request_evidence_from(
+        &self,
+        ctx: &RequestContext,
+        mut evidence: Evidence,
+    ) -> Result<Evidence, Error> {
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -484,9 +491,13 @@ impl Client {
                 return interruption;
             }
             let api = error.api_error();
-            let status = api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
+            let status = error
+                .http_status()
+                .or_else(|| api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok()));
             let error = if error.is_body_too_large() {
-                if read.style == Style::EndpointQuote {
+                if read.style == Style::EndpointQuote
+                    && status.is_none_or(|status| status.is_success())
+                {
                     read.invalid(evidence)
                 } else {
                     read.withheld(status, false).with_body_too_large()
@@ -597,11 +608,7 @@ pub(super) struct Fields<'a>(#[serde(borrow)] BTreeMap<String, &'a RawValue>);
 
 impl<'a> Fields<'a> {
     pub(super) fn decode(text: &'a str) -> Result<Self, ()> {
-        Self::decode_with_limit(text, text.len())
-    }
-
-    pub(super) fn decode_with_limit(text: &'a str, limit: usize) -> Result<Self, ()> {
-        strict_json::validate(text.as_bytes(), &[], limit).map_err(|_| ())?;
+        strict_json::validate(text.as_bytes(), &[], text.len()).map_err(|_| ())?;
         serde_json::from_str(text).map_err(|_| ())
     }
 
