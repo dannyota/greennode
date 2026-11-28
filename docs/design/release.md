@@ -2,17 +2,17 @@
 
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
-exactly `=VERSION` of the SDK. Mac publishing is active until the owner approves
-cutover to a proven CI publish workflow. Uploads are permanent ([Cargo
-publishing]).
+exactly `=VERSION` of the SDK. Releases publish through the CI workflow below,
+which the owner approved after the `v0.1.1` proof; the Mac procedure is for
+recovery only. Uploads are permanent ([Cargo publishing]).
 
 ## Approaches
 
 | Approach                                             | Trade-off                                                                                       |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Publish each crate from the Mac                      | Use now. The owner controls each release and can reconcile the two uploads independently.       |
+| Publish each crate from the Mac                      | Recovery only. The owner can reconcile the two uploads independently.                           |
 | Publish from a tag or release job                    | One job can write to GitHub and crates.io, without a separate approval for the registry upload. |
-| Dispatch a separate workflow with Trusted Publishing | Use after proof and approval. It keeps [duolane]'s separate approval and per-crate recovery.    |
+| Dispatch a separate workflow with Trusted Publishing | Use. It keeps [duolane]'s separate approval and per-crate recovery.                             |
 
 ## Versions
 
@@ -35,8 +35,9 @@ then repeat with `--locked`. Do not edit a member's inherited version.
 
 ## Releases from the owner's Mac
 
-The [Mac release procedure](release-first.md) uses the owner's existing Cargo
-login. It stages archives in the publish checkout and checks the uploaded
+Use the [Mac release procedure](release-first.md) only when the owner approves
+recovering an upload the CI path cannot complete. It uses the owner's existing
+Cargo login. It stages archives in the publish checkout and checks the uploaded
 checksums against the saved receipt before proceeding. The tag push runs the
 GitHub Release workflow. CI publishing uses that workflow's packaging evidence
 and checks the actual archive before upload.
@@ -287,6 +288,9 @@ required CI job covers x86_64.
    uploads, their approved checksums and ownership. Recover a partial CI upload
    through the CI path for that tag. After the proof succeeds, the owner
    approves moving subsequent releases to CI.
+
+`v0.1.1` proved the path on 2026-11-28: both uploads matched their approved
+checksums with `dannyota` as owner, and the owner approved the cutover.
 
 ## Unverified
 

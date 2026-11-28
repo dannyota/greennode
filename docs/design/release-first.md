@@ -1,9 +1,10 @@
-# Releases from the owner's Mac
+# Mac release recovery
 
-The Mac is the active crates.io publishing path until the owner approves the
-[CI cutover](release.md#ci-cutover). The owner chose plain `cargo publish` with
-an existing default Cargo login. Only the owner may narrow or revoke that token.
-Agents never open, read, print or copy the token or its credential file.
+Since the [CI cutover](release.md#ci-cutover), the Mac publishes only to recover
+an upload the CI path cannot complete, with the owner's approval for that run.
+The owner chose plain `cargo publish` with an existing default Cargo login. Only
+the owner may narrow or revoke that token. Agents never open, read, print or
+copy the token or its credential file.
 
 The Mac checks the actual uploaded bytes immediately after each upload. Plain
 Cargo publishing trades away pre-upload approval of those bytes. Cargo may cache

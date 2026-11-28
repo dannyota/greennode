@@ -19,11 +19,11 @@ published on crates.io under the current name.
    `master` as its default branch.
 2. It is its own SDK and CLI, compatible with vngcloud. vngcloud at tag `v1.8.0`
    is the baseline that defines commands, flags, output, and exit codes.
-3. Incremental `0.x.y` releases go to crates.io from the owner's Mac with
-   `cargo publish` and the owner's existing Cargo login. The owner approves
-   cutover to GitHub Actions through Trusted Publishing once the CI publish
-   workflow is proven. The owner releases `1.0.0` once every baseline operation
-   has shipped and the owner judges the product stable. The
+3. Incremental `0.x.y` releases go to crates.io through GitHub Actions with
+   Trusted Publishing, after `v0.1.0` from the owner's Mac proved the release
+   and `v0.1.1` proved the CI workflow. The Mac's `cargo publish` path remains
+   for owner-approved recovery. The owner releases `1.0.0` once every baseline
+   operation has shipped and the owner judges the product stable. The
    [release design](../design/release.md) owns the procedure.
 4. The project moves in small releases. Each release adds whole commands that
    match the baseline. A command that is not built yet is absent, never a stub.
@@ -81,3 +81,5 @@ published on crates.io under the current name.
   compatibility contract is unchanged.
 - 2026-11-28: The owner chose incremental Mac releases with the existing Cargo
   login until the proven CI workflow is approved, and set the `1.0.0` criteria.
+- 2026-11-28: After `v0.1.1` published through CI, the owner approved the
+  cutover: releases use Trusted Publishing and the Mac path is for recovery.
