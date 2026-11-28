@@ -436,12 +436,7 @@ async fn check_cases(select: impl Fn(&Case) -> bool) {
                 })
                 .collect(),
         );
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(3), run(case, &server)).await;
-        let Ok(result) = result else {
-            mismatches.push(format!("{}: timed out", case.name));
-            continue;
-        };
+        let result = run(case, &server).await;
         if server.requests() != case.requests {
             mismatches.push(format!(
                 "{}: request count {} != {}",

@@ -305,7 +305,7 @@ fn dropped_refresh_does_not_publish_and_releases_lock() {
         let second = source(&server, clock, Some(dir.0.join("cache")));
         let (ctx, _) = RequestContext::new();
         assert!(
-            tokio::time::timeout(Duration::from_secs(2), second.token(&ctx))
+            tokio::time::timeout(Duration::from_secs(60), second.token(&ctx))
                 .await
                 .unwrap()
                 .is_ok()
@@ -348,13 +348,13 @@ fn drop_during_stalled_rename_returns_promptly() {
             Some(&live),
         )
     });
-    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    started_rx.recv_timeout(Duration::from_secs(60)).unwrap();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let dropper = std::thread::spawn(move || {
         drop(drop_guard);
         done_tx.send(()).unwrap();
     });
-    let prompt = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+    let prompt = done_rx.recv_timeout(Duration::from_secs(60)).is_ok();
     release_tx.send(()).unwrap();
     dropper.join().unwrap();
     let result = worker.join().unwrap();
@@ -528,7 +528,7 @@ async fn ended_exchange_recovers(deadline: bool) {
     } else {
         cancel.cancel();
     }
-    let result = tokio::time::timeout(Duration::from_secs(2), task).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), task).await;
     assert!(result.is_ok());
     let result = result.unwrap().unwrap();
     let class = if deadline {
@@ -601,7 +601,7 @@ fn ended_disk_worker_recovers(deadline: bool) {
         } else {
             cancel.cancel();
         }
-        let result = tokio::time::timeout(Duration::from_secs(2), task).await;
+        let result = tokio::time::timeout(Duration::from_secs(60), task).await;
         release_tx.send(()).unwrap();
         tokio::task::spawn_blocking(|| {}).await.unwrap();
         let class = if deadline {

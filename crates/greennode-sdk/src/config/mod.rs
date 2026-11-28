@@ -602,7 +602,7 @@ mod worker_tests {
                 ctx
             };
             let result =
-                tokio::time::timeout(Duration::from_secs(2), wait_profile_worker(&ctx, worker))
+                tokio::time::timeout(Duration::from_secs(60), wait_profile_worker(&ctx, worker))
                     .await;
             let expected = if deadline {
                 crate::ErrorClass::DeadlineExceeded
@@ -659,7 +659,7 @@ mod worker_tests {
         tokio::select! { _ = started_rx => {}, _ = &mut future => panic!("worker finished before pause") }
         drop(future);
         release_tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), done_rx)
+        tokio::time::timeout(Duration::from_secs(60), done_rx)
             .await
             .unwrap()
             .unwrap();

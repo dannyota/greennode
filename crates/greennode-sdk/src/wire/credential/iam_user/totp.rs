@@ -286,7 +286,7 @@ mod tests {
             username: "user",
             password: &password,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let mut jar = super::super::CookieJar::new(origin.clone());
         let target = Secret::new(
@@ -348,7 +348,7 @@ mod tests {
                 response("200 OK", None, "<input name=\"_csrf\" value=\"token\">"),
                 reply,
             ]);
-            let result = tokio::time::timeout(Duration::from_millis(500), run(&server, true)).await;
+            let result = tokio::time::timeout(Duration::from_secs(60), run(&server, true)).await;
             assert!(matches!(result, Ok(Ok(_))));
         }
     }

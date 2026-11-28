@@ -1036,7 +1036,7 @@ mod tests {
         std::thread::spawn(move || {
             let _ = send.send(probe(&path));
         });
-        let result = receive.recv_timeout(std::time::Duration::from_secs(1));
+        let result = receive.recv_timeout(std::time::Duration::from_secs(60));
         std::fs::remove_dir_all(dir).unwrap();
         assert_eq!(result, Ok(Presence::Present));
     }

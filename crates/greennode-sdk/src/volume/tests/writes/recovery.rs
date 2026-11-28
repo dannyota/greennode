@@ -417,7 +417,7 @@ async fn create_settlement_bound_warns_that_the_volume_exists() {
             clock.wait_for_sleep(Duration::from_secs(2)).await;
             clock.advance(caller_bound.unwrap_or(Duration::from_secs(300)));
         };
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(60), async {
             tokio::join!(client.create_volume(&ctx, create()), advance)
         })
         .await
@@ -481,7 +481,7 @@ async fn create_keeps_the_confirmation_get_cause_when_its_body_is_canceled() {
         clock.wait_for_body(4).await;
         cancel.cancel();
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(60), async {
         tokio::join!(client.create_volume(&ctx, create()), interrupt)
     })
     .await

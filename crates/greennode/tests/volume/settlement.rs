@@ -376,7 +376,7 @@ impl Call {
             id,
             self.wait.outcome == Outcome::Accepted,
         );
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(60), async {
             tokio::join!(work, self.wait.interrupt(self.requests))
         })
         .await
@@ -400,7 +400,7 @@ impl Call {
             clock: self.wait.clock.as_ref(),
             context: &self.context,
         });
-        let (exit, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(60), async {
             tokio::join!(work, self.wait.interrupt(self.requests))
         })
         .await

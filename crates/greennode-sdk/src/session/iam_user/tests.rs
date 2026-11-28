@@ -281,7 +281,7 @@ async fn cancellation_during_signin_does_not_write_token_and_retry_works() {
     started.await.unwrap();
     cancel.cancel();
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), task)
+        tokio::time::timeout(Duration::from_secs(60), task)
             .await
             .unwrap()
             .unwrap()

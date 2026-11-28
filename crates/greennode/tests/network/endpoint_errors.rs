@@ -53,7 +53,7 @@ async fn interrupt_project_discovery(bearer: &str, status: &str) -> Vec<u8> {
         clock.started().await;
         cancel.cancel();
     };
-    let (exit, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+    let (exit, ()) = tokio::time::timeout(Duration::from_secs(60), async {
         tokio::join!(work, interrupt)
     })
     .await

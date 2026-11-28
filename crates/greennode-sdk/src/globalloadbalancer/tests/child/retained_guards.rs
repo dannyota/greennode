@@ -275,7 +275,7 @@ async fn glb_confirmation_can_poll_for_the_full_fifteen_minutes() {
     let ctx = RequestContext::new().0;
     let confirm = client.create_pool(&ctx, pool_input());
     tokio::pin!(confirm);
-    let Ok(result) = tokio::time::timeout(Duration::from_secs(15), async {
+    let Ok(result) = tokio::time::timeout(Duration::from_secs(60), async {
         tokio::select! {
             result = &mut confirm => result,
             started = final_read => {

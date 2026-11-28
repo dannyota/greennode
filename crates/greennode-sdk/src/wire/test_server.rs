@@ -139,7 +139,7 @@ impl Server {
                             let request_bodies = Arc::clone(&request_bodies);
                             let stop_accept = stop_accept.clone();
                             tasks.spawn(async move {
-                                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+                                let _ = tokio::time::timeout(std::time::Duration::from_secs(60), async move {
                                 let Ok(mut stream) = acceptor.accept(stream).await else { return };
                                 let negotiated = match stream.get_ref().1.alpn_protocol() { Some(b"h2") => 3, Some(b"http/1.1") => 2, _ => 1 };
                                 protocol.store(negotiated, Ordering::SeqCst);

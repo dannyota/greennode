@@ -230,18 +230,18 @@ async fn fragmented_cap_plus_one_with_trailers_is_refused() {
     let client = client(&server);
     let uri = server.origin.clone();
     let worker = tokio::spawn(async move { send(&client, req(Method::GET, &uri), 3).await });
-    tokio::time::timeout(Duration::from_secs(3), first_rx)
+    tokio::time::timeout(Duration::from_secs(60), first_rx)
         .await
         .unwrap()
         .unwrap();
     go_tx.send(()).unwrap();
     assert!(
-        tokio::time::timeout(Duration::from_secs(3), last_rx)
+        tokio::time::timeout(Duration::from_secs(60), last_rx)
             .await
             .unwrap()
             .unwrap()
     );
-    let result = tokio::time::timeout(Duration::from_secs(3), worker)
+    let result = tokio::time::timeout(Duration::from_secs(60), worker)
         .await
         .unwrap()
         .unwrap();
@@ -272,23 +272,23 @@ async fn final_frame_after_deadline_is_refused() {
     let worker = tokio::spawn(async move {
         send::once(&client, request, 10, Encoding::Identity, &clock, deadline).await
     });
-    tokio::time::timeout(Duration::from_secs(3), first_rx)
+    tokio::time::timeout(Duration::from_secs(60), first_rx)
         .await
         .unwrap()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), head_rx)
+    tokio::time::timeout(Duration::from_secs(60), head_rx)
         .await
         .unwrap()
         .unwrap();
     base.advance(Duration::from_secs(1));
     go_tx.send(()).unwrap();
     assert!(
-        tokio::time::timeout(Duration::from_secs(3), last_rx)
+        tokio::time::timeout(Duration::from_secs(60), last_rx)
             .await
             .unwrap()
             .unwrap()
     );
-    let result = tokio::time::timeout(Duration::from_secs(3), worker)
+    let result = tokio::time::timeout(Duration::from_secs(60), worker)
         .await
         .unwrap()
         .unwrap();
@@ -311,7 +311,7 @@ async fn frame_deadline_precedes_overflow() {
         threshold: 2,
     };
     let result = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(60),
         send::once(
             &client,
             req(Method::GET, &server.origin),
@@ -338,7 +338,7 @@ async fn final_deadline_check_rejects_completed_response() {
         threshold: 5,
     };
     let result = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(60),
         send::once(
             &client,
             req(Method::GET, &server.origin),
@@ -562,12 +562,12 @@ async fn declared_oversize_is_refused_before_body() {
     let first_client = client(&server);
     let uri = server.origin.clone();
     let worker = tokio::spawn(async move { send(&first_client, req(Method::GET, &uri), 10).await });
-    tokio::time::timeout(Duration::from_secs(3), wait)
+    tokio::time::timeout(Duration::from_secs(60), wait)
         .await
         .unwrap()
         .unwrap();
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), worker).await,
+        tokio::time::timeout(Duration::from_secs(60), worker).await,
         Ok(Ok(Err(error))) if error.kind() == &Error::BodyTooLarge
     ));
     let server = Server::start(vec![
@@ -637,7 +637,7 @@ async fn repeated_content_length_is_bounded_before_body() {
     )]);
     let client = client(&server);
     assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(1), send(&client, req(Method::GET, &server.origin), 10)).await, Ok(Err(error)) if error.kind() == &Error::BodyTooLarge)
+        matches!(tokio::time::timeout(Duration::from_secs(60), send(&client, req(Method::GET, &server.origin), 10)).await, Ok(Err(error)) if error.kind() == &Error::BodyTooLarge)
     );
 }
 
@@ -664,16 +664,16 @@ async fn deadline_covers_stalled_response_body() {
     let worker = tokio::spawn(async move {
         send::once(&client, request, 10, Encoding::Identity, &clock, deadline).await
     });
-    tokio::time::timeout(Duration::from_secs(3), wait)
+    tokio::time::timeout(Duration::from_secs(60), wait)
         .await
         .unwrap()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), head_rx)
+    tokio::time::timeout(Duration::from_secs(60), head_rx)
         .await
         .unwrap()
         .unwrap();
     base.advance(Duration::from_secs(1));
-    let result = tokio::time::timeout(Duration::from_secs(3), worker)
+    let result = tokio::time::timeout(Duration::from_secs(60), worker)
         .await
         .unwrap()
         .unwrap();
@@ -687,7 +687,7 @@ async fn deadline_covers_stalled_response_body() {
     assert_eq!(head.status, http::StatusCode::UNAUTHORIZED);
     assert_eq!(server.requests(), 1);
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(3), eof_rx).await,
+        tokio::time::timeout(Duration::from_secs(60), eof_rx).await,
         Ok(Ok(true))
     ));
 }

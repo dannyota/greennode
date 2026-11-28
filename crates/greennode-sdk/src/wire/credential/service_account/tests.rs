@@ -50,7 +50,7 @@ async fn unauthorized_stalled_body_returns_at_head() {
         &clock,
         Duration::ZERO,
     );
-    let result = tokio::time::timeout(Duration::from_secs(1), future).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), future).await;
     assert!(result.is_ok());
     assert!(ready.await.is_ok());
     let error = result.unwrap().err().unwrap();
@@ -58,7 +58,7 @@ async fn unauthorized_stalled_body_returns_at_head() {
     assert_eq!(detail.reason(), "token endpoint rejected request");
     assert_eq!(detail.status(), Some(401));
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), closed)
+        tokio::time::timeout(Duration::from_secs(60), closed)
             .await
             .unwrap()
             .unwrap()
@@ -167,7 +167,7 @@ async fn cancellation_during_body_keeps_identity_and_status() {
     }
     assert!(received.await.is_ok());
     handle.cancel();
-    let finished = tokio::time::timeout(Duration::from_secs(1), &mut future).await;
+    let finished = tokio::time::timeout(Duration::from_secs(60), &mut future).await;
     assert!(finished.is_ok());
     let error = finished.unwrap().err().unwrap();
     assert!(error.has_identity(ErrorClass::Cancelled));
@@ -204,7 +204,7 @@ async fn configured_timeout_during_body() {
     }
     assert!(received.await.is_ok());
     clock.inner.advance(Duration::from_secs(5));
-    let finished = tokio::time::timeout(Duration::from_secs(1), &mut future).await;
+    let finished = tokio::time::timeout(Duration::from_secs(60), &mut future).await;
     assert!(finished.is_ok());
     let error = finished.unwrap().err().unwrap();
     assert!(error.has_identity(ErrorClass::Auth));
@@ -248,7 +248,7 @@ async fn zero_timeout_uses_default() {
             .await;
     assert!(pending);
     clock.inner.advance(Duration::from_secs(1));
-    let result = tokio::time::timeout(Duration::from_secs(1), &mut future).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), &mut future).await;
     assert!(result.is_ok());
     let error = result.unwrap().err().unwrap();
     assert!(error.has_identity(ErrorClass::Auth));

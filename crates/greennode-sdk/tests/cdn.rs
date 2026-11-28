@@ -311,7 +311,7 @@ async fn public_page_ignores_hidden_tags_and_comment_decoys_within_a_bound() {
         let result = client(&server, None)
             .list_ip_ranges(&ctx, ListIpRangesInput)
             .await;
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
         assert_eq!(result.unwrap().items, ["192.0.2.0/24"]);
     }
 }

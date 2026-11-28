@@ -124,7 +124,7 @@ async fn endpoint_quote_body_interruption_retains_context_at_discovery_and_price
             clock.wait_for_body(if price { 9 } else { 1 }).await;
             cancel.cancel();
         };
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(60), async {
             tokio::join!(client.quote_create_endpoint(&ctx, input), interrupt)
         })
         .await

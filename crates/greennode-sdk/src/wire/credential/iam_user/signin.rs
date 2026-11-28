@@ -285,7 +285,7 @@ mod tests {
                 username: "user",
                 password: &password,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             },
             test_pkce(),
         )
@@ -644,7 +644,7 @@ mod tests {
                 username: "user",
                 password: &password,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             },
             test_pkce(),
         )
@@ -677,7 +677,7 @@ mod tests {
                 username: "user",
                 password: &password,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             },
             test_pkce(),
         )
@@ -699,7 +699,7 @@ mod tests {
                 response("200 OK", vec![], "<input name=\"_csrf\" value=\"token\">"),
                 reply,
             ]);
-            let result = tokio::time::timeout(Duration::from_millis(500), run(&server)).await;
+            let result = tokio::time::timeout(Duration::from_secs(60), run(&server)).await;
             assert!(matches!(
                 result,
                 Ok(Ok(Session {

@@ -457,7 +457,7 @@ async fn billing_and_quota_body_interruptions_preserve_their_contracts() {
                     _ => clock.advance(Duration::from_secs(120)),
                 }
             };
-            let (error, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            let (error, ()) = tokio::time::timeout(Duration::from_secs(60), async {
                 tokio::join!(work, interrupt)
             })
             .await

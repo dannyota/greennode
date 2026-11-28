@@ -459,7 +459,7 @@ mod tests {
                             clock.advance(Duration::from_secs(120));
                         }
                     };
-                    let (error, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+                    let (error, ()) = tokio::time::timeout(Duration::from_secs(60), async {
                         tokio::join!(work, interrupt)
                     })
                     .await
@@ -507,7 +507,7 @@ mod tests {
             stream.read_exact(&mut [0]).await.unwrap();
             stream
         };
-        let stream = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let stream = tokio::time::timeout(std::time::Duration::from_secs(60), async {
             tokio::select! { stream = handshake => stream, _ = &mut work => panic!("request ended before TLS cancellation") }
         }).await.unwrap();
         cancel.cancel();

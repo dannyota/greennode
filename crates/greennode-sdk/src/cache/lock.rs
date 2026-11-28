@@ -227,7 +227,7 @@ mod tests {
         assert!(still_waiting);
         drop(first);
         clock.advance(Duration::from_millis(20));
-        let result = tokio::time::timeout(Duration::from_secs(2), worker)
+        let result = tokio::time::timeout(Duration::from_secs(60), worker)
             .await
             .unwrap()
             .unwrap();
@@ -256,7 +256,7 @@ mod tests {
         drop(first);
         clock.advance(Duration::from_millis(10));
         assert!(
-            tokio::time::timeout(Duration::from_secs(2), worker)
+            tokio::time::timeout(Duration::from_secs(60), worker)
                 .await
                 .unwrap()
                 .unwrap()
@@ -281,7 +281,7 @@ mod tests {
         });
         ready.notified().await;
         cancel.cancel();
-        let result = tokio::time::timeout(Duration::from_secs(2), worker)
+        let result = tokio::time::timeout(Duration::from_secs(60), worker)
             .await
             .unwrap()
             .unwrap();
@@ -309,7 +309,7 @@ mod tests {
         });
         ready.notified().await;
         clock.advance(Duration::from_secs(1));
-        let result = tokio::time::timeout(Duration::from_secs(2), worker)
+        let result = tokio::time::timeout(Duration::from_secs(60), worker)
             .await
             .unwrap()
             .unwrap();

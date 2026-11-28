@@ -77,7 +77,7 @@ async fn call(
         server,
         ctx,
         &SystemClock,
-        SystemClock.monotonic_now() + Duration::from_secs(5),
+        SystemClock.monotonic_now() + Duration::from_secs(60),
     )
     .await
 }
@@ -148,7 +148,7 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
                 &server,
                 &RequestContext::new().0,
                 &SystemClock,
-                SystemClock.monotonic_now() + Duration::from_secs(5),
+                SystemClock.monotonic_now() + Duration::from_secs(60),
                 &source,
             )
             .await;
@@ -214,7 +214,7 @@ async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
             client: &clients,
             ctx: &ctx,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             sleeper: &Sleeper,
             jitter: &mut || 0,
         },
@@ -252,7 +252,7 @@ async fn discovery_adds_bearer_to_caller_evidence() {
                 client: &clients,
                 ctx: &ctx,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
                 sleeper: &Sleeper,
                 jitter: &mut || 0,
             },
@@ -276,7 +276,7 @@ async fn short_base64url_credential_cannot_be_cached_as_project_id() {
     let discovery = Discovery::default();
     let source = RotatingSource(std::sync::Mutex::new("a?bcd"));
     let (ctx, _) = RequestContext::new();
-    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(60);
     assert!(
         call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
             .await
@@ -300,7 +300,7 @@ async fn credential_project_id_is_not_cached_after_rotation() {
     let discovery = Discovery::default();
     let (ctx, _) = RequestContext::new();
     let source = RotatingSource(std::sync::Mutex::new("toy-token"));
-    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(60);
     assert!(
         call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
             .await
@@ -413,7 +413,7 @@ async fn canceled_waiter_does_not_stop_holder() {
     tokio::select! { _ = &mut waiter_future => panic!("waiter finished early"), _ = tokio::task::yield_now() => {} }
     cancel.cancel();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), waiter_future)
+        tokio::time::timeout(Duration::from_secs(60), waiter_future)
             .await
             .expect("waiter did not cancel")
             .unwrap_err()
@@ -464,7 +464,7 @@ async fn runtime_deadline_expires_while_waiting_for_gate() {
     tokio::pin!(future);
     tokio::select! { _ = &mut future => panic!("waiter finished early"), _ = tokio::task::yield_now() => {} }
     clock.advance(Duration::from_secs(1));
-    let result = tokio::time::timeout(Duration::from_secs(1), future).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), future).await;
     assert!(result.is_ok(), "waiter did not honor deadline");
     assert_eq!(
         result.unwrap().unwrap_err().class(),

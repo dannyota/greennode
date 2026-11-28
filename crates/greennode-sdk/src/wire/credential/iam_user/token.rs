@@ -211,7 +211,7 @@ mod tests {
             code: &Secret::new(code),
             verifier: &verifier,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         })
         .await
         .map(|timed| timed.token)

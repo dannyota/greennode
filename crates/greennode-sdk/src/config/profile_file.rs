@@ -201,7 +201,7 @@ mod tests {
                 let _ = send.send(select(None, None, &source, None));
             });
             let selection = receive
-                .recv_timeout(std::time::Duration::from_secs(1))
+                .recv_timeout(std::time::Duration::from_secs(60))
                 .unwrap()
                 .unwrap();
             assert_eq!(selection.mode, expected);

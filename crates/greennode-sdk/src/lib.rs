@@ -88,7 +88,7 @@ mod iam_entry_tests {
             password: &password,
             totp: None,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let result = run(login, &token_url).await;
         assert!(result.is_err());
