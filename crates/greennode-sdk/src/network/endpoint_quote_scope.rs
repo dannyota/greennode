@@ -1,15 +1,18 @@
 use std::{collections::HashSet, time::Duration};
 
-use serde::Serialize;
 use serde_json::value::RawValue;
 
 use crate::config::session::AuthKind;
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds};
+use crate::wire::product::{
+    evidence::{Evidence, SentCredentials},
+    options::{AttemptCheck, Options, PathIds},
+};
 use crate::{Error, ErrorClass, RequestContext};
 
 use super::Client;
+use super::endpoint_filters::{Filter, FilterField};
 use super::endpoint_quote::{OP, QuoteCreateEndpointInput, fields, local_error};
 use super::inventory::Selection;
 use super::nat_catalog::reflects;
@@ -64,16 +67,10 @@ struct Page {
     pages: i64,
 }
 
-#[derive(Serialize)]
-struct Filter<'a> {
-    field: &'a str,
-    value: &'a str,
-}
-
 struct Scan<'a> {
     read: Read,
     suffix: &'a [&'a str],
-    filters: &'a [(&'a str, &'a str)],
+    filters: &'a [Filter<'a>],
     query: &'a [(&'a str, &'a str)],
     required: &'a [&'a str],
     require_paging: bool,
@@ -310,9 +307,9 @@ impl<'a> EndpointQuote<'a> {
             .scan(Scan {
                 require_paging: true,
                 filters: &[
-                    ("status", "ACTIVE"),
-                    ("endpointServiceId", &offer.service),
-                    ("zoneType", "AVAILABILITY"),
+                    Filter::new(FilterField::Status, "ACTIVE"),
+                    Filter::new(FilterField::EndpointServiceId, &offer.service),
+                    Filter::new(FilterField::ZoneType, "AVAILABILITY"),
                 ],
                 ..Scan::new(VPCS, &["uuid", "status", "projectUuid", "regionUuid"])
             })
@@ -340,7 +337,10 @@ impl<'a> EndpointQuote<'a> {
         let subnets = self
             .scan(Scan {
                 suffix: &[&input.vpc_id],
-                filters: &[("isEndpointUsable", "true"), ("zoneUuid", &offer.zone)],
+                filters: &[
+                    Filter::new(FilterField::IsEndpointUsable, "true"),
+                    Filter::new(FilterField::ZoneUuid, &offer.zone),
+                ],
                 ..Scan::new(SUBNETS, &["uuid", "status", "vpcUuid", "zone"])
             })
             .await?;
@@ -404,13 +404,9 @@ impl<'a> EndpointQuote<'a> {
             .into_iter()
             .chain(spec.suffix.iter().copied())
             .collect();
-        let filters: Vec<_> = spec
-            .filters
-            .iter()
-            .map(|(field, value)| Filter { field, value })
-            .collect();
-        let filters =
-            serde_json::to_string(&filters).map_err(|_| Error::new(ErrorClass::InvalidInput))?;
+        let filters = serde_json::to_string(spec.filters)
+            .map_err(|_| Error::new(ErrorClass::InvalidInput))?;
+        let check = |credentials: &SentCredentials| Filter::check(spec.filters, credentials);
         for page in 1..=50 {
             let params = format!(r#"{{"search":{filters},"sort":{{}},"page":{page},"size":1000}}"#);
             let query: Vec<_> = [("params", params.as_str())]
@@ -426,7 +422,11 @@ impl<'a> EndpointQuote<'a> {
                     Selection {
                         path: &path,
                         query: &query,
-                        headers: &[],
+                        options: Options {
+                            identifier_query_keys: &["zoneUuid"],
+                            attempt_check: Some(AttemptCheck(&check)),
+                            ..Options::DEFAULT
+                        },
                     },
                     self.evidence,
                 )

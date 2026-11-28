@@ -3,7 +3,11 @@ use serde_json::value::RawValue;
 
 use crate::endpoint::Base;
 use crate::model::wire::{Field, WireField, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds, response};
+use crate::wire::product::{
+    evidence::Evidence,
+    options::{Options, PathIds},
+    response,
+};
 use crate::{ApiError, Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
 use super::inventory::{Selection, screen};
@@ -287,7 +291,10 @@ impl Client {
             Selection {
                 path: &[&scope.zone, &scope.project],
                 query,
-                headers: &[],
+                options: Options {
+                    identifier_query_keys: &["zoneUuid"],
+                    ..Options::DEFAULT
+                },
             },
             evidence,
         )

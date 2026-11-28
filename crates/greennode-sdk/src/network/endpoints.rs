@@ -4,9 +4,13 @@ use serde::Serialize;
 
 use crate::endpoint::{Base, vnetwork_regional_gateway};
 use crate::model::wire::{Field, go_json};
-use crate::wire::product::{evidence::Evidence, options::PathIds};
+use crate::wire::product::{
+    evidence::{Evidence, SentCredentials},
+    options::{AttemptCheck, Options, PathIds},
+};
 use crate::{Error, ErrorClass, Failure, List, PagedList, RequestContext};
 
+use super::endpoint_filters::{Filter, FilterField};
 use super::inventory::{InventoryRead, InventoryStyle, Selection, screen};
 use super::wire::Fields;
 use super::{Client, Endpoint, EndpointTag, VNetworkRegion, failure};
@@ -120,12 +124,6 @@ impl ListEndpointTagsInput {
 pub type ListEndpointTagsOutput = List<EndpointTag>;
 
 #[derive(Serialize)]
-struct Filter<'a> {
-    field: &'static str,
-    value: &'a str,
-}
-
-#[derive(Serialize)]
 struct Params<'a> {
     page: i64,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -222,17 +220,17 @@ impl Client {
             let params = Params {
                 page: input.page.max(1),
                 search: [
-                    ("vpcId", input.vpc_id.as_str()),
-                    ("uuid", input.uuid.as_str()),
+                    Filter::new(FilterField::VpcId, &input.vpc_id),
+                    Filter::new(FilterField::Uuid, &input.uuid),
                 ]
                 .into_iter()
-                .filter(|(_, value)| !value.is_empty())
-                .map(|(field, value)| Filter { field, value })
+                .filter(|filter| !filter.value.is_empty())
                 .collect(),
                 size: if input.size > 0 { input.size } else { 10_000 },
             };
-            let params = serde_json::to_string(&params)
+            let encoded = serde_json::to_string(&params)
                 .map_err(|_| failure(Error::new(ErrorClass::InvalidInput)))?;
+            let check = |credentials: &SentCredentials| Filter::check(&params.search, credentials);
             let body = self
                 .inventory(
                     ctx,
@@ -240,8 +238,11 @@ impl Client {
                     LIST,
                     Selection {
                         path: &[&zone, &project],
-                        query: &[("params", &params)],
-                        headers: &[],
+                        query: &[("params", &encoded)],
+                        options: Options {
+                            attempt_check: Some(AttemptCheck(&check)),
+                            ..Options::DEFAULT
+                        },
                     },
                     &mut evidence,
                 )
@@ -294,6 +295,10 @@ impl Client {
             } else {
                 &[]
             };
+            let check = |credentials: &SentCredentials| {
+                (project.user_id > 0 && credentials.id_reflects(&user_id))
+                    .then(|| Box::new(Error::new(ErrorClass::InvalidInput)))
+            };
             let body = self
                 .inventory(
                     ctx,
@@ -302,7 +307,12 @@ impl Client {
                     Selection {
                         path: &[&project.id],
                         query: &[("resourceUuid", &input.endpoint_id)],
-                        headers,
+                        options: Options {
+                            identifier_query_keys: &["resourceUuid"],
+                            headers,
+                            attempt_check: Some(AttemptCheck(&check)),
+                            ..Options::DEFAULT
+                        },
                     },
                     &mut evidence,
                 )

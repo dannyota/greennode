@@ -18,6 +18,7 @@ const LATER: &str = "new-toy-bearer";
 struct Rotating {
     requests: AtomicUsize,
     rotate_at: usize,
+    replacement: &'static str,
 }
 
 impl crate::CredentialsProvider for Rotating {
@@ -29,7 +30,7 @@ impl crate::CredentialsProvider for Rotating {
         let marker = if requests < self.rotate_at {
             "initial-toy-bearer"
         } else {
-            LATER
+            self.replacement
         };
         Box::pin(async move { Ok(crate::Token::new(Secret::new(marker), None)) })
     }
@@ -44,11 +45,16 @@ impl crate::CredentialsProvider for Rotating {
 }
 
 fn rotated_options(rotate_at: usize) -> ConfigOptions {
+    rotating_options(rotate_at, LATER)
+}
+
+fn rotating_options(rotate_at: usize, replacement: &'static str) -> ConfigOptions {
     ConfigOptions::default()
         .with_region("hcm-3".into())
         .with_credentials_provider(Arc::new(Rotating {
             requests: AtomicUsize::new(0),
             rotate_at,
+            replacement,
         }))
 }
 
@@ -219,4 +225,188 @@ async fn endpoint_preflight_remap_retains_rate_limit_retryability() {
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.operation(), "network.DeleteEndpoint");
     assert!(api.retryable());
+}
+
+#[tokio::test]
+async fn endpoint_create_refuses_rotated_credentials_in_query_identifiers_before_the_get() {
+    let zone = include_str!("../../../tests/fixtures/network/endpoint_quote_zones.json")
+        .replace("HCM03-1C", "az-aagb");
+    let services = include_str!("../../../tests/fixtures/network/endpoint_quote_services.json")
+        .replace(
+            "00000000-0000-0000-0000-0000000000a1",
+            "00000000-0000-0000-0000-0000000006a1",
+        );
+    let mut failures = Vec::new();
+    for stage in ["direct zone", "service filter", "zone filter"] {
+        let rotate_at = match stage {
+            "direct zone" => 4,
+            "service filter" => 6,
+            _ => 7,
+        };
+        let project = Server::start(vec![response("200 OK", PROJECT)]);
+        let endpoint = Server::start(vec![
+            response("200 OK", ENDPOINT_REGIONS),
+            response("200 OK", &zone),
+            response(
+                "200 OK",
+                include_str!("../../../tests/fixtures/network/endpoint_quote_categories.json"),
+            ),
+            response(
+                "200 OK",
+                if stage == "service filter" {
+                    &services
+                } else {
+                    include_str!("../../../tests/fixtures/network/endpoint_quote_services.json")
+                },
+            ),
+            response(
+                "200 OK",
+                include_str!("../../../tests/fixtures/network/endpoint_quote_packages.json"),
+            ),
+            response(
+                "200 OK",
+                include_str!("../../../tests/fixtures/network/endpoint_quote_vpcs.json"),
+            ),
+            response(
+                "200 OK",
+                include_str!("../../../tests/fixtures/network/endpoint_quote_subnets.json"),
+            ),
+        ]);
+        let options =
+            with_write_loopback(Product::Vserver, rotating_options(rotate_at, "j"), &project);
+        let options = with_write_loopback(Product::Vnetwork, options, &endpoint);
+        let client = Client::new(&Config::new(options).unwrap());
+        let mut input =
+            CreateEndpointInput::new("edge", PAID_VPC, "sub-00000000-0000-0000-0000-000000000003");
+        input.availability_zone_id = "az-aagb".into();
+        let result = client
+            .create_endpoint(&RequestContext::new().0, input)
+            .await;
+        if endpoint.requests() != rotate_at - 1
+            || !result.is_err_and(|failure| {
+                failure.write_dispatch() == WriteDispatch::NotSent
+                    && failure.error().has_class(ErrorClass::InvalidInput)
+            })
+        {
+            failures.push((stage, endpoint.requests()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "unexpected selector requests: {failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn nat_create_refuses_a_rotated_credential_in_the_package_zone_query() {
+    let zones = include_str!("../../../tests/fixtures/network/list_nat_zones.json")
+        .replace("az-1", "az-aZgb");
+    let network = Server::start(vec![
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/nat_quote_whitelist.json"),
+        ),
+        response("200 OK", &zones),
+        response(
+            "200 OK",
+            include_str!("../../../tests/fixtures/network/list_nat_packages.json"),
+        ),
+    ]);
+    let options = with_write_loopback(
+        Product::Vnetwork,
+        rotating_options(2, "f").with_project_id("proj-1".into()),
+        &network,
+    );
+    let client = Client::new(&Config::new(options).unwrap());
+    let result = client
+        .create_nat_instance(
+            &RequestContext::new().0,
+            CreateNatInstanceInput::new("edge", "zone-1", "az-aZgb", "package-1", "vpc-1"),
+        )
+        .await;
+    assert_eq!(network.requests(), 2);
+    let failure = result.unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert!(failure.error().has_class(ErrorClass::InvalidInput));
+}
+
+#[tokio::test]
+async fn endpoint_list_refuses_rotated_credentials_in_both_inventory_filters() {
+    for (vpc_id, uuid) in [("net-aagb", ""), ("", "enp-aagb")] {
+        let endpoint = Server::start(vec![
+            response("200 OK", ENDPOINT_REGIONS),
+            response("200 OK", NO_NATS),
+        ]);
+        let options = with_product_loopback(
+            Product::Vnetwork,
+            rotating_options(1, "j").with_project_id("pro-1".into()),
+            &endpoint,
+        );
+        let client = Client::new(&Config::new(options).unwrap());
+        let input = ListEndpointsInput {
+            vpc_id: vpc_id.into(),
+            uuid: uuid.into(),
+            ..Default::default()
+        };
+        let result = client.list_endpoints(&RequestContext::new().0, input).await;
+        assert_eq!(endpoint.requests(), 1);
+        assert!(
+            result
+                .unwrap_err()
+                .error()
+                .has_class(ErrorClass::InvalidInput)
+        );
+    }
+}
+
+#[tokio::test]
+async fn endpoint_tags_refuses_a_rotated_credential_in_the_resource_query() {
+    let project = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3","userId":918}]}"#,
+    )]);
+    let endpoint = Server::start(vec![response("200 OK", r#"{"data":[]}"#)]);
+    let options = with_product_loopback(Product::Vserver, rotating_options(1, "f"), &project);
+    let options = with_product_loopback(Product::Vnetwork, options, &endpoint);
+    let client = Client::new(&Config::new(options).unwrap());
+    let result = client
+        .list_endpoint_tags(
+            &RequestContext::new().0,
+            ListEndpointTagsInput::new("enp-aZgb"),
+        )
+        .await;
+    assert_eq!(project.requests(), 1);
+    assert_eq!(endpoint.requests(), 0);
+    assert!(
+        result
+            .unwrap_err()
+            .error()
+            .has_class(ErrorClass::InvalidInput)
+    );
+}
+
+#[tokio::test]
+async fn endpoint_tags_refuses_a_rotated_credential_in_the_portal_user_header() {
+    let project = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3","userId":1668}]}"#,
+    )]);
+    let endpoint = Server::start(vec![response("200 OK", r#"{"data":[]}"#)]);
+    let options = with_product_loopback(Product::Vserver, rotating_options(1, "f"), &project);
+    let options = with_product_loopback(Product::Vnetwork, options, &endpoint);
+    let client = Client::new(&Config::new(options).unwrap());
+    let result = client
+        .list_endpoint_tags(
+            &RequestContext::new().0,
+            ListEndpointTagsInput::new("enp-clean"),
+        )
+        .await;
+    assert_eq!(project.requests(), 1);
+    assert_eq!(endpoint.requests(), 0);
+    assert!(
+        result
+            .unwrap_err()
+            .error()
+            .has_class(ErrorClass::InvalidInput)
+    );
 }

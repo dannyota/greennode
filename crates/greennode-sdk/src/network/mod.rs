@@ -2,6 +2,7 @@
 
 mod bandwidth;
 mod connectivity;
+mod endpoint_filters;
 mod endpoint_models;
 mod endpoint_quote;
 mod endpoint_quote_scope;

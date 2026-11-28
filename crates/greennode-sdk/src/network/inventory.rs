@@ -35,7 +35,7 @@ pub(super) struct InventoryRead {
 pub(super) struct Selection<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
-    pub(super) headers: &'a [(&'static str, &'a str)],
+    pub(super) options: Options<'a>,
 }
 
 impl<'a> Selection<'a> {
@@ -43,7 +43,7 @@ impl<'a> Selection<'a> {
         Self {
             path,
             query: &[],
-            headers: &[],
+            options: Options::DEFAULT,
         }
     }
 }
@@ -163,10 +163,6 @@ impl Client {
             report_redirect: protected,
             retry_config: retry::Config::default(),
         };
-        let options = Options {
-            headers: selection.headers,
-            ..Options::DEFAULT
-        };
         let mut jitter = || self.session.retry_jitter();
         let runtime = self
             .session
@@ -176,7 +172,7 @@ impl Client {
             runtime,
             base,
             &operation,
-            &options,
+            &selection.options,
             selection.path,
             selection.query,
             RouteAuth::Bearer(self.session.bearer_source()),

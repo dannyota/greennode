@@ -464,7 +464,7 @@ impl Client {
                 | Style::BandwidthProject => None,
                 Style::Bandwidth => Some(guard_bandwidth),
             },
-            ..Options::DEFAULT
+            ..selection.options
         };
         let screen = |error: Error, evidence: &Evidence| evidence.screen_error(error);
         let response = operation::execute_raw(
