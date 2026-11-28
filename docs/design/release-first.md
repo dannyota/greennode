@@ -1,16 +1,17 @@
-# Releases from the owner's Mac
+# Mac release recovery
 
-The Mac is the active crates.io publishing path until the owner approves the
-[CI cutover](release.md#ci-cutover). The owner chose plain `cargo publish` with
-an existing default Cargo login. Only the owner may narrow or revoke that token.
-Agents never open, read, print or copy the token or its credential file.
+Since the [CI cutover](release.md#ci-cutover), the Mac publishes only to recover
+an upload the CI path cannot complete, with the owner's approval for that run.
+The owner chose plain `cargo publish` with an existing default Cargo login. Only
+the owner may narrow or revoke that token. Agents never open, read, print or
+copy the token or its credential file.
 
 The Mac checks the actual uploaded bytes immediately after each upload. Plain
 Cargo publishing trades away pre-upload approval of those bytes. Cargo may cache
 a credential from the read before packaging and reuse it for publish, so a
 provider in front of `cargo:token` cannot enforce this check just by falling
-through on reads. Trusted Publishing restores [pre-upload checksum approval]
-when CI takes over. [Cargo providers] and [Cargo auth source] describe the
+through on reads. The CI path keeps [pre-upload checksum approval] through
+Trusted Publishing. [Cargo providers] and [Cargo auth source] describe the
 provider order and credential cache.
 
 ## 1. Verify the commit and tag
@@ -22,22 +23,12 @@ the build, publish and receipt directories. Complete the
 [Mac packaging proof](release.md#packaging-proof) and the
 [GitHub Release setup](release.md#github-release-setup) before tagging.
 
-1. Select the exact approved release commit after the
-   [version commit](release.md#versions) lands. Fetch `origin/master`. Require
-   branch protection, `git merge-base --is-ancestor "$COMMIT" origin/master`,
-   and a successful `ci` job from `.github/workflows/ci.yml` on the `master`
-   push for that exact SHA. Check the SHA on the run itself.
-2. Obtain the owner's approval for the signed annotated tag `vX.Y.Z`, the
-   resulting GitHub Release and the two crates.io uploads at that commit. Create
-   the tag locally, verify its signature against the authorized signer with
-   `git verify-tag`, and require `git rev-parse "refs/tags/$TAG^{commit}"` to
-   equal `$COMMIT`. Only then push the tag. The push starts
-   `.github/workflows/release.yml`, which publishes an immutable GitHub Release
-   and its assets when its checks pass.
-3. Verify that the remote tag object equals the signed local tag object. Stop on
-   a failed identity, signature, ancestry or check result. The Mac upload uses
-   the exact-SHA `ci` check and the signed tag. The GitHub Release and tag-push
-   workflow artifacts are required for CI publishing.
+Run the [tag checks](release.md#tag-checks). For a tag that already exists, run
+them against it instead of creating one. The tag push starts
+`.github/workflows/release.yml`, which publishes an immutable GitHub Release and
+its assets when its checks pass. The Mac upload uses the exact-SHA `ci` check
+and the signed tag; the GitHub Release and tag-push workflow artifacts are
+required for CI publishing.
 
 ## 2. Check the tree, packages and inventory
 
@@ -178,6 +169,25 @@ environment. Record the pending tool upload as in step 3 and run:
 Always run `check-crate-release.py state RECEIPT --wait greennode` after Cargo
 returns. Require `present-and-approved` for both crates and `dannyota` as a user
 owner of both names. Record the confirmed results against the receipt.
+
+## Recover a CI release
+
+Use this when a CI publish leaves the SDK published and the tool absent, the
+tag's exact-run artifacts still exist, and a fresh CI dispatch for that tag
+cannot finish it. If the artifacts have expired, follow the
+[expiry rule](release.md#release-evidence-for-ci-publishing) instead: cut a new
+shared version. Get the owner's approval for the Mac upload of the missing
+crate.
+
+1. Run the [tag checks](release.md#tag-checks) against the existing tag.
+2. Download `crate-checksums.json` from the tag's immutable GitHub Release into
+   a new owner-only directory and use it as `RECEIPT`. Run `state RECEIPT` and
+   require `present-and-approved` for the SDK, owned by `dannyota`, and `absent`
+   for the tool. A CI attempt that may have started the tool upload must be
+   resolved first, as below.
+3. Run step 2's tree, manifest and dry-run checks in a fresh publish checkout of
+   the tag and require the staged tool archive's SHA-256 to equal the receipt's.
+4. Run step 4 for the tool only.
 
 ## Resume a release
 

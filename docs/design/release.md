@@ -2,17 +2,17 @@
 
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
-exactly `=VERSION` of the SDK. Mac publishing is active until the owner approves
-cutover to a proven CI publish workflow. Uploads are permanent ([Cargo
-publishing]).
+exactly `=VERSION` of the SDK. Releases publish through the CI workflow below,
+which the owner approved after the `v0.1.1` proof; the Mac procedure is for
+recovery only. Uploads are permanent ([Cargo publishing]).
 
 ## Approaches
 
 | Approach                                             | Trade-off                                                                                       |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Publish each crate from the Mac                      | Use now. The owner controls each release and can reconcile the two uploads independently.       |
+| Publish each crate from the Mac                      | Recovery only. The owner can reconcile the two uploads independently.                           |
 | Publish from a tag or release job                    | One job can write to GitHub and crates.io, without a separate approval for the registry upload. |
-| Dispatch a separate workflow with Trusted Publishing | Use after proof and approval. It keeps [duolane]'s separate approval and per-crate recovery.    |
+| Dispatch a separate workflow with Trusted Publishing | Use. It keeps [duolane]'s separate approval and per-crate recovery.                             |
 
 ## Versions
 
@@ -33,23 +33,39 @@ A version-only release commit changes the root and tool `Cargo.toml` plus
 `Cargo.lock`. Refresh with `cargo +1.100.0 check --workspace --all-targets`,
 then repeat with `--locked`. Do not edit a member's inherited version.
 
-## Releases from the owner's Mac
+## Mac recovery
 
-The [Mac release procedure](release-first.md) uses the owner's existing Cargo
-login. It stages archives in the publish checkout and checks the uploaded
+Use the [Mac release procedure](release-first.md) only when the owner approves
+recovering an upload the CI path cannot complete. It uses the owner's existing
+Cargo login. It stages archives in the publish checkout and checks the uploaded
 checksums against the saved receipt before proceeding. The tag push runs the
 GitHub Release workflow. CI publishing uses that workflow's packaging evidence
 and checks the actual archive before upload.
 
 ## Release workflow
 
-Before pushing a tag, the owner checks its commit against freshly fetched
-protected `master`, because a tag push runs the workflow file from the tagged
-commit. `.github/workflows/release.yml` runs on `v*` tag pushes, one run at a
-time. As defense in depth, its first job fails unless the tag's commit is in
-protected `master`'s history; later jobs check out that SHA, and no step that
-runs tagged code holds a token. Validate the tag, manifests, lockfile,
-dependency policy and tests with pinned tools. Build only the tool with
+### Tag checks
+
+With the owner's approval for the tag, its GitHub Release and both uploads,
+select as `$COMMIT` the approved protected `master` commit that contains the
+[version commit](#versions), such as its pull request's merge commit. Fetch
+`origin/master` and require branch protection,
+`git merge-base --is-ancestor "$COMMIT" origin/master`, and a successful `ci`
+job from `.github/workflows/ci.yml` on the `master` push for that exact SHA,
+checked on the run itself. Create the signed annotated tag `vX.Y.Z`, verify it
+against the authorized signer with `git verify-tag`, and require
+`git rev-parse "refs/tags/$TAG^{commit}"` to equal `$COMMIT`. Only then push the
+tag, and verify that the remote tag object equals the local one. Stop on a
+failed identity, signature, ancestry or check result. These checks matter
+because a tag push runs the workflow file from the tagged commit.
+
+### Workflow
+
+`.github/workflows/release.yml` runs on `v*` tag pushes, one run at a time. As
+defense in depth, its first job fails unless the tag's commit is in protected
+`master`'s history; later jobs check out that SHA, and no step that runs tagged
+code holds a token. Validate the tag, manifests, lockfile, dependency policy and
+tests with pinned tools. Build only the tool with
 `cargo build --locked --release --package greennode --target TARGET`, check its
 version against the tag, and smoke-test the extracted Windows archive.
 
@@ -226,13 +242,15 @@ stopped job that started Cargo without confirming the upload is also unknown.
 The owner checks the preceding attempt before another upload. If both readers
 still say absent after an ambiguous write, get confirmation from crates.io that
 the write did not land and is no longer in flight. A red job, old 404 or elapsed
-time does not clear it. For Mac recovery, use the
-[saved local receipt and archives](release-first.md#resume-a-release). For CI
-recovery, dispatch the same tag for a new approval while the exact-run artifacts
-still exist. Publish only confirmed missing versions. Investigate yanks and
-mismatches before any write. Never automatically unyank or retag. Correct an
-accidental yank only after verifying the approved bytes. A version with
-different bytes needs a new shared tag.
+time does not clear it. To finish a Mac attempt, use the
+[saved local receipt and archives](release-first.md#resume-a-release). To finish
+a CI attempt from the Mac, use
+[Recover a CI release](release-first.md#recover-a-ci-release). For CI recovery,
+dispatch the same tag for a new approval while the exact-run artifacts still
+exist. Publish only confirmed missing versions. Investigate yanks and mismatches
+before any write. Never automatically unyank or retag. Correct an accidental
+yank only after verifying the approved bytes. A version with different bytes
+needs a new shared tag.
 
 ## GitHub Release setup
 
@@ -288,10 +306,13 @@ required CI job covers x86_64.
    through the CI path for that tag. After the proof succeeds, the owner
    approves moving subsequent releases to CI.
 
+`v0.1.1` proved the path on 2026-11-28: both uploads matched their approved
+checksums with `dannyota` as owner, and the owner approved the cutover.
+
 ## Unverified
 
-- The owner checks the deployed Trusted Publishing forms against their source
-  and verifies the environment and run-approval reads on the first CI dispatch.
+- The owner checks the deployed Trusted Publishing forms against their source.
+  The environment and run-approval reads passed on the `v0.1.1` dispatches.
 - The crates.io not-found bodies were observed on 2026-11-25. A reset during the
   response head or a TLS timeout behind a proxy may stop the registry check.
 
