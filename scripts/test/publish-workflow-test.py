@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/publish-crates.yml'
+PROOF = runpy.run_path(str(ROOT / 'scripts/test/loopback-registry-proof.py'))
 
 
 def parse():
@@ -78,8 +80,8 @@ def validate(w):
         'Recheck release evidence': ('gh run download "$RELEASE_RUN"', 'gh release download "$TAG"', 'cmp "$receipt"', 'check-crate-release.py evidence', '"$RECEIPT_SHA256"', 'check-crate-release.py state', 'needed=false'),
         'Check SDK registry state': ('check-crate-release.py state', 'greennode-sdk: absent'),
         'Check tool registry state': ('check-crate-release.py state', 'greennode-sdk: present-and-approved', 'greennode: absent', '/owners'),
-        'Upload SDK': ('--package greennode-sdk', 'check-crate-publish-credential.py', '--config net.retry=0', 'unknown version='),
-        'Upload tool': ('--package greennode ', 'check-crate-publish-credential.py', '--config net.retry=0', 'unknown version='),
+        'Upload SDK': ('unknown version=',),
+        'Upload tool': ('unknown version=',),
         'Confirm SDK upload': ('--wait greennode-sdk',),
         'Confirm tool upload': ('--wait greennode',),
     }.items():
@@ -98,9 +100,12 @@ case "$states" in
   *) exit 1 ;;
 esac
 ''', 'sdk registry decision'
+    config = f'"$GITHUB_WORKSPACE/{PROOF["PUBLISH_CONFIG"].relative_to(ROOT)}"'
     for name, crate in (('Upload SDK', 'greennode-sdk'), ('Upload tool', 'greennode')):
-        run = publish_steps[names.index(name)]['run']
-        assert f'cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package {crate} --config "$provider" --config net.retry=0' in run.splitlines(), 'upload provider'
+        step = publish_steps[names.index(name)]
+        assert step.get('env', {}).get('CARGO_REGISTRY_TOKEN') == '${{ steps.auth.outputs.token }}', 'registry token scope'
+        upload = ' '.join(('cargo', '+"$TOOLCHAIN"', *PROOF['upload_args'](crate, config)))
+        assert upload in step['run'].splitlines(), 'upload provider'
     assert 'success()' in publish_steps[names.index('Check tool registry state')].get('if', ''), 'registry gate'
     for step in publish_steps:
         if 'steps.auth.outputs.token' in json.dumps(step):
@@ -249,8 +254,10 @@ printf 404
             step['run'] = step['run'].replace(old, new, 1)
         mutations = [
             ('approval condition', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('name') == 'Verify owner approval').update({'if': '${{ false }}'})),
-            ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', '--config "$provider"', '')),
-            ('upload provider', lambda w: change_run(w, 'publish', 'Upload tool', '--config "$provider"', '')),
+            ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', '--config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml"', '')),
+            ('upload provider', lambda w: change_run(w, 'publish', 'Upload tool', '--config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml"', '')),
+            ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', 'publish-cargo.toml', 'other.toml')),
+            ('registry token scope', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('name') == 'Upload tool')['env'].pop('CARGO_REGISTRY_TOKEN')),
             ('sdk registry decision', lambda w: change_run(w, 'publish', 'Check SDK registry state', 'needed=false', 'needed=true')),
             ('sdk registry decision', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('name') == 'Upload SDK').update({'if': '${{ true }}'})),
             ('sdk registry decision', lambda w: w['jobs']['publish']['steps'][4].update(run=w['jobs']['publish']['steps'][4]['run'] + "\nprintf 'needed=true\\n' >> \"$GITHUB_OUTPUT\"")),
@@ -259,7 +266,6 @@ printf 404
             ('registry token scope', lambda w: w['jobs']['publish']['steps'][0].update(env={'CARGO_REGISTRY_TOKEN': 'toy'})),
             ('publish safeguards', lambda w: change_run(w, 'publish', 'Verify owner approval', '.state == "approved"', '.state != "approved"')),
             ('publish safeguards', lambda w: change_run(w, 'publish', 'Recheck release evidence', '"$RECEIPT_SHA256"', '"other"')),
-            ('publish safeguards', lambda w: change_run(w, 'publish', 'Upload SDK', 'check-crate-publish-credential.py', 'other.py')),
             ('publish safeguards', lambda w: change_run(w, 'publish', 'Confirm SDK upload', '--wait greennode-sdk', '')),
             ('publish order', lambda w: w['jobs']['publish']['steps'].reverse()),
             ('auth condition', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('id') == 'auth').update({'if': '${{ true }}'})),

@@ -186,14 +186,18 @@ attempt, not a rerun. Default permissions are `{}`.
 `cargo publish` packages again. Cargo 1.100 computes SHA-256 of the actual
 archive and asks its credential provider for the `publish` operation with the
 name, version and checksum before uploading ([Cargo credential protocol], [Cargo
-1.100 publish source]). In CI, set `registry.credential-provider` explicitly to
-the checksum-checking helper. Give a token for `publish` only if the registry is
-crates.io and the name, version and checksum match the current upload and
-validated receipt. Allow a `read` credential only for that registry. Allow no
-other write. Set `cache: "never"` and `operation_independent: false`. No
-fallback provider or `--token`. Read `CARGO_REGISTRY_TOKEN` ([Cargo token
-config]) and send it only through the provider protocol. Refuse different bytes
-before upload.
+1.100 publish source]). In CI, pass `--config scripts/publish-cargo.toml`, the
+one protected file that sets `registry.credential-provider` to the executable
+checksum-checking helper. Cargo runs only a provider's program with
+`--cargo-plugin` and sends its other configured arguments in the protocol
+messages ([Cargo 1.100 credential process]), so the helper is the program
+itself, with a shebang that runs isolated Python. Give a token for `publish`
+only if the registry is crates.io and the name, version and checksum match the
+current upload and validated receipt. Allow a `read` credential only for that
+registry. Allow no other write. Set `cache: "never"` and
+`operation_independent: false`. No fallback provider or `--token`. Read
+`CARGO_REGISTRY_TOKEN` ([Cargo token config]) and send it only through the
+provider protocol. Refuse different bytes before upload.
 
 ## Registry gate and recovery
 
@@ -239,14 +243,21 @@ including `softprops/action-gh-release`.
 Use `scripts/test/loopback-registry-proof.py` with Cargo 1.100.0 and two toy
 crates. From empty paths, check dry-run staging and equality with the individual
 publish archive checksums before and after the SDK is indexed. The proof also
-checks that the CI checksum provider prevents a mismatched upload. Cargo
-rebuilds the packaged lockfile, so byte equality must be established by the
-proof. A mismatch blocks the affected publish path.
+checks that the CI checksum provider prevents a mismatched upload. It runs the
+workflow's exact Cargo arguments, `--registry crates-io` and
+`scripts/publish-cargo.toml`, against the loopback registry through Cargo
+1.100's test-only crates.io URL override, because Cargo ignores source
+replacement for an explicitly named registry ([Cargo 1.100 registry source]). A
+gate compares the workflow's Cargo arguments with the proof's. Cargo rebuilds
+the packaged lockfile, so byte equality must be established by the proof. A
+mismatch blocks the affected publish path.
 
 The Mac path requires a passing macOS proof with the pinned Cargo version. The
-script passed on macOS on 2026-11-26 for both toy secret sources. The Ubuntu
-24.04 proof passed on 2026-11-28 on aarch64 for both sources. The publish job
-runs on x86_64, so the first CI upload is the proof on that architecture.
+script passed on macOS on 2026-11-26 for both toy secret sources. The first live
+CI upload, for `v0.1.1` on 2026-11-28, stopped before upload because the proof
+had not run the workflow's provider configuration. The corrected proof passed on
+macOS and on Ubuntu 24.04 (aarch64) on 2026-11-28 for both sources. The publish
+job runs on x86_64, so the next CI upload is the proof on that architecture.
 
 ## CI cutover
 
@@ -313,3 +324,7 @@ runs on x86_64, so the first CI upload is the proof on that architecture.
   https://github.com/rust-lang/crates.io/blob/7866a4599199c2034bc631eb067d764486bf7a3a/src/controllers/version/metadata.rs#L22-L46
 [`rust-lang/crates-io-auth-action`]:
   https://github.com/rust-lang/crates-io-auth-action/tree/3268eb413133e2960fa4ae0e963ca76380c54cd9
+[Cargo 1.100 credential process]:
+  https://github.com/rust-lang/cargo/blob/rust-1.100.0/src/util/credential/process.rs#L92-L105
+[Cargo 1.100 registry source]:
+  https://github.com/rust-lang/cargo/blob/rust-1.100.0/src/ops/registry/mod.rs#L157-L184

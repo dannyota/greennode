@@ -1,0 +1,2 @@
+[registry]
+credential-provider = ["./scripts/check-crate-publish-credential.py"]

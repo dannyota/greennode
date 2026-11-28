@@ -351,9 +351,8 @@ jobs:
           printf 'greennode-sdk: unknown version=%s sha256=%s until confirmed\n' "${TAG#v}" "$SDK_SHA256" >> "$GITHUB_STEP_SUMMARY"
           export CARGO_HOME="$RUNNER_TEMP/publish-cargo"
           export GREENNODE_RELEASE_RECEIPT="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"
-          provider="registry.credential-provider=['python3','-I','$GITHUB_WORKSPACE/scripts/check-crate-publish-credential.py']"
           cd "$RUNNER_TEMP/publish-tagged"
-          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode-sdk --config "$provider" --config net.retry=0
+          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode-sdk --config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml" --config net.retry=0
       - name: Confirm SDK upload
         if: ${{ always() && steps.sdk_state.outputs.needed == 'true' && !cancelled() }}
         shell: bash
@@ -385,9 +384,8 @@ jobs:
           printf 'greennode: unknown version=%s sha256=%s until confirmed\n' "${TAG#v}" "$TOOL_SHA256" >> "$GITHUB_STEP_SUMMARY"
           export CARGO_HOME="$RUNNER_TEMP/publish-cargo"
           export GREENNODE_RELEASE_RECEIPT="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"
-          provider="registry.credential-provider=['python3','-I','$GITHUB_WORKSPACE/scripts/check-crate-publish-credential.py']"
           cd "$RUNNER_TEMP/publish-tagged"
-          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode --config "$provider" --config net.retry=0
+          cargo +"$TOOLCHAIN" publish --no-verify --locked --registry crates-io --package greennode --config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml" --config net.retry=0
       - name: Confirm tool upload
         if: ${{ always() && steps.tool_state.outputs.needed == 'true' && !cancelled() }}
         shell: bash
