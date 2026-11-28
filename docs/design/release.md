@@ -44,9 +44,22 @@ and checks the actual archive before upload.
 
 ## Release workflow
 
-Before pushing a tag, the owner checks its commit against freshly fetched
-protected `master`, because a tag push runs the workflow file from the tagged
-commit. `.github/workflows/release.yml` runs on `v*` tag pushes, one run at a
+### Tag checks
+
+With the owner's approval for the tag, its GitHub Release and both uploads,
+select the [version commit](#versions) as `$COMMIT`. Fetch `origin/master` and
+require branch protection,
+`git merge-base --is-ancestor "$COMMIT" origin/master`, and a successful `ci`
+job from `.github/workflows/ci.yml` on the `master` push for that exact SHA,
+checked on the run itself. Create the signed annotated tag `vX.Y.Z`, verify it
+against the authorized signer with `git verify-tag`, and require
+`git rev-parse "refs/tags/$TAG^{commit}"` to equal `$COMMIT`. Only then push the
+tag, and verify that the remote tag object equals the local one. Stop on a
+failed identity, signature, ancestry or check result. These checks matter
+because a tag push runs the workflow file from the tagged commit.
+
+### Workflow `.github/workflows/release.yml` runs on `v*` tag pushes, one run at a
+
 time. As defense in depth, its first job fails unless the tag's commit is in
 protected `master`'s history; later jobs check out that SHA, and no step that
 runs tagged code holds a token. Validate the tag, manifests, lockfile,
@@ -294,8 +307,8 @@ checksums with `dannyota` as owner, and the owner approved the cutover.
 
 ## Unverified
 
-- The owner checks the deployed Trusted Publishing forms against their source
-  and verifies the environment and run-approval reads on the first CI dispatch.
+- The owner checks the deployed Trusted Publishing forms against their source.
+  The environment and run-approval reads passed on the `v0.1.1` dispatches.
 - The crates.io not-found bodies were observed on 2026-11-25. A reset during the
   response head or a TLS timeout behind a proxy may stop the registry check.
 
