@@ -35,7 +35,7 @@ impl Output for Document {
             false,
         )?;
         reply.decode_projection(|body| {
-            let body = normalize(body);
+            let body = crate::model::wire::go_json(body);
             let value = serde_json::from_str(&body).map_err(|_| {
                 Box::new(api(
                     operation.id,
@@ -47,61 +47,6 @@ impl Output for Document {
             Ok(Self(Some(value)))
         })
     }
-}
-
-fn unicode_escape(bytes: &[u8], offset: usize) -> Option<u16> {
-    let escape = bytes.get(offset..offset.checked_add(6)?)?;
-    if !escape.starts_with(b"\\u") {
-        return None;
-    }
-    u16::from_str_radix(std::str::from_utf8(&escape[2..]).ok()?, 16).ok()
-}
-
-fn normalize(bytes: &[u8]) -> String {
-    let text = match std::str::from_utf8(bytes) {
-        Ok(text) => std::borrow::Cow::Borrowed(text),
-        Err(_) => {
-            let mut text = String::with_capacity(bytes.len());
-            for chunk in bytes.utf8_chunks() {
-                text.push_str(chunk.valid());
-                text.extend(std::iter::repeat_n('\u{fffd}', chunk.invalid().len()));
-            }
-            std::borrow::Cow::Owned(text)
-        }
-    };
-    let bytes = text.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut offset = 0;
-    let mut quoted = false;
-    while let Some(&byte) = bytes.get(offset) {
-        if byte == b'"' {
-            quoted = !quoted;
-        } else if quoted && byte == b'\\' {
-            if let Some(code) =
-                unicode_escape(bytes, offset).filter(|n| (0xd800..=0xdfff).contains(n))
-            {
-                if code < 0xdc00
-                    && unicode_escape(bytes, offset + 6)
-                        .is_some_and(|n| (0xdc00..=0xdfff).contains(&n))
-                {
-                    output.extend_from_slice(&bytes[offset..offset + 12]);
-                    offset += 12;
-                } else {
-                    output.extend_from_slice(b"\\ufffd");
-                    offset += 6;
-                }
-                continue;
-            }
-            if let Some(&next) = bytes.get(offset + 1) {
-                output.extend_from_slice(&[byte, next]);
-                offset += 2;
-                continue;
-            }
-        }
-        output.push(byte);
-        offset += 1;
-    }
-    String::from_utf8(output).unwrap_or_else(|_| text.into_owned())
 }
 
 #[derive(Debug)]
@@ -289,7 +234,8 @@ pub(super) fn decode<T>(
     decode: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
 ) -> ShapeResult<T> {
     let raw = document.0.as_deref().ok_or(ShapeIssue::Invalid)?;
-    strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| ShapeIssue::Invalid)?;
+    strict_json::validate(raw.get().as_bytes(), &[], raw.get().len())
+        .map_err(|_| ShapeIssue::Invalid)?;
     decode(raw, names)
 }
 

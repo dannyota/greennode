@@ -3,6 +3,9 @@ use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
+
+use crate::wire::product::lossy;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -228,7 +231,7 @@ impl Client {
         let data = self
             .call_with_evidence(ctx, &call, &[cdn_id], Bytes::new(), evidence)
             .await?;
-        decode_web_detail(&call, cdn_id, data, evidence.field_names())
+        decode_web_detail(&call, cdn_id, data, evidence.field_names(), evidence)
     }
 
     pub(super) async fn read_guard_detail(
@@ -245,6 +248,7 @@ impl Client {
             cdn_id,
             data,
             crate::wire::strict_json::FieldNames::Canonical,
+            evidence,
         )?;
         crate::wire::product::guard::Guarded::latest(detail, evidence)
             .map_err(|error| read_failure(*error))
@@ -300,7 +304,7 @@ impl Client {
             let row: CertificateWire = answer
                 .data
                 .as_deref()
-                .and_then(|data| serde_json::from_str(data.get()).ok())
+                .and_then(|data| lossy::from_slice(data.get().as_bytes()).ok())
                 .ok_or_else(|| read_failure(GET_CERTIFICATE.unexpected(200)))?;
             answer.evidence.add_secret(&Secret::new(row.private_key));
             let mut certificate = row.certificate;
@@ -364,23 +368,40 @@ fn decode_web_detail(
     cdn_id: &str,
     data: Option<Box<serde_json::value::RawValue>>,
     names: crate::wire::strict_json::FieldNames,
+    evidence: &mut Evidence,
 ) -> Result<WebDetail, Failure<()>> {
     let malformed = || read_failure(call.unexpected(200));
     let raw = data.ok_or_else(malformed)?;
-    let text = raw.get();
-    if names.has_case_variant(text.as_bytes(), &STATE) {
-        return Err(read_failure(
-            crate::wire::product::operation::unsafe_guard_response(call.id),
-        ));
+    let (state, mut model, user_uuids): (State, WebAccelerator, Vec<Secret>) =
+        lossy::with_normalized(raw.get().as_bytes(), |text| {
+            if names.has_case_variant(text.as_bytes(), &STATE) {
+                return Err(read_failure(
+                    crate::wire::product::operation::unsafe_guard_response(call.id),
+                ));
+            }
+            names
+                .validate(text.as_bytes(), &STATE, text.len())
+                .map_err(|_| malformed())?;
+            let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
+            if state.id != cdn_id {
+                return Err(malformed());
+            }
+            let model = serde_json::from_str(text).map_err(|_| malformed())?;
+            let fields: BTreeMap<String, &RawValue> =
+                serde_json::from_str(text).map_err(|_| malformed())?;
+            let mut user_uuids = Vec::new();
+            for (key, raw) in fields {
+                if crate::wire::strict_json::field_matches(&key, "userUuid") {
+                    let uuid: Option<String> =
+                        serde_json::from_str(raw.get()).map_err(|_| malformed())?;
+                    user_uuids.extend(uuid.filter(|value| !value.is_empty()).map(Secret::new));
+                }
+            }
+            Ok((state, model, user_uuids))
+        })?;
+    for uuid in user_uuids {
+        evidence.add_redaction(&uuid);
     }
-    names
-        .validate(text.as_bytes(), &STATE, text.len())
-        .map_err(|_| malformed())?;
-    let state: State = serde_json::from_str(text).map_err(|_| malformed())?;
-    if state.id != cdn_id {
-        return Err(malformed());
-    }
-    let mut model: WebAccelerator = serde_json::from_str(text).map_err(|_| malformed())?;
     model.status = super::Field::Value(state.status);
     Ok(WebDetail {
         raw,

@@ -3,6 +3,8 @@ use http::{Method, StatusCode};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 
+use crate::wire::product::lossy;
+
 use super::{Client, ErrorDetail};
 use crate::error::SafeText;
 use crate::wire::product::{
@@ -393,16 +395,20 @@ impl Client {
         };
         reply
             .decode_projection(|body| {
-                if names.has_case_variant(body, &ENVELOPE) {
-                    return Err(Box::new(
-                        crate::wire::product::operation::unsafe_guard_response(call.id),
-                    ));
+                if body.len() > RESPONSE_CAP {
+                    return Err(Box::new(call.unexpected(status)));
                 }
-                names
-                    .validate(body, &ENVELOPE, RESPONSE_CAP)
-                    .map_err(|_| Box::new(call.unexpected(status)))?;
-                let envelope: Envelope =
-                    serde_json::from_slice(body).map_err(|_| Box::new(call.unexpected(status)))?;
+                let envelope: Envelope = lossy::with_normalized(body, |text| {
+                    if names.has_case_variant(text.as_bytes(), &ENVELOPE) {
+                        return Err(Box::new(
+                            crate::wire::product::operation::unsafe_guard_response(call.id),
+                        ));
+                    }
+                    names
+                        .validate(text.as_bytes(), &ENVELOPE, text.len())
+                        .map_err(|_| Box::new(call.unexpected(status)))?;
+                    serde_json::from_str(text).map_err(|_| Box::new(call.unexpected(status)))
+                })?;
                 if !envelope.success {
                     let checked = GuardEnvelope::checked(
                         &envelope,
@@ -523,13 +529,15 @@ pub(super) fn list<T: serde::de::DeserializeOwned>(
         None | Some("null") if allow_null => Ok(Vec::new()),
         Some(text) => {
             let malformed = || read_failure(call.unexpected(200));
-            validate_shape(
-                text.as_bytes(),
-                &Shape::Array(&Shape::Object(&[])),
-                RESPONSE_CAP,
-            )
-            .map_err(|_| malformed())?;
-            serde_json::from_str(text).map_err(|_| malformed())
+            lossy::with_normalized(text.as_bytes(), |text| {
+                validate_shape(
+                    text.as_bytes(),
+                    &Shape::Array(&Shape::Object(&[])),
+                    text.len(),
+                )
+                .map_err(|_| malformed())?;
+                serde_json::from_str(text).map_err(|_| malformed())
+            })
         }
         None => Err(read_failure(call.unexpected(200))),
     }
@@ -537,7 +545,7 @@ pub(super) fn list<T: serde::de::DeserializeOwned>(
 
 fn parse_code(raw: &RawValue) -> Option<String> {
     if raw.get().starts_with('"') {
-        return serde_json::from_str::<String>(raw.get()).ok();
+        return lossy::from_slice::<String>(raw.get().as_bytes()).ok();
     }
     serde_json::from_str::<serde_json::Number>(raw.get())
         .ok()

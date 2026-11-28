@@ -8,10 +8,10 @@ use serde_json::value::RawValue;
 
 use crate::config::Session;
 use crate::error::SafeText;
-use crate::model::wire::{JsonSource, go_json};
 use crate::wire::product::{
     evidence::Evidence,
     guard::Guarded,
+    lossy,
     operation::{self, Operation, Reflection, RouteAuth},
     options::{AttemptCheck, Options},
     redirect::{Classification, Retry},
@@ -85,14 +85,10 @@ pub(crate) async fn list(
     let receipt = reply
         .clean_receipt()
         .ok_or_else(|| invalid(&op, evidence))?;
-    let source = JsonSource::new(receipt.body());
-    let data = decode_data(&op, source.text(), evidence)?;
-    let (mut projection, renew_periods) =
-        decode::list(data).map_err(|()| invalid(&op, evidence))?;
-    if source.has_replacements() {
-        decode::restore_raw_fields(&source, data, &mut projection)
-            .map_err(|()| invalid(&op, evidence))?;
-    }
+    let (projection, renew_periods) = lossy::with_normalized(receipt.body(), |text| {
+        let data = decode_data(&op, text, evidence)?;
+        decode::list(data).map_err(|()| invalid(&op, evidence))
+    })?;
     if credentials::resources_reflect(&projection, evidence) {
         return Err(invalid(&op, evidence));
     }
@@ -124,9 +120,10 @@ pub(crate) async fn account(
         .await
         .map_err(|failure| Box::new(failure.into_parts().0))?;
     reply.decode_projection(|body| {
-        let text = go_json(body);
-        let data = decode_data(&op, &text, evidence)?;
-        let id = decode::account(data).map_err(|()| invalid(&op, evidence))?;
+        let id = lossy::with_normalized(body, |text| {
+            let data = decode_data(&op, text, evidence)?;
+            decode::account(data).map_err(|()| invalid(&op, evidence))
+        })?;
         if evidence.id_reflects(&id) {
             return Err(invalid(&op, evidence));
         }
@@ -212,9 +209,11 @@ pub(crate) async fn put(
     };
     reply
         .decode_projection(|body| {
-            let text = go_json(body);
-            let data = decode_data(&op, &text, evidence)?;
-            let Some(count) = decode::renewal(data).map_err(|()| invalid(&op, evidence))? else {
+            let count = lossy::with_normalized(body, |text| {
+                let data = decode_data(&op, text, evidence)?;
+                decode::renewal(data).map_err(|()| invalid(&op, evidence))
+            })?;
+            let Some(count) = count else {
                 return Ok(());
             };
             let message = format!("server refused auto-renew setting; error count {count}");

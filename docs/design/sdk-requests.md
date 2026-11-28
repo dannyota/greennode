@@ -169,6 +169,14 @@ cannot trigger a resend. Preserve observed status, decode strictness, empty-body
 handling, and overflow classification per operation. A retry hint is not a
 guarantee that rerunning a multi-step operation is safe.
 
+Typed responses decode strings as Go does. Credential screening and retained
+byte limits read the body as received. Decoding then replaces each invalid UTF-8
+sequence in a string with U+FFFD, split as Go splits it, and each unpaired
+surrogate escape with U+FFFD, and every field, raw JSON fields included, reads
+that normalized text. Raw fields therefore differ from Go for those inputs, as
+the [baseline differences](architecture.md#differences-from-the-baseline)
+record.
+
 Product redirects also reject userinfo, fragments, cycles and a chain longer
 than nine hops. Check before attaching credentials to a newly resolved URI.
 Unlike Go, refuse every write redirect and every POST read redirect, even at the

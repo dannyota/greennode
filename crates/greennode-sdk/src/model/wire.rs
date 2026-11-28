@@ -269,66 +269,10 @@ impl Serialize for Detail<'_> {
 
 pub(crate) fn go_json(bytes: &[u8]) -> Cow<'_, str> {
     let text = go_utf8(bytes);
-    match normalize_surrogates(&text, |_, _| {}) {
-        Some(normalized) => Cow::Owned(normalized),
-        None => text,
-    }
+    replace_surrogates(&text).map_or(text, Cow::Owned)
 }
 
-pub(crate) struct JsonSource<'a> {
-    source: Cow<'a, str>,
-    normalized: Option<String>,
-    replacement_runs: Vec<(usize, usize)>,
-}
-
-impl<'a> JsonSource<'a> {
-    pub(crate) fn new(bytes: &'a [u8]) -> Self {
-        let source = go_utf8(bytes);
-        let mut replacement_runs = Vec::new();
-        let mut total = 0;
-        let normalized = normalize_surrogates(&source, |end, count| {
-            total += count;
-            replacement_runs.push((end, total));
-        });
-        Self {
-            source,
-            normalized,
-            replacement_runs,
-        }
-    }
-
-    pub(crate) fn text(&self) -> &str {
-        self.normalized.as_deref().unwrap_or(&self.source)
-    }
-
-    pub(crate) fn has_replacements(&self) -> bool {
-        !self.replacement_runs.is_empty()
-    }
-
-    pub(crate) fn raw_fragment(&self, fragment: &RawValue) -> Option<Box<RawValue>> {
-        let text = self.text();
-        let token = fragment.get();
-        let start = (token.as_ptr() as usize).checked_sub(text.as_ptr() as usize)?;
-        let end = start.checked_add(token.len())?;
-        text.get(start..end)?;
-        let original_offset = |index: usize| {
-            let runs = self
-                .replacement_runs
-                .partition_point(|&(end, _)| end <= index);
-            let replacements = runs
-                .checked_sub(1)
-                .and_then(|last| self.replacement_runs.get(last))
-                .map_or(0, |&(_, total)| total);
-            index.checked_add(replacements.checked_mul(6 - char::REPLACEMENT_CHARACTER.len_utf8())?)
-        };
-        let original = self
-            .source
-            .get(original_offset(start)?..original_offset(end)?)?;
-        serde_json::from_str(original).ok()
-    }
-}
-
-fn normalize_surrogates(text: &str, mut replaced: impl FnMut(usize, usize)) -> Option<String> {
+pub(crate) fn replace_surrogates(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     if !bytes.contains(&b'\\') {
         return None;
@@ -381,19 +325,14 @@ fn normalize_surrogates(text: &str, mut replaced: impl FnMut(usize, usize)) -> O
             } else {
                 normalized.push_str(&"\u{fffd}".repeat(count));
             }
-            replaced(normalized.len(), count);
             start = run_end;
             index = run_end;
             continue;
         }
         index = end;
     }
-    if start == 0 {
-        return None;
-    }
-    if let Some(rest) = text.get(start..) {
-        normalized.push_str(rest);
-    }
+    let rest = text.get(start..).filter(|_| start != 0)?;
+    normalized.push_str(rest);
     Some(normalized)
 }
 
@@ -538,6 +477,12 @@ macro_rules! model {
 }
 
 pub(crate) use model;
+
+pub(crate) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
 
 pub(crate) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
     deserializer: D,

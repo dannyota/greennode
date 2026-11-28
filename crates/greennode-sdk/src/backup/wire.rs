@@ -109,7 +109,8 @@ impl Output for Detail {
         let mut output: Self = decode(operation, response)?;
         let invalid = || Box::new(invalid_body(operation));
         let null_config = response.decode_projection(|body| {
-            serde_json::from_slice::<ConfigPresence<'_>>(body)
+            let text = crate::model::wire::go_json(body);
+            serde_json::from_str::<ConfigPresence<'_>>(&text)
                 .map(|config| config.config.get() == "null")
                 .map_err(|_| invalid())
         })?;

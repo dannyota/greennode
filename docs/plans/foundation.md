@@ -8,13 +8,12 @@ The primary is the integration owner of the workspace `Cargo.toml`, `Cargo.lock`
 
 ## Order
 
-Task 14 runs now. Task 10 waits for the owner. Task 12 runs alongside task 14. Task 13's Ubuntu proof may run alongside task 12. Trusted Publishing setup follows task 12, and task 13 includes the first CI publish and cutover.
+Task 14 runs now. Task 10 waits for the owner. Task 13 finishes with the next owner-approved release.
 
 ## Tasks
 
 - [ ] **10. Live read check.** The billing template, its reads and the frame have landed. The owner approves one read-only live billing run; until then live behavior stays unverified.
-- [ ] **12. First Mac release.** Confirm the macOS packaging proof. With the owner's approval, tag `v0.1.0` and publish both crates using the [Mac release procedure](../design/release-first.md).
-- [ ] **13. CI publish proof and cutover.** Pass `scripts/test/loopback-registry-proof.py` on Ubuntu with Cargo 1.100.0. Configure Trusted Publishing after both names exist, then run a preflight-only dispatch and prove the uploads on the first owner-approved CI publish. The owner approves cutover after the proof, as the [release design](../design/release.md#ci-cutover) specifies.
+- [ ] **13. CI publish proof and cutover.** The Ubuntu proof passed, the `crates-io` environment and both Trusted Publishers are configured, and the `v0.1.0` preflight-only dispatch passed. The first owner-approved CI publish proves the uploads, then the owner approves cutover, as the [release design](../design/release.md#ci-cutover) specifies.
 - [ ] **14. Services.** In waves. Before each wave the primary registers the wave's services in both crates and lands any shared model or quote and discovery code they need. One implementer and one worktree per service or slice, reads before writes, each write with adversarial review. A slice owns its service's paths in both crates as the [layout](../design/architecture.md#layout) lists them. Baseline additions from `v1.2.0` to `v1.7.0` to build with their service: backup and volume list reads refuse reflected credentials and cover han-1; compute create-server adds disk-zone advice on HTTP 400; monitor adds dashboard list and get and HTTP check response-time reads; network adds NAT detail and inbound-rule reads, hcm-3 Public NAT create and delete, and clears stale partial IDs on an ambiguous create. Landed: waves 1 and 2, the shared quote code, and the globalloadbalancer and cdn reads. Baseline additions from `v1.7.0` to `v1.8.1` to build with their service:
   - Compute: flavor price discovery accepts a root disk type and quotes explicitly selected disabled zones.
   - Global Load Balancer: pool, listener, and member group writes resolve regions and package availability from the account catalog.

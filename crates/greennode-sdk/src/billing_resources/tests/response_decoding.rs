@@ -37,7 +37,7 @@ async fn whitespace_only_response_is_distinct_from_zero_bytes() {
 }
 
 #[tokio::test]
-async fn billing_resources_preserve_raw_surrogate_escapes_and_normalize_typed_strings() {
+async fn billing_resources_normalize_raw_and_typed_strings() {
     let unpaired = format!("{}uD800", char::from(92));
     let status = format!(r#"{{"value":"{unpaired}"}}"#);
     let metadata = format!(r#"["{unpaired}"]"#);
@@ -50,6 +50,8 @@ async fn billing_resources_preserve_raw_surrogate_escapes_and_normalize_typed_st
     let mut evidence = Evidence::for_write();
     let list = list(config.session(), &ctx, &mut evidence).await.unwrap();
     let (row, _) = list.rows(&evidence).unwrap().next().unwrap();
+    let status = r#"{"value":"�"}"#;
+    let metadata = r#"["�"]"#;
     assert_eq!(row.artifact_name, "typed�");
     assert_eq!(row.status.as_deref().unwrap().get(), status);
     assert_eq!(
@@ -61,11 +63,11 @@ async fn billing_resources_preserve_raw_surrogate_escapes_and_normalize_typed_st
         .await
         .unwrap();
     assert_eq!(public.items[0].status.as_deref().unwrap().get(), status);
-    assert!(serde_json::to_string(&public).unwrap().contains(&status));
+    assert!(serde_json::to_string(&public).unwrap().contains(status));
 }
 
 #[tokio::test]
-async fn retained_raw_escape_spelling_is_screened_against_current_evidence() {
+async fn original_escape_spelling_is_screened_against_current_evidence() {
     let escape = format!("{}uD800", char::from(92));
     let body = format!(r#"{{"code":200,"data":{{"data":[{{"status":{{"value":"{escape}"}}}}]}}}}"#);
     let server = Server::start(vec![reply("200 OK", body)]);

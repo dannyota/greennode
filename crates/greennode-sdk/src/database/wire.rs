@@ -50,7 +50,8 @@ impl<T: Data> Output for Envelope<T> {
             data: &'a RawValue,
         }
         response.decode_projection(|body| {
-            let header: Header<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
+            let text = crate::model::wire::go_json(body);
+            let header: Header<'_> = serde_json::from_str(&text).map_err(|_| invalid())?;
             if response.credentials.has_numeric_product_credential()
                 || header.code != 200
                 || header.data.get() == "null"

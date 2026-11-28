@@ -437,13 +437,12 @@ fn provider_message<'a>(
         text.len() > 512 || UNSAFE.as_ref().is_none_or(|pattern| pattern.is_match(text))
     };
     let unsafe_wire = reply.clean_receipt().is_none_or(|receipt| {
-        serde_json::from_slice::<serde_json::Map<String, Value>>(receipt.body()).is_ok_and(
-            |fields| {
+        crate::wire::product::lossy::from_slice::<serde_json::Map<String, Value>>(receipt.body())
+            .is_ok_and(|fields| {
                 fields.iter().any(|(key, value)| {
                     key.eq_ignore_ascii_case("message") && value.as_str().is_some_and(unsafe_text)
                 })
-            },
-        )
+            })
     });
     let mut input_evidence = Evidence::new();
     for value in input

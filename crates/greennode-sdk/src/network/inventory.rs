@@ -108,7 +108,7 @@ impl InventoryRead {
         if serde_json::from_str::<&RawValue>(body).is_err() {
             return Err(screen(self.syntax(), evidence));
         }
-        crate::wire::strict_json::validate(body.as_bytes(), &[], CAP)
+        crate::wire::strict_json::validate(body.as_bytes(), &[], body.len())
             .map_err(|_| self.shape(evidence))?;
         serde_json::from_str(body).map_err(|_| self.shape(evidence))
     }

@@ -1,0 +1,79 @@
+[
+  {
+    "command": "list-resources",
+    "input": "surrogate",
+    "format": "json",
+    "query": "",
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ArtifactID\": \"project-1\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"MANUAL\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": null,\n      \"Channel\": 0,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": \"\\ud800\",\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    },\n    {\n      \"ArtifactID\": \"project-2\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"AUTO-RENEW\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": 1,\n      \"Channel\": 1,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": 1,\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    },\n    {\n      \"ArtifactID\": \"project-3\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"FUTURE\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": null,\n      \"Channel\": 2,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": 1,\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    }\n  ],\n  \"TotalAutoRenews\": 1,\n  \"TotalGoodResources\": 3,\n  \"TotalWarningResources\": 0,\n  \"TotalAlertedResources\": 0,\n  \"TotalExpiredResources\": 0,\n  \"Extra\": {\n    \"WarningThresholds\": [7],\n    \"AlarmThresholds\": [1]\n  }\n}\n"
+  },
+  {
+    "command": "list-resources",
+    "input": "surrogate",
+    "format": "text",
+    "query": "",
+    "stdout": "project-1\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t0\t123\t30\t1890000000000\tfalse\tvstorage\t\tMANUAL\t1790000000000\t�\t{\"level\":\"good\"}\nproject-2\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t1\t123\t30\t1890000000000\tfalse\tvstorage\t1\tAUTO-RENEW\t1790000000000\t1\t{\"level\":\"good\"}\nproject-3\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t2\t123\t30\t1890000000000\tfalse\tvstorage\t\tFUTURE\t1790000000000\t1\t{\"level\":\"good\"}\n"
+  },
+  {
+    "command": "list-resources",
+    "input": "surrogate",
+    "format": "json",
+    "query": "Items[0].Status",
+    "stdout": "\"�\"\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "surrogate",
+    "format": "json",
+    "query": "",
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 1,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 12.5,\n      \"Balance\": 100,\n      \"SourceReference\": \"synthetic-reference\",\n      \"Description\": \"�\",\n      \"UserServiceReference\": \"synthetic-service\",\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T18:00:00+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 50,\n  \"TotalPage\": 1,\n  \"TotalItem\": 1\n}\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "surrogate",
+    "format": "text",
+    "query": "",
+    "stdout": "12.5\t100\t2024-11-11T18:00:00+00:00\t�\tDEBIT\t1\t\tsynthetic-reference\tCHARGE\t5\tsynthetic-service\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "surrogate",
+    "format": "json",
+    "query": "Items[0].Description",
+    "stdout": "\"�\"\n"
+  },
+  {
+    "command": "list-resources",
+    "input": "invalid-byte",
+    "format": "text",
+    "query": "",
+    "stdout": "project-1\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t0\t123\t30\t1890000000000\tfalse\tvstorage\t\tMANUAL\t1790000000000\t�\t{\"level\":\"good\"}\nproject-2\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t1\t123\t30\t1890000000000\tfalse\tvstorage\t1\tAUTO-RENEW\t1790000000000\t1\t{\"level\":\"good\"}\nproject-3\t\u003caccount\u003e\tobject-storage\t[{\"MetaKey\":{\"quota\":30},\"Quantity\":30,\"SKU\":\"synthetic-sku\"}]\tPREPAID\t2\t123\t30\t1890000000000\tfalse\tvstorage\t\tFUTURE\t1790000000000\t1\t{\"level\":\"good\"}\n"
+  },
+  {
+    "command": "list-resources",
+    "input": "invalid-byte",
+    "format": "json",
+    "query": "Items[0].Status",
+    "stdout": "\"�\"\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "invalid-byte",
+    "format": "json",
+    "query": "",
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 1,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 12.5,\n      \"Balance\": 100,\n      \"SourceReference\": \"synthetic-reference\",\n      \"Description\": \"�\",\n      \"UserServiceReference\": \"synthetic-service\",\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T18:00:00+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 50,\n  \"TotalPage\": 1,\n  \"TotalItem\": 1\n}\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "invalid-byte",
+    "format": "text",
+    "query": "",
+    "stdout": "12.5\t100\t2024-11-11T18:00:00+00:00\t�\tDEBIT\t1\t\tsynthetic-reference\tCHARGE\t5\tsynthetic-service\n"
+  },
+  {
+    "command": "list-transactions",
+    "input": "invalid-byte",
+    "format": "json",
+    "query": "Items[0].Description",
+    "stdout": "\"�\"\n"
+  }
+]

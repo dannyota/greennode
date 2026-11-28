@@ -179,10 +179,11 @@ pub(crate) fn error_message_matches(
         name: "message",
         children: &[],
     }];
-    if crate::wire::strict_json::validate(body, &fields, body.len()).is_err() {
+    let text = crate::model::wire::go_json(body);
+    if crate::wire::strict_json::validate(text.as_bytes(), &fields, text.len()).is_err() {
         return false;
     }
-    let (_, message) = decode(body, true);
+    let (_, message) = decode_text(&text, true);
     decision_text(&Zeroizing::new(message), credentials)
         .is_some_and(|text| predicate(text.as_str()))
 }
@@ -460,8 +461,8 @@ fn equal_fold(value: &str, expected: &str) -> bool {
         })
         .eq(expected.chars())
 }
-pub(super) fn billing_envelope_fields(body: &[u8]) -> Option<(String, String)> {
-    let entry = parse_raw(std::str::from_utf8(body).ok()?, true)?;
+pub(super) fn billing_envelope_fields(text: &str) -> Option<(String, String)> {
+    let entry = parse_raw(text, true)?;
     if entry.invalid
         || entry.code.is_empty()
         || entry
@@ -475,22 +476,24 @@ pub(super) fn billing_envelope_fields(body: &[u8]) -> Option<(String, String)> {
     }
 }
 
-pub(super) fn first_transport_error_entry(body: &[u8]) -> Option<&RawValue> {
-    let entries: Vec<&RawValue> = serde_json::from_slice(body).ok()?;
-    if entries
-        .iter()
-        .all(|entry| parse_raw(entry.get(), false).is_some_and(|entry| !entry.invalid))
-    {
-        entries.first().copied()
-    } else {
-        None
-    }
+pub(super) fn has_transport_error_entries(body: &[u8]) -> bool {
+    let text = crate::model::wire::go_json(body);
+    serde_json::from_str::<Vec<&RawValue>>(&text).is_ok_and(|entries| {
+        !entries.is_empty()
+            && entries
+                .iter()
+                .all(|entry| parse_raw(entry.get(), false).is_some_and(|entry| !entry.invalid))
+    })
 }
 
 fn decode(body: &[u8], restricted: bool) -> (String, String) {
-    let trimmed = body.iter().copied().find(|b| !b.is_ascii_whitespace());
+    decode_text(&crate::model::wire::go_json(body), restricted)
+}
+
+fn decode_text(text: &str, restricted: bool) -> (String, String) {
+    let trimmed = text.bytes().find(|b| !b.is_ascii_whitespace());
     let envelope = if trimmed == Some(b'[') {
-        serde_json::from_slice::<Vec<Box<RawValue>>>(body)
+        serde_json::from_str::<Vec<Box<RawValue>>>(text)
             .ok()
             .and_then(|items| {
                 let mut parsed = Vec::new();
@@ -509,10 +512,7 @@ fn decode(body: &[u8], restricted: bool) -> (String, String) {
             })
             .unwrap_or_default()
     } else {
-        std::str::from_utf8(body)
-            .ok()
-            .and_then(|raw| parse_raw(raw, restricted))
-            .unwrap_or_default()
+        parse_raw(text, restricted).unwrap_or_default()
     };
     if !restricted
         && envelope.code.is_empty()

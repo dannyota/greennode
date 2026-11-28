@@ -188,6 +188,18 @@ pub(super) fn request_identifier_key(key: &str) -> bool {
     identifier_key(key) || matches!(key, "policyIdList" | "serverIdList")
 }
 
+pub(super) fn retained_request_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(body) else {
+        return true;
+    };
+    let normalized = crate::model::wire::replace_surrogates(text);
+    request_reflects(
+        matcher,
+        normalized.as_deref().unwrap_or(text).as_bytes(),
+        false,
+    )
+}
+
 pub(super) fn request_reflects(matcher: &BodyMatcher<'_>, body: &[u8], identifier: bool) -> bool {
     !check_decoded(
         body,

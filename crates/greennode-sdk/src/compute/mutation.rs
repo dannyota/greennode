@@ -423,7 +423,7 @@ pub(super) fn decode_data<T: WireField>(
 
     #[derive(serde::Deserialize)]
     struct Envelope<'a> {
-        #[serde(borrow)]
+        #[serde(borrow, default)]
         data: Option<&'a serde_json::value::RawValue>,
     }
 
@@ -444,7 +444,7 @@ pub(super) fn decode_data<T: WireField>(
             name: "data",
             children: &[],
         }],
-        8 << 20,
+        text.len(),
     )
     .map_err(|_| invalid())?;
     if !raw.get().trim_start().starts_with('{') {

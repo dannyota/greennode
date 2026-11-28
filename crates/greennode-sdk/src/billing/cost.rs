@@ -399,18 +399,18 @@ impl<'de> Deserialize<'de> for CostBreakdown {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Default, Deserialize)]
         #[serde(default)]
-        struct Fields<'a> {
+        struct Fields {
             #[serde(deserialize_with = "null_default")]
             key: String,
-            #[serde(borrow, deserialize_with = "present")]
-            value: Option<&'a RawValue>,
-            #[serde(borrow, deserialize_with = "present")]
-            cost: Option<&'a RawValue>,
+            #[serde(deserialize_with = "crate::model::wire::present")]
+            value: Option<Box<RawValue>>,
+            #[serde(deserialize_with = "crate::model::wire::present")]
+            cost: Option<Box<RawValue>>,
             #[serde(deserialize_with = "null_default")]
             percent: f64,
         }
 
-        let fields = Option::<Fields<'_>>::deserialize(deserializer)?.unwrap_or_default();
+        let fields = Option::<Fields>::deserialize(deserializer)?.unwrap_or_default();
         let cost = match fields.value.or(fields.cost) {
             Some(raw) => serde_json::from_str::<Option<f64>>(raw.get())
                 .map_err(|_| de::Error::custom("invalid breakdown cost"))?
@@ -595,8 +595,4 @@ fn serialize_series<S: Serializer, T: Serialize>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     series.as_deref().unwrap_or_default().serialize(serializer)
-}
-
-fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<&'de RawValue>, D::Error> {
-    <&RawValue>::deserialize(deserializer).map(Some)
 }

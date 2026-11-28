@@ -241,7 +241,8 @@ impl Output for Users {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
             response.decode_projection(|body| {
-                serde_json::from_slice(body).map_err(|_| Box::new(Error::new(ErrorClass::Api)))
+                crate::wire::product::lossy::from_slice(body)
+                    .map_err(|_| Box::new(Error::new(ErrorClass::Api)))
             })?;
         let reflected = [
             result.page,
@@ -516,7 +517,8 @@ impl Output for RepositoryRead {
 
         let repository = Repository::decode_response(op, response)?;
         let count: ImageCount = response.decode_projection(|body| {
-            serde_json::from_slice(body).map_err(|_| Box::new(Error::new(ErrorClass::Api)))
+            crate::wire::product::lossy::from_slice(body)
+                .map_err(|_| Box::new(Error::new(ErrorClass::Api)))
         })?;
         Ok(Self {
             repository,

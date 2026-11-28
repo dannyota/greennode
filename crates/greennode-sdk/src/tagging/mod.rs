@@ -146,7 +146,7 @@ struct WireTag {
 }
 
 fn decode_snapshot(body: &[u8]) -> Result<Vec<Tag>, ()> {
-    let wire: Vec<WireTag> = serde_json::from_slice(body).map_err(|_| ())?;
+    let wire: Vec<WireTag> = crate::wire::product::lossy::from_slice(body).map_err(|_| ())?;
     let mut seen = HashSet::new();
     wire.into_iter()
         .map(|tag| {
@@ -200,7 +200,10 @@ impl Output for Snapshot {
             )));
         }
         response.decode_projection(|body| {
-            strict_json::validate_shape(body, &Self::SCHEMA, op.cap).map_err(|_| invalid())?;
+            crate::wire::product::lossy::validate(body, op.cap, |bytes, limit| {
+                strict_json::validate_shape(bytes, &Self::SCHEMA, limit)
+            })
+            .map_err(|_| invalid())?;
             let mut tags = decode_snapshot(body).map_err(|_| invalid())?;
             for tag in &mut tags {
                 if response

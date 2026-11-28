@@ -509,7 +509,7 @@ fn create_id(
         String::new()
     } else {
         let text = go_json(body);
-        strict_json::validate_exact_shape(text.as_bytes(), &SHAPE, 8 << 20)
+        strict_json::validate_exact_shape(text.as_bytes(), &SHAPE, text.len())
             .map_err(|_| invalid())?;
         serde_json::from_str::<Option<Acknowledgement>>(&text)
             .map_err(|_| invalid())?

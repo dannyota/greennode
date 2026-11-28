@@ -175,7 +175,7 @@ pub(super) fn body_reflects(
         return false;
     }
     let matcher = response::BodyMatcher::new(credentials, body.len());
-    matcher.reflects(body, false) || peer::request_reflects(&matcher, body, false)
+    matcher.reflects(body, false) || peer::retained_request_reflects(&matcher, body)
 }
 
 fn check_password_body(

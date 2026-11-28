@@ -10,6 +10,7 @@ use super::{
     Balances, CostResource, CostResourceSummary, CostSeries, CostSeriesGroup, CostSummary,
 };
 use crate::wire::product::{
+    lossy,
     operation::{self, Operation, Output},
     sender::{Response, SentCredentials},
 };
@@ -102,17 +103,22 @@ impl Output for BalancesResponse {
             })?;
             if direct {
                 response.decode_projection(|body| {
-                    strict_json::validate_folded_canonical_shape(
-                        body,
-                        &Self::SCHEMA,
-                        operation.cap,
-                    )
-                    .map_err(|_| invalid())?;
-                    let raw = serde_json::from_slice::<&RawValue>(body).map_err(|_| invalid())?;
-                    if !data_valid(operation.id, Some(raw)) {
+                    if body.len() > operation.cap {
                         return Err(invalid());
                     }
-                    Ok(())
+                    lossy::with_normalized(body, |text| {
+                        strict_json::validate_folded_canonical_shape(
+                            text.as_bytes(),
+                            &Self::SCHEMA,
+                            text.len(),
+                        )
+                        .map_err(|_| invalid())?;
+                        let raw = serde_json::from_str(text).map_err(|_| invalid())?;
+                        if !data_valid(operation.id, Some(raw)) {
+                            return Err(invalid());
+                        }
+                        Ok(())
+                    })
                 })?;
                 if response.credentials.has_numeric_product_credential() {
                     return Err(invalid());

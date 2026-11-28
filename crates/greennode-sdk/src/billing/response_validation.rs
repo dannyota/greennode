@@ -23,6 +23,12 @@ pub(super) fn data_valid(operation: &str, data: Option<&RawValue>) -> bool {
     let Some(data) = data.filter(|data| data.get() != "null") else {
         return false;
     };
+    crate::wire::product::lossy::with_normalized(data.get().as_bytes(), |text| {
+        serde_json::from_str(text).is_ok_and(|raw| valid(operation, raw))
+    })
+}
+
+fn valid(operation: &str, data: &RawValue) -> bool {
     match operation {
         "billing.ListBudgets" | "billing.ListBudgetThresholds" | "billing.ListBudgetAlerts" => {
             rows(data, |row| row.get() != "null")
