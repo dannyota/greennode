@@ -130,7 +130,7 @@ impl<'a> Poll<'a> {
                         last = detail;
                         observed = true;
                     }
-                    Err(error) if error.has_class(ErrorClass::NotFound) => {
+                    Err(error) if crate::cdn::wire::confirms_missing_detail(&error, self.id) => {
                         return (last, Some(error));
                     }
                     Err(error) if error.detail::<RefusedGuard>().is_some() => {

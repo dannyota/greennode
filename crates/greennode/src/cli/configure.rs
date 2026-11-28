@@ -77,7 +77,7 @@ fn fail(invocation: &mut Invocation<'_>, code: &str, message: &str, exit: u8) ->
         invocation.stderr,
         &super::errors::Envelope {
             code,
-            message,
+            message: message.into(),
             status: None,
             operation: None,
         },
@@ -257,7 +257,7 @@ fn sdk_error(invocation: &mut Invocation<'_>, error: &greennode_sdk::Error) -> E
             format!("{slot} ({}){line}: {}", detail.source(), detail.reason())
         });
     let envelope = super::errors::Envelope {
-        message: diagnostic.as_deref().unwrap_or(classified.envelope.message),
+        message: diagnostic.map_or(classified.envelope.message, Into::into),
         ..classified.envelope
     };
     super::errors::write_error(invocation.stderr, &envelope);

@@ -1058,7 +1058,9 @@ fn table_rejects_cell_limit_before_writing() {
 
 #[test]
 fn table_rejects_projected_bytes_before_writing() {
-    let value = render::Value::Array(vec![render::Value::String("a".repeat(1 << 20)); 64]);
+    let mut rows = vec![render::Value::Null; 64];
+    rows[0] = render::Value::String("a".repeat(1 << 20));
+    let value = render::Value::Array(rows);
     let mut out = Vec::new();
     assert!(matches!(
         render::write_table(&mut out, &value),

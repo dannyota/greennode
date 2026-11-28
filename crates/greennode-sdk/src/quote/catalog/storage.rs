@@ -1,4 +1,7 @@
-use super::{Catalog, REGIONS, array, exact, unique, unpaged, value};
+use super::{
+    Catalog, REGIONS, array, exact, fields::zero_rows, unique, unpaged, value, wire_field,
+};
+use crate::go_text::go_upper;
 use crate::quote::request::{Product, Request, api, invalid};
 use crate::wire::product::options::PathIds;
 use crate::{Error, ErrorClass};
@@ -23,7 +26,7 @@ pub(crate) fn storage_region_name(configured: &str, name: &str) -> Option<String
     } else {
         name
     };
-    Some(name.to_uppercase())
+    Some(go_upper(name))
 }
 
 pub(crate) fn storage_region<'a>(
@@ -32,7 +35,7 @@ pub(crate) fn storage_region<'a>(
 ) -> Option<&'a StorageRegion> {
     regions
         .iter()
-        .find(|row| row.region_name.to_uppercase() == name || row.region_id.to_uppercase() == name)
+        .find(|row| go_upper(&row.region_name) == name || row.region_id.eq_ignore_ascii_case(name))
 }
 
 pub(crate) fn storage_data<'a>(
@@ -41,14 +44,25 @@ pub(crate) fn storage_data<'a>(
     list: bool,
 ) -> Result<&'a Value, Box<Error>> {
     let obj = raw.as_object().ok_or_else(|| invalid(op, 200))?;
-    unpaged(op, obj, true)?;
     if obj
-        .get("isNext")
-        .is_some_and(|item| !item.is_null() && item.as_bool() != Some(false))
+        .get("errorMsg")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
     {
         return Err(invalid(op, 200));
     }
-    match obj.get("success").and_then(Value::as_bool) {
+    let next = match obj.get("isNext") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(next)) => *next,
+        _ => return Err(invalid(op, 200)),
+    };
+    let success = obj.get("success").and_then(Value::as_bool);
+    if list || success == Some(true) {
+        unpaged(op, obj, true)?;
+        if next {
+            return Err(invalid(op, 200));
+        }
+    }
+    match success {
         Some(true) => {}
         Some(false) => {
             let code = obj
@@ -83,20 +97,21 @@ pub(crate) fn storage_data<'a>(
     .ok_or_else(|| invalid(op, 200))
 }
 
-#[derive(Clone, Deserialize, serde::Serialize)]
+#[derive(Clone, Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code, reason = "Shared fields for service ports")]
 pub(crate) struct StorageResource {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) price_key: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) purchase_type_id: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) project_type_id: i64,
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) period: Option<i64>,
 }
 
@@ -105,11 +120,13 @@ pub(crate) struct StorageResource {
 pub(crate) struct StorageType {
     pub(crate) id: i64,
     pub(crate) name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "wire_field")]
     #[allow(dead_code, reason = "Shared storage catalog field")]
     pub(crate) title: String,
     pub(crate) status: i64,
+    #[serde(deserialize_with = "wire_field")]
     pub(crate) allow_period: Vec<i64>,
+    #[serde(deserialize_with = "zero_rows")]
     pub(crate) billable_resources: Vec<StorageResource>,
 }
 
@@ -185,10 +202,9 @@ impl Catalog<'_> {
         )?;
         let mut aliases = HashMap::new();
         for row in &rows {
-            if row.region_id.len() > 128
-                || row.region_name.is_empty()
+            if row.region_name.is_empty()
                 || aliases
-                    .insert(row.region_name.to_uppercase(), &row.region_id)
+                    .insert(go_upper(&row.region_name), &row.region_id)
                     .is_some()
             {
                 return Err(invalid(REGIONS, 200));
@@ -196,7 +212,7 @@ impl Catalog<'_> {
         }
         for row in &rows {
             if aliases
-                .insert(row.region_id.to_uppercase(), &row.region_id)
+                .insert(row.region_id.to_ascii_uppercase(), &row.region_id)
                 .is_some_and(|id| id != &row.region_id)
             {
                 return Err(invalid(REGIONS, 200));
@@ -253,12 +269,21 @@ impl Catalog<'_> {
             ],
         )?;
         for row in kinds.as_array().into_iter().flatten() {
+            if ["allowPeriod", "billableResources"]
+                .into_iter()
+                .any(|key| row.get(key).is_none_or(Value::is_null))
+            {
+                return Err(invalid(op, 200));
+            }
             for item in row
                 .get("billableResources")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
             {
+                if item.is_null() {
+                    continue;
+                }
                 exact(
                     op,
                     item.as_object().ok_or_else(|| invalid(op, 200))?,

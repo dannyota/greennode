@@ -19,8 +19,12 @@ fn response(body: &str) -> Response {
 }
 
 fn client(server: &Server, region: &str) -> Client {
+    client_with_options(server, region, ConfigOptions::default())
+}
+
+fn client_with_options(server: &Server, region: &str, options: ConfigOptions) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_static_token(Secret::new(TOKEN))
             .with_region(region.into())
             .with_project_id("project-1".into())
@@ -161,41 +165,67 @@ async fn explicitly_selected_disabled_zone_is_quoted_at_offering_minimum() {
 }
 
 #[tokio::test]
-async fn quote_only_type_ids_accept_underscores_without_relaxing_path_ids() {
+async fn volume_pricing_refuses_path_id_underscores_before_discovery() {
+    let (ctx, _) = RequestContext::new();
+    for input in [
+        ListVolumePricesInput {
+            zone_id: "zone_1".into(),
+            ..Default::default()
+        },
+        ListVolumePricesInput {
+            volume_type_id: "type_1".into(),
+            ..Default::default()
+        },
+    ] {
+        let server = Server::start(vec![response(r#"{"data":[]}"#)]);
+        let failure = client(&server, "hcm-3")
+            .list_volume_prices(&ctx, input)
+            .await
+            .unwrap_err();
+        assert_eq!(server.requests(), 0);
+        assert!(
+            failure
+                .error()
+                .has_identity(crate::ErrorClass::InvalidInput)
+        );
+    }
+}
+
+#[tokio::test]
+async fn volume_pricing_decodes_null_scalars_as_zero_and_keeps_encryption_underscores() {
     let server = Server::start(vec![
-        response(r#"{"data":[{"uuid":"zone_1","isEnabled":true}]}"#),
-        response(r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#),
-        response("[]"),
-        response(r#"{"volumeTypes":[{"id":"type_1","name":"SSD","minSize":1,"maxSize":10}]}"#),
+        response(r#"{"data":[{"uuid":"zone-1","name":null,"isEnabled":true}]}"#),
+        response(
+            r#"{"volumeTypeZones":[{"id":"parent-1","name":null,"description":null,"zone":{"uuid":null,"serverCount":null,"isEnabled":null}}]}"#,
+        ),
+        response(r#"[{"key":"aes_256","name":null,"id":null}]"#),
+        response(
+            r#"{"volumeTypes":[{"id":"type-1","volumeTypeId":null,"name":"SSD","iops":null,"minSize":1,"maxSize":10,"throughPut":null}]}"#,
+        ),
         response(r#"{"optimumPrice":100}"#),
     ]);
-    let client = client(&server, "hcm-3");
     let (ctx, _) = RequestContext::new();
-    let path_error = client
-        .get_volume_type(
-            &ctx,
-            GetVolumeTypeInput {
-                volume_type_id: "type_1".into(),
-            },
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(path_error.error().class(), crate::ErrorClass::InvalidInput);
-    assert_eq!(server.requests(), 0);
-    let prices = client
+    let prices = client(&server, "hcm-3")
         .list_volume_prices(
             &ctx,
             ListVolumePricesInput {
-                volume_type_id: "type_1".into(),
-                encryption: "none".into(),
+                volume_type_id: "type-1".into(),
+                encryption: "aes_256".into(),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-    assert_eq!(prices.items[0].volume_type.id, "type_1");
-    assert_eq!(prices.items[0].price.monthly_price, Some(100.0));
     assert_eq!(server.requests(), 5);
+    assert_eq!(prices.items.len(), 1);
+    let row = &prices.items[0];
+    assert_eq!(row.zone_name, "");
+    assert_eq!(row.volume_type.id, "type-1");
+    assert_eq!(row.volume_type.volume_type_id, "");
+    assert_eq!(row.volume_type.iops, 0);
+    assert_eq!(row.volume_type.throughput, 0);
+    assert_eq!(row.price.monthly_price, Some(100.0));
+    assert_eq!(row.encryption_type_id, "aes_256");
 }
 
 #[tokio::test]
@@ -451,34 +481,161 @@ async fn resize_quote_refuses_invalid_returned_type_before_post() {
 }
 
 #[tokio::test]
-async fn discovery_distinguishes_catalog_schema_and_http_operations() {
+async fn volume_pricing_maps_a_portal_zone_refusal_to_permission_identity() {
+    let server = Server::start(vec![Response::Http {
+        status: "403 Forbidden".into(),
+        headers: vec![("Content-Length".into(), "2".into())],
+        body: b"{}".to_vec(),
+    }]);
     let (ctx, _) = RequestContext::new();
-    for (answer, operation, status) in [
+    let failure = client(&server, "hcm-3")
+        .list_volume_prices(&ctx, ListVolumePricesInput::default())
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 1);
+    assert_eq!(
+        failure.error().api_error().map(crate::ApiError::operation),
+        Some("portal.ListZones")
+    );
+    assert!(
+        failure
+            .error()
+            .has_identity(crate::ErrorClass::PermissionDenied)
+    );
+}
+
+#[tokio::test]
+async fn volume_pricing_distinguishes_validation_decode_and_http_operations() {
+    let (ctx, _) = RequestContext::new();
+    let valid = [
+        r#"{"data":[{"uuid":"zone-1","isEnabled":true}]}"#,
+        r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#,
+        "[]",
+    ];
+    let mut mismatches = Vec::new();
+    for (index, (operation, bad_shape, bad_row)) in [
         (
-            response(r#"{"volumeTypeZones":null}"#),
-            "volume.ListVolumePrices",
-            200,
+            "portal.ListZones",
+            r#"{"data":null}"#,
+            r#"{"data":[{"uuid":"zone-1"}]}"#,
         ),
         (
-            Response::Http {
-                status: "400 Bad Request".into(),
-                headers: vec![],
-                body: b"{}".to_vec(),
-            },
             "volume.ListVolumeTypeZones",
-            400,
+            r#"{"volumeTypeZones":null}"#,
+            r#"{"volumeTypeZones":[{}]}"#,
         ),
-    ] {
-        let server = Server::start(vec![
+        ("volume.ListEncryptionTypes", "{}", r#"[{"key":"none"}]"#),
+        (
+            "volume.ListVolumeTypes",
+            r#"{"volumeTypes":null}"#,
+            r#"{"volumeTypes":[{}]}"#,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (case, answer, expected) in [
+            (
+                "shape",
+                response(bad_shape),
+                ("volume.ListVolumePrices", Some(200), "InvalidResponse"),
+            ),
+            (
+                "row",
+                response(bad_row),
+                ("volume.ListVolumePrices", Some(200), "InvalidResponse"),
+            ),
+            (
+                "null required field",
+                response(
+                    [
+                        r#"{"data":[{"uuid":"zone-1","isEnabled":null}]}"#,
+                        r#"{"volumeTypeZones":[{"id":null}]}"#,
+                        r#"[{"key":null}]"#,
+                        r#"{"volumeTypes":[{"id":"type-1","name":null,"minSize":1,"maxSize":10}]}"#,
+                    ][index],
+                ),
+                ("volume.ListVolumePrices", Some(200), "InvalidResponse"),
+            ),
+            (
+                "empty",
+                response(""),
+                ("volume.ListVolumePrices", Some(200), "InvalidResponse"),
+            ),
+            (
+                "duplicate",
+                response(r#"{"data":[],"data":[]}"#),
+                ("volume.ListVolumePrices", Some(200), "InvalidResponse"),
+            ),
+            (
+                "json",
+                response("{broken"),
+                (operation, Some(200), "InvalidResponse"),
+            ),
+            (
+                "http",
+                Response::Http {
+                    status: "400 Bad Request".into(),
+                    headers: vec![("Content-Length".into(), "2".into())],
+                    body: b"{}".to_vec(),
+                },
+                (operation, Some(400), "BadRequest"),
+            ),
+        ] {
+            let server = Server::start(
+                valid[..index]
+                    .iter()
+                    .map(|body| response(body))
+                    .chain([answer])
+                    .collect(),
+            );
+            let options = ConfigOptions::default().with_clock(crate::testing::retry_clock());
+            let failure = client_with_options(&server, "hcm-3", options)
+                .list_volume_prices(&ctx, ListVolumePricesInput::default())
+                .await
+                .unwrap_err();
+            assert_eq!(server.requests(), index + 1);
+            assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotAWrite);
+            assert!(failure.partial().is_none());
+            let api = failure.error().api_error().unwrap();
+            if (api.operation(), api.status(), api.code()) != expected {
+                mismatches.push((
+                    operation,
+                    case,
+                    api.operation().to_owned(),
+                    api.status(),
+                    api.code().to_owned(),
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:?}");
+}
+
+#[tokio::test]
+async fn volume_pricing_rejects_underscored_catalogue_path_ids() {
+    let (ctx, _) = RequestContext::new();
+    for replies in [
+        vec![response(r#"{"data":[{"uuid":"zone_1","isEnabled":true}]}"#)],
+        vec![
             response(r#"{"data":[{"uuid":"zone-1","isEnabled":true}]}"#),
-            answer,
-        ]);
+            response(r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#),
+            response("[]"),
+            response(r#"{"volumeTypes":[{"id":"type_1","name":"SSD","minSize":1,"maxSize":10}]}"#),
+        ],
+    ] {
+        let requests = replies.len();
+        let server = Server::start(replies);
         let error = client(&server, "hcm-3")
             .list_volume_prices(&ctx, ListVolumePricesInput::default())
             .await
             .unwrap_err();
-        assert_eq!(error.error().api_error().unwrap().operation(), operation);
-        assert_eq!(error.error().api_error().unwrap().status(), Some(status));
+        assert_eq!(server.requests(), requests);
+        let api = error.error().api_error().unwrap();
+        assert_eq!(
+            (api.operation(), api.status(), api.code()),
+            ("volume.ListVolumePrices", Some(200), "InvalidResponse")
+        );
     }
 }
 
@@ -520,17 +677,17 @@ async fn volume_quote_keeps_the_peer_refusal_but_discovery_prices_are_status_onl
     assert_eq!(api.code(), "QuoteRefused");
     assert_eq!(api.message(), "size is not orderable");
     let server = Server::start(vec![
-        response(r#"{"data":[{"uuid":"zone_1","isEnabled":true}]}"#),
+        response(r#"{"data":[{"uuid":"zone-1","isEnabled":true}]}"#),
         response(r#"{"volumeTypeZones":[{"id":"parent-1"}]}"#),
         response("[]"),
-        response(r#"{"volumeTypes":[{"id":"type_1","name":"SSD","minSize":1,"maxSize":10}]}"#),
+        response(r#"{"volumeTypes":[{"id":"type-1","name":"SSD","minSize":1,"maxSize":10}]}"#),
         refusal(),
     ]);
     let error = client(&server, "hcm-3")
         .list_volume_prices(
             &ctx,
             ListVolumePricesInput {
-                volume_type_id: "type_1".into(),
+                volume_type_id: "type-1".into(),
                 encryption: "none".into(),
                 ..Default::default()
             },

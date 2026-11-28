@@ -132,17 +132,12 @@ async fn nat_list_oversized_error_body_reports_status_text() {
 }
 
 #[tokio::test]
-async fn nat_list_truncated_ok_body_is_invalid_list_envelope() {
+async fn nat_list_truncated_ok_body_is_a_statusless_read_failure() {
     let truncated =
         Response::RawClose(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"succ".to_vec());
     assert_eq!(
         nat_list_failure(vec![truncated]).await,
-        (
-            Some(200),
-            "InvalidResponse".into(),
-            "invalid list envelope".into(),
-            1
-        )
+        (None, "".into(), "".into(), 1)
     );
 }
 
@@ -170,14 +165,8 @@ async fn nat_quote_placement_diagnostics_screen_current_credentials() {
         .await
         .unwrap_err();
     assert_eq!(failure.error().class(), ErrorClass::InvalidInput);
-    assert!(
-        !failure
-            .error()
-            .api_error()
-            .unwrap()
-            .message()
-            .contains("requires")
-    );
+    assert!(failure.error().api_error().is_none());
+    assert!(!failure.error().to_string().contains("requires"));
 }
 
 #[tokio::test]
@@ -534,7 +523,142 @@ async fn quote_input_diagnostics_screen_current_credentials() {
         .quote_create_endpoint(&ctx, QuoteCreateEndpointInput::new("", "vpc-1", "subnet-1"))
         .await
         .unwrap_err();
-    for error in [nat.error(), endpoint.error()] {
-        assert!(!error.api_error().unwrap().message().contains("requires"));
+    assert!(nat.error().api_error().is_none());
+    assert!(!nat.error().to_string().contains("requires"));
+    assert!(
+        !endpoint
+            .error()
+            .api_error()
+            .unwrap()
+            .message()
+            .contains("requires")
+    );
+}
+
+#[tokio::test]
+async fn nat_catalog_lookups_keep_the_callers_withheld_error() {
+    for project_configured in [false, true] {
+        let server = Server::start(vec![Response::RawClose(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 8\r\n\r\n{}".to_vec(),
+        )]);
+        let mut options = ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_static_token(Secret::new("xyz"));
+        if project_configured {
+            options = options.with_project_id("proj-1".into());
+            options = with_product_loopback(Product::Vnetwork, options, &server);
+        } else {
+            options = with_product_loopback(Product::Vserver, options, &server);
+        }
+        let config = Config::new(options).unwrap();
+        let (ctx, _) = RequestContext::new();
+        let failure = Client::new(&config)
+            .list_nat_zones(&ctx, ListNatZonesInput::default())
+            .await
+            .unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(
+            (api.operation(), api.status(), api.code(), api.message()),
+            ("network.ListNATZones", None, "", "NAT response withheld")
+        );
+        assert_eq!(server.requests(), 1);
     }
+}
+
+#[tokio::test]
+async fn nat_catalog_project_inventory_screens_unknown_fields_before_catalog_reads() {
+    let project = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3"}],"unknown":"toy-secret"}"#,
+    )]);
+    let nat = Server::start(vec![response(
+        "200 OK",
+        include_str!("../../../tests/fixtures/network/list_nat_zones.json"),
+    )]);
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        with_product_loopback(Product::Vserver, options(), &project),
+        &nat,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let failure = Client::new(&config)
+        .list_nat_zones(
+            &ctx,
+            ListNatZonesInput {
+                zone_id: "zone-1".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code(), api.message()),
+        (
+            "network.ListNATZones",
+            Some(200),
+            "InvalidResponse",
+            "NAT response withheld"
+        )
+    );
+    assert_eq!(project.requests(), 1);
+    assert_eq!(nat.requests(), 0);
+}
+
+#[tokio::test]
+async fn nat_catalog_project_inventory_accepts_limit_metadata() {
+    let project = Server::start(vec![response(
+        "200 OK",
+        r#"{"projects":[{"projectId":"proj-1","region":"hcm-3"}],"limit":100}"#,
+    )]);
+    let nat = Server::start(vec![response(
+        "200 OK",
+        include_str!("../../../tests/fixtures/network/list_nat_zones.json"),
+    )]);
+    let config = Config::new(with_product_loopback(
+        Product::Vnetwork,
+        with_product_loopback(Product::Vserver, options(), &project),
+        &nat,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let outcome = Client::new(&config)
+        .list_nat_zones(
+            &ctx,
+            ListNatZonesInput {
+                zone_id: "zone-1".into(),
+            },
+        )
+        .await;
+    assert!(outcome.is_ok());
+    assert_eq!(project.requests(), 1);
+    assert_eq!(nat.requests(), 1);
+}
+
+#[tokio::test]
+async fn oversized_nat_region_lookup_reports_the_regions_envelope() {
+    let server = Server::start(vec![Response::RawClose(
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            (4 << 20) + 1
+        )
+        .into_bytes(),
+    )]);
+    let config = nat_detail_config(&server, true);
+    let (ctx, _) = RequestContext::new();
+    let failure = Client::new(&config)
+        .list_nat_instances(&ctx, ListNatInstancesInput::default())
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code(), api.message()),
+        (
+            "network.ListNATInstances",
+            Some(200),
+            "InvalidResponse",
+            "oversized regions envelope"
+        )
+    );
+    assert_eq!(server.requests(), 1);
 }

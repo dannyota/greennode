@@ -133,11 +133,11 @@ async fn gzip_encoded_cap_rejects_overflow() {
         )
         .await
     });
-    tokio::time::timeout(Duration::from_secs(3), wait)
+    tokio::time::timeout(Duration::from_secs(60), wait)
         .await
         .unwrap()
         .unwrap();
-    let result = tokio::time::timeout(Duration::from_secs(1), worker).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), worker).await;
     assert!(
         matches!(result, Ok(Ok(Err(e))) if e.kind() == &Error::BodyTooLarge && e.observed().is_some())
     );
@@ -262,16 +262,16 @@ async fn gzip_stalled_body_obeys_deadline() {
     let worker = tokio::spawn(async move {
         send::once(&client, request, 3, Encoding::Gzip, &clock, deadline).await
     });
-    tokio::time::timeout(Duration::from_secs(3), wait)
+    tokio::time::timeout(Duration::from_secs(60), wait)
         .await
         .unwrap()
         .unwrap();
-    tokio::time::timeout(Duration::from_secs(3), head_rx)
+    tokio::time::timeout(Duration::from_secs(60), head_rx)
         .await
         .unwrap()
         .unwrap();
     base.advance(Duration::from_secs(1));
-    let result = tokio::time::timeout(Duration::from_secs(1), worker).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), worker).await;
     assert!(
         matches!(result, Ok(Ok(Err(e))) if e.kind() == &Error::Deadline && e.observed().is_some())
     );

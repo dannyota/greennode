@@ -52,27 +52,42 @@ impl Client {
                 description: &input.description,
             })?;
             let mut flow = Workflow::start(self, ctx, CREATE_ZONE).await?;
-            let (status, response) = flow
-                .send::<Detail<Option<HostedZone>>>(Method::POST, ZONES, &[], body)
+            let (status, receipt) = flow
+                .send::<crate::wire::product::guard::Acknowledgement<Detail<Option<HostedZone>>>>(
+                    Method::POST,
+                    ZONES,
+                    &[],
+                    body,
+                )
                 .await
                 .map_err(create_failure(CREATE_ZONE))?;
-            let zone = response
-                .data
-                .filter(|zone| !zone.id.is_empty())
-                .ok_or_else(|| missing_id(CREATE_ZONE, status))?;
-            if input.no_wait {
-                return Ok(CreateHostedZoneOutput {
-                    hosted_zone: flow.clean(zone),
-                });
-            }
-            let id = zone.id.clone();
-            flow.settle_zone(
-                &id,
-                zone,
-                false,
-                |zone| zone.status == ACTIVE,
-                |hosted_zone| CreateHostedZoneOutput { hosted_zone },
-            )
+            let (Detail { data: Some(zone) }, acknowledged) = receipt
+                .into_id(|response| {
+                    response
+                        .data
+                        .as_ref()
+                        .filter(|zone| !zone.id.is_empty())
+                        .map(|zone| zone.id.as_str())
+                })
+                .ok_or_else(|| missing_id(CREATE_ZONE, status))?
+            else {
+                return Err(missing_id(CREATE_ZONE, status));
+            };
+            flow.with_acknowledgement(&acknowledged, async move |flow, id| {
+                if input.no_wait {
+                    return Ok(CreateHostedZoneOutput {
+                        hosted_zone: flow.clean(zone),
+                    });
+                }
+                flow.settle_zone(
+                    id,
+                    zone,
+                    false,
+                    |zone| zone.status == ACTIVE,
+                    |hosted_zone| CreateHostedZoneOutput { hosted_zone },
+                )
+                .await
+            })
             .await
         })
     }
@@ -215,27 +230,42 @@ impl Client {
             })?;
             let mut flow = Workflow::start(self, ctx, CREATE_RECORD).await?;
             flow.ready(zone_id).await?;
-            let (status, response) = flow
-                .send::<Detail<Option<Record>>>(Method::POST, RECORDS, &[zone_id], body)
+            let (status, receipt) = flow
+                .send::<crate::wire::product::guard::Acknowledgement<Detail<Option<Record>>>>(
+                    Method::POST,
+                    RECORDS,
+                    &[zone_id],
+                    body,
+                )
                 .await
                 .map_err(create_failure(CREATE_RECORD))?;
-            let record = response
-                .data
-                .filter(|record| !record.id.is_empty())
-                .ok_or_else(|| missing_id(CREATE_RECORD, status))?;
-            if input.no_wait {
-                return Ok(CreateRecordOutput {
-                    record: flow.clean(record),
-                });
-            }
-            let id = record.id.clone();
-            flow.settle_record(
-                (zone_id, &id),
-                record,
-                false,
-                |record, _| record.status == ACTIVE,
-                |record| CreateRecordOutput { record },
-            )
+            let (Detail { data: Some(record) }, acknowledged) = receipt
+                .into_id(|response| {
+                    response
+                        .data
+                        .as_ref()
+                        .filter(|record| !record.id.is_empty())
+                        .map(|record| record.id.as_str())
+                })
+                .ok_or_else(|| missing_id(CREATE_RECORD, status))?
+            else {
+                return Err(missing_id(CREATE_RECORD, status));
+            };
+            flow.with_acknowledgement(&acknowledged, async move |flow, id| {
+                if input.no_wait {
+                    return Ok(CreateRecordOutput {
+                        record: flow.clean(record),
+                    });
+                }
+                flow.settle_record(
+                    (zone_id, id),
+                    record,
+                    false,
+                    |record, _| record.status == ACTIVE,
+                    |record| CreateRecordOutput { record },
+                )
+                .await
+            })
             .await
         })
     }
@@ -420,6 +450,27 @@ fn missing_id<T>(id: &'static str, status: StatusCode) -> Failure<T> {
 fn create_failure<T, O>(operation: &'static str) -> impl FnOnce(Failure<T>) -> Failure<O> {
     move |failure| {
         let (error, _, dispatch) = failure.into_parts();
+        if dispatch == WriteDispatch::MayHaveBeenSent
+            && error
+                .detail::<crate::wire::product::operation::RefusedGuard>()
+                .is_some()
+        {
+            let resource = if operation == CREATE_ZONE {
+                "hosted zone"
+            } else {
+                "record"
+            };
+            let detail = format!(
+                "{operation}: {resource} creation could not be confirmed; list before creating it again"
+            );
+            return Failure::new(
+                Error::new(crate::ErrorClass::NotSettled)
+                    .with_detail(detail)
+                    .with_cause(error),
+                None,
+                dispatch,
+            );
+        }
         let error = if dispatch == WriteDispatch::MayHaveBeenSent
             && !observed_status(&error).is_some_and(|status| status.is_client_error())
         {
@@ -445,9 +496,7 @@ fn create_failure<T, O>(operation: &'static str) -> impl FnOnce(Failure<T>) -> F
 }
 
 fn observed_status(error: &Error) -> Option<StatusCode> {
-    error
-        .http_status()
-        .or_else(|| StatusCode::from_u16(error.api_error()?.status()?).ok())
+    StatusCode::from_u16(error.api_error()?.observed_status()?).ok()
 }
 
 fn is_rejected(error: &Error) -> bool {

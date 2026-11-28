@@ -1,0 +1,784 @@
+[
+  {
+    "name": "canonical budget",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"name\":\"monthly\"}}",
+    "exit": 0,
+    "stdout": "{\n  \"Budget\": {\n    \"UUID\": \"b-1\",\n    \"ID\": 0,\n    \"Name\": \"monthly\",\n    \"PeriodType\": \"\",\n    \"Type\": \"\",\n    \"LimitAmount\": 0,\n    \"Currency\": \"\",\n    \"Status\": \"\",\n    \"PeriodKey\": \"\",\n    \"PeriodStart\": \"\",\n    \"PeriodEnd\": \"\",\n    \"StartDate\": \"\",\n    \"CreatedAt\": \"\",\n    \"UpdatedAt\": \"\",\n    \"ActualCost\": null,\n    \"ForecastedCost\": null,\n    \"ActualPercentage\": null,\n    \"ForecastedPercentage\": null,\n    \"ThresholdPercentage\": null,\n    \"Alarm\": false,\n    \"ThresholdCount\": 0,\n    \"AlarmThresholdCount\": 0\n  }\n}\n"
+  },
+  {
+    "name": "unknown single field",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"future\":{\"Name\":1}}}",
+    "exit": 0,
+    "stdout": "{\n  \"Budget\": {\n    \"UUID\": \"b-1\",\n    \"ID\": 0,\n    \"Name\": \"\",\n    \"PeriodType\": \"\",\n    \"Type\": \"\",\n    \"LimitAmount\": 0,\n    \"Currency\": \"\",\n    \"Status\": \"\",\n    \"PeriodKey\": \"\",\n    \"PeriodStart\": \"\",\n    \"PeriodEnd\": \"\",\n    \"StartDate\": \"\",\n    \"CreatedAt\": \"\",\n    \"UpdatedAt\": \"\",\n    \"ActualCost\": null,\n    \"ForecastedCost\": null,\n    \"ActualPercentage\": null,\n    \"ForecastedPercentage\": null,\n    \"ThresholdPercentage\": null,\n    \"Alarm\": false,\n    \"ThresholdCount\": 0,\n    \"AlarmThresholdCount\": 0\n  }\n}\n"
+  },
+  {
+    "name": "known data field casing",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"Name\":\"monthly\"}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "typed row field casing",
+    "args": [
+      "list-budgets"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":[{\"uuid\":\"b-1\",\"Currency\":\"VND\"}]}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "folded unknown object keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"future\":[{\"name\":1,\"Name\":2}]}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "unicode folded unknown keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"future\":{\"Σ\":1,\"ς\":2}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "escaped folded unknown keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"future\":{\"name\":1,\"\\u004eame\":2}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "scope of folded unknown keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"uuid\":\"b-1\",\"future\":[{\"name\":1},{\"Name\":2}]}}",
+    "exit": 0,
+    "stdout": "{\n  \"Budget\": {\n    \"UUID\": \"b-1\",\n    \"ID\": 0,\n    \"Name\": \"\",\n    \"PeriodType\": \"\",\n    \"Type\": \"\",\n    \"LimitAmount\": 0,\n    \"Currency\": \"\",\n    \"Status\": \"\",\n    \"PeriodKey\": \"\",\n    \"PeriodStart\": \"\",\n    \"PeriodEnd\": \"\",\n    \"StartDate\": \"\",\n    \"CreatedAt\": \"\",\n    \"UpdatedAt\": \"\",\n    \"ActualCost\": null,\n    \"ForecastedCost\": null,\n    \"ActualPercentage\": null,\n    \"ForecastedPercentage\": null,\n    \"ThresholdPercentage\": null,\n    \"Alarm\": false,\n    \"ThresholdCount\": 0,\n    \"AlarmThresholdCount\": 0\n  }\n}\n"
+  },
+  {
+    "name": "transport message casing",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 400,
+    "body": "{\"Message\":\"Budget not found\"}",
+    "exit": 4,
+    "code": "NotFound",
+    "status": 400,
+    "message": "Budget not found"
+  },
+  {
+    "name": "first transport array message",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 400,
+    "body": "[{\"Message\":\"Budget not found\"},{\"message\":\"unrelated\"}]",
+    "exit": 4,
+    "code": "NotFound",
+    "status": 400,
+    "message": "Budget not found"
+  },
+  {
+    "name": "invalid later transport array item",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 400,
+    "body": "[{\"Message\":\"Budget not found\"},{\"title\":7}]",
+    "exit": 1,
+    "code": "BadRequest",
+    "status": 400
+  },
+  {
+    "name": "valid envelope refusal",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":400,\"message\":\"Budget not found\",\"data\":{\"future\":{\"Name\":1}}}",
+    "exit": 4,
+    "code": "NotFound",
+    "status": 200
+  },
+  {
+    "name": "refusal with ambiguous unknown keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":400,\"message\":\"Budget not found\",\"data\":{\"future\":{\"Name\":1,\"name\":2}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "reflected refusal with ambiguous unknown keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":\"Denied\",\"message\":\"rejected test-token\",\"future\":{\"a\":1,\"A\":2}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "null period cost",
+    "args": [
+      "get-current-period-cost"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"actualCost\":0,\"forecastedCost\":null}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "zero period cost",
+    "args": [
+      "get-current-period-cost"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"actualCost\":0,\"forecastedCost\":0}}",
+    "exit": 0,
+    "stdout": "{\n  \"PeriodCost\": {\n    \"PeriodKey\": \"\",\n    \"PeriodStart\": \"\",\n    \"PeriodEnd\": \"\",\n    \"ActualCost\": 0,\n    \"ForecastedCost\": 0\n  }\n}\n"
+  },
+  {
+    "name": "null list row",
+    "args": [
+      "list-budgets"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":[null]}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "nullable direct balances",
+    "args": [
+      "get-balances"
+    ],
+    "http_status": 200,
+    "body": "{\"cash\":null,\"poc\":null,\"cashAvailable\":null,\"cashHolding\":null,\"pocHolding\":null}",
+    "exit": 0,
+    "stdout": "{\n  \"Balances\": {\n    \"Cash\": null,\n    \"POC\": null,\n    \"CashAvailable\": null,\n    \"CashHolding\": null,\n    \"POCHolding\": null\n  }\n}\n"
+  },
+  {
+    "name": "missing direct balance key",
+    "args": [
+      "get-balances"
+    ],
+    "http_status": 200,
+    "body": "{\"cash\":null,\"poc\":null,\"cashAvailable\":null,\"cashHolding\":null}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "empty envelope refusal message",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":\"Denied\"}",
+    "exit": 1,
+    "code": "Denied",
+    "status": 200,
+    "message": "billing.GetBudget: request failed (status 200)"
+  },
+  {
+    "name": "reflected refusal without duplicate keys",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":\"Denied\",\"message\":\"rejected test-token\"}",
+    "exit": 1,
+    "code": "Denied",
+    "status": 200,
+    "message": "rejected [redacted]"
+  },
+  {
+    "name": "transaction history ignores folded unknown envelope fields",
+    "args": [
+      "list-transactions",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"future\":{\"key\":1,\"Key\":2},\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"transactionID\": 410058,\n        \"transactionType\": 5,\n        \"transactionValue\": 96000.0,\n        \"cumulativeValue\": 7285000.0,\n        \"sourceReference\": \"300012\",\n        \"userServiceReference\": \"500013\",\n        \"invoiceId\": 72025,\n        \"description\": \"Synthetic transaction 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410055,\n        \"transactionType\": 5,\n        \"transactionValue\": 252500.0,\n        \"cumulativeValue\": 7381000.0,\n        \"sourceReference\": \"300011\",\n        \"userServiceReference\": \"500014\",\n        \"invoiceId\": 72027,\n        \"description\": \"Synthetic transaction 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410052,\n        \"transactionType\": 1,\n        \"transactionValue\": 318500.0,\n        \"cumulativeValue\": 7633500.0,\n        \"sourceReference\": \"300010\",\n        \"userServiceReference\": null,\n        \"invoiceId\": null,\n        \"description\": \"Synthetic transaction 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410049,\n        \"transactionType\": 5,\n        \"transactionValue\": 219000.0,\n        \"cumulativeValue\": 7315000.0,\n        \"sourceReference\": \"300009\",\n        \"userServiceReference\": \"500006\",\n        \"invoiceId\": 72023,\n        \"description\": \"Synthetic transaction 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410046,\n        \"transactionType\": 5,\n        \"transactionValue\": 95000.0,\n        \"cumulativeValue\": 7534000.0,\n        \"sourceReference\": \"300008\",\n        \"userServiceReference\": \"500005\",\n        \"invoiceId\": 72021,\n        \"description\": \"Synthetic transaction 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410043,\n        \"transactionType\": 5,\n        \"transactionValue\": 240000.0,\n        \"cumulativeValue\": 7629000.0,\n        \"sourceReference\": \"300007\",\n        \"userServiceReference\": \"500004\",\n        \"invoiceId\": 72019,\n        \"description\": \"Synthetic transaction 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410040,\n        \"transactionType\": 5,\n        \"transactionValue\": 107000.0,\n        \"cumulativeValue\": 7869000.0,\n        \"sourceReference\": \"300006\",\n        \"userServiceReference\": \"500012\",\n        \"invoiceId\": 72017,\n        \"description\": \"Synthetic transaction 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410037,\n        \"transactionType\": 2,\n        \"transactionValue\": 111000.0,\n        \"cumulativeValue\": 7976000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 8\",\n        \"createTimeStamp\": \"2024-11-03T06:53:58.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410034,\n        \"transactionType\": 2,\n        \"transactionValue\": 84500.0,\n        \"cumulativeValue\": 7865000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500010\",\n        \"invoiceId\": 72011,\n        \"description\": \"Synthetic transaction 9\",\n        \"createTimeStamp\": \"2024-11-03T05:20:01.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410031,\n        \"transactionType\": 5,\n        \"transactionValue\": 335500.0,\n        \"cumulativeValue\": 7780500.0,\n        \"sourceReference\": \"300005\",\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 10\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\",\n        \"creditStatus\": false\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 13,\n      \"totalElements\": 130,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 410058,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 96000,\n      \"Balance\": 7285000,\n      \"SourceReference\": \"300012\",\n      \"Description\": \"Synthetic transaction 1\",\n      \"UserServiceReference\": \"500013\",\n      \"InvoiceID\": 72025,\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\"\n    },\n    {\n      \"ID\": 410055,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 252500,\n      \"Balance\": 7381000,\n      \"SourceReference\": \"300011\",\n      \"Description\": \"Synthetic transaction 2\",\n      \"UserServiceReference\": \"500014\",\n      \"InvoiceID\": 72027,\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\"\n    },\n    {\n      \"ID\": 410052,\n      \"Type\": \"PURCHASE\",\n      \"TypeCode\": 1,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 318500,\n      \"Balance\": 7633500,\n      \"SourceReference\": \"300010\",\n      \"Description\": \"Synthetic transaction 3\",\n      \"UserServiceReference\": null,\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\"\n    },\n    {\n      \"ID\": 410049,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 219000,\n      \"Balance\": 7315000,\n      \"SourceReference\": \"300009\",\n      \"Description\": \"Synthetic transaction 4\",\n      \"UserServiceReference\": \"500006\",\n      \"InvoiceID\": 72023,\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\"\n    },\n    {\n      \"ID\": 410046,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 95000,\n      \"Balance\": 7534000,\n      \"SourceReference\": \"300008\",\n      \"Description\": \"Synthetic transaction 5\",\n      \"UserServiceReference\": \"500005\",\n      \"InvoiceID\": 72021,\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\"\n    },\n    {\n      \"ID\": 410043,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 240000,\n      \"Balance\": 7629000,\n      \"SourceReference\": \"300007\",\n      \"Description\": \"Synthetic transaction 6\",\n      \"UserServiceReference\": \"500004\",\n      \"InvoiceID\": 72019,\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\"\n    },\n    {\n      \"ID\": 410040,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 107000,\n      \"Balance\": 7869000,\n      \"SourceReference\": \"300006\",\n      \"Description\": \"Synthetic transaction 7\",\n      \"UserServiceReference\": \"500012\",\n      \"InvoiceID\": 72017,\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\"\n    },\n    {\n      \"ID\": 410037,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 111000,\n      \"Balance\": 7976000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 8\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T06:53:58.000+00:00\"\n    },\n    {\n      \"ID\": 410034,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 84500,\n      \"Balance\": 7865000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 9\",\n      \"UserServiceReference\": \"500010\",\n      \"InvoiceID\": 72011,\n      \"CreatedAt\": \"2024-11-03T05:20:01.000+00:00\"\n    },\n    {\n      \"ID\": 410031,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 335500,\n      \"Balance\": 7780500,\n      \"SourceReference\": \"300005\",\n      \"Description\": \"Synthetic transaction 10\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 13,\n  \"TotalItem\": 130\n}\n"
+  },
+  {
+    "name": "transaction history accepts an envelope code alias",
+    "args": [
+      "list-transactions",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"Code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"transactionID\": 410058,\n        \"transactionType\": 5,\n        \"transactionValue\": 96000.0,\n        \"cumulativeValue\": 7285000.0,\n        \"sourceReference\": \"300012\",\n        \"userServiceReference\": \"500013\",\n        \"invoiceId\": 72025,\n        \"description\": \"Synthetic transaction 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410055,\n        \"transactionType\": 5,\n        \"transactionValue\": 252500.0,\n        \"cumulativeValue\": 7381000.0,\n        \"sourceReference\": \"300011\",\n        \"userServiceReference\": \"500014\",\n        \"invoiceId\": 72027,\n        \"description\": \"Synthetic transaction 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410052,\n        \"transactionType\": 1,\n        \"transactionValue\": 318500.0,\n        \"cumulativeValue\": 7633500.0,\n        \"sourceReference\": \"300010\",\n        \"userServiceReference\": null,\n        \"invoiceId\": null,\n        \"description\": \"Synthetic transaction 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410049,\n        \"transactionType\": 5,\n        \"transactionValue\": 219000.0,\n        \"cumulativeValue\": 7315000.0,\n        \"sourceReference\": \"300009\",\n        \"userServiceReference\": \"500006\",\n        \"invoiceId\": 72023,\n        \"description\": \"Synthetic transaction 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410046,\n        \"transactionType\": 5,\n        \"transactionValue\": 95000.0,\n        \"cumulativeValue\": 7534000.0,\n        \"sourceReference\": \"300008\",\n        \"userServiceReference\": \"500005\",\n        \"invoiceId\": 72021,\n        \"description\": \"Synthetic transaction 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410043,\n        \"transactionType\": 5,\n        \"transactionValue\": 240000.0,\n        \"cumulativeValue\": 7629000.0,\n        \"sourceReference\": \"300007\",\n        \"userServiceReference\": \"500004\",\n        \"invoiceId\": 72019,\n        \"description\": \"Synthetic transaction 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410040,\n        \"transactionType\": 5,\n        \"transactionValue\": 107000.0,\n        \"cumulativeValue\": 7869000.0,\n        \"sourceReference\": \"300006\",\n        \"userServiceReference\": \"500012\",\n        \"invoiceId\": 72017,\n        \"description\": \"Synthetic transaction 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410037,\n        \"transactionType\": 2,\n        \"transactionValue\": 111000.0,\n        \"cumulativeValue\": 7976000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 8\",\n        \"createTimeStamp\": \"2024-11-03T06:53:58.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410034,\n        \"transactionType\": 2,\n        \"transactionValue\": 84500.0,\n        \"cumulativeValue\": 7865000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500010\",\n        \"invoiceId\": 72011,\n        \"description\": \"Synthetic transaction 9\",\n        \"createTimeStamp\": \"2024-11-03T05:20:01.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410031,\n        \"transactionType\": 5,\n        \"transactionValue\": 335500.0,\n        \"cumulativeValue\": 7780500.0,\n        \"sourceReference\": \"300005\",\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 10\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\",\n        \"creditStatus\": false\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 13,\n      \"totalElements\": 130,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 410058,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 96000,\n      \"Balance\": 7285000,\n      \"SourceReference\": \"300012\",\n      \"Description\": \"Synthetic transaction 1\",\n      \"UserServiceReference\": \"500013\",\n      \"InvoiceID\": 72025,\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\"\n    },\n    {\n      \"ID\": 410055,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 252500,\n      \"Balance\": 7381000,\n      \"SourceReference\": \"300011\",\n      \"Description\": \"Synthetic transaction 2\",\n      \"UserServiceReference\": \"500014\",\n      \"InvoiceID\": 72027,\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\"\n    },\n    {\n      \"ID\": 410052,\n      \"Type\": \"PURCHASE\",\n      \"TypeCode\": 1,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 318500,\n      \"Balance\": 7633500,\n      \"SourceReference\": \"300010\",\n      \"Description\": \"Synthetic transaction 3\",\n      \"UserServiceReference\": null,\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\"\n    },\n    {\n      \"ID\": 410049,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 219000,\n      \"Balance\": 7315000,\n      \"SourceReference\": \"300009\",\n      \"Description\": \"Synthetic transaction 4\",\n      \"UserServiceReference\": \"500006\",\n      \"InvoiceID\": 72023,\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\"\n    },\n    {\n      \"ID\": 410046,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 95000,\n      \"Balance\": 7534000,\n      \"SourceReference\": \"300008\",\n      \"Description\": \"Synthetic transaction 5\",\n      \"UserServiceReference\": \"500005\",\n      \"InvoiceID\": 72021,\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\"\n    },\n    {\n      \"ID\": 410043,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 240000,\n      \"Balance\": 7629000,\n      \"SourceReference\": \"300007\",\n      \"Description\": \"Synthetic transaction 6\",\n      \"UserServiceReference\": \"500004\",\n      \"InvoiceID\": 72019,\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\"\n    },\n    {\n      \"ID\": 410040,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 107000,\n      \"Balance\": 7869000,\n      \"SourceReference\": \"300006\",\n      \"Description\": \"Synthetic transaction 7\",\n      \"UserServiceReference\": \"500012\",\n      \"InvoiceID\": 72017,\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\"\n    },\n    {\n      \"ID\": 410037,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 111000,\n      \"Balance\": 7976000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 8\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T06:53:58.000+00:00\"\n    },\n    {\n      \"ID\": 410034,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 84500,\n      \"Balance\": 7865000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 9\",\n      \"UserServiceReference\": \"500010\",\n      \"InvoiceID\": 72011,\n      \"CreatedAt\": \"2024-11-03T05:20:01.000+00:00\"\n    },\n    {\n      \"ID\": 410031,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 335500,\n      \"Balance\": 7780500,\n      \"SourceReference\": \"300005\",\n      \"Description\": \"Synthetic transaction 10\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 13,\n  \"TotalItem\": 130\n}\n"
+  },
+  {
+    "name": "payments ignore unknown row fields",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"future\":{\"name\":1,\"Name\":2},\"paymentID\": 880134,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000018\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 164000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000017\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\"\n      },\n      {\n        \"paymentID\": 880127,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000003\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 184500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000018\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\"\n      },\n      {\n        \"paymentID\": 880120,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000014\",\n        \"payGate\": \"ZaloPay\",\n        \"payGateTransactionID\": \"000000-SY-0000000000001-000000\",\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 326000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8082,\n        \"paymentRefID\": null,\n        \"paymentOptions\": \"{\\\"synthetic\\\":[],\\\"options\\\":{\\\"synthetic_option_group\\\":{\\\"values\\\":[\\\"SYNTHETIC\\\"]}}}\",\n        \"executorID\": 9001,\n        \"executorName\": \"Synthetic User 1\",\n        \"description\": \"Synthetic payment 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\"\n      },\n      {\n        \"paymentID\": 880113,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000010\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 246500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000016\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\"\n      },\n      {\n        \"paymentID\": 880106,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000011\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 394000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000015\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880099,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000006\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 93000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000014\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\"\n      },\n      {\n        \"paymentID\": 880092,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000012\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 238000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000013\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\"\n      },\n      {\n        \"paymentID\": 880085,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000016\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 73500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000012\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 8\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\"\n      },\n      {\n        \"paymentID\": 880078,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000013\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 284500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000011\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 9\",\n        \"createTimeStamp\": \"2024-10-16T11:51:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880071,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000008\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 98000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000010\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 10\",\n        \"createTimeStamp\": \"2024-10-16T03:10:05.000+00:00\"\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 8,\n      \"totalElements\": 74,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 880134,\n      \"TypeCode\": 8084,\n      \"Amount\": 164000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000018\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\",\n      \"Description\": \"Synthetic payment 1\"\n    },\n    {\n      \"ID\": 880127,\n      \"TypeCode\": 8084,\n      \"Amount\": 184500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000003\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\",\n      \"Description\": \"Synthetic payment 2\"\n    },\n    {\n      \"ID\": 880120,\n      \"TypeCode\": 8082,\n      \"Amount\": 326000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000014\",\n      \"Gateway\": \"ZaloPay\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\",\n      \"Description\": \"Synthetic payment 3\"\n    },\n    {\n      \"ID\": 880113,\n      \"TypeCode\": 8084,\n      \"Amount\": 246500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000010\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\",\n      \"Description\": \"Synthetic payment 4\"\n    },\n    {\n      \"ID\": 880106,\n      \"TypeCode\": 8084,\n      \"Amount\": 394000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000011\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\",\n      \"Description\": \"Synthetic payment 5\"\n    },\n    {\n      \"ID\": 880099,\n      \"TypeCode\": 8084,\n      \"Amount\": 93000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000006\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\",\n      \"Description\": \"Synthetic payment 6\"\n    },\n    {\n      \"ID\": 880092,\n      \"TypeCode\": 8084,\n      \"Amount\": 238000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000012\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\",\n      \"Description\": \"Synthetic payment 7\"\n    },\n    {\n      \"ID\": 880085,\n      \"TypeCode\": 8084,\n      \"Amount\": 73500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000016\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\",\n      \"Description\": \"Synthetic payment 8\"\n    },\n    {\n      \"ID\": 880078,\n      \"TypeCode\": 8084,\n      \"Amount\": 284500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000013\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-10-16T11:51:21.000+00:00\",\n      \"Description\": \"Synthetic payment 9\"\n    },\n    {\n      \"ID\": 880071,\n      \"TypeCode\": 8084,\n      \"Amount\": 98000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000008\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-10-16T03:10:05.000+00:00\",\n      \"Description\": \"Synthetic payment 10\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 8,\n  \"TotalItem\": 74\n}\n"
+  },
+  {
+    "name": "payments require the exact ID field",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"PaymentID\": 880134,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000018\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 164000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000017\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\"\n      },\n      {\n        \"paymentID\": 880127,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000003\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 184500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000018\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\"\n      },\n      {\n        \"paymentID\": 880120,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000014\",\n        \"payGate\": \"ZaloPay\",\n        \"payGateTransactionID\": \"000000-SY-0000000000001-000000\",\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 326000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8082,\n        \"paymentRefID\": null,\n        \"paymentOptions\": \"{\\\"synthetic\\\":[],\\\"options\\\":{\\\"synthetic_option_group\\\":{\\\"values\\\":[\\\"SYNTHETIC\\\"]}}}\",\n        \"executorID\": 9001,\n        \"executorName\": \"Synthetic User 1\",\n        \"description\": \"Synthetic payment 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\"\n      },\n      {\n        \"paymentID\": 880113,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000010\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 246500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000016\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\"\n      },\n      {\n        \"paymentID\": 880106,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000011\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 394000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000015\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880099,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000006\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 93000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000014\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\"\n      },\n      {\n        \"paymentID\": 880092,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000012\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 238000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000013\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\"\n      },\n      {\n        \"paymentID\": 880085,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000016\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 73500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000012\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 8\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\"\n      },\n      {\n        \"paymentID\": 880078,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000013\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 284500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000011\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 9\",\n        \"createTimeStamp\": \"2024-10-16T11:51:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880071,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000008\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 98000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000010\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 10\",\n        \"createTimeStamp\": \"2024-10-16T03:10:05.000+00:00\"\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 8,\n      \"totalElements\": 74,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "history ignores an out-of-range envelope number",
+    "args": [
+      "list-transactions",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"future\":1e400,\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"transactionID\": 410058,\n        \"transactionType\": 5,\n        \"transactionValue\": 96000.0,\n        \"cumulativeValue\": 7285000.0,\n        \"sourceReference\": \"300012\",\n        \"userServiceReference\": \"500013\",\n        \"invoiceId\": 72025,\n        \"description\": \"Synthetic transaction 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410055,\n        \"transactionType\": 5,\n        \"transactionValue\": 252500.0,\n        \"cumulativeValue\": 7381000.0,\n        \"sourceReference\": \"300011\",\n        \"userServiceReference\": \"500014\",\n        \"invoiceId\": 72027,\n        \"description\": \"Synthetic transaction 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410052,\n        \"transactionType\": 1,\n        \"transactionValue\": 318500.0,\n        \"cumulativeValue\": 7633500.0,\n        \"sourceReference\": \"300010\",\n        \"userServiceReference\": null,\n        \"invoiceId\": null,\n        \"description\": \"Synthetic transaction 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410049,\n        \"transactionType\": 5,\n        \"transactionValue\": 219000.0,\n        \"cumulativeValue\": 7315000.0,\n        \"sourceReference\": \"300009\",\n        \"userServiceReference\": \"500006\",\n        \"invoiceId\": 72023,\n        \"description\": \"Synthetic transaction 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410046,\n        \"transactionType\": 5,\n        \"transactionValue\": 95000.0,\n        \"cumulativeValue\": 7534000.0,\n        \"sourceReference\": \"300008\",\n        \"userServiceReference\": \"500005\",\n        \"invoiceId\": 72021,\n        \"description\": \"Synthetic transaction 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410043,\n        \"transactionType\": 5,\n        \"transactionValue\": 240000.0,\n        \"cumulativeValue\": 7629000.0,\n        \"sourceReference\": \"300007\",\n        \"userServiceReference\": \"500004\",\n        \"invoiceId\": 72019,\n        \"description\": \"Synthetic transaction 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410040,\n        \"transactionType\": 5,\n        \"transactionValue\": 107000.0,\n        \"cumulativeValue\": 7869000.0,\n        \"sourceReference\": \"300006\",\n        \"userServiceReference\": \"500012\",\n        \"invoiceId\": 72017,\n        \"description\": \"Synthetic transaction 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410037,\n        \"transactionType\": 2,\n        \"transactionValue\": 111000.0,\n        \"cumulativeValue\": 7976000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 8\",\n        \"createTimeStamp\": \"2024-11-03T06:53:58.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410034,\n        \"transactionType\": 2,\n        \"transactionValue\": 84500.0,\n        \"cumulativeValue\": 7865000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500010\",\n        \"invoiceId\": 72011,\n        \"description\": \"Synthetic transaction 9\",\n        \"createTimeStamp\": \"2024-11-03T05:20:01.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410031,\n        \"transactionType\": 5,\n        \"transactionValue\": 335500.0,\n        \"cumulativeValue\": 7780500.0,\n        \"sourceReference\": \"300005\",\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 10\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\",\n        \"creditStatus\": false\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 13,\n      \"totalElements\": 130,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 410058,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 96000,\n      \"Balance\": 7285000,\n      \"SourceReference\": \"300012\",\n      \"Description\": \"Synthetic transaction 1\",\n      \"UserServiceReference\": \"500013\",\n      \"InvoiceID\": 72025,\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\"\n    },\n    {\n      \"ID\": 410055,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 252500,\n      \"Balance\": 7381000,\n      \"SourceReference\": \"300011\",\n      \"Description\": \"Synthetic transaction 2\",\n      \"UserServiceReference\": \"500014\",\n      \"InvoiceID\": 72027,\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\"\n    },\n    {\n      \"ID\": 410052,\n      \"Type\": \"PURCHASE\",\n      \"TypeCode\": 1,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 318500,\n      \"Balance\": 7633500,\n      \"SourceReference\": \"300010\",\n      \"Description\": \"Synthetic transaction 3\",\n      \"UserServiceReference\": null,\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\"\n    },\n    {\n      \"ID\": 410049,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 219000,\n      \"Balance\": 7315000,\n      \"SourceReference\": \"300009\",\n      \"Description\": \"Synthetic transaction 4\",\n      \"UserServiceReference\": \"500006\",\n      \"InvoiceID\": 72023,\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\"\n    },\n    {\n      \"ID\": 410046,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 95000,\n      \"Balance\": 7534000,\n      \"SourceReference\": \"300008\",\n      \"Description\": \"Synthetic transaction 5\",\n      \"UserServiceReference\": \"500005\",\n      \"InvoiceID\": 72021,\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\"\n    },\n    {\n      \"ID\": 410043,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 240000,\n      \"Balance\": 7629000,\n      \"SourceReference\": \"300007\",\n      \"Description\": \"Synthetic transaction 6\",\n      \"UserServiceReference\": \"500004\",\n      \"InvoiceID\": 72019,\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\"\n    },\n    {\n      \"ID\": 410040,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 107000,\n      \"Balance\": 7869000,\n      \"SourceReference\": \"300006\",\n      \"Description\": \"Synthetic transaction 7\",\n      \"UserServiceReference\": \"500012\",\n      \"InvoiceID\": 72017,\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\"\n    },\n    {\n      \"ID\": 410037,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 111000,\n      \"Balance\": 7976000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 8\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T06:53:58.000+00:00\"\n    },\n    {\n      \"ID\": 410034,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 84500,\n      \"Balance\": 7865000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 9\",\n      \"UserServiceReference\": \"500010\",\n      \"InvoiceID\": 72011,\n      \"CreatedAt\": \"2024-11-03T05:20:01.000+00:00\"\n    },\n    {\n      \"ID\": 410031,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 335500,\n      \"Balance\": 7780500,\n      \"SourceReference\": \"300005\",\n      \"Description\": \"Synthetic transaction 10\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 13,\n  \"TotalItem\": 130\n}\n"
+  },
+  {
+    "name": "history ignores an out-of-range page and metadata number",
+    "args": [
+      "list-transactions",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"future\":1e400,\"content\": [\n      {\n        \"transactionID\": 410058,\n        \"transactionType\": 5,\n        \"transactionValue\": 96000.0,\n        \"cumulativeValue\": 7285000.0,\n        \"sourceReference\": \"300012\",\n        \"userServiceReference\": \"500013\",\n        \"invoiceId\": 72025,\n        \"description\": \"Synthetic transaction 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410055,\n        \"transactionType\": 5,\n        \"transactionValue\": 252500.0,\n        \"cumulativeValue\": 7381000.0,\n        \"sourceReference\": \"300011\",\n        \"userServiceReference\": \"500014\",\n        \"invoiceId\": 72027,\n        \"description\": \"Synthetic transaction 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410052,\n        \"transactionType\": 1,\n        \"transactionValue\": 318500.0,\n        \"cumulativeValue\": 7633500.0,\n        \"sourceReference\": \"300010\",\n        \"userServiceReference\": null,\n        \"invoiceId\": null,\n        \"description\": \"Synthetic transaction 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410049,\n        \"transactionType\": 5,\n        \"transactionValue\": 219000.0,\n        \"cumulativeValue\": 7315000.0,\n        \"sourceReference\": \"300009\",\n        \"userServiceReference\": \"500006\",\n        \"invoiceId\": 72023,\n        \"description\": \"Synthetic transaction 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410046,\n        \"transactionType\": 5,\n        \"transactionValue\": 95000.0,\n        \"cumulativeValue\": 7534000.0,\n        \"sourceReference\": \"300008\",\n        \"userServiceReference\": \"500005\",\n        \"invoiceId\": 72021,\n        \"description\": \"Synthetic transaction 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410043,\n        \"transactionType\": 5,\n        \"transactionValue\": 240000.0,\n        \"cumulativeValue\": 7629000.0,\n        \"sourceReference\": \"300007\",\n        \"userServiceReference\": \"500004\",\n        \"invoiceId\": 72019,\n        \"description\": \"Synthetic transaction 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410040,\n        \"transactionType\": 5,\n        \"transactionValue\": 107000.0,\n        \"cumulativeValue\": 7869000.0,\n        \"sourceReference\": \"300006\",\n        \"userServiceReference\": \"500012\",\n        \"invoiceId\": 72017,\n        \"description\": \"Synthetic transaction 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\",\n        \"creditStatus\": false\n      },\n      {\n        \"transactionID\": 410037,\n        \"transactionType\": 2,\n        \"transactionValue\": 111000.0,\n        \"cumulativeValue\": 7976000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 8\",\n        \"createTimeStamp\": \"2024-11-03T06:53:58.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410034,\n        \"transactionType\": 2,\n        \"transactionValue\": 84500.0,\n        \"cumulativeValue\": 7865000.0,\n        \"sourceReference\": null,\n        \"userServiceReference\": \"500010\",\n        \"invoiceId\": 72011,\n        \"description\": \"Synthetic transaction 9\",\n        \"createTimeStamp\": \"2024-11-03T05:20:01.000+00:00\",\n        \"creditStatus\": true\n      },\n      {\n        \"transactionID\": 410031,\n        \"transactionType\": 5,\n        \"transactionValue\": 335500.0,\n        \"cumulativeValue\": 7780500.0,\n        \"sourceReference\": \"300005\",\n        \"userServiceReference\": \"500001\",\n        \"invoiceId\": 72015,\n        \"description\": \"Synthetic transaction 10\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\",\n        \"creditStatus\": false\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 13,\n      \"totalElements\": 130,\n      \"size\": 10,\n      \"future\":1e400,\"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 410058,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 96000,\n      \"Balance\": 7285000,\n      \"SourceReference\": \"300012\",\n      \"Description\": \"Synthetic transaction 1\",\n      \"UserServiceReference\": \"500013\",\n      \"InvoiceID\": 72025,\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\"\n    },\n    {\n      \"ID\": 410055,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 252500,\n      \"Balance\": 7381000,\n      \"SourceReference\": \"300011\",\n      \"Description\": \"Synthetic transaction 2\",\n      \"UserServiceReference\": \"500014\",\n      \"InvoiceID\": 72027,\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\"\n    },\n    {\n      \"ID\": 410052,\n      \"Type\": \"PURCHASE\",\n      \"TypeCode\": 1,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 318500,\n      \"Balance\": 7633500,\n      \"SourceReference\": \"300010\",\n      \"Description\": \"Synthetic transaction 3\",\n      \"UserServiceReference\": null,\n      \"InvoiceID\": null,\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\"\n    },\n    {\n      \"ID\": 410049,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 219000,\n      \"Balance\": 7315000,\n      \"SourceReference\": \"300009\",\n      \"Description\": \"Synthetic transaction 4\",\n      \"UserServiceReference\": \"500006\",\n      \"InvoiceID\": 72023,\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\"\n    },\n    {\n      \"ID\": 410046,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 95000,\n      \"Balance\": 7534000,\n      \"SourceReference\": \"300008\",\n      \"Description\": \"Synthetic transaction 5\",\n      \"UserServiceReference\": \"500005\",\n      \"InvoiceID\": 72021,\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\"\n    },\n    {\n      \"ID\": 410043,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 240000,\n      \"Balance\": 7629000,\n      \"SourceReference\": \"300007\",\n      \"Description\": \"Synthetic transaction 6\",\n      \"UserServiceReference\": \"500004\",\n      \"InvoiceID\": 72019,\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\"\n    },\n    {\n      \"ID\": 410040,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 107000,\n      \"Balance\": 7869000,\n      \"SourceReference\": \"300006\",\n      \"Description\": \"Synthetic transaction 7\",\n      \"UserServiceReference\": \"500012\",\n      \"InvoiceID\": 72017,\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\"\n    },\n    {\n      \"ID\": 410037,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 111000,\n      \"Balance\": 7976000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 8\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T06:53:58.000+00:00\"\n    },\n    {\n      \"ID\": 410034,\n      \"Type\": \"REFUND\",\n      \"TypeCode\": 2,\n      \"Direction\": \"CREDIT\",\n      \"Amount\": 84500,\n      \"Balance\": 7865000,\n      \"SourceReference\": null,\n      \"Description\": \"Synthetic transaction 9\",\n      \"UserServiceReference\": \"500010\",\n      \"InvoiceID\": 72011,\n      \"CreatedAt\": \"2024-11-03T05:20:01.000+00:00\"\n    },\n    {\n      \"ID\": 410031,\n      \"Type\": \"CHARGE\",\n      \"TypeCode\": 5,\n      \"Direction\": \"DEBIT\",\n      \"Amount\": 335500,\n      \"Balance\": 7780500,\n      \"SourceReference\": \"300005\",\n      \"Description\": \"Synthetic transaction 10\",\n      \"UserServiceReference\": \"500001\",\n      \"InvoiceID\": 72015,\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 13,\n  \"TotalItem\": 130\n}\n"
+  },
+  {
+    "name": "history ignores an out-of-range row number",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"content\": [\n      {\n        \"future\":1e400,\"paymentID\": 880134,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000018\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 164000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000017\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 1\",\n        \"createTimeStamp\": \"2024-11-11T12:47:51.000+00:00\"\n      },\n      {\n        \"paymentID\": 880127,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000003\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 184500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000018\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 2\",\n        \"createTimeStamp\": \"2024-11-11T12:47:49.000+00:00\"\n      },\n      {\n        \"paymentID\": 880120,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000014\",\n        \"payGate\": \"ZaloPay\",\n        \"payGateTransactionID\": \"000000-SY-0000000000001-000000\",\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 326000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8082,\n        \"paymentRefID\": null,\n        \"paymentOptions\": \"{\\\"synthetic\\\":[],\\\"options\\\":{\\\"synthetic_option_group\\\":{\\\"values\\\":[\\\"SYNTHETIC\\\"]}}}\",\n        \"executorID\": 9001,\n        \"executorName\": \"Synthetic User 1\",\n        \"description\": \"Synthetic payment 3\",\n        \"createTimeStamp\": \"2024-11-11T12:40:39.000+00:00\"\n      },\n      {\n        \"paymentID\": 880113,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000010\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 246500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000016\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 4\",\n        \"createTimeStamp\": \"2024-11-05T01:36:20.000+00:00\"\n      },\n      {\n        \"paymentID\": 880106,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000011\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 394000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000015\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 5\",\n        \"createTimeStamp\": \"2024-11-04T01:35:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880099,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000006\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 93000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000014\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 6\",\n        \"createTimeStamp\": \"2024-11-04T01:35:15.000+00:00\"\n      },\n      {\n        \"paymentID\": 880092,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000012\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 238000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000013\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 7\",\n        \"createTimeStamp\": \"2024-11-03T06:54:53.000+00:00\"\n      },\n      {\n        \"paymentID\": 880085,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000016\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 73500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000012\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 8\",\n        \"createTimeStamp\": \"2024-11-03T05:19:44.000+00:00\"\n      },\n      {\n        \"paymentID\": 880078,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000013\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 284500.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000011\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 9\",\n        \"createTimeStamp\": \"2024-10-16T11:51:21.000+00:00\"\n      },\n      {\n        \"paymentID\": 880071,\n        \"transactionID\": \"00000000-0000-4000-8000-000000000008\",\n        \"payGate\": \"use_balance\",\n        \"payGateTransactionID\": null,\n        \"payGateName\": null,\n        \"bankCode\": null,\n        \"bankName\": null,\n        \"merchantCode\": null,\n        \"paymentStatus\": \"1\",\n        \"paymentAmount\": 98000.0,\n        \"actualAmount\": null,\n        \"paymentType\": 8084,\n        \"paymentRefID\": \"7000010\",\n        \"paymentOptions\": null,\n        \"executorID\": null,\n        \"executorName\": null,\n        \"description\": \"Synthetic payment 10\",\n        \"createTimeStamp\": \"2024-10-16T03:10:05.000+00:00\"\n      }\n    ],\n    \"pageable\": {\n      \"totalPages\": 8,\n      \"totalElements\": 74,\n      \"size\": 10,\n      \"number\": 1\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 880134,\n      \"TypeCode\": 8084,\n      \"Amount\": 164000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000018\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:47:51.000+00:00\",\n      \"Description\": \"Synthetic payment 1\"\n    },\n    {\n      \"ID\": 880127,\n      \"TypeCode\": 8084,\n      \"Amount\": 184500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000003\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:47:49.000+00:00\",\n      \"Description\": \"Synthetic payment 2\"\n    },\n    {\n      \"ID\": 880120,\n      \"TypeCode\": 8082,\n      \"Amount\": 326000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000014\",\n      \"Gateway\": \"ZaloPay\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-11T12:40:39.000+00:00\",\n      \"Description\": \"Synthetic payment 3\"\n    },\n    {\n      \"ID\": 880113,\n      \"TypeCode\": 8084,\n      \"Amount\": 246500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000010\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-05T01:36:20.000+00:00\",\n      \"Description\": \"Synthetic payment 4\"\n    },\n    {\n      \"ID\": 880106,\n      \"TypeCode\": 8084,\n      \"Amount\": 394000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000011\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-04T01:35:21.000+00:00\",\n      \"Description\": \"Synthetic payment 5\"\n    },\n    {\n      \"ID\": 880099,\n      \"TypeCode\": 8084,\n      \"Amount\": 93000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000006\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-04T01:35:15.000+00:00\",\n      \"Description\": \"Synthetic payment 6\"\n    },\n    {\n      \"ID\": 880092,\n      \"TypeCode\": 8084,\n      \"Amount\": 238000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000012\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-03T06:54:53.000+00:00\",\n      \"Description\": \"Synthetic payment 7\"\n    },\n    {\n      \"ID\": 880085,\n      \"TypeCode\": 8084,\n      \"Amount\": 73500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000016\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-11-03T05:19:44.000+00:00\",\n      \"Description\": \"Synthetic payment 8\"\n    },\n    {\n      \"ID\": 880078,\n      \"TypeCode\": 8084,\n      \"Amount\": 284500,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000013\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-10-16T11:51:21.000+00:00\",\n      \"Description\": \"Synthetic payment 9\"\n    },\n    {\n      \"ID\": 880071,\n      \"TypeCode\": 8084,\n      \"Amount\": 98000,\n      \"TransactionID\": \"00000000-0000-4000-8000-000000000008\",\n      \"Gateway\": \"use_balance\",\n      \"Status\": \"1\",\n      \"CreatedAt\": \"2024-10-16T03:10:05.000+00:00\",\n      \"Description\": \"Synthetic payment 10\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 10,\n  \"TotalPage\": 8,\n  \"TotalItem\": 74\n}\n"
+  },
+  {
+    "name": "history applies a later known row alias",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":10,\"PaymentAmount\":20,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 1,\n      \"TypeCode\": 1,\n      \"Amount\": 20,\n      \"TransactionID\": \"txn-1\",\n      \"Gateway\": \"BALANCE\",\n      \"Status\": \"PAID\",\n      \"CreatedAt\": \"2024-11-02T03:04:05Z\",\n      \"Description\": null\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 50,\n  \"TotalPage\": 1,\n  \"TotalItem\": 1\n}\n"
+  },
+  {
+    "name": "history applies a later exact row duplicate",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":10,\"paymentAmount\":20,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 1,\n      \"TypeCode\": 1,\n      \"Amount\": 20,\n      \"TransactionID\": \"txn-1\",\n      \"Gateway\": \"BALANCE\",\n      \"Status\": \"PAID\",\n      \"CreatedAt\": \"2024-11-02T03:04:05Z\",\n      \"Description\": null\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 50,\n  \"TotalPage\": 1,\n  \"TotalItem\": 1\n}\n"
+  },
+  {
+    "name": "history rejects a malformed known row field before a valid alias",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":\"invalid\",\"PaymentAmount\":20,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "history rejects malformed metadata before a valid alias",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":10,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":\"invalid\",\"Number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "history applies a valid metadata alias",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":10,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":2,\"Number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ID\": 1,\n      \"TypeCode\": 1,\n      \"Amount\": 10,\n      \"TransactionID\": \"txn-1\",\n      \"Gateway\": \"BALANCE\",\n      \"Status\": \"PAID\",\n      \"CreatedAt\": \"2024-11-02T03:04:05Z\",\n      \"Description\": null\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 50,\n  \"TotalPage\": 1,\n  \"TotalItem\": 1\n}\n"
+  },
+  {
+    "name": "short credential withholds the whole refusal",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":\"Denied\",\"message\":\"toy was rejected\"}",
+    "exit": 1,
+    "code": "Denied",
+    "status": 200,
+    "message": "[redacted]",
+    "bearer": "toy"
+  },
+  {
+    "name": "refusal match budget withholds the whole field",
+    "args": [
+      "get-budget",
+      "--budget-uuid",
+      "b-1"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":\"Denied\",\"message\":\"test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token test-token \"}",
+    "exit": 1,
+    "code": "Denied",
+    "status": 200,
+    "message": "[redacted]"
+  },
+  {
+    "name": "history rejects an out-of-range known amount",
+    "args": [
+      "list-payments",
+      "--start-date",
+      "2024-11-01",
+      "--end-date",
+      "2024-11-30",
+      "--size",
+      "50"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"content\":[{\"paymentID\":1,\"transactionID\":\"txn-1\",\"payGate\":\"BALANCE\",\"paymentStatus\":\"PAID\",\"paymentAmount\":1e400,\"paymentType\":1,\"description\":null,\"createTimeStamp\":\"2024-11-02T03:04:05Z\"}],\"pageable\":{\"number\":1,\"size\":50,\"totalPages\":1,\"totalElements\":1}}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "resource inventory ignores folded unknown keys",
+    "args": [
+      "list-resources"
+    ],
+    "http_status": 200,
+    "body": "{\"future\":{\"name\":1,\"Name\":2},\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": {\n    \"data\": [\n      {\n        \"artifactId\": \"project-1\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"MANUAL\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 0,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-2\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"AUTO-RENEW\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": 1,\n        \"channel\": 1,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-3\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"FUTURE\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 2,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      }\n    ],\n    \"totalAutoRenews\": 1,\n    \"totalGoodResources\": 3,\n    \"totalWarningResources\": 0,\n    \"totalAlertedResources\": 0,\n    \"totalExpiredResources\": 0,\n    \"extra\": {\n      \"warningThresholds\": [\n        7\n      ],\n      \"alarmThresholds\": [\n        1\n      ]\n    }\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ArtifactID\": \"project-1\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"MANUAL\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": null,\n      \"Channel\": 0,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": 1,\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    },\n    {\n      \"ArtifactID\": \"project-2\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"AUTO-RENEW\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": 1,\n      \"Channel\": 1,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": 1,\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    },\n    {\n      \"ArtifactID\": \"project-3\",\n      \"ArtifactName\": \"\\u003caccount\\u003e\",\n      \"ArtifactType\": \"object-storage\",\n      \"Product\": \"vstorage\",\n      \"RenewType\": \"FUTURE\",\n      \"BillingType\": \"PREPAID\",\n      \"StartBillingTime\": 1790000000000,\n      \"EndBillingTime\": 1890000000000,\n      \"DateLeft\": 30,\n      \"RenewPeriod\": null,\n      \"Channel\": 2,\n      \"IsRenewing\": false,\n      \"Cost\": 123,\n      \"Status\": 1,\n      \"StatusUI\": {\"level\":\"good\"},\n      \"BillingElements\": [\n        {\n          \"SKU\": \"synthetic-sku\",\n          \"Quantity\": 30,\n          \"MetaKey\": {\"quota\":30}\n        }\n      ]\n    }\n  ],\n  \"TotalAutoRenews\": 1,\n  \"TotalGoodResources\": 3,\n  \"TotalWarningResources\": 0,\n  \"TotalAlertedResources\": 0,\n  \"TotalExpiredResources\": 0,\n  \"Extra\": {\n    \"WarningThresholds\": [7],\n    \"AlarmThresholds\": [1]\n  }\n}\n"
+  },
+  {
+    "name": "resource inventory rejects exact unknown duplicates",
+    "args": [
+      "list-resources"
+    ],
+    "http_status": 200,
+    "body": "{\"future\":{\"name\":1,\"name\":2},\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": {\n    \"data\": [\n      {\n        \"artifactId\": \"project-1\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"MANUAL\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 0,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-2\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"AUTO-RENEW\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": 1,\n        \"channel\": 1,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-3\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"FUTURE\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 2,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      }\n    ],\n    \"totalAutoRenews\": 1,\n    \"totalGoodResources\": 3,\n    \"totalWarningResources\": 0,\n    \"totalAlertedResources\": 0,\n    \"totalExpiredResources\": 0,\n    \"extra\": {\n      \"warningThresholds\": [\n        7\n      ],\n      \"alarmThresholds\": [\n        1\n      ]\n    }\n  }\n}\n",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "resource inventory rejects known aliases",
+    "args": [
+      "list-resources"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": {\n    \"data\": [\n      {\n        \"ArtifactId\": \"project-1\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"MANUAL\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 0,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-2\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"AUTO-RENEW\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": 1,\n        \"channel\": 1,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      },\n      {\n        \"artifactId\": \"project-3\",\n        \"artifactName\": \"\u003caccount\u003e\",\n        \"artifactType\": \"object-storage\",\n        \"product\": \"vstorage\",\n        \"renewType\": \"FUTURE\",\n        \"billingType\": \"PREPAID\",\n        \"startBillingTime\": 1790000000000,\n        \"endBillingTime\": 1890000000000,\n        \"dateLeft\": 30,\n        \"renewPeriod\": null,\n        \"channel\": 2,\n        \"isRenewing\": false,\n        \"cost\": 123,\n        \"status\": 1,\n        \"statusUI\": {\n          \"level\": \"good\"\n        },\n        \"billingElements\": [\n          {\n            \"sku\": \"synthetic-sku\",\n            \"quantity\": 30,\n            \"metaKey\": {\n              \"quota\": 30\n            }\n          }\n        ],\n        \"tags\": {\n          \"creator\": \"\u003caccount\u003e\",\n          \"iam-id\": \"\u003cid\u003e\"\n        }\n      }\n    ],\n    \"totalAutoRenews\": 1,\n    \"totalGoodResources\": 3,\n    \"totalWarningResources\": 0,\n    \"totalAlertedResources\": 0,\n    \"totalExpiredResources\": 0,\n    \"extra\": {\n      \"warningThresholds\": [\n        7\n      ],\n      \"alarmThresholds\": [\n        1\n      ]\n    }\n  }\n}\n",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "direct balances require an exact envelope header",
+    "args": [
+      "get-balances"
+    ],
+    "http_status": 200,
+    "body": "{\"Message\":\"ok\",\"cash\":null,\"poc\":null,\"cashAvailable\":null,\"cashHolding\":null,\"pocHolding\":null}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "direct balances require a typed envelope header",
+    "args": [
+      "get-balances"
+    ],
+    "http_status": 200,
+    "body": "{\"message\":9,\"cash\":null,\"poc\":null,\"cashAvailable\":null,\"cashHolding\":null,\"pocHolding\":null}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "direct balances accept an ordinary envelope message",
+    "args": [
+      "get-balances"
+    ],
+    "http_status": 200,
+    "body": "{\"message\":\"ok\",\"cash\":null,\"poc\":null,\"cashAvailable\":null,\"cashHolding\":null,\"pocHolding\":null}",
+    "exit": 0,
+    "stdout": "{\n  \"Balances\": {\n    \"Cash\": null,\n    \"POC\": null,\n    \"CashAvailable\": null,\n    \"CashHolding\": null,\n    \"POCHolding\": null\n  }\n}\n"
+  },
+  {
+    "name": "grouped overview ignores flat series field casing",
+    "args": [
+      "get-cost-overview",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"summary\":{\"currentCost\":0},\"series\":[{\"key\":\"group\",\"points\":[{\"x\":\"2026-11-01\",\"y\":0}],\"Date\":\"unused\",\"Cost\":7}]}}",
+    "exit": 0,
+    "stdout": "{\n  \"Summary\": {\n    \"CurrentCost\": 0,\n    \"LastPeriodCost\": 0,\n    \"ChangePercent\": 0,\n    \"ForecastCost\": 0,\n    \"ActiveCount\": 0,\n    \"Breakdown\": []\n  },\n  \"Series\": [],\n  \"GroupedSeries\": [\n    {\n      \"Key\": \"group\",\n      \"Color\": \"\",\n      \"Points\": [\n        {\n          \"Date\": \"2026-11-01\",\n          \"Cost\": 0\n        }\n      ]\n    }\n  ],\n  \"Interval\": \"\",\n  \"StartDate\": \"\",\n  \"EndDate\": \"\",\n  \"GroupBy\": \"\"\n}\n"
+  },
+  {
+    "name": "grouped overview requires exact point fields",
+    "args": [
+      "get-cost-overview",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"summary\":{\"currentCost\":0},\"series\":[{\"key\":\"group\",\"points\":[{\"X\":\"2026-11-01\",\"y\":0}]}]}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "flat overview requires date and cost",
+    "args": [
+      "get-cost-overview",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"summary\":{\"currentCost\":0},\"series\":[{\"date\":\"2026-11-01\"}]}}",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "canonical flat overview",
+    "args": [
+      "get-cost-overview",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"data\":{\"summary\":{\"currentCost\":0},\"series\":[{\"date\":\"2026-11-01\",\"cost\":0}]}}",
+    "exit": 0,
+    "stdout": "{\n  \"Summary\": {\n    \"CurrentCost\": 0,\n    \"LastPeriodCost\": 0,\n    \"ChangePercent\": 0,\n    \"ForecastCost\": 0,\n    \"ActiveCount\": 0,\n    \"Breakdown\": []\n  },\n  \"Series\": [\n    {\n      \"Date\": \"2026-11-01\",\n      \"Cost\": 0\n    }\n  ],\n  \"GroupedSeries\": [],\n  \"Interval\": \"\",\n  \"StartDate\": \"\",\n  \"EndDate\": \"\",\n  \"GroupBy\": \"\"\n}\n"
+  },
+  {
+    "name": "canonical cost resources",
+    "args": [
+      "list-cost-resources",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"items\": [\n      {\"dailyAvg\": 125000.5, \"product\": \"compute\", \"region\": \"global\", \"resourceId\": \"server-1\", \"resourceName\": \"web-1\", \"resourceType\": \"server\", \"startDate\": \"2026-09-01\", \"totalCost\": 250000, \"userId\": 123456789},\n      {\"dailyAvg\": 45000.25, \"product\": \"volume\", \"region\": \"global\", \"resourceId\": \"vol-1\", \"resourceName\": \"data-1\", \"resourceType\": \"volume\", \"startDate\": \"2026-09-02\", \"totalCost\": 90000, \"userId\": 123456789}\n    ],\n    \"pagination\": {\"page\": 0, \"size\": 200, \"total\": 2, \"totalPages\": 1},\n    \"summary\": {\"totalAll\": 340000, \"activeCount\": 2, \"avgPerResource\": 170000}\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"ResourceID\": \"server-1\",\n      \"ResourceName\": \"web-1\",\n      \"ResourceType\": \"server\",\n      \"Product\": \"compute\",\n      \"Cost\": 250000,\n      \"DailyAverage\": 125000.5,\n      \"StartDate\": \"2026-09-01\"\n    },\n    {\n      \"ResourceID\": \"vol-1\",\n      \"ResourceName\": \"data-1\",\n      \"ResourceType\": \"volume\",\n      \"Product\": \"volume\",\n      \"Cost\": 90000,\n      \"DailyAverage\": 45000.25,\n      \"StartDate\": \"2026-09-02\"\n    }\n  ],\n  \"Page\": 1,\n  \"PageSize\": 200,\n  \"TotalPage\": 1,\n  \"TotalItem\": 2,\n  \"Summary\": {\n    \"TotalAll\": 340000,\n    \"ActiveCount\": 2,\n    \"AvgPerResource\": 170000\n  }\n}\n"
+  },
+  {
+    "name": "cost resource case-sensitive fields",
+    "args": [
+      "list-cost-resources",
+      "--start-date",
+      "2026-11-01",
+      "--end-date",
+      "2026-11-09"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": {\n    \"items\": [\n      {\"dailyAvg\": 125000.5, \"product\": \"compute\", \"region\": \"global\", \"resourceId\": \"server-1\", \"resourceName\": \"web-1\", \"resourceType\": \"server\", \"startDate\": \"2026-09-01\", \"TotalCost\": 250000, \"userId\": 123456789},\n      {\"dailyAvg\": 45000.25, \"product\": \"volume\", \"region\": \"global\", \"resourceId\": \"vol-1\", \"resourceName\": \"data-1\", \"resourceType\": \"volume\", \"startDate\": \"2026-09-02\", \"totalCost\": 90000, \"userId\": 123456789}\n    ],\n    \"pagination\": {\"page\": 0, \"size\": 200, \"total\": 2, \"totalPages\": 1},\n    \"summary\": {\"totalAll\": 340000, \"activeCount\": 2, \"avgPerResource\": 170000}\n  }\n}\n",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "canonical thresholds",
+    "args": [
+      "list-budget-thresholds",
+      "--budget-uuid",
+      "budget-1"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": [\n    {\n      \"id\": 1,\n      \"uuid\": \"threshold-1\",\n      \"budgetId\": 1,\n      \"thresholdType\": \"ACTUAL\",\n      \"thresholdPercentage\": 100.0,\n      \"comparisonOperator\": \"GTE\",\n      \"enabled\": false,\n      \"notificationState\": \"OK\",\n      \"statePeriodKey\": null,\n      \"lastStateChangedAt\": null,\n      \"maxAlertsPerPeriod\": 1,\n      \"reminderIntervalHours\": 24,\n      \"lastAlertAt\": null,\n      \"realarmRequested\": false,\n      \"createdAt\": \"2026-09-01T00:00:00\",\n      \"updatedAt\": \"2026-09-01T00:00:00\"\n    }\n  ]\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"UUID\": \"threshold-1\",\n      \"ThresholdType\": \"ACTUAL\",\n      \"ThresholdPercentage\": 100,\n      \"ComparisonOperator\": \"GTE\",\n      \"Enabled\": false,\n      \"MaxAlertsPerPeriod\": 1,\n      \"ReminderIntervalHours\": 24,\n      \"NotificationState\": \"OK\",\n      \"LastAlertAt\": \"\"\n    }\n  ]\n}\n"
+  },
+  {
+    "name": "threshold row case-sensitive fields",
+    "args": [
+      "list-budget-thresholds",
+      "--budget-uuid",
+      "budget-1"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"success\",\n  \"data\": [\n    {\n      \"id\": 1,\n      \"UUID\": \"threshold-1\",\n      \"budgetId\": 1,\n      \"thresholdType\": \"ACTUAL\",\n      \"thresholdPercentage\": 100.0,\n      \"comparisonOperator\": \"GTE\",\n      \"enabled\": false,\n      \"notificationState\": \"OK\",\n      \"statePeriodKey\": null,\n      \"lastStateChangedAt\": null,\n      \"maxAlertsPerPeriod\": 1,\n      \"reminderIntervalHours\": 24,\n      \"lastAlertAt\": null,\n      \"realarmRequested\": false,\n      \"createdAt\": \"2026-09-01T00:00:00\",\n      \"updatedAt\": \"2026-09-01T00:00:00\"\n    }\n  ]\n}\n",
+    "exit": 1,
+    "code": "InvalidResponse",
+    "status": 200
+  },
+  {
+    "name": "canonical alerts",
+    "args": [
+      "list-budget-alerts",
+      "--budget-uuid",
+      "budget-1",
+      "--period-key",
+      "2026-09"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"Success\",\n  \"data\": [\n    {\n      \"triggeredAt\": \"2026-09-10T08:00:00Z\",\n      \"thresholdType\": \"ACTUAL\",\n      \"thresholdPercentage\": 80,\n      \"triggeredValue\": 4200000,\n      \"actualPercentage\": 84,\n      \"deliveryStatus\": \"SENT\",\n      \"recipients\": \"[\\\"\u003caccount\u003e\\\"]\"\n    },\n    {\n      \"triggeredAt\": \"2026-09-15T08:00:00Z\",\n      \"thresholdType\": \"FORECASTED\",\n      \"thresholdPercentage\": 90,\n      \"triggeredValue\": 5100000,\n      \"actualPercentage\": 91,\n      \"deliveryStatus\": \"FAILED\",\n      \"recipients\": \"not-an-array\"\n    }\n  ]\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Items\": [\n    {\n      \"TriggeredAt\": \"2026-09-10T08:00:00Z\",\n      \"ThresholdType\": \"ACTUAL\",\n      \"ThresholdPercentage\": 80,\n      \"TriggeredValue\": 4200000,\n      \"ActualPercentage\": 84,\n      \"DeliveryStatus\": \"SENT\",\n      \"Recipients\": [\n        \"\\u003caccount\\u003e\"\n      ],\n      \"RecipientsRaw\": \"\"\n    },\n    {\n      \"TriggeredAt\": \"2026-09-15T08:00:00Z\",\n      \"ThresholdType\": \"FORECASTED\",\n      \"ThresholdPercentage\": 90,\n      \"TriggeredValue\": 5100000,\n      \"ActualPercentage\": 91,\n      \"DeliveryStatus\": \"FAILED\",\n      \"Recipients\": [],\n      \"RecipientsRaw\": \"not-an-array\"\n    }\n  ]\n}\n"
+  },
+  {
+    "name": "canonical create budget",
+    "args": [
+      "create-budget",
+      "--name",
+      "sample",
+      "--period-type",
+      "MONTHLY",
+      "--type",
+      "ACTUAL",
+      "--limit-amount",
+      "100"
+    ],
+    "http_status": 201,
+    "body": "{\n  \"code\": 201,\n  \"message\": \"notification.created\",\n  \"data\": {\n    \"id\": 1,\n    \"uuid\": \"budget-1\",\n    \"userId\": 1,\n    \"name\": \"example-budget\",\n    \"periodType\": \"MONTHLY\",\n    \"type\": \"ACTUAL\",\n    \"limitAmount\": 1000000,\n    \"currency\": \"credit\",\n    \"startDate\": \"2026-09-01T00:00:00.000000000\",\n    \"status\": \"PAUSED\",\n    \"createdBy\": 1,\n    \"createdAt\": \"2026-09-01T00:00:00.000000000\",\n    \"updatedAt\": \"2026-09-01T00:00:00.000000000\",\n    \"deletedAt\": null\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Budget\": {\n    \"UUID\": \"budget-1\",\n    \"ID\": 1,\n    \"Name\": \"example-budget\",\n    \"PeriodType\": \"MONTHLY\",\n    \"Type\": \"ACTUAL\",\n    \"LimitAmount\": 1000000,\n    \"Currency\": \"credit\",\n    \"Status\": \"PAUSED\",\n    \"PeriodKey\": \"\",\n    \"PeriodStart\": \"\",\n    \"PeriodEnd\": \"\",\n    \"StartDate\": \"2026-09-01T00:00:00.000000000\",\n    \"CreatedAt\": \"2026-09-01T00:00:00.000000000\",\n    \"UpdatedAt\": \"2026-09-01T00:00:00.000000000\",\n    \"ActualCost\": null,\n    \"ForecastedCost\": null,\n    \"ActualPercentage\": null,\n    \"ForecastedPercentage\": null,\n    \"ThresholdPercentage\": null,\n    \"Alarm\": false,\n    \"ThresholdCount\": 0,\n    \"AlarmThresholdCount\": 0\n  }\n}\n"
+  },
+  {
+    "name": "canonical update budget",
+    "args": [
+      "update-budget",
+      "--budget-uuid",
+      "budget-1",
+      "--status",
+      "PAUSED"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"update_success\",\n  \"data\": {\n    \"id\": 1,\n    \"uuid\": \"budget-1\",\n    \"userId\": 1,\n    \"name\": \"example-budget\",\n    \"periodType\": \"MONTHLY\",\n    \"type\": \"ACTUAL\",\n    \"limitAmount\": 1000000,\n    \"currency\": \"credit\",\n    \"startDate\": \"2026-09-01T00:00:00\",\n    \"status\": \"PAUSED\",\n    \"createdBy\": 1,\n    \"createdAt\": \"2026-09-01T00:00:00\",\n    \"updatedAt\": \"2026-09-01T00:00:00.000000000\",\n    \"deletedAt\": null\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{}\n"
+  },
+  {
+    "name": "canonical delete budget",
+    "args": [
+      "delete-budget",
+      "--budget-uuid",
+      "budget-1",
+      "--yes"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"message\":\"update_success\",\"data\":null}\n",
+    "exit": 0,
+    "stdout": "{}\n"
+  },
+  {
+    "name": "canonical create threshold",
+    "args": [
+      "create-budget-threshold",
+      "--budget-uuid",
+      "budget-1",
+      "--threshold-type",
+      "ACTUAL",
+      "--threshold-percentage",
+      "100"
+    ],
+    "http_status": 201,
+    "body": "{\n  \"code\": 201,\n  \"message\": \"notification.created\",\n  \"data\": {\n    \"id\": 1,\n    \"uuid\": \"threshold-1\",\n    \"budgetId\": 1,\n    \"thresholdType\": \"ACTUAL\",\n    \"thresholdPercentage\": 100,\n    \"comparisonOperator\": \"GTE\",\n    \"enabled\": true,\n    \"notificationState\": \"OK\",\n    \"statePeriodKey\": null,\n    \"lastStateChangedAt\": null,\n    \"maxAlertsPerPeriod\": 1,\n    \"reminderIntervalHours\": 648,\n    \"lastAlertAt\": null,\n    \"realarmRequested\": false,\n    \"createdAt\": \"2026-09-01T00:00:00.000000000\",\n    \"updatedAt\": \"2026-09-01T00:00:00.000000000\"\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{\n  \"Threshold\": {\n    \"UUID\": \"threshold-1\",\n    \"ThresholdType\": \"ACTUAL\",\n    \"ThresholdPercentage\": 100,\n    \"ComparisonOperator\": \"GTE\",\n    \"Enabled\": true,\n    \"MaxAlertsPerPeriod\": 1,\n    \"ReminderIntervalHours\": 648,\n    \"NotificationState\": \"OK\",\n    \"LastAlertAt\": \"\"\n  }\n}\n"
+  },
+  {
+    "name": "canonical update threshold",
+    "args": [
+      "update-budget-threshold",
+      "--budget-uuid",
+      "budget-1",
+      "--threshold-uuid",
+      "threshold-1",
+      "--enabled=false"
+    ],
+    "http_status": 200,
+    "body": "{\n  \"code\": 200,\n  \"message\": \"update_success\",\n  \"data\": {\n    \"id\": 1,\n    \"uuid\": \"threshold-1\",\n    \"budgetId\": 1,\n    \"thresholdType\": \"ACTUAL\",\n    \"thresholdPercentage\": 100.0,\n    \"comparisonOperator\": \"GTE\",\n    \"enabled\": false,\n    \"notificationState\": \"OK\",\n    \"statePeriodKey\": null,\n    \"lastStateChangedAt\": null,\n    \"maxAlertsPerPeriod\": 1,\n    \"reminderIntervalHours\": 648,\n    \"lastAlertAt\": null,\n    \"realarmRequested\": false,\n    \"createdAt\": \"2026-09-01T00:00:00\",\n    \"updatedAt\": \"2026-09-01T00:00:00.000000000\"\n  }\n}\n",
+    "exit": 0,
+    "stdout": "{}\n"
+  },
+  {
+    "name": "canonical delete threshold",
+    "args": [
+      "delete-budget-threshold",
+      "--budget-uuid",
+      "budget-1",
+      "--threshold-uuid",
+      "threshold-1",
+      "--yes"
+    ],
+    "http_status": 200,
+    "body": "{\"code\":200,\"message\":\"update_success\",\"data\":null}\n",
+    "exit": 0,
+    "stdout": "{}\n"
+  }
+]

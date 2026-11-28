@@ -331,11 +331,11 @@ impl Client {
                 read: &LISTENERS,
                 ..listener_target("", &ids)
             };
-            let (status, response) = write
+            let response = write
                 .send(ctx, Method::POST, &target, bytes, None)
                 .await
                 .map_err(|failure| write.create_failure(failure, "list-listeners"))?;
-            let uuid = write.acknowledged_id(status, &response, "list-listeners", input.no_wait)?;
+            let uuid = write.acknowledged_id(&response, "list-listeners", input.no_wait)?;
             let fallback = body.settings.submitted(Listener {
                 uuid: uuid.clone(),
                 name: body.listener_name.to_owned(),
@@ -423,7 +423,8 @@ impl Client {
                 .map_err(not_sent)?;
             write
                 .send(ctx, Method::PUT, &target, bytes, Some(&target))
-                .await?;
+                .await
+                .map(drop)?;
             let fallback = if input.no_wait {
                 body.submitted(listener.clone())
             } else {
@@ -583,6 +584,9 @@ async fn finish<O>(
     } else {
         settle(ctx, write, target, creating, &mut listener).await
     };
+    write
+        .check_acknowledgement(target)
+        .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
     let retained = ListenerProjection::retain(&mut listener, &write.evidence)
         .map(|projection| output(listener, projection))
         .map_err(|()| GET_LISTENER.decode_error(&write.evidence, DecodeError::ReflectedCredential));

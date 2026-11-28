@@ -356,7 +356,8 @@ fn reset<'a>(
             Ok(output) => output,
             Err(failed) => {
                 let error = failed.error();
-                let code = if error.has_identity(ErrorClass::NotSettled) {
+                let accepted = error.has_identity(ErrorClass::NotSettled);
+                let code = if accepted {
                     "NotSettled"
                 } else if error.detail::<sdk::WriteError>()
                     == Some(&sdk::WriteError::UserWriteUncertain)
@@ -368,7 +369,7 @@ fn reset<'a>(
                 let path = sdk::redact_reset_user_failure(&failed, &input.path);
                 let state = if let Some(password) = sdk::generated_reset_user_password(&failed) {
                     if !persist(input, password).await {
-                        let outcome = if code == "NotSettled" {
+                        let outcome = if accepted {
                             "reset was accepted but response handling did not settle"
                         } else {
                             "reset outcome is uncertain; the previous password may be unusable"

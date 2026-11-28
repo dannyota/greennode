@@ -12,7 +12,11 @@ use std::{future::Future, pin::Pin};
 use tokio::time::Instant;
 use url::Url;
 
+mod credentials;
+mod response_body;
 mod uri;
+use credentials::attempt_headers;
+use uri::redirect_target;
 use uri::uri_contains_credential;
 pub(super) use uri::uri_reflects_credential_forms;
 
@@ -92,6 +96,8 @@ pub(crate) struct Operation<'a> {
     pub(crate) class: redirect::Classification,
     pub(crate) retry: redirect::Retry,
     pub(crate) no_redirect: bool,
+    pub(crate) report_redirect: bool,
+    pub(crate) keep_status: bool,
     pub(crate) allow_recovery: bool,
     pub(crate) cap: usize,
     pub(crate) encoding: send::Encoding,
@@ -108,74 +114,30 @@ pub(crate) struct Request {
     pub(crate) credentials: Vec<CredentialHeader>,
     pub(crate) body: Bytes,
 }
-fn credential_value(secret: &Secret, bearer: bool) -> Result<http::HeaderValue, Error> {
-    let value = secret.expose_secret();
-    if value.is_empty()
-        || (bearer
-            && value
-                .bytes()
-                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()))
-    {
-        return Err(Error::InvalidRequest);
-    }
-    let text = zeroize::Zeroizing::new(if bearer {
-        format!("Bearer {value}")
-    } else {
-        value.to_owned()
-    });
-    let mut header = http::HeaderValue::from_str(&text).map_err(|_| Error::InvalidRequest)?;
-    header.set_sensitive(true);
-    Ok(header)
-}
-
-fn attempt_headers(
-    request: &Request,
-    bearer: Option<&BearerToken>,
-) -> Result<(HeaderMap, SentCredentials), Error> {
-    let mut headers = request.headers.clone();
-    let mut credentials = SentCredentials::default();
-    let declared = request.credentials.iter().map(|credential| {
-        (
-            credential.name.clone(),
-            &credential.value,
-            credential.bearer,
-        )
-    });
-    let authorization = bearer.map(|bearer| {
-        (
-            http::header::AUTHORIZATION,
-            &bearer.token.access_token,
-            true,
-        )
-    });
-    for (name, secret, bearer) in declared.chain(authorization) {
-        if headers.contains_key(&name) {
-            return Err(Error::InvalidRequest);
-        }
-        let value = credential_value(secret, bearer)?;
-        let wire = std::str::from_utf8(value.as_bytes()).map_err(|_| Error::InvalidRequest)?;
-        credentials.record_product_credential(secret);
-        credentials.record(&Secret::new(wire));
-        headers.insert(name, value);
-    }
-    Ok((headers, credentials))
-}
-
+#[must_use = "inspect the receipt or explicitly discard a screened acknowledgement"]
 pub(crate) struct Response {
-    pub(crate) reply: send::Reply,
+    pub(crate) status: http::StatusCode,
+    pub(crate) headers: HeaderMap,
+    body: zeroize::Zeroizing<Vec<u8>>,
+    body_cap: usize,
     pub(crate) credentials: SentCredentials,
     pub(crate) reflection: Screen,
+    receipt_screen: Screen,
+    receipt_policy: super::guard::ReceiptPolicy,
+    project_output: bool,
+    write_response: bool,
+    transport_screen: std::sync::OnceLock<Screen>,
+    pub(super) request: Option<super::absence::RequestIdentity>,
 }
-impl std::ops::Deref for Response {
-    type Target = send::Reply;
-    fn deref(&self) -> &Self::Target {
-        &self.reply
-    }
-}
+crate::error::debug_record!(Response unit);
+
 #[derive(Debug)]
 pub(crate) enum Error {
     Context(crate::ContextEnd),
+    ActiveRequestContext(crate::ContextEnd),
+    BodyContext(crate::ContextEnd),
     Provider(Box<crate::Error>),
+    Invalidation(Box<crate::Error>),
     Send(send::Error),
     Redirect(redirect::Refusal),
     InvalidRequest,
@@ -186,12 +148,11 @@ pub(crate) struct Failure {
     pub(crate) status: Option<http::StatusCode>,
     pub(crate) dispatch: crate::WriteDispatch,
     pub(crate) credentials: SentCredentials,
-    pub(crate) refused_body: Vec<u8>,
 }
 impl Failure {
     pub(crate) fn into_failure<T>(self, error: crate::Error) -> crate::Failure<T> {
         let error = match self.error {
-            Error::Provider(provider) => *provider,
+            Error::Provider(provider) | Error::Invalidation(provider) => *provider,
             _ => error,
         };
         let error = match self.status {
@@ -262,6 +223,13 @@ async fn acquire_bearer(
     result
 }
 
+fn active_request_context(error: Error) -> Error {
+    match error {
+        Error::Context(end) => Error::ActiveRequestContext(end),
+        error => error,
+    }
+}
+
 fn unauthorized_decision<'a>(
     auth: Auth<'_>,
     bearer: Option<&'a BearerToken>,
@@ -315,12 +283,16 @@ pub(crate) struct Runtime<'a> {
     pub(crate) sleeper: &'a dyn Sleeper,
     pub(crate) jitter: &'a mut (dyn FnMut() -> u64 + Send),
 }
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(super) struct RouteInputs<'a> {
     pub(super) path: &'a [&'a str],
     pub(super) query: &'a [(&'a str, &'a str)],
     pub(super) password_slot: Option<super::options::PasswordSlot<'a>>,
     pub(super) identifier_query_keys: &'a [&'a str],
+    pub(super) descriptor: Option<(&'static str, &'static str)>,
+    pub(super) project_output: bool,
+    pub(super) redact_output: bool,
+    pub(super) receipt_policy: super::guard::ReceiptPolicy,
 }
 
 impl RouteInputs<'_> {
@@ -355,24 +327,26 @@ pub(super) async fn run(
         dispatch,
         sent: SentCredentials::default(),
         reflection: runtime.configured_credentials.cloned().unwrap_or_default(),
-        refused_body: Vec::new(),
     };
     let result = run_inner(runtime, op, auth, request, route_inputs, &mut evidence).await;
     let mut credentials = evidence.reflection;
     credentials.extend(&evidence.sent);
     super::exit::record(&credentials, &evidence.sent, evidence.dispatch);
     match result {
-        Ok((reply, reflection)) => Ok(Response {
+        Ok((reply, reflection, answered)) => Ok(Response::from_exchange(
             reply,
-            credentials,
             reflection,
-        }),
+            credentials,
+            op,
+            &request.url,
+            &answered,
+            route_inputs,
+        )),
         Err(error) => Err(Failure {
             error,
             status: evidence.status,
             dispatch: evidence.dispatch,
             credentials,
-            refused_body: evidence.refused_body,
         }),
     }
 }
@@ -382,7 +356,6 @@ struct Evidence {
     dispatch: crate::WriteDispatch,
     sent: SentCredentials,
     reflection: SentCredentials,
-    refused_body: Vec<u8>,
 }
 
 async fn run_inner(
@@ -392,7 +365,7 @@ async fn run_inner(
     request: &Request,
     route_inputs: RouteInputs<'_>,
     evidence: &mut Evidence,
-) -> Result<(send::Reply, Screen), Error> {
+) -> Result<(send::Reply, Screen, Url), Error> {
     let sent = &mut evidence.sent;
     let reflection = &mut evidence.reflection;
     let Runtime {
@@ -514,6 +487,31 @@ async fn run_inner(
             if matches!(op.class, redirect::Classification::Write) {
                 observed.attempt_counter = Some(sleeper);
             }
+            let mut redirect = None;
+            let read_body = |status: http::StatusCode, headers: &HeaderMap| {
+                if !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+                    return true;
+                }
+                if matches!(status.as_u16(), 307 | 308)
+                    && matches!(op.retry, redirect::Retry::Once)
+                    && op.report_redirect
+                {
+                    return true;
+                }
+                let Some(location) = headers
+                    .get(http::header::LOCATION)
+                    .filter(|value| !value.is_empty())
+                else {
+                    return true;
+                };
+                let decision =
+                    redirect_target(&url, op, hops, &visited, location, auth, &credentials);
+                if op.report_redirect && matches!(decision, Err(redirect::Refusal::Operation)) {
+                    return true;
+                }
+                redirect = Some(decision);
+                false
+            };
             let result = bounded(&ctx, clock, || {
                 sent.extend(&header_credentials);
                 if let Some(slot) = route_inputs.password_slot {
@@ -528,7 +526,7 @@ async fn run_inner(
                         op.encoding,
                         clock,
                         deadline,
-                        &mut observed,
+                        (&mut observed, read_body),
                     ),
                 )
             })
@@ -540,12 +538,50 @@ async fn run_inner(
                 && observed.started
                 && !matches!(
                     result,
-                    Ok(Err(send::Error::Transport(retry::SendFailure::FailedDial)))
+                    Ok(Err(send::Error::Transport(
+                        retry::SendFailure::FailedDial,
+                        _
+                    )))
                 )
             {
                 evidence.dispatch = crate::WriteDispatch::MayHaveBeenSent;
             }
-            let result = result?;
+            let result = result.map_err(|error| match error {
+                Error::Context(end) if observed.status.is_some() => Error::BodyContext(end),
+                Error::Context(end) if observed.attempted => Error::ActiveRequestContext(end),
+                _ => error,
+            })?;
+            if let Some(redirect) = redirect {
+                match redirect {
+                    Ok(target) => {
+                        url = target;
+                        hops += 1;
+                        visited.insert(url.clone());
+                        continue;
+                    }
+                    Err(refusal) => {
+                        if op.method == Method::GET
+                            && matches!(op.retry, redirect::Retry::Repeatable)
+                            && let Some(delay) = retry::decide(
+                                op.retry,
+                                attempt,
+                                &op.retry_config,
+                                retry::Outcome::Send(retry::SendFailure::PossiblySent),
+                                retry::system_time(clock.utc_now()).ok_or(Error::InvalidRequest)?,
+                                jitter(),
+                            )
+                        {
+                            evidence.status = None;
+                            bounded(&ctx, clock, || sleeper.sleep(delay))
+                                .await
+                                .map_err(active_request_context)?;
+                            attempt += 1;
+                            continue 'attempt;
+                        }
+                        return Err(Error::Redirect(refusal));
+                    }
+                }
+            }
             let body_reflection = result.as_ref().map_or(Screen::Indeterminate, |reply| {
                 op.screen_reply(matches!(auth, Auth::None), reply, reflection, sent)
             });
@@ -561,9 +597,12 @@ async fn run_inner(
             };
             let is_401 = match &result {
                 Ok(reply) => reply.status == http::StatusCode::UNAUTHORIZED,
-                Err(error) => error
-                    .observed()
-                    .is_some_and(|head| head.status == http::StatusCode::UNAUTHORIZED),
+                Err(error) => {
+                    (op.keep_status || matches!(error.kind(), send::Error::BodyTooLarge))
+                        && error
+                            .observed()
+                            .is_some_and(|head| head.status == http::StatusCode::UNAUTHORIZED)
+                }
             };
             if is_401 {
                 let decision = unauthorized_decision(
@@ -574,17 +613,28 @@ async fn run_inner(
                     recovered,
                     clock,
                 );
+                let resending =
+                    decision.resend && matches!(auth, Auth::Bearer(source) if source.refreshable());
                 if let (Auth::Bearer(source), Some(sent)) = (auth, decision.rejected) {
-                    bounded(&ctx, clock, || {
+                    let rejected = match bounded(&ctx, clock, || {
                         source.rejected(&ctx, sent, decision.invalidate.is_some())
                     })
-                    .await?
-                    .map_err(|error| Error::Provider(Box::new(error)))?;
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(Error::Context(end)) => Err(end.into()),
+                        Err(error) => return Err(error),
+                    };
+                    rejected.map_err(|error| {
+                        if resending {
+                            Error::Provider(Box::new(error))
+                        } else {
+                            Error::Invalidation(Box::new(error))
+                        }
+                    })?;
                 }
-                if decision.resend
-                    && let Auth::Bearer(source) = auth
-                    && source.refreshable()
-                {
+                if resending && let Auth::Bearer(source) = auth {
+                    evidence.status = None;
                     bearer = Some(acquire_bearer(&ctx, clock, source, reflection).await?);
                     recovered = true;
                     attempt = 0;
@@ -592,8 +642,12 @@ async fn run_inner(
                 }
             }
             if let Some(id) = refused {
-                evidence.status = body_reflection.diagnostic_status(evidence.status);
-                let error = super::operation::unsafe_guard_response(id);
+                let observed = evidence.status;
+                evidence.status = body_reflection.diagnostic_status(observed);
+                let error = super::absence::keep_unscreened_status(
+                    super::operation::unsafe_guard_response(id),
+                    observed,
+                );
                 let error = if body_reflection == Screen::Indeterminate
                     && let Ok(reply) = &result
                     && serde_json::from_str::<&serde_json::value::RawValue>(
@@ -612,58 +666,6 @@ async fn run_inner(
             }
             let outcome = match &result {
                 Ok(reply) => {
-                    if matches!(reply.status.as_u16(), 301 | 302 | 303 | 307 | 308)
-                        && let Some(location) = reply.headers.get(http::header::LOCATION)
-                    {
-                        let location = location.to_str().map_err(|_| Error::InvalidRequest)?;
-                        let next = match redirect::decide(
-                            &url,
-                            redirect::Operation {
-                                class: op.class,
-                                method: &op.method,
-                                retry: op.retry,
-                                no_redirect: op.no_redirect,
-                            },
-                            hops,
-                            &visited,
-                            location,
-                        ) {
-                            Ok(next) => next,
-                            Err(refusal) => {
-                                evidence.refused_body = reply.body.clone();
-                                return Err(Error::Redirect(refusal));
-                            }
-                        };
-                        let reflected = match auth {
-                            Auth::Bearer(_) => {
-                                super::response::reflects_credential(location, &credentials)
-                            }
-                            _ => uri_reflects_credential_forms(&next, &credentials),
-                        };
-                        let reflected_path =
-                            next.path_segments().into_iter().flatten().any(|segment| {
-                                super::response::reflects_identifier(segment, &credentials)
-                            });
-                        let reflected_query = next.query().is_some_and(|query| {
-                            query.split('&').any(|pair| {
-                                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-                                [key, value].into_iter().any(|part| {
-                                    super::response::reflects_identifier(part, &credentials)
-                                })
-                            })
-                        });
-                        if reflected
-                            || reflected_path
-                            || reflected_query
-                            || uri_contains_credential(&next, &credentials)
-                        {
-                            return Err(Error::Redirect(redirect::Refusal::Invalid));
-                        }
-                        hops += 1;
-                        visited.insert(next.clone());
-                        url = next;
-                        continue;
-                    }
                     let hint = reply
                         .headers
                         .get(http::header::RETRY_AFTER)
@@ -676,12 +678,18 @@ async fn run_inner(
             if let Some(delay) = outcome.and_then(|outcome| {
                 retry::decide(op.retry, attempt, &op.retry_config, outcome, now, jitter())
             }) {
-                bounded(&ctx, clock, || sleeper.sleep(delay)).await?;
+                bounded(&ctx, clock, || sleeper.sleep(delay))
+                    .await
+                    .map_err(active_request_context)?;
                 attempt += 1;
                 continue 'attempt;
             }
             return result
-                .map(|reply| (reply, body_reflection))
+                .map(|reply| {
+                    let receipt_screen =
+                        op.receipt_screen(&reply, body_reflection, reflection, sent);
+                    (reply, receipt_screen, url)
+                })
                 .map_err(Error::Send);
         }
     }

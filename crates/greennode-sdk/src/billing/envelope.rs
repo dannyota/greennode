@@ -1,4 +1,5 @@
 use super::model::{Budget, field};
+use super::response_validation::data_valid;
 use crate::error::SafeText;
 use crate::wire::product::{
     operation::{self, Operation, Output},
@@ -64,12 +65,20 @@ impl<T: BudgetData> Output for Envelope<T> {
     ]);
 
     fn reflected_response(operation: &Operation, response: &Response) -> Box<Error> {
-        if let Ok(header) = serde_json::from_slice::<Header<'_>>(&response.body)
-            && header
-                .proved_code(&response.credentials)
-                .is_some_and(|(code, _)| success_code(code) == Some(false))
-        {
-            return api_error(operation, response, header.not_found(&response.credentials));
+        if matches!(
+            operation.class,
+            crate::wire::product::redirect::Classification::Read
+        ) {
+            let error = api_error(operation, response);
+            if error.api_error().is_some_and(|api| {
+                !api.code().is_empty()
+                    && !api
+                        .code()
+                        .parse::<u16>()
+                        .is_ok_and(|code| (200..300).contains(&code))
+            }) {
+                return error;
+            }
         }
         Box::new(invalid_response(operation, response.status, false))
     }
@@ -77,77 +86,61 @@ impl<T: BudgetData> Output for Envelope<T> {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let status = response.status;
         let invalid = || Box::new(invalid_response(operation, status, false));
-        if status == StatusCode::BAD_REQUEST
-            && response.reflection.clean().is_some()
-            && serde_json::from_slice::<Header<'_>>(&response.body).is_ok_and(|header| {
-                (header.code.is_none() || header.screened_code(&response.credentials).is_some())
-                    && header.not_found(&response.credentials)
-            })
-        {
-            return Err(api_error(operation, response, true));
-        }
         if !operation.success.contains(&status) {
             if status.is_success() {
                 return Err(invalid());
             }
-            return operation::decode_response(operation, response);
+            return Err(api_error(operation, response));
         }
-        if !operation.no_output && operation.reflection == operation::Reflection::Redact {
-            let header =
-                serde_json::from_slice::<Header<'_>>(&response.body).map_err(|_| invalid())?;
-            let (code, clean) = header
-                .proved_code(&response.credentials)
-                .ok_or_else(invalid)?;
-            return Self::decoded_projection(operation, response, &header, code, clean);
-        }
-        let clean = response.reflection.clean().ok_or_else(invalid)?;
-        Self::accepted_response(operation, response, clean)
+        response
+            .decode_projection(|body| {
+                if operation.allow_empty && body.is_empty() {
+                    return Ok(Self::default());
+                }
+                let header = decode_header(body, operation.cap).ok_or_else(invalid)?;
+                let (code, _) = header
+                    .proved_code(&response.credentials)
+                    .ok_or_else(invalid)?;
+                Self::decoded_projection(operation, response, &header, code, body)
+            })
+            .map_err(|error| {
+                if error.detail::<operation::RefusedGuard>().is_some() {
+                    if error.has_identity(crate::ErrorClass::NotSettled) {
+                        Box::new(
+                            crate::Error::new(crate::ErrorClass::NotSettled)
+                                .with_cause(*invalid())
+                                .with_cause(*error),
+                        )
+                    } else {
+                        invalid()
+                    }
+                } else {
+                    error
+                }
+            })
     }
 }
 
 impl<T: BudgetData> Envelope<T> {
-    fn accepted_response(
-        operation: &Operation,
-        response: &Response,
-        clean: response::Clean,
-    ) -> Result<Self, Box<Error>> {
-        let status = response.status;
-        let invalid = || Box::new(invalid_response(operation, status, false));
-        if operation.allow_empty && response.body.is_empty() {
-            return Ok(Self::default());
-        }
-        let header: Header<'_> = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-        let code = header
-            .screened_code(&response.credentials)
-            .ok_or_else(invalid)?;
-        Self::decoded_projection(operation, response, &header, code, clean)
-    }
-
     fn decoded_projection(
         operation: &Operation,
         response: &Response,
         header: &Header<'_>,
         code: &str,
-        _: response::Clean,
+        body: &[u8],
     ) -> Result<Self, Box<Error>> {
         let status = response.status;
         let invalid = || Box::new(invalid_response(operation, status, false));
         if !success_code(code).ok_or_else(invalid)? {
-            strict_json::validate_shape(&response.body, &HEADER_SCHEMA, operation.cap)
-                .map_err(|_| invalid())?;
-            return Err(api_error(
-                operation,
-                response,
-                header.not_found(&response.credentials),
-            ));
+            return Err(api_error(operation, response));
         }
-        if response.credentials.has_numeric_product_credential() {
+        if response.credentials.has_numeric_product_credential()
+            || (!operation.no_output && !data_valid(operation.id, header.data))
+        {
             return Err(invalid());
         }
-        if operation.no_output {
-            strict_json::validate_shape(&response.body, &Self::SCHEMA, operation.cap)
-                .map_err(|_| invalid())?;
-        }
+        strict_json::validate_canonical_shape(body, &Self::SCHEMA, operation.cap)
+            .map_err(|_| invalid())?;
         let mut output: Self =
             operation::decode_response(operation, response).map_err(|_| invalid())?;
         if !output.data.valid(&response.credentials) {
@@ -159,14 +152,25 @@ impl<T: BudgetData> Envelope<T> {
 }
 
 #[derive(Deserialize)]
-struct Header<'a> {
+pub(super) struct Header<'a> {
     #[serde(borrow, default, deserialize_with = "present_code")]
     code: Option<&'a RawValue>,
-    #[serde(borrow)]
-    message: Option<Cow<'a, str>>,
+    #[serde(borrow, rename = "message")]
+    _message: Option<Cow<'a, str>>,
+    #[serde(borrow, default, deserialize_with = "present_code")]
+    data: Option<&'a RawValue>,
+}
+
+pub(super) fn decode_header(body: &[u8], cap: usize) -> Option<Header<'_>> {
+    strict_json::validate_folded_canonical_shape(body, &HEADER_SCHEMA, cap).ok()?;
+    serde_json::from_slice(body).ok()
 }
 
 impl Header<'_> {
+    pub(super) fn is_direct(&self) -> bool {
+        self.code.is_none() && self.data.is_none()
+    }
+
     fn proved_code(&self, credentials: &SentCredentials) -> Option<(&str, response::Clean)> {
         let raw = self.code?.get();
         let clean = crate::wire::product::evidence::Evidence::from_credentials(credentials)
@@ -185,14 +189,6 @@ impl Header<'_> {
             response::decision_text(&decoded, credentials)?;
         }
         Some(wire)
-    }
-
-    fn not_found(&self, credentials: &SentCredentials) -> bool {
-        self.message.as_deref().is_some_and(|message| {
-            let safe = response::sanitize_error_text(message, credentials);
-            let message = safe.as_str().trim_start();
-            message.starts_with("Budget not found") || message.starts_with("Threshold not found")
-        })
     }
 }
 
@@ -214,27 +210,57 @@ fn success_code(code: &str) -> Option<bool> {
     }
 }
 
-fn api_error(operation: &Operation, reply: &Response, not_found: bool) -> Box<Error> {
-    let error = response::classify(
-        operation.id,
-        reply.status,
-        bytes::Bytes::copy_from_slice(&reply.body),
-        &[],
-        (true, operation.sensitive, operation.retry),
-        &reply.credentials,
-    )
-    .err()
+fn api_error(operation: &Operation, reply: &Response) -> Box<Error> {
+    let rules = (true, operation.sensitive, operation.retry);
+    let error = if reply.status.is_success() {
+        reply.billing_envelope_refusal(operation.id)
+    } else {
+        reply.classify_billing_transport(operation.id, rules).err()
+    }
     .unwrap_or_else(|| Box::new(invalid_response(operation, reply.status, false)));
-    if not_found && let Some(api) = error.api_error() {
+    let Some(api) = error.api_error() else {
+        return error;
+    };
+    let message = api.message().trim();
+    if (reply.status == StatusCode::BAD_REQUEST || reply.status.is_success())
+        && reply.clean_receipt().is_some()
+        && (message.starts_with("Budget not found") || message.starts_with("Threshold not found"))
+    {
         let secrets: Vec<_> = reply.credentials.values().iter().collect();
         let detail = ApiError::without_fallback(
-            api.operation(),
-            api.status(),
+            operation.id,
+            api.observed_status(),
             SafeText::new("NotFound", &secrets),
             SafeText::new(api.message(), &secrets),
             api.retryable(),
         );
-        Box::new(Error::new(ErrorClass::NotFound).with_cause(Error::from_api(detail)))
+        Box::new(
+            Error::new(ErrorClass::NotFound)
+                .with_cause(Error::from_api(detail))
+                .retain_status_visibility(Some(api)),
+        )
+    } else {
+        error
+    }
+}
+
+pub(super) fn read_failure_response(operation: &Operation, error: Error) -> Error {
+    let Some(api) = error.api_error() else {
+        return error;
+    };
+    let Some(status) = api
+        .observed_status()
+        .and_then(|status| StatusCode::from_u16(status).ok())
+    else {
+        return error;
+    };
+    if status.is_success()
+        && api.code() != "InvalidResponse"
+        && (error.is_body_too_large()
+            || error.detail::<operation::BodyReadFailure>().is_some()
+            || error.detail::<operation::DecodeFailure>().is_some())
+    {
+        invalid_response(operation, status, error.is_body_too_large()).with_cause(error)
     } else {
         error
     }

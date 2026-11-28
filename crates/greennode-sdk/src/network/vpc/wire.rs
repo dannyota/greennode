@@ -11,7 +11,7 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::wire::strict_json::{self, field_matches};
 use crate::{
@@ -222,6 +222,7 @@ impl<'a> Reads<'a> {
         items: &mut Vec<T>,
         rows: Vec<T>,
     ) -> Result<(), Error> {
+        let byte_limit = self.client.session.retained_byte_limit(CAP);
         for row in rows {
             let length = serde_json::to_vec(&row)
                 .map_err(|_| self.invalid(read))?
@@ -229,7 +230,7 @@ impl<'a> Reads<'a> {
             *retained = retained
                 .checked_add(length + 1)
                 .ok_or_else(|| self.invalid(read))?;
-            if *retained > CAP {
+            if *retained > byte_limit {
                 return Err(self.invalid(read));
             }
             items.push(row);
@@ -300,10 +301,12 @@ impl<'a> Reads<'a> {
             allow_empty: !protected,
             no_output: false,
             keep_status: false,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: protected,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: protected,
+            report_redirect: protected,
             retry_config: retry::Config::default(),
         };
         let reply = operation::execute_raw(
@@ -325,43 +328,36 @@ impl<'a> Reads<'a> {
                     return self.screen(read.protected_invalid()).with_body_too_large();
                 }
                 if let Some(api) = err.api_error()
-                    && api.operation() == read.id
+                    && api.is_for_operation(read.id)
+                    && let Some(status) = api.observed_status()
                 {
-                    if let Some(status) = api.status() {
-                        return self.screen(read.api(
-                            Some(status),
-                            api.code(),
-                            WITHHELD,
-                            api.retryable(),
-                        ));
-                    }
-                    if let Some(status) = err.http_status().filter(|status| status.is_redirection())
-                    {
-                        return self.screen(read.api(Some(status.as_u16()), "", WITHHELD, false));
-                    }
+                    return self.screen(
+                        read.api(Some(status), api.code(), WITHHELD, api.retryable())
+                            .retaining_response_proof(&err),
+                    );
                 }
             }
             self.screen(err)
         })?;
-        let text = go_json(&reply.body);
         if reply.status != StatusCode::OK {
-            let Err(error) = response::classify(
+            let Err(error) = reply.classify_normalized_json(
                 read.id,
-                reply.status,
-                Bytes::copy_from_slice(text.as_bytes()),
                 operation.success,
                 (true, false, operation.retry),
-                self.evidence.credentials(),
             ) else {
                 return Err(self.invalid(read));
             };
             let error = if protected && let Some(api) = error.api_error() {
-                read.api(api.status(), api.code(), WITHHELD, api.retryable())
+                read.api(api.observed_status(), api.code(), WITHHELD, api.retryable())
+                    .retaining_response_proof(&error)
             } else {
                 *error
             };
             return Err(self.screen(error));
         }
+        let text = reply
+            .decode_projection(|body| Ok(go_json(body).into_owned()))
+            .map_err(|error| self.screen(*error))?;
         if text.is_empty() {
             return if protected {
                 Err(self.screen(read.protected_invalid()))
@@ -381,7 +377,7 @@ impl<'a> Reads<'a> {
         if protected && self.evidence.text_reflects(&text) {
             return Err(self.screen(read.protected_invalid()));
         }
-        Ok(text.into_owned())
+        Ok(text)
     }
 
     pub(super) async fn get<T: WireField>(&mut self, read: Read, ids: &[&str]) -> Result<T, Error> {

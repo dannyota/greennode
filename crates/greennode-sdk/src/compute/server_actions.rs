@@ -296,11 +296,18 @@ impl Client {
             let raw = self
                 .send_mutation(ctx, &RENAME, &[id], Some(&body), false, &mut evidence)
                 .await?;
-            let server = decode_data::<Server>(&raw, &RENAME, &evidence)
+            let receipt = raw.clean_receipt().ok_or_else(|| {
+                Failure::new(
+                    invalid_mutation_response(&RENAME, &evidence),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })?;
+            let server = decode_data::<Server>(receipt.body(), &RENAME, &evidence)
                 .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let output = (!server.name.is_empty()
                 && (server.uuid.is_empty() || server.uuid == *id)
-                && !evidence.text_reflects(&server.uuid))
+                && !evidence.id_reflects(&server.uuid))
             .then(|| safe_server(server, &evidence))
             .flatten()
             .map(|server| RenameServerOutput { server });

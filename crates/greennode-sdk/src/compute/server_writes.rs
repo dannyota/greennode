@@ -24,7 +24,7 @@ const CREATE: Mutation = Mutation {
     template: "v2/{}/servers",
     method: Method::POST,
     retry: Retry::Once,
-    overflow_overrides_status: true,
+    overflow_overrides_status: false,
     success: &[StatusCode::ACCEPTED],
 };
 const DELETE: Mutation = Mutation {
@@ -155,7 +155,14 @@ impl Client {
                 .send_mutation(ctx, &CREATE, &[], Some(&body), sensitive, &mut evidence)
                 .await
                 .map_err(|failed| create_error(failed, sensitive, &evidence))?;
-            let id = create_id(&body, &evidence)
+            let receipt = create_id(&body, &evidence)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
+            let id = receipt
+                .recheck(&evidence)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?
+                .to_owned();
+            evidence
+                .keep_acknowledgement(&receipt)
                 .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let mut server = Server {
                 uuid: id.clone(),
@@ -165,10 +172,19 @@ impl Client {
             let settlement = if input.no_wait {
                 Ok(())
             } else {
-                self.settle_server(ctx, &id, Settlement::Created, &mut server, &mut evidence)
-                    .await
+                self.settle_server(
+                    ctx,
+                    &id,
+                    Settlement::Created(&receipt),
+                    &mut server,
+                    &mut evidence,
+                )
+                .await
             };
-            let output = safe_server(server, &evidence)
+            let output = receipt
+                .recheck(&evidence)
+                .ok()
+                .and_then(|_| safe_server(server, &evidence))
                 .filter(|_| {
                     !evidence.output_reflects(&json!(quote.optimum_price))
                         && !evidence.reflects_fixed_two(quote.optimum_price)
@@ -248,7 +264,8 @@ impl Client {
                 }
             }
             self.send_mutation(ctx, &DELETE, &[id], Some(&body), false, &mut evidence)
-                .await?;
+                .await
+                .map(drop)?;
             if !input.no_wait {
                 if let Err(error) = self
                     .settle_server(ctx, id, Settlement::Deleted, &mut server, &mut evidence)
@@ -298,7 +315,13 @@ impl Client {
                                     WriteDispatch::MayHaveBeenSent,
                                 ));
                             }
-                            Err(error) if error.has_class(ErrorClass::NotFound) => {}
+                            Err(error)
+                                if crate::confirms_absence(
+                                    &error,
+                                    "volume.GetVolume",
+                                    "GET",
+                                    "v2/{}/volumes/{}",
+                                ) => {}
                             _ => kept.push(volume_id),
                         }
                     }
@@ -345,17 +368,16 @@ impl Client {
         let mut metadata = None;
         let mut ids = HashSet::<[u8; 32]>::new();
         for page in 1..=50 {
-            let results = self
-                .server_page::<()>(&ctx, page, 10_000, evidence)
-                .await
-                .map_err(|error| {
-                    let error = error.into_parts().0;
-                    if status(&error) == Some(200) {
-                        invalid()
-                    } else {
-                        not_sent(error)
-                    }
-                })?;
+            let results = self.server_page::<()>(&ctx, page, 10_000, evidence).await;
+            decide(evidence, |_| ()).map_err(|error| not_sent(*error))?;
+            let results = results.map_err(|error| {
+                let error = error.into_parts().0;
+                if status(&error) == Some(200) {
+                    invalid()
+                } else {
+                    not_sent(error)
+                }
+            })?;
             let totals = (results.total_page, results.total_item, results.page_size);
             if results.page != page
                 || results.total_page > 50
@@ -458,7 +480,10 @@ fn create_body(input: &CreateServerInput) -> Result<Value, Box<Error>> {
     Ok(value)
 }
 
-fn create_id(body: &[u8], evidence: &Evidence) -> Result<String, Box<Error>> {
+fn create_id(
+    reply: &crate::wire::product::sender::Response,
+    evidence: &Evidence,
+) -> Result<crate::wire::product::guard::AcknowledgedId, Box<Error>> {
     let invalid = || Box::new(invalid_response(evidence));
     #[derive(Deserialize)]
     struct Acknowledgement {
@@ -478,15 +503,14 @@ fn create_id(body: &[u8], evidence: &Evidence) -> Result<String, Box<Error>> {
             shape: Shape::Any,
         }]),
     }]);
+    let receipt = reply.clean_receipt().ok_or_else(invalid)?;
+    let body = receipt.body();
     let id = if body.is_empty() {
         String::new()
     } else {
         let text = go_json(body);
         strict_json::validate_exact_shape(text.as_bytes(), &SHAPE, 8 << 20)
             .map_err(|_| invalid())?;
-        if !evidence.go_peer_body_screen(body).is_clean() {
-            return Err(invalid());
-        }
         serde_json::from_str::<Option<Acknowledgement>>(&text)
             .map_err(|_| invalid())?
             .and_then(|ack| ack.data)
@@ -502,10 +526,10 @@ fn create_id(body: &[u8], evidence: &Evidence) -> Result<String, Box<Error>> {
             evidence,
         )));
     }
-    if evidence.text_reflects(&id) || path_id(CREATE.id, "ServerID", &id).is_err() {
+    if evidence.id_reflects(&id) || path_id(CREATE.id, "ServerID", &id).is_err() {
         return Err(invalid());
     }
-    Ok(id)
+    Ok(receipt.bind_id(id))
 }
 
 fn invalid_response(evidence: &Evidence) -> Error {
@@ -565,22 +589,24 @@ fn create_error(
         && !remote_status.is_some_and(|status| (400..500).contains(&status))
         && !evidence.text_reflects(CREATE_AMBIGUOUS)
     {
-        let reason = error.api_error().map_or("", ApiError::message);
-        let reason = if evidence.text_reflects(reason) {
+        let reason = error
+            .api_error()
+            .map_or_else(String::new, ApiError::go_text);
+        let reason = if evidence.text_reflects(&reason) {
             ""
         } else {
-            reason
+            reason.as_str()
         };
-        let end = reason.floor_char_boundary(512 - CREATE_AMBIGUOUS.len() - 2);
+        let end = reason.floor_char_boundary(512 - CREATE_AMBIGUOUS.len() - CREATE.id.len() - 4);
         let advice = if reason.is_empty() {
-            CREATE_AMBIGUOUS.to_owned()
+            format!("{}: {CREATE_AMBIGUOUS}", CREATE.id)
         } else {
-            format!("{}; {CREATE_AMBIGUOUS}", &reason[..end])
+            format!("{}: {CREATE_AMBIGUOUS}: {}", CREATE.id, &reason[..end])
         };
         if evidence.text_reflects(&advice) {
             error
         } else {
-            error.with_detail(crate::error::RecoveryAdvice::new(&advice))
+            error.with_outer_detail(crate::error::RecoveryAdvice::new(&advice))
         }
     } else {
         error

@@ -509,17 +509,19 @@ async fn require_absent(
     expected: &str,
     exists: &str,
 ) -> Result<(), Error> {
-    let (status, raw) = reader.get_status(route, &[], true).await?;
+    let (status, raw, absence) = reader.get_status(route, &[], true).await?;
     if status == StatusCode::OK {
         reader.decode(decode_quota(&raw))?;
         return Err(usage(reader.read.id, exists));
     }
-    if Object::of(&raw).is_some_and(|body| {
-        body.len() == 1
-            && body.text("message").is_some_and(|message| {
-                message == expected && !reader.evidence.text_reflects(&message)
-            })
-    }) {
+    if absence.is_some()
+        && Object::of(&raw).is_some_and(|body| {
+            body.len() == 1
+                && body.text("message").is_some_and(|message| {
+                    message == expected && !reader.evidence.text_reflects(&message)
+                })
+        })
+    {
         return Ok(());
     }
     Err(reader.read.error(

@@ -88,6 +88,19 @@ pub(crate) fn validate_canonical_shape(
     validate_fields(body, shape, limit, FieldShape::Canonical)
 }
 
+pub(crate) fn validate_folded_canonical_shape(
+    body: &[u8],
+    shape: &Shape<'_>,
+    limit: usize,
+) -> Result<(), Error> {
+    if body.len() > limit {
+        return Err(Error);
+    }
+    let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
+    validate_value(raw.get(), &[], 0, true)?;
+    shape_value(raw, shape, FieldShape::Canonical)
+}
+
 fn validate_fields(
     body: &[u8],
     shape: &Shape<'_>,
@@ -169,7 +182,7 @@ pub(crate) fn validate(body: &[u8], fields: &[Field<'_>], limit: usize) -> Resul
         return Err(Error);
     }
     let raw: &RawValue = serde_json::from_slice(body).map_err(|_| Error)?;
-    validate_value(raw.get(), fields, 0)
+    validate_value(raw.get(), fields, 0, false)
 }
 
 pub(crate) fn field_matches(left: &str, right: &str) -> bool {
@@ -184,12 +197,17 @@ fn fold(value: &str) -> impl Iterator<Item = char> + '_ {
     })
 }
 
-fn validate_value(raw: &str, fields: &[Field<'_>], depth: usize) -> Result<(), Error> {
+fn validate_value(
+    raw: &str,
+    fields: &[Field<'_>],
+    depth: usize,
+    fold_keys: bool,
+) -> Result<(), Error> {
     if depth >= 128 && matches!(raw.as_bytes().first(), Some(b'{' | b'[')) {
         return Err(Error);
     }
     let mut decoder = serde_json::Deserializer::from_str(raw);
-    let visitor = Check(fields, depth);
+    let visitor = Check(fields, depth, fold_keys);
     match raw.as_bytes().first() {
         Some(b'{') => decoder.deserialize_map(visitor).map_err(|_| Error),
         Some(b'[') => decoder.deserialize_seq(visitor).map_err(|_| Error),
@@ -197,7 +215,7 @@ fn validate_value(raw: &str, fields: &[Field<'_>], depth: usize) -> Result<(), E
     }
 }
 
-struct Check<'a>(&'a [Field<'a>], usize);
+struct Check<'a>(&'a [Field<'a>], usize, bool);
 
 impl<'de> Visitor<'de> for Check<'_> {
     type Value = ();
@@ -210,7 +228,12 @@ impl<'de> Visitor<'de> for Check<'_> {
         let mut keys = HashSet::new();
         let mut assigned = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if !keys.insert(key.clone()) {
+            let unique = if self.2 {
+                key.chars().map(crate::go_text::go_simple_fold).collect()
+            } else {
+                key.clone()
+            };
+            if !keys.insert(unique) {
                 return Err(serde::de::Error::custom("duplicate key"));
             }
             let index = self
@@ -227,7 +250,7 @@ impl<'de> Visitor<'de> for Check<'_> {
             }
             let raw = map.next_value::<&RawValue>()?;
             let children = index.map_or(&[][..], |i| self.0[i].children);
-            validate_value(raw.get(), children, self.1 + 1)
+            validate_value(raw.get(), children, self.1 + 1, self.2)
                 .map_err(|_| serde::de::Error::custom("invalid value"))?;
         }
         Ok(())
@@ -235,7 +258,7 @@ impl<'de> Visitor<'de> for Check<'_> {
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
         while let Some(raw) = seq.next_element::<&RawValue>()? {
-            validate_value(raw.get(), self.0, self.1 + 1)
+            validate_value(raw.get(), self.0, self.1 + 1, self.2)
                 .map_err(|_| serde::de::Error::custom("invalid value"))?;
         }
         Ok(())

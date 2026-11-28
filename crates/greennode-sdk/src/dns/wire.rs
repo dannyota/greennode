@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::value::RawValue;
 
 use super::models::{Field, Resource, array, null_default, null_items, redact_integer, scalar};
 use crate::Error;
@@ -123,24 +122,27 @@ pub(super) fn decode<T: Output>(
     status_code_fallback: bool,
 ) -> Result<T, Box<Error>> {
     if !operation.success.contains(&response.status) {
-        return crate::wire::product::response::classify(
-            operation.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
-            operation.success,
-            (status_code_fallback, operation.sensitive, operation.retry),
-            &response.credentials,
-        )
-        .map(|_| T::default());
+        return response
+            .classify(
+                operation.id,
+                operation.success,
+                (status_code_fallback, operation.sensitive, operation.retry),
+                false,
+            )
+            .map(|_| T::default());
     }
-    if (operation.allow_empty && response.body.is_empty())
-        || (response.body.trim_ascii() == b"null"
-            && serde_json::from_slice::<()>(&response.body).is_ok())
+    if (operation.allow_empty && response.empty_body())
+        || response
+            .decode_projection(|body| Ok(body.trim_ascii() == b"null"))
+            .unwrap_or(false)
     {
         return Ok(T::default());
     }
-    operation::decode_response(operation, response).map_err(|_| {
-        let detail = if serde_json::from_slice::<&RawValue>(&response.body).is_err() {
+    operation::decode_response(operation, response).map_err(|error| {
+        if error.detail::<operation::RefusedGuard>().is_some() {
+            return error;
+        }
+        let detail = if response.malformed_json() {
             DecodeError::MalformedJson
         } else {
             DecodeError::InvalidShape

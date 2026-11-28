@@ -40,7 +40,14 @@ fn invoke_with_bearer(args: &[&str], server: &Server, bearer: &str) -> (ExitCode
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let options = with_product_loopback(
         Product::Portal,
-        ConfigOptions::default().with_static_token(Secret::new(bearer)),
+        with_product_loopback(
+            Product::Storage,
+            greennode_sdk::testing::with_clock(
+                ConfigOptions::default().with_static_token(Secret::new(bearer)),
+                greennode_sdk::testing::retry_clock(),
+            ),
+            server,
+        ),
         server,
     );
     let status = tokio::runtime::Builder::new_current_thread()
@@ -247,4 +254,57 @@ fn authenticated_writer_refuses_reflected_pricing_coverage_diagnostics() {
     assert_eq!(exit, ExitCode::FAILURE);
     assert!(stdout.is_empty());
     assert!(stderr.contains("OutputWithheld"));
+}
+
+#[test]
+fn estimate_allow_partial_keeps_quotes_on_both_sides_of_a_storage_112() {
+    let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../greennode-sdk/tests/fixtures/price_catalogue/go-v1.8.0.json"
+    ))
+    .unwrap();
+    let case = cases
+        .iter()
+        .find(|case| case["service"] == "estimate-partial")
+        .unwrap();
+    let replies = case["replies"].as_array().unwrap();
+    let server = Server::start(
+        replies
+            .iter()
+            .map(|reply| response("200 OK", reply["body"].as_str().unwrap()))
+            .collect(),
+    );
+    let input = r#"{"PublicIPs":[{"Key":"first","Kind":"public-vip","Type":"public","Quantity":1}],"Storage":[{"Key":"refused","Type":"Gold","Quantity":1,"QuotaGB":1},{"Key":"later","Type":"Gold","Quantity":1,"QuotaGB":2}]}"#;
+    let (exit, stdout, stderr) = invoke(
+        &["estimate", "--allow-partial", "--cli-input-json", input],
+        &server,
+    );
+    assert_eq!(server.requests(), replies.len());
+    assert_eq!(exit, ExitCode::FAILURE);
+    let output: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(output["Items"][0]["Price"]["Status"], "quoted");
+    assert_eq!(output["Items"][1]["Price"]["Status"], "failed");
+    assert_eq!(output["Items"][2]["Price"]["Status"], "quoted");
+    assert_eq!(output["Metadata"]["Failures"][0]["Code"], "112");
+    let error: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(error["error"]["code"], "DiscoveryIncomplete");
+}
+
+#[test]
+fn estimate_limit_prints_its_local_diagnostic() {
+    let server = Server::start(Vec::new());
+    let input = r#"{"PublicIPs":[{"Key":"first","Kind":"public-vip","Type":"public","Quantity":1},{"Key":"second","Kind":"public-vip","Type":"public-vm","Quantity":1}]}"#;
+    let (exit, stdout, stderr) = invoke(
+        &["estimate", "--max-requests", "1", "--cli-input-json", input],
+        &server,
+    );
+    assert_eq!(server.requests(), 0);
+    assert_eq!(exit, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    assert_eq!(
+        error,
+        serde_json::json!({"error":{
+            "code":"EstimateLimit", "message":"estimate limit exceeded: discovery limit exceeded: requires 2 requests, maximum 1"
+        }})
+    );
 }

@@ -1,3 +1,8 @@
+#[path = "network/endpoint_errors.rs"]
+mod endpoint_errors;
+#[path = "network/nat_errors.rs"]
+mod nat_errors;
+
 use std::{
     ffi::{OsStr, OsString},
     process::ExitCode,
@@ -35,7 +40,10 @@ fn invoke(
 ) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let options = with_product_loopback(
         product,
-        ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
+        greennode_sdk::testing::with_clock(
+            ConfigOptions::default().with_static_token(Secret::new(TOKEN)),
+            greennode_sdk::testing::retry_clock(),
+        ),
         server,
     );
     invoke_with_options(options, format, command, args)

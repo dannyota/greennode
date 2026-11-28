@@ -138,7 +138,7 @@ async fn listener_confirmation_failure_keeps_the_pre_update_listener() {
         no_wait: false,
         ..update()
     };
-    let failure = client(&server, CANARY)
+    let failure = settlement_client(&server)
         .update_listener(&ctx, input)
         .await
         .unwrap_err();

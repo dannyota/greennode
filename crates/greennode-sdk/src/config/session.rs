@@ -5,7 +5,9 @@ use super::{EndpointOverrides, IamUserAuth, credentials};
 use crate::discovery::{Discovery, ProjectRead};
 use crate::endpoint::{self, Base, EndpointSet};
 use crate::wire::connection::{HeadLimit, OneSendClient, PooledClient, Trust};
-use crate::wire::product::sender::{BearerSource, Clients, Runtime, SentCredentials, Sleeper};
+use crate::wire::product::sender::{
+    BearerSource, BearerToken, Clients, Runtime, SentCredentials, Sleeper,
+};
 use crate::{Clock, Error, ErrorClass, Project, RequestContext, Secret};
 use std::future::Future;
 use std::pin::Pin;
@@ -23,6 +25,8 @@ pub(crate) struct Session {
     product_fixtures: OnceLock<Vec<(crate::testing::Product, bool)>>,
     #[cfg(test)]
     retry_attempts: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    pub(crate) test_retained_byte_limit: OnceLock<usize>,
     clients: OnceLock<Result<Clients, rustls::Error>>,
     clock: Arc<dyn Clock>,
     timeout: Duration,
@@ -57,17 +61,10 @@ impl BearerSource for Session {
     fn token<'a>(
         &'a self,
         ctx: &'a RequestContext,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<crate::wire::product::sender::BearerToken, Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
+    ) -> Pin<Box<dyn Future<Output = Result<BearerToken, Error>> + Send + 'a>> {
         Box::pin(async move {
             match &self.auth {
-                Auth::Static(token) => Ok(crate::wire::product::sender::BearerToken {
+                Auth::Static(token) => Ok(BearerToken {
                     token: crate::Token::new(token.clone(), None),
                     obtained_at: None,
                     signin_credentials: None,
@@ -276,6 +273,14 @@ impl Session {
 impl Session {
     pub(crate) fn endpoints(&self) -> &EndpointSet {
         &self.endpoints
+    }
+
+    pub(crate) fn retained_byte_limit(&self, default: usize) -> usize {
+        #[cfg(test)]
+        if let Some(&limit) = self.test_retained_byte_limit.get() {
+            return limit;
+        }
+        default
     }
 
     pub(crate) fn clock(&self) -> &dyn Clock {
@@ -522,6 +527,8 @@ impl Session {
             product_fixtures: OnceLock::new(),
             #[cfg(test)]
             retry_attempts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            test_retained_byte_limit: OnceLock::new(),
             clients: OnceLock::new(),
             clock,
             timeout,
@@ -549,7 +556,6 @@ impl Session {
             Auth::ServiceAccount(source) => source.token(ctx).await.map(|_| ()),
             Auth::IamUser(source) => source.token(ctx).await.map(|_| ()),
             Auth::Provider(provider) => {
-                use std::future::Future;
                 use std::task::Poll;
                 let mut ended = std::pin::pin!(ctx.wait(&crate::SystemClock));
                 let mut work = provider.token(ctx);

@@ -14,7 +14,7 @@ The SDK has configuration, both sign-in kinds with the token cache, the request 
 |-|-|
 |What should the product become?|[Architecture](docs/design/architecture.md)|
 |How are settings, profiles, and the vngcloud fallback resolved?|[Configuration design](docs/design/config.md)|
-|What is the SDK's public interface, and how may it send requests?|[SDK design](docs/design/sdk.md) and [request policies](docs/design/sdk-requests.md)|
+|What is the SDK's public interface, and how may it send requests?|[SDK design](docs/design/sdk.md) and [request policies](docs/design/sdk-requests.md); [credential screening](docs/design/sdk-screening.md)|
 |How are commands declared, guarded, run, and printed?|[CLI design](docs/design/cli.md) and [CLI output](docs/design/cli-output.md)|
 |What must hold for credentials, requests, and writes?|[Security design](docs/design/security.md)|
 |How does a version reach crates.io?|[Release design](docs/design/release.md) and [Mac releases](docs/design/release-first.md)|
@@ -49,19 +49,21 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
 |`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|go-jmespath v0.4.0 semantics, derived from its source: lexer, parser, `compile`, evaluation and all built-in functions; its license and compliance suite|
 |`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Go-compatible `html.UnescapeString` and `strconv.Quote`, derived from Go's source, plus the letter/digit and ASCII-lowercase tables behind the monitor credential-key check (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
+|`crates/greennode-sdk/src/go_json.rs`|Go-compatible encoding/json top-level scanner, derived from Go's source, with its `RawMessage` extent rules, shared by guarded catalogue requests and budgeted project discovery, under Go's BSD licence (crate-private)|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|
 |`crates/greennode-sdk/src/billing/`, `crates/greennode/src/services/billing.rs`, `src/services/billing/`|The billing service: SDK client, models and private envelope; CLI operations; the template every service copies|
 |`crates/greennode-sdk/src/<service>/`, `crates/greennode/src/services/<service>.rs`, `src/services/<service>/`, `scripts/<service>-goldens/`|Each other service, on the billing template: SDK client and models, CLI operations, and the generator for its Go-rendered goldens|
 |`crates/greennode-sdk/src/quote/`|Shared price catalog, quote request and quote input code reused by pricing, volume, compute, storage, network and monitor (crate-private)|
+|`crates/greennode-sdk/src/quote/catalog/corpus.rs`, `tests/fixtures/price_catalogue/`, `scripts/price-catalogue-goldens/`|Price-catalogue decoding parity: the corpus test and the generator that runs Go's own catalogue decoders over row variants|
 |`crates/greennode/src/cli/secret_file.rs`, `src/cli/password.rs`, `src/cli/stdin.rs`|Shared secret-file delivery, post-guard password input and deadline-bounded stdin|
 |`crates/greennode-sdk/src/cache/`|Token cache: safe path selection, the anchored Unix store, the lock, the entry format and the one-time-code marker (crate-private)|
 |`crates/greennode-sdk/src/session/`|Built-in token sources: the service-account and IAM user sources with the cache, the one-time-code marker, single-flight refresh and rejection rules (crate-private)|
 |`crates/greennode-sdk/src/discovery/`|Project discovery: the region's projects read, selection and the shared discovery gate (crate-private)|
 |`crates/greennode-sdk/src/config/session/tests/queries.rs`, `tests/monitor.rs`|Session project access and auth and endpoint query tests, and the monitor quota scrub test that needs a sign-in endpoint hook|
 |`crates/greennode-sdk/src/endpoint/`|Endpoint defaults, validation, and route assembly (crate-private)|
-|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, the operation client with strict schema decoding, safe response classification, strict token validation, the service-account exchange, the IAM user sign-in with PKCE, cookies and TOTP, and the loopback TLS test server (crate-private)|
+|`crates/greennode-sdk/src/wire/`|HTTPS-only connection builder, the bounded single-send step with gzip, product redirect, retry and 401 decisions, the product send loop, the operation client with strict schema decoding, safe response classification, the shared absence proof (`wire/product/absence.rs`), strict token validation, the service-account exchange, the IAM user sign-in with PKCE, cookies and TOTP, and the loopback TLS test server (crate-private)|
 |`scripts/`|Gates that `make check` and CI run, with their tests in `scripts/test/`|
 
 The [architecture](docs/design/architecture.md#layout) owns the intended layout. Add a row here in the change that adds the path.

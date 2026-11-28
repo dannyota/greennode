@@ -186,16 +186,9 @@ const TAG_SHAPE: Shape<'static> = Shape::Array(&Shape::Object(&[
 impl Output for Snapshot {
     const SCHEMA: Shape<'static> = TAG_SHAPE;
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        crate::wire::product::response::classify(
-            op.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
-            op.success,
-            (true, op.sensitive, op.retry),
-            &response.credentials,
-        )?;
+        response.classify(op.id, op.success, (true, op.sensitive, op.retry), false)?;
         let invalid = || Box::new(Error::new(ErrorClass::Api));
-        if serde_json::from_slice::<&serde_json::value::RawValue>(&response.body).is_err() {
+        if response.malformed_json() {
             return Err(Box::new(Error::from_api(
                 crate::ApiError::without_fallback(
                     op.id,
@@ -206,23 +199,24 @@ impl Output for Snapshot {
                 ),
             )));
         }
-        strict_json::validate_shape(&response.body, &Self::SCHEMA, op.cap)
-            .map_err(|_| invalid())?;
-        let mut tags = decode_snapshot(&response.body).map_err(|_| invalid())?;
-        for tag in &mut tags {
-            if response
-                .credentials
-                .text_reflects(if tag.system_tag { "true" } else { "false" })
-            {
-                return Err(invalid());
-            }
-            for value in [&mut tag.key, &mut tag.value, &mut tag.created_at] {
-                if response.credentials.text_reflects(value) {
-                    *value = "<redacted>".to_owned();
+        response.decode_projection(|body| {
+            strict_json::validate_shape(body, &Self::SCHEMA, op.cap).map_err(|_| invalid())?;
+            let mut tags = decode_snapshot(body).map_err(|_| invalid())?;
+            for tag in &mut tags {
+                if response
+                    .credentials
+                    .text_reflects(if tag.system_tag { "true" } else { "false" })
+                {
+                    return Err(invalid());
+                }
+                for value in [&mut tag.key, &mut tag.value, &mut tag.created_at] {
+                    if response.credentials.text_reflects(value) {
+                        *value = "<redacted>".to_owned();
+                    }
                 }
             }
-        }
-        Ok(Self(tags))
+            Ok(Self(tags))
+        })
     }
 }
 
@@ -281,10 +275,12 @@ impl Client {
                 allow_empty: false,
                 no_output: false,
                 keep_status: false,
-                overflow_overrides_status: true,
+                raw_body: false,
+                overflow_overrides_status: false,
                 sensitive: false,
                 reflection: crate::wire::product::operation::Reflection::Redact,
                 no_redirect: false,
+                report_redirect: false,
                 retry_config: retry::Config::default(),
             };
             let (_, snapshot) = operation::execute::<Snapshot>(

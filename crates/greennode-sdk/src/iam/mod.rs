@@ -186,21 +186,26 @@ fn screen_error(mut error: Error, evidence: &Evidence) -> Error {
     let Some(api) = error.api_error() else {
         return error;
     };
+    let reflects = |text: &str| evidence.text_reflects(text);
     if !api.status().is_some_and(reflects_status) {
-        return error;
+        return error.screen_api(&reflects);
     }
     let message = if evidence.text_reflects(api.message()) {
         "IAM response withheld"
     } else {
         api.message()
     };
-    Error::new(error.class()).with_cause(Error::from_api(ApiError::without_fallback(
+    let detail = ApiError::without_fallback(
         api.operation(),
-        None,
+        api.observed_status(),
         SafeText::new(api.code(), &[]),
         SafeText::new(message, &[]),
         api.retryable(),
-    )))
+    )
+    .with_public_status_withheld();
+    Error::new(error.class())
+        .with_cause(Error::from_api(detail))
+        .screen_api(&reflects)
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -283,10 +288,12 @@ fn read_operation(
         allow_empty,
         no_output: false,
         keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }

@@ -60,14 +60,14 @@ pub struct CreateSshKeyOutput {
     #[serde(rename = "PrivateKey")]
     private_key: Secret,
     #[serde(skip)]
-    cleanup_id: String,
+    ownership: crate::wire::product::guard::AcknowledgedId,
     #[serde(skip)]
     issuer: Client,
     #[serde(skip)]
     evidence: Evidence,
 }
 
-crate::wire::product::output::public_fields!(custom_debug CreateSshKeyOutput { ssh_key; private_key, cleanup_id, issuer, evidence });
+crate::wire::product::output::public_fields!(custom_debug CreateSshKeyOutput { ssh_key; private_key, ownership, issuer, evidence });
 
 crate::error::debug_record!(CreateSshKeyOutput => |self, f| {
     f.debug_struct("CreateSshKeyOutput").finish_non_exhaustive()
@@ -94,19 +94,21 @@ impl CreateSshKeyOutput {
         let ctx = ctx.child_with_deadline(
             self.issuer.session.clock().monotonic_now() + Duration::from_secs(10),
         );
-        let result = self
-            .issuer
-            .delete_key(&ctx, &self.cleanup_id, &mut self.evidence)
-            .await;
+        let mut evidence = Evidence::for_write();
+        evidence.absorb(self.evidence.credentials());
+        let Ok(id) = self.ownership.recheck(&evidence) else {
+            return false;
+        };
+        if evidence.keep_acknowledgement(&self.ownership).is_err() {
+            return false;
+        }
+        let result = self.issuer.delete_key(&ctx, id, &mut evidence).await;
         result.is_ok()
             || result.is_err_and(|failure| {
                 let error = failure.error();
                 failure.write_dispatch() == WriteDispatch::MayHaveBeenSent
-                    && rejected(error)
-                    && error.has_class(ErrorClass::NotFound)
-                    && error
-                        .api_error()
-                        .is_some_and(|api| api.operation() == DELETE.id)
+                    && (crate::confirms_absence(error, DELETE.id, "DELETE", DELETE.template)
+                        || already_gone(error))
             })
     }
 }
@@ -176,7 +178,15 @@ impl Client {
                 )
                 .await
                 .map_err(|error| ambiguous(error, &CREATE, &input.name, &evidence))?;
-            let (mut ssh_key, private_key) = decode_key(&reply, &CREATE, &evidence)
+            let receipt = reply.clean_receipt().ok_or_else(|| {
+                ambiguous(
+                    sent(acknowledgement_error(&reply, &CREATE, &evidence)),
+                    &CREATE,
+                    &input.name,
+                    &evidence,
+                )
+            })?;
+            let (mut ssh_key, private_key) = decode_key(receipt.body(), &CREATE, &evidence)
                 .map_err(|error| ambiguous(sent(*error), &CREATE, &input.name, &evidence))?;
             if evidence.text_reflects(private_key.expose_secret()) {
                 return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
@@ -208,7 +218,7 @@ impl Client {
                 return Err(sent(invalid_mutation_response(&CREATE, &evidence)));
             }
             Ok(CreateSshKeyOutput {
-                cleanup_id: ssh_key.id.clone(),
+                ownership: receipt.bind_id(ssh_key.id.clone()),
                 issuer: self.clone(),
                 ssh_key,
                 private_key,
@@ -258,8 +268,17 @@ impl Client {
                 )
                 .await
                 .map_err(|error| ambiguous(error, &IMPORT, &input.name, &evidence))?;
-            let (mut ssh_key, unexpected_private_key) = decode_key(&reply, &IMPORT, &evidence)
-                .map_err(|error| ambiguous(sent(*error), &IMPORT, &input.name, &evidence))?;
+            let receipt = reply.clean_receipt().ok_or_else(|| {
+                ambiguous(
+                    sent(acknowledgement_error(&reply, &IMPORT, &evidence)),
+                    &IMPORT,
+                    &input.name,
+                    &evidence,
+                )
+            })?;
+            let (mut ssh_key, unexpected_private_key) =
+                decode_key(receipt.body(), &IMPORT, &evidence)
+                    .map_err(|error| ambiguous(sent(*error), &IMPORT, &input.name, &evidence))?;
             evidence.add_redaction(&unexpected_private_key);
             if ssh_key.id.is_empty() {
                 return Err(sent(api(
@@ -300,6 +319,7 @@ impl Client {
             .map_err(|error| not_sent(*error))?;
         self.send_mutation::<()>(ctx, &DELETE, &[id], None, ReplyPolicy::SshPublic, evidence)
             .await
+            .map(drop)
             .map_err(|failure| {
                 let (error, _, dispatch) = failure.into_parts();
                 let error = if !rejected(&error)
@@ -311,11 +331,7 @@ impl Client {
                         "read get-ssh-key to confirm the deletion",
                         evidence,
                     )
-                } else if rejected(&error)
-                    && error.api_error().is_some_and(|api| {
-                        api.status() == Some(400) && provider_key_absent(api.message(), id)
-                    })
-                {
+                } else if already_gone(&error) {
                     Error::new(ErrorClass::NotFound).with_cause(error)
                 } else {
                     error
@@ -337,6 +353,37 @@ fn valid_key_output(key: &mut SshKey, evidence: &Evidence) -> bool {
         && !evidence.text_reflects("SSHKey")
 }
 
+struct KeyAlreadyGone(crate::wire::product::absence::CleanRequest);
+
+crate::error::debug_record!(KeyAlreadyGone unit);
+
+fn already_gone(error: &Error) -> bool {
+    error
+        .internal_detail::<KeyAlreadyGone>()
+        .is_some_and(|proof| proof.0.matches(DELETE.id, "DELETE", DELETE.template))
+}
+
+pub(super) fn key_already_gone(
+    receipt: &crate::wire::product::sender::Response,
+    requested: &[&str],
+    mut error: Error,
+) -> Error {
+    if let [id] = requested
+        && receipt.status == StatusCode::BAD_REQUEST
+        && let Some(request) = receipt.clean_request()
+        && let Some(body) = receipt.clean_receipt()
+        && request.matches(DELETE.id, "DELETE", DELETE.template)
+        && crate::wire::product::response::error_message_matches(
+            body.body(),
+            &receipt.credentials,
+            |message| provider_key_absent(message, id),
+        )
+    {
+        error = error.with_outer_detail(KeyAlreadyGone(request));
+    }
+    error
+}
+
 fn provider_key_absent(message: &str, id: &str) -> bool {
     message
         .to_ascii_lowercase()
@@ -349,6 +396,25 @@ fn provider_key_absent(message: &str, id: &str) -> bool {
             .next()
             .is_some_and(|value| value.eq_ignore_ascii_case(id))
         })
+}
+
+fn acknowledgement_error(
+    reply: &crate::wire::product::sender::Response,
+    mutation: &Mutation,
+    evidence: &Evidence,
+) -> Error {
+    if reply.malformed_json() {
+        api(
+            mutation.id,
+            None,
+            "",
+            "response failed to decode; body withheld",
+            evidence,
+        )
+        .with_outer_detail(crate::wire::product::operation::DecodeFailure)
+    } else {
+        invalid_mutation_response(mutation, evidence)
+    }
 }
 
 fn decode_key(
@@ -455,7 +521,9 @@ fn ambiguous<O>(
     if dispatch == WriteDispatch::NotSent || rejected(&error) {
         return Failure::new(error, None, dispatch);
     }
-    let reason = error.api_error().map_or("", |api| api.message());
+    let reason = error
+        .api_error()
+        .map_or_else(String::new, crate::ApiError::go_text);
     let cleanup = if mutation.id == CREATE.id {
         "; a key found that way has lost its private key and should be deleted"
     } else {

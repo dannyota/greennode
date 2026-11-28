@@ -352,3 +352,56 @@ async fn group_update_guards_the_read_after_dispatch() {
         assert_eq!(server.heads().len(), 3);
     }
 }
+
+#[tokio::test]
+async fn server_group_create_refuses_reflected_acknowledgement() {
+    let server = TestServer::start(vec![http(
+        "201 Created",
+        r#"{"data":{"uuid":"group-1","name":"group"},"ignored":"toy-secret"}"#,
+    )]);
+    let failure = client(&server)
+        .create_server_group(
+            &RequestContext::new().0,
+            CreateServerGroupInput {
+                name: "group".into(),
+                policy_id: "policy-1".into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn create_server_group_malformed_acknowledgement_is_statusless() {
+    let server = TestServer::start(vec![http("201 Created", "{")]);
+    let failure = client(&server)
+        .create_server_group(
+            &RequestContext::new().0,
+            CreateServerGroupInput {
+                name: "group".into(),
+                policy_id: "policy-1".into(),
+                description: String::new(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::DecodeFailure>()
+            .is_some()
+    );
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), None);
+    assert_eq!(
+        api.go_text(),
+        "compute.CreateServerGroup: request failed: response failed to decode"
+    );
+}

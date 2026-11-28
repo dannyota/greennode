@@ -1,4 +1,3 @@
-use crate::wire::strict_json::FieldNames;
 use std::collections::HashSet;
 
 use http::Method;
@@ -6,10 +5,10 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::wire::product::{evidence::Evidence, options::PathIds};
-use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{Error, ErrorClass, Failure, RecoveryAction, RequestContext, WriteDispatch};
 
 use super::quotes::{create_quote, resize_bodies};
-use super::wire::{Object, Redact, api, decode, invalid};
+use super::wire::{Redact, api, invalid};
 use super::write::{
     CREATE_UNKNOWN, Mutation, Settlement, available, client_error, finish, in_use, named, not_sent,
     safe, screen_state, settlement_error,
@@ -113,39 +112,55 @@ impl Client {
             let monthly = quote.optimum_price;
             check_price(&CREATE, monthly, input.max_price, &mut evidence).map_err(not_sent)?;
             let project = self.project(ctx, &mut evidence).await.map_err(not_sent)?;
-            let ack = self.send_write::<CreateVolumeOutput>(ctx, &CREATE, &[&project], Some(&body), &mut evidence).await.map_err(|failure| {
-                let (error, _, dispatch) = failure.into_parts();
-                if dispatch != WriteDispatch::MayHaveBeenSent || client_error(&error) || error.api_error().is_some_and(|api| api.message() == CREATE_UNKNOWN) {
-                    return Failure::new(error, None, dispatch);
-                }
-                let advice = "create may have already reached the server; list volumes and match the name exactly before creating it again";
-                let reason = error.api_error().map(crate::ApiError::message).filter(|message| !message.is_empty());
-                let advice = reason.map_or_else(|| advice.to_owned(), |reason| format!("{advice}: {reason}"));
-                Failure::new(error.with_outer_detail(crate::RecoveryAdvice::new(&advice)), None, dispatch)
-            })?;
+            let recovery = RecoveryAction::CheckExistingVolume;
+            let ack = self
+                .send_write::<CreateVolumeOutput>(
+                    ctx,
+                    &CREATE,
+                    &[&project],
+                    Some(&body),
+                    &mut evidence,
+                )
+                .await
+                .map_err(|failure| {
+                    let (error, _, dispatch) = failure.into_parts();
+                    let error = if dispatch == WriteDispatch::MayHaveBeenSent
+                        && !client_error(&error)
+                    {
+                        error.with_recovery_action(recovery, |text| evidence.text_reflects(text))
+                    } else {
+                        error
+                    };
+                    Failure::new(error, None, dispatch)
+                })?;
             let ids = if input.no_wait {
                 PathIds::WithUnderscore
             } else {
                 PathIds::Strict
             };
-            let id: String = decode(
-                &super::wire::Document(ack.0),
-                FieldNames::Compatible,
-                |raw, names| {
-                    let envelope = Object::parse(raw, names)?;
-                    let data = envelope.get("data")?.ok_or(())?;
-                    Object::parse(data, names)?.require("uuid")
-                },
-            )
-            .ok()
-            .filter(|id: &String| ids.allows(id) && !evidence.text_reflects(id))
-            .ok_or_else(|| {
+            let unusable = |message| {
+                let error = api(CREATE.id, Some(202), "", message)
+                    .screen_api(&|text| evidence.text_reflects(text));
                 Failure::new(
-                    api(CREATE.id, Some(202), "", CREATE_UNKNOWN),
+                    error.with_recovery_action(recovery, |text| evidence.text_reflects(text)),
                     None,
                     WriteDispatch::MayHaveBeenSent,
                 )
-            })?;
+            };
+            let receipt = ack.receipt.ok_or_else(|| unusable(CREATE_UNKNOWN))?;
+            let id = receipt
+                .recheck(&evidence)
+                .map_err(|_| unusable("create response had an unusable id"))?;
+            if id.is_empty() {
+                return Err(unusable(CREATE_UNKNOWN));
+            }
+            if !ids.allows(id) || evidence.id_reflects(id) {
+                return Err(unusable("create response had an unusable id"));
+            }
+            let id = id.to_owned();
+            evidence
+                .keep_acknowledgement(&receipt)
+                .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let mut volume = Volume {
                 uuid: id.clone(),
                 name: input.name,
@@ -154,9 +169,38 @@ impl Client {
             let result = if input.no_wait {
                 Ok(())
             } else {
-                self.settle(ctx, &id, Settlement::Created, &mut volume, &mut evidence)
-                    .await
+                self.settle(
+                    ctx,
+                    CREATE.id,
+                    &id,
+                    Settlement::Created(&receipt),
+                    &mut volume,
+                    &mut evidence,
+                )
+                .await
             };
+            if let Err(error) = receipt.recheck(&evidence) {
+                return Err(Failure::new(
+                    match result {
+                        Err(timeout)
+                            if timeout.recovery_action()
+                                == Some(RecoveryAction::DoNotRepeatVolumeCreate) =>
+                        {
+                            *timeout
+                        }
+                        _ => settlement_error(
+                            *error,
+                            CREATE.id,
+                            &id,
+                            None,
+                            Some(recovery),
+                            &evidence,
+                        ),
+                    },
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                ));
+            }
             finish(
                 CreateVolumeOutput {
                     volume,
@@ -165,7 +209,8 @@ impl Client {
                 result,
                 &evidence,
                 &CREATE,
-                "the volume may exist; list volumes before ordering again",
+                &id,
+                Some(recovery),
                 WriteDispatch::MayHaveBeenSent,
             )
         })
@@ -238,7 +283,14 @@ impl Client {
                     return Err(Failure::new(error, None, dispatch));
                 }
                 return Err(Failure::new(
-                    settlement_error(error, RESIZE.id, CHECK),
+                    settlement_error(
+                        error,
+                        RESIZE.id,
+                        &input.volume_id,
+                        Some(CHECK),
+                        None,
+                        &evidence,
+                    ),
                     safe(
                         ResizeVolumeOutput {
                             volume,
@@ -254,6 +306,7 @@ impl Client {
             } else {
                 self.settle(
                     ctx,
+                    RESIZE.id,
                     &input.volume_id,
                     Settlement::Resized(size),
                     &mut volume,
@@ -269,7 +322,8 @@ impl Client {
                 result,
                 &evidence,
                 &RESIZE,
-                CHECK,
+                &input.volume_id,
+                None,
                 WriteDispatch::MayHaveBeenSent,
             )
         })
@@ -282,10 +336,10 @@ impl Client {
         evidence: &mut Evidence,
     ) -> Result<(), Box<Error>> {
         const MAX_PAGES: i64 = 50;
-        let incomplete = || {
-            invalid(
-                "vngcloud: invalid input: volume.CreateVolume: could not confirm no volume has the requested name: incomplete inventory",
-            )
+        let incomplete = |evidence: &Evidence| {
+            crate::wire::product::guard::decide(evidence, |_| {
+                invalid("vngcloud: invalid input: volume.CreateVolume: could not confirm no volume has the requested name: incomplete inventory")
+            }).unwrap_or_else(std::convert::identity)
         };
         let mut ids = HashSet::new();
         let mut expected = None;
@@ -296,16 +350,13 @@ impl Client {
                 size: 0,
             };
             let result = self.volumes(ctx, &input, evidence).await.map_err(|error| {
-                if error
-                    .api_error()
-                    .is_some_and(|api| api.message() == super::wire::PAGE_SHAPE)
-                {
-                    incomplete()
+                if error.detail::<super::wire::LocalShapeFailure>().is_some() {
+                    incomplete(evidence)
                 } else {
                     error
                 }
             })?;
-            let count = i64::try_from(result.items.len()).map_err(|_| incomplete())?;
+            let count = i64::try_from(result.items.len()).map_err(|_| incomplete(evidence))?;
             let totals = (result.total_page, result.total_item, result.page_size);
             if result.page != page
                 || result.page_size <= 0
@@ -315,34 +366,35 @@ impl Client {
                 || totals != *expected.get_or_insert(totals)
                 || (count == 0 && (result.total_item != 0 || page != 1 || result.total_page > 1))
             {
-                return Err(incomplete());
+                return Err(incomplete(evidence));
             }
             for row in result.items {
                 if !super::inventory::response_id(&row.uuid)
                     || row.name.is_empty()
                     || !ids.insert(row.uuid)
                 {
-                    return Err(incomplete());
+                    return Err(incomplete(evidence));
                 }
                 if row.name == name {
+                    evidence.recheck_read_proofs()?;
                     return Err(invalid(
                         "vngcloud: invalid input: volume.CreateVolume: a volume with the requested name already exists",
                     ));
                 }
             }
-            let seen = i64::try_from(ids.len()).map_err(|_| incomplete())?;
+            let seen = i64::try_from(ids.len()).map_err(|_| incomplete(evidence))?;
             if seen > result.total_item || (result.total_page == 0 && seen != 0) {
-                return Err(incomplete());
+                return Err(incomplete(evidence));
             }
             if page >= result.total_page {
                 return if seen == result.total_item {
-                    Ok(())
+                    evidence.recheck_read_proofs()
                 } else {
-                    Err(incomplete())
+                    Err(incomplete(evidence))
                 };
             }
         }
-        Err(incomplete())
+        Err(incomplete(evidence))
     }
 }
 

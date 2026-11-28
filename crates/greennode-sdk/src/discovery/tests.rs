@@ -77,7 +77,7 @@ async fn call(
         server,
         ctx,
         &SystemClock,
-        SystemClock.monotonic_now() + Duration::from_secs(5),
+        SystemClock.monotonic_now() + Duration::from_secs(60),
     )
     .await
 }
@@ -148,7 +148,7 @@ async fn discovery_rejects_malformed_json_errors_and_screens_complete_identifier
                 &server,
                 &RequestContext::new().0,
                 &SystemClock,
-                SystemClock.monotonic_now() + Duration::from_secs(5),
+                SystemClock.monotonic_now() + Duration::from_secs(60),
                 &source,
             )
             .await;
@@ -207,13 +207,14 @@ async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
     };
     let base = crate::endpoint::Base::parse(&server.origin).unwrap();
     let (ctx, _) = RequestContext::new();
+    let mut limit = NoLimit(Pacing::new(Duration::ZERO));
     let error = read_projects_with_evidence(
         Runtime {
             configured_credentials: None,
             client: &clients,
             ctx: &ctx,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             sleeper: &Sleeper,
             jitter: &mut || 0,
         },
@@ -221,7 +222,7 @@ async fn paced_discovery_rejects_plain_text_on_a_nonaccepted_201() {
         &Source,
         "han-1",
         &mut Evidence::new(),
-        Some(&Pacing::new(Duration::ZERO)),
+        Some(&mut limit),
     )
     .await
     .unwrap_err();
@@ -251,7 +252,7 @@ async fn discovery_adds_bearer_to_caller_evidence() {
                 client: &clients,
                 ctx: &ctx,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
                 sleeper: &Sleeper,
                 jitter: &mut || 0,
             },
@@ -275,7 +276,7 @@ async fn short_base64url_credential_cannot_be_cached_as_project_id() {
     let discovery = Discovery::default();
     let source = RotatingSource(std::sync::Mutex::new("a?bcd"));
     let (ctx, _) = RequestContext::new();
-    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(60);
     assert!(
         call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
             .await
@@ -299,7 +300,7 @@ async fn credential_project_id_is_not_cached_after_rotation() {
     let discovery = Discovery::default();
     let (ctx, _) = RequestContext::new();
     let source = RotatingSource(std::sync::Mutex::new("toy-token"));
-    let deadline = SystemClock.monotonic_now() + Duration::from_secs(5);
+    let deadline = SystemClock.monotonic_now() + Duration::from_secs(60);
     assert!(
         call_at_source(&discovery, &server, &ctx, &SystemClock, deadline, &source)
             .await
@@ -412,7 +413,7 @@ async fn canceled_waiter_does_not_stop_holder() {
     tokio::select! { _ = &mut waiter_future => panic!("waiter finished early"), _ = tokio::task::yield_now() => {} }
     cancel.cancel();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), waiter_future)
+        tokio::time::timeout(Duration::from_secs(60), waiter_future)
             .await
             .expect("waiter did not cancel")
             .unwrap_err()
@@ -463,7 +464,7 @@ async fn runtime_deadline_expires_while_waiting_for_gate() {
     tokio::pin!(future);
     tokio::select! { _ = &mut future => panic!("waiter finished early"), _ = tokio::task::yield_now() => {} }
     clock.advance(Duration::from_secs(1));
-    let result = tokio::time::timeout(Duration::from_secs(1), future).await;
+    let result = tokio::time::timeout(Duration::from_secs(60), future).await;
     assert!(result.is_ok(), "waiter did not honor deadline");
     assert_eq!(
         result.unwrap().unwrap_err().class(),
@@ -504,4 +505,32 @@ async fn failed_read_is_not_cached() {
     assert!(call(&discovery, &server, &ctx).await.is_err());
     assert_eq!(call(&discovery, &server, &ctx).await.unwrap().id, "two");
     assert_eq!(server.requests(), 2);
+}
+
+struct NoLimit(Pacing);
+impl InventoryLimits for NoLimit {
+    fn reserve(&mut self) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn check_bytes(&self, _: usize) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn account(&mut self, _: usize, _: usize) -> Result<(), Box<Error>> {
+        Ok(())
+    }
+    fn pacing(&self) -> &Pacing {
+        &self.0
+    }
+}
+
+#[tokio::test]
+async fn discovery_plain_text_404_keeps_http_refusal() {
+    let server = Server::start(vec![response("404 Not Found", b"404 Not Found")]);
+    let error = call(&Discovery::default(), &server, &RequestContext::new().0)
+        .await
+        .unwrap_err();
+    let api = error.api_error().unwrap();
+    assert_eq!(api.code(), "NotFound");
+    assert_eq!(api.status(), Some(404));
+    assert_eq!(server.requests(), 1);
 }

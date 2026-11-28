@@ -1,3 +1,9 @@
+mod failure;
+pub(crate) use failure::{
+    BodyReadFailure, DecodeFailure, is_active_transport_failure, raw_overflow_status,
+};
+use failure::{FailureText, classify_failure, invalid_response, request_failure};
+
 use super::evidence::Evidence;
 use super::options::{Options, PasswordSlot};
 use super::{redirect, retry, sender};
@@ -11,7 +17,7 @@ pub(crate) enum Reflection {
     Refuse,
     Guard,
     Redact,
-    PrivateDelivery,
+    PrivateDelivery(&'static str),
 }
 
 #[derive(Clone)]
@@ -27,10 +33,12 @@ pub(crate) struct Operation {
     pub(crate) allow_empty: bool,
     pub(crate) no_output: bool,
     pub(crate) keep_status: bool,
+    pub(crate) raw_body: bool,
     pub(crate) overflow_overrides_status: bool,
     pub(crate) sensitive: bool,
     pub(crate) reflection: Reflection,
     pub(crate) no_redirect: bool,
+    pub(crate) report_redirect: bool,
     pub(crate) retry_config: retry::Config,
 }
 
@@ -141,20 +149,22 @@ pub(crate) async fn execute_with_evidence<T: Output>(
     if GuardOperation::applies(operation, evidence)
         && operation.success.contains(&status)
         && !matches!(T::SCHEMA, Shape::Any)
+        && response.clean_receipt().is_some_and(|receipt| {
+            let body = crate::model::wire::go_json(receipt.body());
+            crate::wire::strict_json::FieldNames::Canonical
+                .has_case_variant(body.as_bytes(), &T::SCHEMA)
+        })
     {
-        let body = crate::model::wire::go_json(&response.body);
-        if crate::wire::strict_json::FieldNames::Canonical
-            .has_case_variant(body.as_bytes(), &T::SCHEMA)
-        {
-            return Err(crate::Failure::new(
-                evidence.screen_error(unsafe_guard_response(operation.id)),
-                None,
-                dispatch,
-            ));
-        }
+        return Err(crate::Failure::new(
+            evidence.screen_error(unsafe_guard_response(operation.id)),
+            None,
+            dispatch,
+        ));
     }
-    let output = T::decode_response(operation, &response)
-        .map_err(|error| crate::Failure::new(evidence.screen_error(*error), None, dispatch))?;
+    let output = T::decode_response(operation, &response).map_err(|error| {
+        let error = error.with_clean_absence(response.clean_absence());
+        crate::Failure::new(evidence.screen_error(error), None, dispatch)
+    })?;
     Ok((status, output))
 }
 
@@ -221,6 +231,8 @@ async fn send_route<T>(
     evidence: &mut Evidence,
     credential_error: impl Fn(&Operation, &sender::SentCredentials) -> Option<Box<crate::Error>> + Send,
 ) -> Result<sender::Response, crate::Failure<T>> {
+    #[cfg(test)]
+    tests::status_flags::assert_matches_go(operation, options);
     let guard;
     let operation = if GuardOperation::applies(operation, evidence)
         && operation.reflection != Reflection::Guard
@@ -380,11 +392,14 @@ async fn send_route<T>(
         let unsafe_guard = matches!(operation.class, redirect::Classification::Write)
             .then(|| evidence.recheck_guards(credentials))
             .flatten();
-        unsafe_guard.or_else(|| {
-            options
-                .attempt_check
-                .and_then(|check| (check.0)(credentials))
-        })
+        evidence
+            .check_acknowledged(credentials)
+            .or(unsafe_guard)
+            .or_else(|| {
+                options
+                    .attempt_check
+                    .and_then(|check| (check.0)(credentials))
+            })
     };
     let policy = sender::Operation {
         guard: (operation.reflection == Reflection::Guard).then_some(operation.id),
@@ -400,7 +415,11 @@ async fn send_route<T>(
         method: operation.method.clone(),
         class: operation.class,
         retry: operation.retry,
-        no_redirect: operation.no_redirect,
+        no_redirect: operation.no_redirect
+            || (operation.reflection == Reflection::Guard
+                && operation.id.starts_with("loadbalancer.")),
+        report_redirect: operation.report_redirect,
+        keep_status: operation.keep_status,
         allow_recovery: operation.allow_recovery,
         cap: operation.cap,
         encoding: send::Encoding::Gzip,
@@ -419,6 +438,16 @@ async fn send_route<T>(
             query,
             password_slot: options.password_slot,
             identifier_query_keys: options.identifier_query_keys,
+            descriptor: Some((operation.id, operation.template)),
+            project_output: matches!(operation.class, redirect::Classification::Read)
+                && operation.reflection != Reflection::Guard,
+            redact_output: operation.reflection == Reflection::Redact,
+            receipt_policy: match operation.reflection {
+                Reflection::PrivateDelivery(field) => {
+                    super::guard::ReceiptPolicy::PrivateIssuance(field)
+                }
+                _ => options.receipt_policy,
+            },
         },
     )
     .await;
@@ -432,98 +461,25 @@ async fn send_route<T>(
         Err(failure) => {
             evidence.absorb(&failure.credentials);
             if let Some(error) = credential_error(operation, &failure.credentials) {
-                return Err(crate::Failure::new(*error, None, failure.dispatch));
-            }
-            let status = failure.status;
-            let overflow = matches!(&failure.error, sender::Error::Send(error) if matches!(error.kind(), send::Error::BodyTooLarge));
-            let refused_redirect = (operation.keep_status || options.report_redirect)
-                && matches!(&failure.error, sender::Error::Redirect(_));
-            if let Some(status) = status
-                && (refused_redirect
-                    || (overflow
-                        && operation.reflection != Reflection::Guard
-                        && !operation.overflow_overrides_status
-                        && (status.is_client_error() || status.is_server_error())))
-            {
-                let error = super::response::classify(
-                    operation.id,
-                    status,
-                    bytes::Bytes::from(if refused_redirect {
-                        failure.refused_body.clone()
-                    } else {
-                        Vec::new()
-                    }),
-                    &[],
-                    (true, operation.sensitive, operation.retry),
-                    &failure.credentials,
-                )
-                .err()
-                .map(|error| *error)
-                .unwrap_or_else(|| api_error(operation.id, Some(status), crate::ErrorClass::Api));
-                let error = if refused_redirect {
-                    error.with_http_status(status)
-                } else {
-                    error
-                };
+                let error = evidence.screen_error(*error);
                 return Err(crate::Failure::new(error, None, failure.dispatch));
             }
-            if overflow {
-                let api = crate::ApiError::without_fallback(
-                    "",
-                    None,
-                    crate::error::SafeText::new("", &[]),
-                    crate::error::SafeText::new("transport: response body exceeds limit", &[]),
-                    false,
-                );
-                let error = crate::Error::new(crate::ErrorClass::Api)
-                    .with_cause(crate::Error::from_api(api))
-                    .with_body_too_large();
-                let error = match status {
-                    Some(status) => error.with_http_status(status),
-                    None => error,
-                };
-                return Err(crate::Failure::new(error, None, failure.dispatch));
-            }
-            let class = match &failure.error {
-                sender::Error::Context(crate::ContextEnd::Cancelled) => {
-                    crate::ErrorClass::Cancelled
-                }
-                sender::Error::Context(crate::ContextEnd::DeadlineExceeded) => {
-                    crate::ErrorClass::DeadlineExceeded
-                }
-                _ => crate::ErrorClass::Api,
-            };
-            let retryable = send_retry_hint(&failure.error, operation.retry);
-            let error = match failure.error {
-                sender::Error::Provider(error) => *error,
-                _ if retryable => retryable_error(operation.id),
-                _ => api_error(
-                    operation.id,
-                    if operation.keep_status
-                        && !(operation.reflection == Reflection::Guard
-                            && status == Some(StatusCode::NOT_FOUND))
-                    {
-                        status
-                    } else {
-                        None
-                    },
-                    class,
-                ),
-            };
-            let error = match status {
-                Some(status) => error.with_http_status(status),
-                None => error,
-            };
-            return Err(crate::Failure::new(error, None, failure.dispatch));
+            let dispatch = failure.dispatch;
+            let error = evidence.screen_error(classify_failure(operation, failure));
+            return Err(crate::Failure::new(error, None, dispatch));
         }
     };
     evidence.absorb(&response.credentials);
-    if operation.reflection == Reflection::Guard
-        && !response
-            .reflection
-            .clean()
-            .is_some_and(|clean| evidence.keep_guard(operation.id, &response.body, clean))
-    {
+    response
+        .check_write_acknowledgement(operation)
+        .map_err(|error| {
+            crate::Failure::new(
+                evidence.screen_error(*error),
+                None,
+                crate::WriteDispatch::MayHaveBeenSent,
+            )
+        })?;
+    if operation.reflection == Reflection::Guard && !keep_read_receipt(evidence, &response) {
         return Err(crate::Failure::new(
             unsafe_guard_response(operation.id),
             None,
@@ -533,8 +489,10 @@ async fn send_route<T>(
     Ok(response)
 }
 
-fn invalid_response(operation: &Operation, status: StatusCode) -> crate::Error {
-    api_error(operation.id, None, crate::ErrorClass::Api).with_http_status(status)
+fn keep_read_receipt(evidence: &mut Evidence, response: &sender::Response) -> bool {
+    response
+        .clean_receipt()
+        .is_some_and(|receipt| evidence.keep_proof(receipt.into_proof()))
 }
 
 pub(crate) fn decode_response<T: Output>(
@@ -542,23 +500,47 @@ pub(crate) fn decode_response<T: Output>(
     response: &sender::Response,
 ) -> Result<T, Box<crate::Error>> {
     let status = response.status;
-    let invalid = || Box::new(invalid_response(operation, status));
+    let invalid = || {
+        let status = operation.keep_status.then_some(status);
+        let diagnostic = if operation.sensitive {
+            FailureText::Message("response failed to decode; body withheld")
+        } else {
+            FailureText::Cause("response failed to decode")
+        };
+        Box::new(
+            request_failure(operation.id, status, diagnostic, false, None)
+                .with_outer_detail(DecodeFailure),
+        )
+    };
     let clean = response.reflection.clean();
-    let body = super::response::classify(
+    response.classify(
         operation.id,
-        status,
-        bytes::Bytes::copy_from_slice(&response.body),
         operation.success,
         (true, operation.sensitive, operation.retry),
-        &response.credentials,
+        false,
     )?;
     if operation.reflection == Reflection::Refuse && clean.is_none() {
         return Err(invalid());
     }
     if operation.no_output {
+        response.check_discarded_acknowledgement(operation.id)?;
         return Ok(T::default());
     }
-    decode(&body, operation.allow_empty, operation.cap).map_err(|_| invalid())
+    response.decode_projection(|body| {
+        decode(body, operation.allow_empty, operation.cap).map_err(|_| invalid())
+    })
+}
+
+pub(crate) fn go_decode_failure(id: &'static str, sensitive: bool) -> crate::Error {
+    let diagnostic = if sensitive {
+        FailureText::MessageAndCause(
+            "response failed to decode; body withheld",
+            "response failed to decode",
+        )
+    } else {
+        FailureText::Cause("response failed to decode")
+    };
+    request_failure(id, None, diagnostic, false, None).with_outer_detail(DecodeFailure)
 }
 
 pub(crate) fn unsafe_json_response(
@@ -592,46 +574,6 @@ fn encode_query(input: &str, output: &mut String) {
     }
 }
 
-fn send_retry_hint(error: &sender::Error, policy: redirect::Retry) -> bool {
-    matches!(
-        error,
-        sender::Error::Send(send::Error::Transport(retry::SendFailure::FailedDial))
-    ) || (matches!(policy, redirect::Retry::Repeatable)
-        && matches!(
-            error,
-            sender::Error::Send(send::Error::Transport(retry::SendFailure::PossiblySent))
-        ))
-}
-
-fn retryable_error(operation: &'static str) -> crate::Error {
-    crate::Error::from_api(crate::ApiError::without_fallback(
-        operation,
-        None,
-        crate::error::SafeText::new("", &[]),
-        crate::error::SafeText::new("", &[]),
-        true,
-    ))
-}
-
-fn api_error(
-    operation: &'static str,
-    status: Option<StatusCode>,
-    class: crate::ErrorClass,
-) -> crate::Error {
-    let api = crate::ApiError::without_fallback(
-        operation,
-        status.map(|s| s.as_u16()),
-        crate::error::SafeText::new("", &[]),
-        crate::error::SafeText::new("", &[]),
-        false,
-    );
-    if class == crate::ErrorClass::Api {
-        crate::Error::from_api(api)
-    } else {
-        crate::Error::new(class).with_cause(crate::Error::from_api(api))
-    }
-}
-
 pub(crate) trait Output: DeserializeOwned + Default {
     const SCHEMA: Shape<'static>;
     const RESPONSE_GUARD: Option<sender::ResponseGuard> = None;
@@ -662,6 +604,9 @@ fn decode<T: Output>(body: &[u8], allow_empty: bool, cap: usize) -> Result<T, ()
     crate::wire::strict_json::validate_shape(body, &T::SCHEMA, cap).map_err(|_| ())?;
     serde_json::from_slice(body).map_err(|_| ())
 }
+
+#[cfg(test)]
+pub(crate) use tests::status_flags::assert_nat_region_matches_go;
 
 #[cfg(test)]
 mod tests {
@@ -722,10 +667,12 @@ mod tests {
             allow_empty: false,
             no_output: false,
             keep_status: false,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: false,
             reflection: Reflection::Refuse,
             no_redirect: false,
+            report_redirect: false,
             retry_config: retry::Config::default(),
         }
     }
@@ -803,6 +750,8 @@ mod tests {
     }
 
     mod evidence;
+    mod failures;
+    pub(super) mod status_flags;
 
     #[tokio::test]
     async fn a_write_cannot_reuse_evidence_from_an_unproved_read() {
@@ -1018,7 +967,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_success_keeps_observed_status() {
+    async fn malformed_success_only_keeps_opted_in_status() {
         let server = Server::start(vec![response("200 OK", b"{")]);
         let error = call(&server, &declaration(), &["one"]).await.unwrap_err();
         assert_eq!(error.error().http_status(), Some(StatusCode::OK));
@@ -1078,11 +1027,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_invalidation_keeps_unauthorized_status() {
+    async fn opted_in_failed_invalidation_keeps_unauthorized_status() {
         let server = Server::start(vec![response("401 Unauthorized", b"{}")]);
+        let op = Operation {
+            keep_status: true,
+            ..declaration()
+        };
         let error = call_with_source(
             &server,
-            &declaration(),
+            &op,
             &["one"],
             &[],
             bytes::Bytes::new(),
@@ -1116,6 +1069,7 @@ mod tests {
         assert_eq!(error.error().class(), crate::ErrorClass::Api);
         assert_eq!(error.error().http_status(), Some(StatusCode::NOT_FOUND));
         assert!(!error.error().has_class(crate::ErrorClass::NotFound));
+        assert_eq!(error.error().api_error().unwrap().status(), Some(404));
     }
 
     #[tokio::test]
@@ -1134,7 +1088,8 @@ mod tests {
         for body in [br#"{"id":"toy-token"}"#.as_slice(), escaped.as_bytes()] {
             let server = Server::start(vec![response("200 OK", body)]);
             let mut op = declaration();
-            op.reflection = crate::wire::product::operation::Reflection::Refuse;
+            op.reflection = Reflection::Refuse;
+            op.keep_status = true;
             let Err(failure) = call(&server, &op, &["one"]).await else {
                 panic!("reflected response accepted");
             };
@@ -1230,7 +1185,9 @@ mod tests {
     async fn reported_redirect_keeps_the_status() {
         let failure = refused_redirect(true).await;
         let api = failure.error().api_error().unwrap();
+        assert_eq!(failure.error().class(), crate::ErrorClass::Api);
         assert_eq!(api.status(), Some(302));
+        assert_eq!(api.code(), "Moved");
         assert_eq!(api.message(), "moved elsewhere");
     }
 
@@ -1240,8 +1197,8 @@ mod tests {
         assert_eq!(failure.error().api_error().unwrap().status(), None);
     }
 
-    async fn refused_redirect(report: bool) -> crate::Failure<()> {
-        let body = br#"{"message":"moved elsewhere"}"#.to_vec();
+    async fn refused_redirect(report: bool) -> crate::Failure<Example> {
+        let body = br#"{"code":"Moved","message":"moved elsewhere"}"#.to_vec();
         let server = Server::start(vec![Response::Http {
             status: "302 Found".into(),
             headers: vec![
@@ -1250,53 +1207,12 @@ mod tests {
             ],
             body,
         }]);
-        let mut op = declaration();
-        op.no_redirect = true;
-        let clients = sender::Clients {
-            pooled: PooledClient::new(HeadLimit::Api, Trust::test(server.root_der.clone()))
-                .unwrap(),
-            one_send: OneSendClient::new(HeadLimit::Api, Trust::test(server.root_der.clone()))
-                .unwrap(),
-        };
-        let (ctx, _) = crate::RequestContext::new();
-        let clock = TestClock::new(time::OffsetDateTime::UNIX_EPOCH);
-        let deadline = clock.monotonic_now() + Duration::from_secs(5);
-        let base = crate::endpoint::Base::parse(&server.origin).unwrap();
-        let options = Options {
+        let op = Operation {
+            no_redirect: true,
             report_redirect: report,
-            ..Options::DEFAULT
+            ..declaration()
         };
-        execute_raw(
-            sender::Runtime {
-                configured_credentials: None,
-                client: &clients,
-                ctx: &ctx,
-                clock: &clock,
-                deadline,
-                sleeper: &Immediate,
-                jitter: &mut || 0,
-            },
-            &base,
-            &op,
-            &options,
-            &["one"],
-            &[],
-            RouteAuth::Bearer(&Source(false, "toy-token")),
-            bytes::Bytes::new(),
-            &mut Evidence::new(),
-        )
-        .await
-        .err()
-        .unwrap()
-    }
-
-    #[test]
-    fn failed_dial_keeps_retry_hint() {
-        let failed = sender::Error::Send(send::Error::Transport(retry::SendFailure::FailedDial));
-        let body = sender::Error::Send(send::Error::Body);
-        assert!(send_retry_hint(&failed, redirect::Retry::Once));
-        assert!(retryable_error("test").api_error().unwrap().retryable());
-        assert!(!send_retry_hint(&body, redirect::Retry::Once));
+        call(&server, &op, &["one"]).await.unwrap_err()
     }
 
     #[derive(Default, serde::Deserialize)]

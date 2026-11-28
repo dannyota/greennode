@@ -1,10 +1,10 @@
-use super::{client, response};
+use super::{client, client_with_options, response};
 use crate::iam::{
     AttachServiceAccountPolicyInput, AttachUserPolicyInput, CreatePolicyInput, DeletePolicyInput,
     DetachServiceAccountPolicyInput, Statement, UpdatePolicyInput, WriteError,
 };
 use crate::wire::test_server::{Response, Server};
-use crate::{ErrorClass, RequestContext, WriteDispatch};
+use crate::{ConfigOptions, ErrorClass, RequestContext, WriteDispatch};
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
@@ -214,7 +214,8 @@ async fn account_policy_retries_follow_write_method() {
             responses.extend((0..4).map(|_| response(status, b"{}")));
             let server = Server::start(responses);
             let (ctx, _) = RequestContext::new();
-            let client = client(&server, BEARER);
+            let options = ConfigOptions::default().with_clock(crate::testing::retry_clock());
+            let client = client_with_options(&server, BEARER, options);
             let (error, dispatch) = if detach {
                 let failure = client
                     .detach_service_account_policy(
@@ -270,7 +271,8 @@ async fn account_policy_failed_dial_after_guard_is_not_sent() {
             response("200 OK", br#"{"id":"pol-1","statements":[{"effect":"allow","actions":["iam:ListActions"]}]}"#),
         ], 4);
         let (ctx, _) = RequestContext::new();
-        let client = client(&server, BEARER);
+        let options = ConfigOptions::default().with_clock(crate::testing::retry_clock());
+        let client = client_with_options(&server, BEARER, options);
         let (error, dispatch) = if detach {
             let failure = client
                 .detach_service_account_policy(
@@ -486,7 +488,12 @@ async fn encoded_credential_never_becomes_a_policy_confirmation_id() {
     assert!(failure.partial().is_none());
     let api = failure.error().api_error().unwrap();
     assert_eq!(api.operation(), "iam.CreatePolicy");
-    assert!(api.message().starts_with("create response had no id"));
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::RefusedGuard>()
+            .is_some()
+    );
     assert!(!api.message().contains(&encoded));
     assert_eq!(server.requests(), 3);
 }
@@ -689,3 +696,5 @@ async fn hex_credential_never_becomes_a_policy_confirmation_id() {
     assert!(!failure.error().to_string().contains(&encoded));
     assert_eq!(server.requests(), 3);
 }
+
+mod settlement;

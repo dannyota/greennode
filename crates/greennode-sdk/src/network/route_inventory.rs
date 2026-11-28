@@ -9,7 +9,7 @@ use crate::wire::product::{
     operation::{self, Operation, RouteAuth},
     options::{Options, PathIds},
     redirect::{Classification, Retry},
-    response, retry,
+    retry,
 };
 use crate::wire::strict_json;
 use crate::{ApiError, Error, ErrorClass, PagedList, RequestContext, model};
@@ -259,10 +259,12 @@ impl Client {
             allow_empty: false,
             no_output: false,
             keep_status: false,
+            raw_body: false,
             overflow_overrides_status: false,
             sensitive: read.kind != ResponseKind::Standard,
             reflection: crate::wire::product::operation::Reflection::Redact,
             no_redirect: read.kind == ResponseKind::RouteTable,
+            report_redirect: read.kind == ResponseKind::RouteTable,
             retry_config: retry::Config::default(),
         };
         let options = Options {
@@ -271,7 +273,6 @@ impl Client {
             } else {
                 PathIds::Strict
             },
-            report_redirect: read.kind == ResponseKind::RouteTable,
             ..Options::DEFAULT
         };
         let response = operation::execute_raw(
@@ -300,60 +301,69 @@ impl Client {
                 }
             } else if read.kind != ResponseKind::Standard
                 && let Some(api) = error.api_error()
-                && api.operation() == read.id
+                && api.is_for_operation(read.id)
             {
                 let status = api
-                    .status()
+                    .observed_status()
                     .and_then(|status| StatusCode::from_u16(status).ok());
                 if read.kind == ResponseKind::Vpn {
                     if status == Some(StatusCode::OK) {
                         return read.invalid(evidence);
                     }
-                    return read.vpn_refused(status, api.retryable(), evidence);
+                    return read
+                        .vpn_refused(status, api.retryable(), evidence)
+                        .retaining_response_proof(&error);
                 }
                 if status.is_some() {
-                    return read.api(
-                        status,
-                        api.code(),
-                        ROUTE_TABLE_WITHHELD,
-                        api.retryable(),
-                        evidence,
-                    );
+                    return read
+                        .api(
+                            status,
+                            api.code(),
+                            ROUTE_TABLE_WITHHELD,
+                            api.retryable(),
+                            evidence,
+                        )
+                        .retaining_response_proof(&error);
                 }
             }
             evidence.screen_error(error)
         })?;
         if response.status == StatusCode::OK {
-            return Ok(response.reply.body);
+            return response
+                .decode_projection(|body| Ok(body.to_vec()))
+                .map_err(|error| evidence.screen_error(*error));
         }
         let status = response.status;
-        let retryable = matches!(status.as_u16(), 429 | 502..=504);
-        if read.kind == ResponseKind::Vpn {
-            return Err(read.vpn_refused(Some(status), retryable, evidence));
-        }
-        response::classify(
-            read.id,
-            status,
-            response.reply.body.into(),
-            operation.success,
-            (true, false, operation.retry),
-            evidence.credentials(),
-        )
-        .map(Vec::from)
-        .map_err(|error| {
-            if read.kind == ResponseKind::RouteTable
-                && let Some(api) = error.api_error()
-            {
-                return read.api(
-                    Some(status),
-                    api.code(),
-                    ROUTE_TABLE_WITHHELD,
-                    api.retryable(),
-                    evidence,
-                );
-            }
-            evidence.screen_error(*error)
-        })
+        response
+            .classify(
+                read.id,
+                operation.success,
+                (true, false, operation.retry),
+                false,
+            )
+            .map(|()| Vec::new())
+            .map_err(|error| {
+                if read.kind == ResponseKind::Vpn {
+                    let retryable = matches!(status.as_u16(), 429 | 502..=504);
+                    return read
+                        .vpn_refused(Some(status), retryable, evidence)
+                        .retaining_response_proof(&error);
+                }
+                if read.kind == ResponseKind::RouteTable
+                    && let Some(api) = error.api_error()
+                {
+                    return read
+                        .api(
+                            Some(status),
+                            api.code(),
+                            ROUTE_TABLE_WITHHELD,
+                            api.retryable(),
+                            evidence,
+                        )
+                        .retaining_response_proof(&error);
+                }
+                evidence.screen_error(*error)
+            })
     }
 
     pub(super) async fn inventory_page<T: WireField>(

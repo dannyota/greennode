@@ -33,6 +33,8 @@ jobs:
         run: make lengths
       - name: Comment gate
         run: make comments
+      - name: Absence proof gate
+        run: make absence
       - name: Workflow and tool pin gate
         run: make pins
       - name: Parity list gate

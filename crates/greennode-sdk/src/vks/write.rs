@@ -49,7 +49,7 @@ impl Client {
         let runtime = self.session.runtime(ctx, &mut jitter)?;
         let mut op = super::read_operation("vks.GetCluster", "v1/clusters/{}");
         op.no_redirect = true;
-        op.keep_status = true;
+        op.report_redirect = true;
         let op = operation::GuardOperation::new(op);
         let (_, state) = op
             .execute::<ClusterState>(

@@ -77,7 +77,7 @@ fn check_with<T: Serialize + ?Sized, E: serde::ser::Error>(
         };
         let matcher = BodyMatcher::with_work(&state.credentials, state.remaining);
         match reflects(&matcher, &bytes) {
-            Screen::Clean => {
+            screen if screen.is_clean() => {
                 state.remaining = matcher.remaining();
                 false
             }
@@ -171,6 +171,9 @@ mod tests {
         fn missing_serde(&self, source: &str) -> Vec<String> {
             use super::super::evidence::identifier_key;
 
+            if !source.contains("Serialize") {
+                return Vec::new();
+            }
             let mut missing = Vec::new();
             for model in self.structs.captures_iter(source) {
                 if !model[1].contains("Serialize") {
@@ -201,6 +204,9 @@ mod tests {
         }
 
         fn missing_manual(&self, source: &str) -> Vec<String> {
+            if !source.contains("serialize_field(") && !source.contains("serialize_entry(") {
+                return Vec::new();
+            }
             self.manual
                 .captures_iter(source)
                 .filter_map(|field| {
@@ -303,6 +309,12 @@ struct Projection {
         inspect_fields(&root, &|path, source| {
             let relative = path.strip_prefix(&root).unwrap();
             if relative.starts_with("wire") || relative.iter().any(|part| part == "tests") {
+                return;
+            }
+            if !source
+                .match_indices("\",")
+                .any(|(index, pair)| source[index + pair.len()..].trim_start().starts_with('"'))
+            {
                 return;
             }
             for row in fields.captures_iter(source) {

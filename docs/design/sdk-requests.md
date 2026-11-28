@@ -176,36 +176,18 @@ same origin. This includes the VPC rename and monitor log-project quote. Discard
 `Location` in public errors. A refused redirect reports its 3xx status only for
 operations whose Go request sets `Once` or `NoRedirect` and returns the redirect
 itself; elsewhere it reports no status, as Go does for the cross-host redirects
-it refuses. Routes own trusted templates; validate caller path IDs before
-escaping and never interpolate them in log events.
+it refuses. Body limits follow Go's per-request flags: a truncated body keeps
+its status only where Go sets `KeepObservedStatus`; an oversized 4xx or 5xx body
+is classified by status unless Go sets `BodyLimitOverridesStatus`; where Go
+reads a write's body raw (`DoRaw`), an oversized body is a status-less, possibly
+sent failure, never a definite rejection; a raw read keeps its service's mapping
+(`cdn.ListIPRanges`: oversized 200 is `PageFormat`). No status alone proves
+absence; [screening](sdk-screening.md#screening-a-body) owns that rule. Routes
+own trusted templates; validate caller path IDs before escaping and never
+interpolate them in log events.
 
-Decoders may receive bounded response bytes and typed status internally. Accept
-peer error codes and message fields only through the operation's safe
-classifier. On credential-bearing or secret-bearing paths withhold fields that
-are not known safe; use status fallback and fixed diagnostics. Even a field that
-looks like an identifier can be a reflected credential. When any credential was
-sent, keep only `code` and `message`, and withhold a message with non-ASCII
-text, a credential field marker or a sent credential in any encoding; this is
-stricter than Go, which case-folds Unicode. "Any encoding" means the literal,
-percent and JSON-escape forms anywhere at any length, and Base64, Base64URL and
-lowercase-compared hex forms by these rules: a whole encoding of eight or more
-characters, a stable fragment of seven or more (the part of the encoding that
-does not depend on neighbouring bytes, at each of the three alignments), and a
-hex form of seven or more match anywhere; a shorter whole encoding matches only
-when bounded, that is when neither neighbour is an ASCII letter or digit, nor
-`+` or `/` for Base64, nor `-` or `_` for Base64URL. Identifier checks match
-every form anywhere. One shared screener checks a peer body: its bytes as
-received (spanning a key, delimiter or raw escape), numbers as received, and
-each decoded string, with the identifier check under any key whose last word
-(split at `_`, `-` or a lower-to-upper case change) is `id`, `ids`, `uuid` or
-`uuids` in any case. Output spellings apply only to kept values. Every SDK
-result and error, and every byte the CLI writes after a request, is rechecked at
-exit. Withhold any peer `code` or `message` containing `/`, `\`, `@`, `www.` in
-any case, or a colon followed by anything but whitespace or the end; this closed
-rule stands in for URL detection. Never expose raw headers, response bodies,
-unbounded peer text, URLs, or decode errors via an error source, capture, or
-debug event. Keep per-attempt credentials available only within the logical
-request for reflection checks, including across retries.
+[Credential screening](sdk-screening.md) owns how responses, decisions, errors
+and CLI output are checked for reflected credentials.
 
 Success bodies are checked against the operation's output schema before
 decoding: object or array shape at every node, duplicate keys, and keys that

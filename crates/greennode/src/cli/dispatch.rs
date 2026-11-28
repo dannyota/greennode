@@ -127,7 +127,7 @@ pub(super) fn local(stderr: &mut dyn Write, error: LocalError) -> u8 {
         stderr,
         &errors::Envelope {
             code: error.code,
-            message: &error.message,
+            message: error.message,
             status: None,
             operation: None,
         },
@@ -397,15 +397,21 @@ async fn run_with_clock<I: ParsedInput, A: Adapter<I>>(
                     );
                 }
                 let mut classified = errors::classify(&failure.error, adapter.rules());
-                if let Some(advice) = failure.error.detail::<String>() {
-                    classified.envelope.message = advice;
-                } else if let Some(advice) = adapter.advice(&failure.error) {
-                    classified.envelope.message = advice;
+                if !classified.fixed_message {
+                    let message = failure
+                        .error
+                        .joined_diagnostic()
+                        .or_else(|| failure.error.detail::<String>().map(String::as_str))
+                        .or_else(|| adapter.advice(&failure.error));
+                    if let Some(message) = message {
+                        classified.envelope.message = message.into();
+                    }
                 }
                 classified.envelope.code =
                     RequestContext::screened_response_text(classified.envelope.code);
-                classified.envelope.message =
-                    RequestContext::screened_response_text(classified.envelope.message);
+                if RequestContext::screened_response_text(&classified.envelope.message).is_empty() {
+                    classified.envelope.message = "".into();
+                }
                 classified.envelope.operation = classified
                     .envelope
                     .operation

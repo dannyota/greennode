@@ -201,11 +201,11 @@ impl Client {
                 input.name
             );
             let advised = |failure| advise(failure, &advice, &evidence);
-            let (status, raw) = result.map_err(advised)?;
-            let raw = reject(
+            let reply = result.map_err(advised)?;
+            let status = reply.status;
+            reject(
                 &REQUEST,
-                status,
-                raw,
+                &reply,
                 &evidence,
                 Some(IMPORT_CERTIFICATE_WITHHELD_MESSAGE),
             )
@@ -227,7 +227,14 @@ impl Client {
                     WriteDispatch::MayHaveBeenSent,
                 ))
             };
-            let text = go_json(&raw);
+            let receipt = reply.clean_receipt().ok_or_else(|| {
+                failed(if reply.malformed_json() {
+                    DecodeError::MalformedJson
+                } else {
+                    DecodeError::ReflectedCredential
+                })
+            })?;
+            let text = go_json(receipt.body());
             serde_json::from_str::<&serde_json::value::RawValue>(&text)
                 .map_err(|_| failed(DecodeError::MalformedJson))?;
             strict_json::validate(text.as_bytes(), &[], text.len())
@@ -241,7 +248,7 @@ impl Client {
                 .map_err(decode_failed)?;
             let certificate: Certificate = read.parse(row, &evidence).map_err(decode_failed)?;
             if !PathIds::WithUnderscore.allows(&certificate.uuid)
-                || evidence.text_reflects(&certificate.uuid)
+                || evidence.id_reflects(&certificate.uuid)
             {
                 let message = format!(
                     "import response had no id; a certificate may exist, check with list-certificates --name {:?} and match exactly",

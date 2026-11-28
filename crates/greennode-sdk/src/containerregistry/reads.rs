@@ -1,5 +1,8 @@
 use super::*;
 
+#[derive(Debug)]
+pub(super) struct RepositoryAbsentFromInventory;
+
 /// Filters and selects a page of registry users.
 #[derive(Clone, Default)]
 pub struct ListUsersInput {
@@ -237,8 +240,9 @@ impl Output for Users {
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let result: Self = operation::decode_response(op, response)?;
         let keys: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_slice(&response.body)
-                .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
+            response.decode_projection(|body| {
+                serde_json::from_slice(body).map_err(|_| Box::new(Error::new(ErrorClass::Api)))
+            })?;
         let reflected = [
             result.page,
             result.page_size,
@@ -384,8 +388,7 @@ impl Client {
         if !valid_id(id) {
             return Err(failure(Error::new(ErrorClass::InvalidInput).with_detail("vngcloud: invalid input: containerregistry.GetRepository requires RepositoryID to match ^[A-Za-z0-9-]+$")));
         }
-        let mut get = read_operation("containerregistry.GetRepository", "v1/repository/{}");
-        get.overflow_overrides_status = true;
+        let get = read_operation("containerregistry.GetRepository", "v1/repository/{}");
         let result: Result<RepositoryRead, Failure<O>> = self
             .request(ctx, &get, &[id], &[], bytes::Bytes::new(), evidence)
             .await;
@@ -395,43 +398,45 @@ impl Client {
                 "containerregistry.GetRepository: repository identity is unproven",
             ))),
             Err(original)
-                if !original.error().is_body_too_large()
-                    && original.error().api_error().is_some_and(|api| {
-                        !api.code().is_empty()
-                            && api
-                                .status()
-                                .is_some_and(|status| (500..600).contains(&status))
-                    }) =>
+                if original
+                    .error()
+                    .api_error()
+                    .and_then(crate::ApiError::observed_status)
+                    .is_some_and(|status| (500..600).contains(&status)) =>
             {
-                let result: Result<Repositories, Failure<O>> = self
-                    .request(
+                let result = self
+                    .fallback_inventory::<Repositories, O>(
                         ctx,
-                        &Operation {
-                            cap: 4 << 20,
-                            ..read_operation(
-                                "containerregistry.repositoryFoundAfterServerError",
-                                "v1/repository",
-                            )
-                        },
-                        &[],
+                        "containerregistry.repositoryFoundAfterServerError",
+                        "v1/repository",
                         &[("accessLevel", "ALL"), ("name", ""), ("size", "10000")],
-                        bytes::Bytes::new(),
                         evidence,
                     )
                     .await;
-                if let Ok(list) = result
-                    && let (Some(items), Some(pages), Some(total)) = (
-                        list.data.or(list.list_data),
-                        list.total_page,
-                        list.total_item,
+                if result.is_ok_and(|receipt| {
+                    complete_absence(
+                        receipt,
+                        evidence,
+                        id,
+                        |list| {
+                            if list.page < 0 || list.page_size < 0 {
+                                return None;
+                            }
+                            let items = match (list.data, list.list_data) {
+                                (Some(items), None) | (None, Some(items)) => items,
+                                _ => return None,
+                            };
+                            Some((items, list.total_page?, list.total_item?))
+                        },
+                        |item| &item.id,
                     )
-                    && list.page >= 0
-                    && list.page_size >= 0
-                    && complete_absence(&items, pages, total, id, |item| &item.id)
-                {
+                }) {
+                    evidence
+                        .recheck_read_proofs()
+                        .map_err(|error| failure(*error))?;
                     return Err(failure(Error::new(ErrorClass::NotFound).with_detail(
                         "vngcloud: resource not found: containerregistry.GetRepository: repository absent",
-                    )));
+                    ).with_outer_detail(RepositoryAbsentFromInventory)));
                 }
                 Err(redact_failure(original, evidence))
             }
@@ -470,13 +475,16 @@ impl Users {
     }
 }
 
-pub(super) fn complete_absence<T>(
-    items: &[T],
-    pages: i64,
-    total: i64,
+pub(super) fn complete_absence<I, T>(
+    receipt: crate::wire::product::guard::Guarded<I>,
+    evidence: &Evidence,
     target: &str,
+    page: impl FnOnce(I) -> Option<(Vec<T>, i64, i64)>,
     id: impl Fn(&T) -> &str,
 ) -> bool {
+    let Some((items, pages, total)) = receipt.into_checked(evidence).ok().and_then(page) else {
+        return false;
+    };
     let mut ids = std::collections::HashSet::new();
     (0..=1).contains(&pages)
         && (pages != 0 || total == 0)
@@ -507,8 +515,9 @@ impl Output for RepositoryRead {
         }
 
         let repository = Repository::decode_response(op, response)?;
-        let count: ImageCount = serde_json::from_slice(&response.body)
-            .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
+        let count: ImageCount = response.decode_projection(|body| {
+            serde_json::from_slice(body).map_err(|_| Box::new(Error::new(ErrorClass::Api)))
+        })?;
         Ok(Self {
             repository,
             image_count_known: count.image_count.is_some(),
@@ -530,15 +539,19 @@ mod tests {
         }
     }
     fn client(server: &Server) -> Client {
-        let config = Config::new(
-            ConfigOptions::default()
-                .with_region("hcm-3".into())
-                .with_static_token(Secret::new("synthetic-registry-token"))
-                .with_endpoint_overrides(EndpointOverrides {
-                    container_registry: Some(server.origin.clone()),
-                    ..Default::default()
-                }),
+        client_with_options(
+            server,
+            ConfigOptions::default().with_static_token(Secret::new("synthetic-registry-token")),
         )
+    }
+
+    fn client_with_options(server: &Server, options: ConfigOptions) -> Client {
+        let config = Config::new(options.with_region("hcm-3".into()).with_endpoint_overrides(
+            EndpointOverrides {
+                container_registry: Some(server.origin.clone()),
+                ..Default::default()
+            },
+        ))
         .unwrap();
         config
             .session()
@@ -581,8 +594,42 @@ mod tests {
         assert_eq!(result.items[0].repositories[0].policies[0].id, "policy-1");
     }
     #[tokio::test]
-    async fn oversized_errors_and_confirmation_never_prove_absence() {
-        let big_error = vec![b' '; (8 << 20) + 1];
+    async fn repository_lookup_confirms_absence_from_screened_and_oversized_server_errors() {
+        let mut mismatches = Vec::new();
+        for (oversized, refusal) in [
+            (
+                false,
+                Response::Http {
+                    status: "500 Internal Server Error".into(),
+                    headers: vec![("Content-Length".into(), "2".into())],
+                    body: b"{}".to_vec(),
+                },
+            ),
+            (true, Server::oversized("500 Internal Server Error")),
+        ] {
+            let server = Server::start(vec![
+                refusal,
+                response(br#"{"data":[],"totalPage":0,"totalItem":0}"#),
+            ]);
+            let options = ConfigOptions::default()
+                .with_static_token(Secret::new("500"))
+                .with_cdn_api_key(Secret::new("ServerError"));
+            let failure = client_with_options(&server, options)
+                .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
+                .await
+                .unwrap_err();
+            if !failure.error().has_identity(ErrorClass::NotFound) || server.requests() != 2 {
+                mismatches.push((oversized, failure.error().class(), server.requests()));
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "server refusal did not reach absence lookup: {mismatches:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn truncated_refusal_and_oversized_confirmation_never_prove_absence() {
         let big_confirmation = format!(
             "{{\"data\":[],\"totalPage\":0,\"totalItem\":0,\"padding\":\"{}\"}}",
             "x".repeat(4 << 20)
@@ -600,13 +647,6 @@ mod tests {
             },
             response(br#"{"data":[],"totalPage":0,"totalItem":0}"#),
         ]);
-        let failure = client(&server)
-            .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
-            .await
-            .unwrap_err();
-        assert_ne!(failure.error().class(), ErrorClass::NotFound);
-        assert_eq!(server.requests(), 1);
-        let server = Server::start(vec![error_response(big_error)]);
         let failure = client(&server)
             .get_repository(&RequestContext::new().0, GetRepositoryInput::new("repo-1"))
             .await

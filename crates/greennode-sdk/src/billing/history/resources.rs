@@ -1,5 +1,5 @@
 use super::{
-    Envelope, failure, history_operation,
+    failure, history_operation,
     security::{RESOURCE_WITHHELD, response_error, status_error},
 };
 use crate::billing::{
@@ -17,7 +17,6 @@ use crate::wire::{
 use crate::{Error, Failure, RequestContext};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
-use std::collections::BTreeMap;
 
 /// Billing resource cannot be renewed.
 pub const RENEW_TYPE_NON_RENEWABLE: &str = "NON-RENEWABLE";
@@ -196,7 +195,9 @@ impl Client {
             let operation = Operation {
                 cap: 4 << 20,
                 reflection: crate::wire::product::operation::Reflection::Refuse,
-                overflow_overrides_status: true,
+                overflow_overrides_status: false,
+                no_redirect: true,
+                report_redirect: true,
                 ..history_operation("billing.ListResources", "gateway/api/v1/resources")
             };
             self.history_request::<ResourceEnvelope>(ctx, &operation, &[], RESOURCE_WITHHELD)
@@ -279,43 +280,31 @@ impl Output for ResourceEnvelope {
         if !operation.success.contains(&status) {
             return Err(Box::new(status_error(operation, status, RESOURCE_WITHHELD)));
         }
-        let raw: &RawValue = serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-        if response.credentials.has_numeric_product_credential() || !exact_names(raw, &Self::SCHEMA)
-        {
-            return Err(invalid());
-        }
-        let envelope: Envelope<'_> = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
-        if exact_integer(envelope.code.get()) != Some(200) {
-            return Err(invalid());
-        }
-        let output: Self =
-            operation::decode_response(operation, response).map_err(|_| invalid())?;
-        let evidence = Evidence::from_credentials(&response.credentials);
-        if serde_json::to_value(&output.data).map_or(true, |value| evidence.output_reflects(&value))
-        {
-            return Err(invalid());
-        }
-        Ok(output)
-    }
-}
-
-fn exact_names(raw: &RawValue, shape: &Shape<'_>) -> bool {
-    if raw.get() == "null" {
-        return true;
-    }
-    match shape {
-        Shape::Any => true,
-        Shape::Object(fields) => serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())
-            .is_ok_and(|object| {
-                object.iter().all(|(name, value)| {
-                    fields
-                        .iter()
-                        .find(|field| strict_json::field_matches(field.name, name))
-                        .is_none_or(|field| field.name == name && exact_names(value, &field.shape))
-                })
-            }),
-        Shape::Array(item) => serde_json::from_str::<Vec<&RawValue>>(raw.get())
-            .is_ok_and(|elements| elements.into_iter().all(|value| exact_names(value, item))),
+        response.decode_projection(|body| {
+            strict_json::validate_canonical_shape(body, &Self::SCHEMA, operation.cap)
+                .map_err(|_| invalid())?;
+            if response.credentials.has_numeric_product_credential() {
+                return Err(invalid());
+            }
+            #[derive(Deserialize)]
+            struct Header<'a> {
+                #[serde(borrow)]
+                code: &'a RawValue,
+            }
+            let header: Header<'_> = serde_json::from_slice(body).map_err(|_| invalid())?;
+            if exact_integer(header.code.get()) != Some(200) {
+                return Err(invalid());
+            }
+            let output: Self =
+                operation::decode_response(operation, response).map_err(|_| invalid())?;
+            let evidence = Evidence::from_credentials(&response.credentials);
+            if serde_json::to_value(&output.data)
+                .map_or(true, |value| evidence.output_reflects(&value))
+            {
+                return Err(invalid());
+            }
+            Ok(output)
+        })
     }
 }
 

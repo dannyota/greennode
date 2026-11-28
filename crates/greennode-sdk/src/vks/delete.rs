@@ -128,7 +128,14 @@ impl Client {
             async |wait, evidence| {
                 let checkpoint = evidence.guard_checkpoint();
                 match self.cluster_state(wait, &input.cluster_id, evidence).await {
-                    Err(error) if error.has_class(ErrorClass::NotFound) => {
+                    Err(error)
+                        if crate::confirms_absence(
+                            &error,
+                            "vks.GetCluster",
+                            "GET",
+                            "v1/clusters/{}",
+                        ) =>
+                    {
                         crate::wire::product::guard::Guarded::from_checkpoint(
                             true, evidence, checkpoint,
                         )?
@@ -155,10 +162,7 @@ fn unsettled(
     );
     if let Some(api) = error.api_error() {
         use std::fmt::Write as _;
-        let _ = write!(message, "\n{}: {}", api.operation(), api.message());
-        if let Some(status) = api.status() {
-            let _ = write!(message, " (status {status})");
-        }
+        let _ = write!(message, "\n{}", api.go_text());
     } else {
         let cause = match error.class() {
             ErrorClass::Cancelled => "operation cancelled",
@@ -189,11 +193,13 @@ fn delete_operation() -> Operation {
         allow_recovery: false,
         allow_empty: true,
         no_output: true,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }

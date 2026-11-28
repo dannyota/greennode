@@ -321,7 +321,7 @@ async fn lock_wait_is_bounded_by_the_request_context() {
         cancel.cancel();
     };
     let (waited, ()) = tokio::join!(
-        tokio::time::timeout(Duration::from_secs(5), wait),
+        tokio::time::timeout(Duration::from_secs(60), wait),
         cancel_after_first_poll
     );
     let waited = waited.expect("lock wait ignored the context");

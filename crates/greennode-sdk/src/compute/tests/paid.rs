@@ -1,3 +1,5 @@
+mod receipt_tests;
+
 use super::*;
 
 #[tokio::test]
@@ -619,6 +621,31 @@ async fn create_server_retains_the_accepted_partial_when_the_settlement_read_ref
     assert_eq!(output.monthly_price, 20.0);
     assert!(server.heads()[1].starts_with(b"POST /portal/v1/price "));
     assert!(server.heads()[3].starts_with(b"GET /v2/project-1/servers/server-1 "));
+}
+
+#[tokio::test]
+async fn create_server_retains_a_screened_partial_after_settlement_failure() {
+    let server = TestServer::start(vec![
+        inventory(),
+        response(r#"{"optimumPrice":20}"#),
+        http("202 Accepted", r#"{"data":{"uuid":"server-1"}}"#),
+        response(r#"{"data":{"uuid":"server-1","status":"ERROR","name":"failed-server"}}"#),
+    ]);
+    let failure = server_order_client(&server)
+        .create_server(&RequestContext::new().0, server_order())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().class(), ErrorClass::Failed);
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+    let output = failure.partial().unwrap();
+    assert_eq!(output.server.name, "failed-server");
+    assert_eq!(output.server.status, "ERROR");
+    assert_eq!(output.server.uuid, "server-1");
+    assert_eq!(output.monthly_price, 20.0);
+    assert_eq!(server.requests(), 4);
 }
 
 #[tokio::test]

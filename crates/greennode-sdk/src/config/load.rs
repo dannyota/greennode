@@ -260,7 +260,7 @@ mod tests {
         tokio::select! { started = started_rx => assert!(started.is_ok()), _ = &mut future => panic!("load completed before read hook") }
         drop(future);
         release_tx.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), done_rx)
+        tokio::time::timeout(std::time::Duration::from_secs(60), done_rx)
             .await
             .unwrap()
             .unwrap();

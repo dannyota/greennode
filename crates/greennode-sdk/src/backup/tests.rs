@@ -553,3 +553,19 @@ async fn backup_overflow_screens_a_reflected_static_detail() {
     );
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn backup_policy_oversized_redirect_is_a_bare_limit_error() {
+    let server = Server::start(vec![Server::oversized("302 Found")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, "han-1")
+        .get_policy(&ctx, GetPolicyInput::new("policy-1"))
+        .await
+        .unwrap_err();
+    assert!(failure.error().is_body_too_large());
+    assert!(failure.error().api_error().is_none());
+    assert!(
+        failure.error().detail::<String>().map(String::as_str)
+            == Some("transport: response body exceeds limit")
+    );
+}

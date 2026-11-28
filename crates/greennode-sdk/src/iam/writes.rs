@@ -300,7 +300,14 @@ pub(super) fn write_operation(
         success,
         allow_recovery: !matches!(retry, Retry::Once),
         no_output: success == [StatusCode::NO_CONTENT],
-        no_redirect: true,
+        report_redirect: matches!(
+            id,
+            "iam.CreateGroup"
+                | "iam.CreatePolicy"
+                | "iam.UpdatePolicy"
+                | "iam.CreateServiceAccount"
+                | "iam.ResetServiceAccountSecret"
+        ),
         ..read_operation(id, template, DEFAULT_CAP, true)
     }
 }
@@ -420,26 +427,7 @@ pub(super) fn error_reason(error: &Error) -> String {
         }
         .to_owned();
     };
-    let mut reason = String::new();
-    let operation = api.operation();
-    let has_operation = api
-        .message()
-        .strip_prefix(operation)
-        .is_some_and(|rest| rest.starts_with(": "));
-    if !operation.is_empty() && !has_operation {
-        reason.push_str(operation);
-        reason.push_str(": ");
-    }
-    reason.push_str(if api.message().is_empty() {
-        "request failed"
-    } else {
-        api.message()
-    });
-    if let Some(status) = api.status() {
-        use std::fmt::Write;
-        let _ = write!(reason, " (status {status})");
-    }
-    reason
+    api.go_text()
 }
 
 fn caller_reflected(caller: &super::GetCallerIdentityOutput, evidence: &Evidence) -> bool {

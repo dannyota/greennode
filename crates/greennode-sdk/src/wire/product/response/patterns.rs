@@ -1,5 +1,5 @@
 use super::{
-    automaton::{Automaton, charge},
+    automaton::{Automaton, SCAN_BLOCK, block_excludes_starts, charge},
     encoded::{self, EncodedNeedle},
 };
 use zeroize::Zeroizing;
@@ -172,30 +172,74 @@ impl Patterns {
         let search_base64 = encodings && !self.base64.is_empty();
         let mut folded = 0;
         let mut base64 = 0;
-        for (index, byte) in input.iter().copied().enumerate() {
-            let end = index + 1;
-            let accepts_encoded = |length, flags| {
-                strict
-                    || flags & encoded::UNBOUNDED != 0
-                    || encoded::bounded(input, end - length, end, flags)
-            };
-            folded = self
-                .folded
-                .advance(folded, byte.to_ascii_lowercase(), work)?;
-            if self.folded.accepts(folded, work, |length, flags| {
-                flags & literals != 0
-                    || (encodings
-                        && flags & (encoded::UNBOUNDED | encoded::BOUNDED_HEX) != 0
-                        && accepts_encoded(length, flags))
-            })? {
-                return Some(true);
+        let starts = (input.len() >= SCAN_BLOCK).then(|| {
+            let mut starts = Zeroizing::new(Vec::new());
+            starts.extend((0..=u8::MAX).filter(|&byte| {
+                self.folded.root(byte.to_ascii_lowercase()) != 0
+                    || (search_base64 && self.base64.root(byte) != 0)
+            }));
+            starts
+        });
+        let mut repeated = None;
+        for (block_index, block) in input.chunks(SCAN_BLOCK).enumerate() {
+            let initial = (folded, base64);
+            if let Some((previous, states, cost)) = repeated
+                && initial == states
+                && block == previous
+            {
+                charge(work, cost)?;
+                continue;
             }
-            if search_base64 {
-                base64 = self.base64.advance(base64, byte, work)?;
-                if self.base64.accepts(base64, work, accepts_encoded)? {
+            if folded == 0
+                && base64 == 0
+                && block_excludes_starts(block, starts.as_deref().map(Vec::as_slice))
+            {
+                continue;
+            }
+            let before = *work;
+            let mut saw_output = false;
+            for (index, byte) in block.iter().copied().enumerate() {
+                let end = block_index * SCAN_BLOCK + index + 1;
+                let accepts_encoded = |length, flags| {
+                    strict
+                        || flags & encoded::UNBOUNDED != 0
+                        || encoded::bounded(input, end - length, end, flags)
+                };
+                let lower = byte.to_ascii_lowercase();
+                folded = if folded == 0 {
+                    self.folded.root(lower)
+                } else {
+                    self.folded.advance(folded, lower, work)?
+                };
+                if folded != 0
+                    && self.folded.accepts(folded, work, |length, flags| {
+                        saw_output = true;
+                        flags & literals != 0
+                            || (encodings
+                                && flags & (encoded::UNBOUNDED | encoded::BOUNDED_HEX) != 0
+                                && accepts_encoded(length, flags))
+                    })?
+                {
                     return Some(true);
                 }
+                if search_base64 {
+                    base64 = if base64 == 0 {
+                        self.base64.root(byte)
+                    } else {
+                        self.base64.advance(base64, byte, work)?
+                    };
+                    if base64 != 0
+                        && self.base64.accepts(base64, work, |length, flags| {
+                            saw_output = true;
+                            accepts_encoded(length, flags)
+                        })?
+                    {
+                        return Some(true);
+                    }
+                }
             }
+            repeated = (!saw_output && initial == (folded, base64) && block.len() == SCAN_BLOCK)
+                .then_some((block, initial, before - *work));
         }
         Some(false)
     }
@@ -204,6 +248,47 @@ impl Patterns {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_blocks_charge_the_same_failure_transitions() {
+        let patterns = Patterns::compile(&[crate::Secret::new("toy-secret")]).unwrap();
+        let mut block = br"\uD800".repeat(SCAN_BLOCK / 6);
+        *block.last_mut().unwrap() = b'!';
+        let body = block.repeat(3);
+        let mut once = 10 * SCAN_BLOCK;
+        assert_eq!(patterns.forms(&block, false, false, &mut once), Some(false));
+        let mut thrice = 30 * SCAN_BLOCK;
+        assert_eq!(
+            patterns.forms(&body, false, false, &mut thrice),
+            Some(false)
+        );
+        assert_eq!(thrice, once * 3);
+    }
+
+    #[test]
+    fn block_prefilter_preserves_matches_and_work_limits_across_boundaries() {
+        let credentials = [crate::Secret::new("toy-secret")];
+        let patterns = Patterns::compile(&credentials).unwrap();
+        let mut clean = vec![b'x'; 3 * SCAN_BLOCK];
+        assert_eq!(
+            patterns.forms(&clean, false, false, &mut (3 * SCAN_BLOCK - 1)),
+            None
+        );
+        for credential in ["toy-secret", "TOY-SECRET", "dG95LXNlY3JldA=="] {
+            let start = 2 * SCAN_BLOCK - 2;
+            let end = start + credential.len();
+            clean[start..end].copy_from_slice(credential.as_bytes());
+            assert_eq!(
+                patterns.forms(&clean, false, false, &mut (5 * SCAN_BLOCK)),
+                Some(true)
+            );
+            assert_eq!(
+                patterns.raw(&clean, &mut (5 * SCAN_BLOCK)),
+                credential == "toy-secret"
+            );
+            clean[start..end].fill(b'x');
+        }
+    }
 
     #[test]
     fn compiler_refuses_when_automaton_storage_exceeds_four_mib() {

@@ -149,7 +149,14 @@ impl Client {
                 ..Options::DEFAULT
             };
             let reply = match self
-                .send_write::<CreateReply>(ctx, &operation, &options, &[], body, &mut evidence)
+                .send_write::<crate::wire::product::guard::Acknowledgement<CreateReply>>(
+                    ctx,
+                    &operation,
+                    &options,
+                    &[],
+                    body,
+                    &mut evidence,
+                )
                 .await
             {
                 Ok(reply) => reply,
@@ -168,13 +175,15 @@ impl Client {
                     }));
                 }
             };
-            let Some(id) = reply.instance_id(&evidence) else {
+            let Some((_, acknowledged)) = reply.into_id(|row| row.instance_id(&evidence)) else {
                 return Err(create_unsettled(
                     "vngcloud: write outcome not confirmed: create response lacks a valid instance ID",
                     &evidence,
                 ));
             };
-            match self.poll_instance(ctx, id, &mut evidence, INTERRUPTED, |instance| {
+            let id = acknowledged.recheck(&evidence).map_err(|_| create_unsettled("vngcloud: write outcome not confirmed: create response lacks a valid instance ID", &evidence))?;
+            evidence.keep_acknowledgement(&acknowledged).map_err(|_| create_unsettled("vngcloud: write outcome not confirmed: create response lacks a valid instance ID", &evidence))?;
+            let result = self.poll_instance(ctx, crate::wire::product::guard::ConfirmationTarget::Acknowledged(&acknowledged), &mut evidence, INTERRUPTED, |instance| {
                 match instance {
                     None => Poll::Pending,
                     Some(instance) => match instance.status.to_ascii_uppercase().as_str() {
@@ -189,10 +198,34 @@ impl Client {
                         _ => Poll::Ready(Err(Settlement::NotSettled("vngcloud: write outcome not confirmed: create status unrecognized"))),
                     },
                 }
-            }).await {
-                Ok(instance) if serde_json::to_value(&instance).is_ok_and(|value| !evidence.output_reflects(&value)) => Ok(CreateDatabaseInstanceOutput { instance }),
-                Ok(_) => Err(unsettled(CREATE, INTERRUPTED, Some(id.to_owned()), &evidence, id_only)),
-                Err(settlement) => Err(unsettled(CREATE, settlement, Some(id.to_owned()), &evidence, id_only)),
+            }).await;
+            if acknowledged.recheck(&evidence).is_err() {
+                return Err(create_unsettled(
+                    "vngcloud: write outcome not confirmed: create acknowledgement withheld",
+                    &evidence,
+                ));
+            }
+            match result {
+                Ok(instance)
+                    if serde_json::to_value(&instance)
+                        .is_ok_and(|value| !evidence.output_reflects(&value)) =>
+                {
+                    Ok(CreateDatabaseInstanceOutput { instance })
+                }
+                Ok(_) => Err(unsettled(
+                    CREATE,
+                    INTERRUPTED,
+                    Some(id.to_owned()),
+                    &evidence,
+                    id_only,
+                )),
+                Err(settlement) => Err(unsettled(
+                    CREATE,
+                    settlement,
+                    Some(id.to_owned()),
+                    &evidence,
+                    id_only,
+                )),
             }
         })
     }
@@ -536,7 +569,7 @@ impl Output for CreateReply {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         operation::decode_response(operation, response).map_err(|error| {
             if response.status.is_client_error() {
-                Box::new(error.with_detail(field_errors(&response.body)))
+                Box::new(error.with_detail(RejectedFields(response.database_rejected_fields())))
             } else {
                 error
             }
@@ -546,49 +579,3 @@ impl Output for CreateReply {
 
 #[derive(Debug)]
 pub(super) struct RejectedFields(pub(super) Vec<&'static str>);
-
-fn field_errors(body: &[u8]) -> RejectedFields {
-    #[derive(Deserialize)]
-    struct Entry {
-        field: String,
-    }
-    #[derive(Deserialize)]
-    struct Fields {
-        #[serde(rename = "fieldError")]
-        entries: Vec<Entry>,
-    }
-    let Ok(fields) = serde_json::from_slice::<Fields>(body) else {
-        return RejectedFields(Vec::new());
-    };
-    let mut names = Vec::new();
-    for entry in fields.entries.iter().take(20) {
-        let field = FIELD_INDEX
-            .as_ref()
-            .map_or(std::borrow::Cow::Borrowed(entry.field.as_str()), |index| {
-                index.replace_all(&entry.field, "")
-            })
-            .to_ascii_lowercase();
-        let name = match field.as_str() {
-            "name" => "Name",
-            "password" | "user.password" => "Password",
-            "user.name" | "username" => "Username",
-            "databases.name" | "user.databases.name" | "databasename" => "DatabaseName",
-            "volumetype" => "StorageTypeID",
-            "volumesize" => "StorageSize",
-            "packageid" => "FlavorID",
-            "locatezoneid" => "ZoneID",
-            "netids" => "SubnetID",
-            _ => continue,
-        };
-        if !names.contains(&name) {
-            names.push(name);
-        }
-        if names.len() == 5 {
-            break;
-        }
-    }
-    RejectedFields(names)
-}
-
-static FIELD_INDEX: std::sync::LazyLock<Option<regex_lite::Regex>> =
-    std::sync::LazyLock::new(|| regex_lite::Regex::new(r"\[[0-9]*\]").ok());

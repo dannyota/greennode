@@ -157,7 +157,6 @@ async fn provider_error_text_is_not_exposed() {
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::MayHaveBeenSent,
         credentials: SentCredentials::default(),
-        refused_body: Vec::new(),
     };
     let sdk: crate::Failure<()> = failure.into_failure(SdkError::provider_failed());
     assert!(sdk.error().api_error().is_none());
@@ -186,7 +185,6 @@ fn status_detail_preserves_identity_and_api_error() {
         status: Some(StatusCode::UNAUTHORIZED),
         dispatch: WriteDispatch::NotSent,
         credentials: SentCredentials::default(),
-        refused_body: Vec::new(),
     };
     let sdk: crate::Failure<()> = failure.into_failure(mapped);
     assert!(!sdk.error().has_identity(crate::ErrorClass::Auth));
@@ -224,7 +222,7 @@ async fn untrusted_tls_failure_is_not_sent() {
     );
     assert!(matches!(
         err.error,
-        Error::Send(send::Error::Transport(retry::SendFailure::PossiblySent))
+        Error::Send(send::Error::Transport(retry::SendFailure::PossiblySent, _))
     ));
     assert_eq!(err.dispatch, WriteDispatch::NotSent);
     assert_eq!(server.requests(), 0);
@@ -480,7 +478,7 @@ async fn failed_first_dial_stays_not_sent() {
     );
     assert!(matches!(
         err.error,
-        Error::Send(send::Error::Transport(retry::SendFailure::FailedDial))
+        Error::Send(send::Error::Transport(retry::SendFailure::FailedDial, _))
     ));
     assert_eq!(err.dispatch, WriteDispatch::NotSent);
     assert!(err.status.is_none());
@@ -508,7 +506,7 @@ async fn failed_dial_after_response_keeps_dispatch_evidence() {
     );
     assert!(matches!(
         err.error,
-        Error::Send(send::Error::Transport(retry::SendFailure::FailedDial))
+        Error::Send(send::Error::Transport(retry::SendFailure::FailedDial, _))
     ));
     assert_eq!(err.dispatch, WriteDispatch::MayHaveBeenSent);
     assert_eq!(err.status, None);
@@ -586,7 +584,7 @@ async fn once_invalidation_error_keeps_status_and_dispatch() {
         )
         .await,
     );
-    assert!(matches!(err.error, Error::Provider(_)));
+    assert!(matches!(err.error, Error::Invalidation(_)));
     assert_eq!(err.status, Some(StatusCode::UNAUTHORIZED));
     assert_eq!(err.dispatch, WriteDispatch::MayHaveBeenSent);
     assert!(!format!("{err:?}").contains("toy-header"));

@@ -74,7 +74,7 @@ impl Client {
                 Err(error) => {
                     if error
                         .api_error()
-                        .and_then(ApiError::status)
+                        .and_then(ApiError::observed_status)
                         .is_some_and(|status| (500..600).contains(&status))
                     {
                         let result = reads

@@ -160,8 +160,25 @@ impl Client {
                     partial(&run, ""),
                 ));
             }
-            let row = group.members.first().map(|row| row.id.as_str());
-            if row.is_some_and(|id| !PathIds::Strict.allows(id)) {
+            let group_id = acceptance
+                .acknowledged_id(|row| row.groups.first().map(|group| group.id.as_str()))
+                .ok_or_else(|| {
+                    run.fail(
+                        "create response lacks a valid member group",
+                        partial(&run, ""),
+                    )
+                })?;
+            let member_id = acceptance.acknowledged_id(|row| {
+                row.groups
+                    .first()?
+                    .members
+                    .first()
+                    .map(|member| member.id.as_str())
+            });
+            if member_id.as_ref().is_some_and(|id| {
+                !id.recheck(&run.0.evidence)
+                    .is_ok_and(|id| PathIds::Strict.allows(id))
+            }) {
                 return Err(run.fail("create response has an invalid backend", partial(&run, "")));
             }
             let wait = run.0.wait_context(ctx, CREATE_WAIT);
@@ -170,7 +187,7 @@ impl Client {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
                 let confirmed = run
-                    .confirm_pool(&wait, &input, &acceptance, &group.id)
+                    .confirm_pool(&wait, &input, &acceptance, &group_id)
                     .await;
                 let Ok((parent_state, chain)) = confirmed else {
                     break Settlement::Unknown("create confirmation could not be proven");
@@ -181,6 +198,13 @@ impl Client {
                 let evidence = &run.0.evidence;
                 let (Ok(region), Ok(address)) =
                     (region.recheck(evidence), address.recheck(evidence))
+                else {
+                    break Settlement::Unknown("create confirmation could not be proven");
+                };
+                let Ok(row) = member_id
+                    .as_ref()
+                    .map(|id| id.recheck(evidence))
+                    .transpose()
                 else {
                     break Settlement::Unknown("create confirmation could not be proven");
                 };
@@ -216,7 +240,8 @@ impl Client {
             let partial = acceptance
                 .recheck(&run.0.evidence)
                 .ok()
-                .map(|_| partial(&run, &group.id));
+                .and_then(|_| group_id.recheck(&run.0.evidence).ok())
+                .map(|id| partial(&run, id));
             Err(run.0.finish(reason, partial))
         })
     }
@@ -377,7 +402,7 @@ impl Child<'_> {
         ctx: &RequestContext,
         input: &CreatePoolInput,
         acceptance: &Guarded<Acceptance>,
-        group: &str,
+        group: &crate::wire::product::guard::AcknowledgedId,
     ) -> Result<(State, Chain), Box<Error>> {
         let glb = input.load_balancer_id.as_str();
         let parent = self
@@ -385,11 +410,13 @@ impl Child<'_> {
             .await?;
         confirm_parent(glb, parent.recheck(&self.0.evidence)?)?;
         let accepted = acceptance.recheck(&self.0.evidence)?;
+        let group_id = group.recheck(&self.0.evidence)?;
         let chain = self
-            .chain(ctx, glb, &accepted.id, Some(group), &input.name)
+            .chain(ctx, glb, &accepted.id, Some(group_id), &input.name)
             .await?;
         let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;
         acceptance.recheck(&self.0.evidence)?;
+        group.recheck(&self.0.evidence)?;
         self.pool_decision(glb, parent, chain, listeners)
     }
 
@@ -416,7 +443,10 @@ impl Child<'_> {
     ) -> Result<ListenerWire, Box<Error>> {
         let glb = input.load_balancer_id.as_str();
         let pool = input.pool_id.as_str();
-        let id = &acceptance.recheck(&self.0.evidence)?.id;
+        let listener_id = acceptance
+            .acknowledged_id(|row| Some(&row.id))
+            .ok_or_else(|| refuse("create response lacks a listener ID"))?;
+        let id = listener_id.recheck(&self.0.evidence)?;
         let listener = self.read_guard(ctx, LISTENER, &[glb, id], false).await?;
         acceptance.recheck(&self.0.evidence)?;
         let listeners = self.read_guard(ctx, LISTENERS, &[glb], false).await?;

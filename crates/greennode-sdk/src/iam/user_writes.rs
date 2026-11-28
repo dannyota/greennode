@@ -205,7 +205,7 @@ pub fn redact_reset_user_id<'a>(
 enum CreateAck {
     #[default]
     Empty,
-    Object(String),
+    Object(Box<crate::wire::product::guard::AcknowledgedId>),
 }
 
 impl Wire for CreateAck {
@@ -214,13 +214,24 @@ impl Wire for CreateAck {
         shape: Shape::Any,
     }]);
 
-    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
+    fn decode(_: &RawValue) -> Result<Self, serde_json::Error> {
+        Ok(Self::Empty)
+    }
+
+    fn decode_acknowledgement(
+        raw: &RawValue,
+        receipt: crate::wire::product::guard::CleanReceipt<'_>,
+    ) -> Result<Self, serde_json::Error> {
         let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
         let id = super::wire::field(&fields, "id")
             .map(|raw| serde_json::from_str::<String>(raw.get()))
             .transpose()?
             .unwrap_or_default();
-        Ok(Self::Object(id))
+        Ok(if id.is_empty() {
+            Self::Empty
+        } else {
+            Self::Object(Box::new(receipt.bind_id(id)))
+        })
     }
 }
 
@@ -287,11 +298,7 @@ impl Client {
                     ));
                 }
             };
-            let id = match ack {
-                CreateAck::Empty => String::new(),
-                CreateAck::Object(id) => id,
-            };
-            if id.is_empty() {
+            let CreateAck::Object(acknowledged) = ack else {
                 let (candidate, cause) = match self
                     .lookup_created_user(ctx, &username, &mut evidence)
                     .await
@@ -306,8 +313,13 @@ impl Client {
                     generated.then_some(password),
                     &evidence,
                 ));
-            }
-            if !safe_user_id(&id, &evidence) {
+            };
+            let id = acknowledged
+                .recheck(&evidence)
+                .ok()
+                .filter(|id| safe_user_id(id, &evidence));
+            let Some(id) = id.filter(|_| evidence.keep_acknowledgement(&acknowledged).is_ok())
+            else {
                 return Err(create_failed(
                     None,
                     WriteError::UserCreateUncertain,
@@ -315,14 +327,23 @@ impl Client {
                     generated.then_some(password),
                     &evidence,
                 ));
+            };
+            let result = self
+                .confirm_created_user::<CreateUserOutput>(ctx, id, &username, &mut evidence)
+                .await;
+            if let Err(error) = acknowledged.recheck(&evidence) {
+                return Err(create_failed(
+                    Some(*error),
+                    WriteError::CreateUnconfirmed,
+                    fallback_user(&username, "", "", &evidence),
+                    generated.then_some(password),
+                    &evidence,
+                ));
             }
-            match self
-                .confirm_created_user::<CreateUserOutput>(ctx, &id, &username, &mut evidence)
-                .await
-            {
+            match result {
                 Ok(user) => Ok(CreateUserOutput {
                     user,
-                    created_id: id,
+                    created_id: id.to_owned(),
                     candidate_id: String::new(),
                     password_marker: "[redacted]",
                     password: generated
@@ -333,7 +354,7 @@ impl Client {
                 Err(failure) => Err(create_failed(
                     Some(failure.into_parts().0),
                     WriteError::CreateUnconfirmed,
-                    fallback_user(&username, &id, "", &evidence),
+                    fallback_user(&username, id, "", &evidence),
                     generated.then_some(password),
                     &evidence,
                 )),
@@ -508,7 +529,13 @@ pub(super) fn user_write(
 ) -> Operation {
     Operation {
         sensitive: true,
-        keep_status: true,
+        keep_status: id != DELETE,
+        no_redirect: id == DELETE,
+        report_redirect: matches!(
+            id,
+            CREATE | DELETE | RESET | "iam.EnableUserMFA" | "iam.DisableUserMFA"
+        ),
+        raw_body: false,
         cap: WRITE_CAP,
         ..write_operation(id, method, route, retry, success)
     }

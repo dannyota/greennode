@@ -9,17 +9,15 @@ impl Output for RawSnapshot {
     const SCHEMA: Shape<'static> = TAG_SHAPE;
 
     fn decode_response(op: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        crate::wire::product::response::classify(
-            op.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
-            op.success,
-            (true, op.sensitive, op.retry),
-            &response.credentials,
-        )?;
-        strict_json::validate_shape(&response.body, &Self::SCHEMA, op.cap)
+        response.classify(op.id, op.success, (true, op.sensitive, op.retry), false)?;
+        let receipt = response.clean_receipt().ok_or_else(|| {
+            Box::new(crate::wire::product::operation::unsafe_guard_response(
+                op.id,
+            ))
+        })?;
+        strict_json::validate_shape(receipt.body(), &Self::SCHEMA, op.cap)
             .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
-        decode_snapshot(&response.body)
+        decode_snapshot(receipt.body())
             .map(Self)
             .map_err(|_| Box::new(Error::new(ErrorClass::Api)))
     }
@@ -96,10 +94,12 @@ fn operation(id: &'static str, write: bool) -> Operation {
         allow_empty: write,
         no_output: write,
         keep_status: write,
-        overflow_overrides_status: !write,
+        raw_body: false,
+        overflow_overrides_status: false,
         sensitive: false,
         reflection: crate::wire::product::operation::Reflection::Redact,
-        no_redirect: write,
+        no_redirect: false,
+        report_redirect: write,
         retry_config: retry::Config::default(),
     }
 }
@@ -268,13 +268,10 @@ impl Client {
         .await;
         if let Err(failure) = result {
             let dispatch = failure.write_dispatch();
-            let status = failure.error().http_status().or_else(|| {
-                failure
-                    .error()
-                    .api_error()
-                    .and_then(|api| api.status())
-                    .and_then(|status| StatusCode::from_u16(status).ok())
-            });
+            let status = failure
+                .error()
+                .api_error()
+                .and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
             let rejected = status.is_some_and(|status| {
                 status.is_client_error() && status.as_u16() != 408 && status.as_u16() != 499
             });

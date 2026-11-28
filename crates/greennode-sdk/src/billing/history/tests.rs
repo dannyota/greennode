@@ -552,7 +552,7 @@ async fn oversized_history_keeps_status_and_refuses_retry() {
 
 #[tokio::test]
 async fn history_walk_counts_only_json_bytes_and_withholds_over_budget() {
-    const LIMIT: usize = 8 << 20;
+    const LIMIT: usize = 32 << 10;
     let row = payment_row(1, "ordinary");
     for extra in [0, 1] {
         let replies = (1..=5)
@@ -562,9 +562,9 @@ async fn history_walk_counts_only_json_bytes_and_withholds_over_budget() {
                 body.pop();
                 body.push_str(r#","padding":""#);
                 let size = if page == 5 {
-                    (4 << 20) + extra
+                    (4 << 10) + extra
                 } else {
-                    7 << 20
+                    7 << 10
                 };
                 body.extend(std::iter::repeat_n('x', size - body.len() - 2));
                 body.push_str("\"}");
@@ -574,7 +574,9 @@ async fn history_walk_counts_only_json_bytes_and_withholds_over_budget() {
             .collect();
         let server = Server::start(replies);
         let (ctx, _) = RequestContext::new();
-        let result = client(&server, BEARER)
+        let client = client(&server, BEARER);
+        client.session.test_retained_byte_limit.set(LIMIT).unwrap();
+        let result = client
             .list_payments(
                 &ctx,
                 ListPaymentsInput {

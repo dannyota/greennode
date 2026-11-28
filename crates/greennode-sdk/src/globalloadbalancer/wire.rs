@@ -9,7 +9,6 @@ use crate::error::SafeText;
 use crate::wire::product::{
     evidence::Evidence,
     operation::{Operation, Output},
-    response,
     sender::Response,
 };
 use crate::wire::strict_json::{self, Shape};
@@ -229,24 +228,24 @@ impl<T: WireField> Output for Field<T> {
     const SCHEMA: Shape<'static> = T::SHAPE;
 
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
-        let body = response::classify(
+        response.classify(
             operation.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
             operation.success,
             (true, operation.sensitive, operation.retry),
-            &response.credentials,
+            false,
         )?;
-        if body.is_empty() {
-            return Ok(Self::default());
-        }
-        let body = go_json(&body);
-        let error = |detail| Box::new(response_error(operation, detail));
-        let raw = serde_json::from_str::<&RawValue>(&body)
-            .map_err(|_| error(DecodeError::MalformedJson))?;
-        strict_json::validate_shape(body.as_bytes(), &Self::SCHEMA, operation.cap)
-            .map_err(|_| error(DecodeError::InvalidShape))?;
-        serde_json::from_str(raw.get()).map_err(|_| error(DecodeError::InvalidShape))
+        response.decode_projection(|body| {
+            if body.is_empty() {
+                return Ok(Self::default());
+            }
+            let body = go_json(body);
+            let error = |detail| Box::new(response_error(operation, detail));
+            let raw = serde_json::from_str::<&RawValue>(&body)
+                .map_err(|_| error(DecodeError::MalformedJson))?;
+            strict_json::validate_shape(body.as_bytes(), &Self::SCHEMA, operation.cap)
+                .map_err(|_| error(DecodeError::InvalidShape))?;
+            serde_json::from_str(raw.get()).map_err(|_| error(DecodeError::InvalidShape))
+        })
     }
 }
 

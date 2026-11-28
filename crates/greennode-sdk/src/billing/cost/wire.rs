@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, de};
 use serde_json::value::RawValue;
 
-use super::super::envelope::{BudgetData, Envelope, invalid_response};
+use super::super::envelope::{BudgetData, Envelope, decode_header, invalid_response};
 use super::super::model::{field, null_default, reflects_integer};
+use super::super::response_validation::data_valid;
 use super::{
     Balances, CostResource, CostResourceSummary, CostSeries, CostSeriesGroup, CostSummary,
 };
@@ -40,11 +41,24 @@ impl<'de> Deserialize<'de> for SeriesItem {
         let raw = <&RawValue>::deserialize(deserializer)?;
         let fields: BTreeMap<String, &RawValue> =
             serde_json::from_str(raw.get()).map_err(de::Error::custom)?;
-        if fields.keys().any(|name| {
+        let grouped = fields.keys().any(|name| {
             ["key", "color", "points"]
                 .iter()
                 .any(|field| strict_json::field_matches(field, name))
-        }) {
+        });
+        const GROUP: Shape<'static> = Shape::Object(&[
+            field("key"),
+            field("color"),
+            shape_field(
+                "points",
+                Shape::Array(&Shape::Object(&[field("x"), field("y")])),
+            ),
+        ]);
+        const FLAT: Shape<'static> = Shape::Object(&[field("date"), field("cost")]);
+        let shape = if grouped { &GROUP } else { &FLAT };
+        strict_json::validate_canonical_shape(raw.get().as_bytes(), shape, raw.get().len())
+            .map_err(|_| de::Error::custom("invalid cost series fields"))?;
+        if grouped {
             serde_json::from_str(raw.get())
                 .map(Self::Group)
                 .map_err(de::Error::custom)
@@ -81,11 +95,25 @@ impl Output for BalancesResponse {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let invalid = || Box::new(invalid_response(operation, response.status, false));
         if operation.success.contains(&response.status) {
-            let fields: BTreeMap<String, &RawValue> =
-                serde_json::from_slice(&response.body).map_err(|_| invalid())?;
-            if !fields.keys().any(|name| {
-                strict_json::field_matches("code", name) || strict_json::field_matches("data", name)
-            }) {
+            let direct = response.decode_projection(|body| {
+                decode_header(body, operation.cap)
+                    .map(|header| header.is_direct())
+                    .ok_or_else(invalid)
+            })?;
+            if direct {
+                response.decode_projection(|body| {
+                    strict_json::validate_folded_canonical_shape(
+                        body,
+                        &Self::SCHEMA,
+                        operation.cap,
+                    )
+                    .map_err(|_| invalid())?;
+                    let raw = serde_json::from_slice::<&RawValue>(body).map_err(|_| invalid())?;
+                    if !data_valid(operation.id, Some(raw)) {
+                        return Err(invalid());
+                    }
+                    Ok(())
+                })?;
                 if response.credentials.has_numeric_product_credential() {
                     return Err(invalid());
                 }
@@ -127,19 +155,7 @@ impl BudgetData for OverviewData {
                 ),
             ]),
         ),
-        shape_field(
-            "series",
-            Shape::Array(&Shape::Object(&[
-                field("date"),
-                field("cost"),
-                field("key"),
-                field("color"),
-                shape_field(
-                    "points",
-                    Shape::Array(&Shape::Object(&[field("x"), field("y")])),
-                ),
-            ])),
-        ),
+        shape_field("series", Shape::Array(&Shape::Any)),
         field("interval"),
         field("startDate"),
         field("endDate"),

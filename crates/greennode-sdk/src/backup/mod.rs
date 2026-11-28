@@ -271,11 +271,13 @@ fn read_operation(id: &'static str, template: &'static str) -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }

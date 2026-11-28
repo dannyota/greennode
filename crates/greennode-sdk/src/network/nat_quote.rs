@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, value::RawValue};
 
 use crate::model::wire::{Field, go_json, model};
-use crate::quote::request::{self, Product, Request};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, RequestContext};
 
+use super::Client;
 use super::inventory::screen;
+use super::nat::failure;
 use super::nat_catalog::{NatScope, catalog_data, catalog_invalid, decode_rows, params, reflects};
 use super::wire::{Fields, Read, Style};
-use super::{Client, failure};
 
 const OP: &str = "network.QuoteCreateNATInstance";
 const PRICE: Read = Read::new(OP, "vnetwork/billing/v1/{}/{}/price", Style::NatCatalog);
@@ -159,7 +159,7 @@ impl Client {
     ) -> Result<QuoteCreateNatInstanceOutput, Failure<QuoteCreateNatInstanceOutput>> {
         crate::wire::product::exit::finish!(async {
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
-            check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
+            check_input(&input, &evidence).map_err(failure)?;
             let scope = self
                 .nat_scope(ctx, PRICE, input.zone_id.clone(), &mut evidence, false)
                 .await
@@ -175,23 +175,20 @@ impl Client {
             if evidence.output_reflects(&body) {
                 return Err(failure(Error::new(ErrorClass::InvalidInput)));
             }
-            let result = request::exchange(
-                &self.session,
-                ctx,
-                &mut evidence,
-                Request {
-                    operation: OP,
-                    template: PRICE.template,
-                    product: Product::Vnetwork(&scope.base),
-                    path: &[&scope.zone, &scope.project],
-                    query: &[],
-                    body: Some(&body),
-                },
-                None,
-            )
-            .await;
-            let raw = result.map_err(|error| failure(quote_error(*error, &evidence)))?;
-            decode_quote(&go_json(raw.get().as_bytes()), &evidence)
+            let body = serde_json::to_vec(&body)
+                .map_err(|_| failure(Error::new(ErrorClass::InvalidInput)))?;
+            let raw = self
+                .exchange(
+                    ctx,
+                    &scope.base,
+                    PRICE,
+                    super::inventory::Selection::path(&[&scope.zone, &scope.project]),
+                    (http::Method::POST, body.into()),
+                    &mut evidence,
+                )
+                .await
+                .map_err(failure)?;
+            decode_quote(&go_json(&raw), &evidence)
                 .map_err(|error| failure(screen(error, &evidence)))
         })
     }
@@ -217,6 +214,7 @@ impl Client {
             return Err(local_error(
                 ErrorClass::InvalidConfig,
                 "requires NAT V3 enabledForAll",
+                evidence,
             ));
         }
         let zones = self.nat_zones(ctx, OP, scope, evidence).await?;
@@ -227,18 +225,21 @@ impl Client {
             local_error(
                 ErrorClass::InvalidInput,
                 "requires one exact availability zone",
+                evidence,
             )
         })?;
         if zone.zone_type != "AVAILABILITY" || !zone.is_enabled {
             return Err(local_error(
                 ErrorClass::InvalidInput,
                 "requires an enabled AVAILABILITY zone",
+                evidence,
             ));
         }
         if matching.next().is_some() {
             return Err(local_error(
                 ErrorClass::InvalidInput,
                 "requires one exact availability zone",
+                evidence,
             ));
         }
         let offers = self
@@ -253,6 +254,7 @@ impl Client {
             return Err(local_error(
                 ErrorClass::InvalidInput,
                 "requires one exact VND package in the availability zone",
+                evidence,
             ));
         }
         self.check_nat_vpc(ctx, scope, input, evidence).await
@@ -357,6 +359,7 @@ impl Client {
                     None => Err(local_error(
                         ErrorClass::NotFound,
                         ": VPC absent from selected scope",
+                        evidence,
                     )),
                 };
             }
@@ -367,22 +370,26 @@ impl Client {
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 fn check_input(input: &QuoteCreateNatInstanceInput, evidence: &Evidence) -> Result<(), Error> {
-    if input.name.is_empty() {
-        return Err(local_error(ErrorClass::InvalidInput, "requires Name"));
+    let path_ids = [
+        ("ZoneID", &input.zone_id),
+        ("AvailabilityZoneID", &input.availability_zone_id),
+        ("PackageID", &input.package_id),
+        ("VPCID", &input.vpc_id),
+    ];
+    for (field, value) in [("Name", &input.name)].into_iter().chain(path_ids) {
+        if value.is_empty() {
+            return Err(PRICE.nat_input_error(&format!("requires {field}"), evidence));
+        }
     }
     if !input.max_price.is_finite() || input.max_price < 0.0 {
         return Err(local_error(
             ErrorClass::InvalidInput,
             "requires finite nonnegative MaxPrice",
+            evidence,
         ));
     }
-    for (field, id) in [
-        ("ZoneID", &input.zone_id),
-        ("AvailabilityZoneID", &input.availability_zone_id),
-        ("PackageID", &input.package_id),
-        ("VPCID", &input.vpc_id),
-    ] {
-        PRICE.path(field, id)?;
+    for (field, id) in path_ids {
+        PRICE.nat_path(field, id, evidence)?;
         if evidence.id_reflects(id) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
@@ -393,29 +400,17 @@ fn check_input(input: &QuoteCreateNatInstanceInput, evidence: &Evidence) -> Resu
     Ok(())
 }
 
-fn local_error(class: ErrorClass, detail: &str) -> Error {
+fn local_error(class: ErrorClass, detail: &str, evidence: &Evidence) -> Error {
     let separator = if detail.starts_with(':') { "" } else { " " };
-    let (code, message) = match class {
-        ErrorClass::InvalidConfig => (
-            "InvalidConfig",
-            format!("vngcloud: invalid config: {OP}{separator}{detail}"),
+    let message = match class {
+        ErrorClass::InvalidConfig => format!("vngcloud: invalid config: {OP}{separator}{detail}"),
+        ErrorClass::NotFound => format!("vngcloud: resource not found: {OP}{separator}{detail}"),
+        ErrorClass::Unpriced => format!(
+            "vngcloud: quote priced the order at 0; refusing to order an unpriced paid resource: {OP}"
         ),
-        ErrorClass::NotFound => (
-            "NotFound",
-            format!("vngcloud: resource not found: {OP}{separator}{detail}"),
-        ),
-        ErrorClass::Unpriced => (
-            "Unpriced",
-            format!(
-                "vngcloud: quote priced the order at 0; refusing to order an unpriced paid resource: {OP}"
-            ),
-        ),
-        _ => (
-            "InvalidUsage",
-            format!("vngcloud: invalid input: {OP}{separator}{detail}"),
-        ),
+        _ => format!("vngcloud: invalid input: {OP}{separator}{detail}"),
     };
-    Error::new(class).with_cause(request::api("", None, code, &message, false))
+    super::wire::nat_diagnostic(class, message, evidence)
 }
 
 fn placement_data<'a>(text: &'a str, evidence: &Evidence) -> Result<Fields<'a>, ()> {
@@ -430,34 +425,6 @@ fn placement_data<'a>(text: &'a str, evidence: &Evidence) -> Result<Fields<'a>, 
         fields.raw(field)?;
     }
     Ok(fields)
-}
-
-fn quote_error(error: Error, evidence: &Evidence) -> Error {
-    if error.is_body_too_large()
-        || error.api_error().is_some_and(|api| {
-            api.status() == Some(200) || api.code() == "InvalidResponse" && api.status().is_none()
-        })
-    {
-        return catalog_invalid(PRICE, evidence);
-    }
-    let Some(api) = error.api_error() else {
-        return screen(error, evidence);
-    };
-    let code = if api.code() == "InvalidResponse" {
-        "InvalidResponse"
-    } else {
-        api.code()
-    };
-    screen(
-        request::api(
-            OP,
-            api.status(),
-            code,
-            "NAT response withheld",
-            api.retryable(),
-        ),
-        evidence,
-    )
 }
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
@@ -487,7 +454,7 @@ fn decode_quote(text: &str, evidence: &Evidence) -> Result<QuoteCreateNatInstanc
     )
     .map_err(|()| invalid())?;
     if optimum_price <= 0.0 {
-        return Err(local_error(ErrorClass::Unpriced, ""));
+        return Err(local_error(ErrorClass::Unpriced, "", evidence));
     }
     let output = NetworkQuoteOutput {
         optimum_price,

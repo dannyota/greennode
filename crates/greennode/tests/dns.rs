@@ -661,14 +661,13 @@ async fn dns_create_preserves_empty_lists_and_rejects_missing_lists() {
 }
 
 #[tokio::test]
-async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
+async fn dns_reflected_write_acknowledgements_never_reach_stdout_or_query() {
     let encoded = "%73ynthetic-dns-cli-bearer";
     let created_zone = ZONE.replace("zone-1", encoded);
     let created_record = RECORD
         .replace("record-1", encoded)
         .replace("zone-1", "invalid/zone");
-    let mut screened = Vec::new();
-    for (flags, replies, query, expected) in [
+    for (flags, replies, query) in [
         (
             &[
                 "create-hosted-zone",
@@ -680,7 +679,6 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
             ][..],
             vec![("200 OK", created_zone.as_str())],
             "HostedZone.ID",
-            serde_json::json!("<redacted>"),
         ),
         (
             &[
@@ -695,7 +693,6 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
             ],
             vec![("200 OK", ZONE), ("200 OK", created_record.as_str())],
             "Record.[ID, HostedZoneID]",
-            serde_json::json!(["<redacted>", "<redacted>"]),
         ),
     ] {
         for query_enabled in [false, true] {
@@ -710,26 +707,12 @@ async fn dns_successful_writes_screen_ids_before_stdout_and_query() {
                 args.extend(["--query", query]);
             }
             let (status, stdout, stderr) = invoke(&server, BEARER, &args).await;
-            assert_eq!(status, ExitCode::SUCCESS);
-            assert!(stderr.is_empty());
-            let output: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
-            let actual = if query_enabled {
-                output
-            } else {
-                match flags[0] {
-                    "create-hosted-zone" => output["HostedZone"]["ID"].clone(),
-                    "create-record" => serde_json::json!([
-                        output["Record"]["ID"],
-                        output["Record"]["HostedZoneID"]
-                    ]),
-                    _ => unreachable!(),
-                }
-            };
-            screened.push(actual == expected);
+            assert_eq!(status, ExitCode::FAILURE);
+            assert!(stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&stderr).contains(BEARER));
             assert_eq!(server.requests(), replies.len());
         }
     }
-    assert_eq!(screened, [true; 4]);
 }
 
 #[tokio::test]

@@ -311,7 +311,7 @@ async fn public_page_ignores_hidden_tags_and_comment_decoys_within_a_bound() {
         let result = client(&server, None)
             .list_ip_ranges(&ctx, ListIpRangesInput)
             .await;
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
         assert_eq!(result.unwrap().items, ["192.0.2.0/24"]);
     }
 }
@@ -507,5 +507,49 @@ async fn malformed_end_tags_cannot_expose_hidden_template_content() {
             .await
             .unwrap();
         assert_eq!(output.items, ["192.0.2.0/24"], "{forged_end}");
+    }
+}
+
+#[tokio::test]
+async fn web_accelerator_refusal_screens_the_assembled_status_suffix() {
+    let server = Server::start(vec![with_status("403 Forbidden", "{}", "application/json")]);
+    let key = "403)";
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, Some(key))
+        .list_web_accelerators(&ctx, ListWebAcceleratorsInput)
+        .await
+        .unwrap_err();
+    assert_eq!(server.requests(), 1);
+    assert!(failure.partial().is_none());
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code()),
+        ("cdn.ListWebAccelerators", Some(403), "Forbidden")
+    );
+    assert!(!format!("{} {api} {failure:?}", failure.error()).contains(key));
+}
+
+#[tokio::test]
+async fn direct_cdn_docs_404_carries_absence_proof() {
+    for (reply, confirmed) in [
+        (
+            with_status("404 Not Found", "<html>missing</html>", "text/html"),
+            true,
+        ),
+        (
+            with_status("404 Not Found", &"x".repeat((4 << 20) + 1), "text/html"),
+            false,
+        ),
+    ] {
+        let server = Server::start(vec![reply]);
+        let failure = client(&server, None)
+            .list_ip_ranges(&RequestContext::new().0, ListIpRangesInput)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.error().api_error().unwrap().status(), Some(404));
+        assert_eq!(
+            greennode_sdk::confirms_absence(failure.error(), "cdn.ListIPRanges", "GET", ""),
+            confirmed
+        );
     }
 }

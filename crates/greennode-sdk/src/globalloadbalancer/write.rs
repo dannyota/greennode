@@ -217,7 +217,7 @@ impl Write<'_> {
         }
         if let Some(status) = error
             .api_error()
-            .and_then(ApiError::status)
+            .and_then(ApiError::observed_status)
             .and_then(|status| StatusCode::from_u16(status).ok())
             .filter(StatusCode::is_client_error)
         {
@@ -227,6 +227,30 @@ impl Write<'_> {
                 None => status_rejection(self.id, status, credentials),
             };
             return Failure::new(error, None, dispatch);
+        }
+        if matches!(
+            error.class(),
+            ErrorClass::Auth
+                | ErrorClass::NotFound
+                | ErrorClass::PermissionDenied
+                | ErrorClass::RateLimited
+        ) && let Some(api) = error.api_error()
+            && api.observed_status().is_none()
+        {
+            let message = fixed_message.unwrap_or(api.message());
+            let safe = ApiError::without_fallback(
+                api.operation(),
+                None,
+                SafeText::new(api.code(), &[]),
+                SafeText::new(message, &[]),
+                api.retryable(),
+            );
+            let safe = Error::new(error.class()).with_cause(Error::from_api(safe));
+            return Failure::new(
+                safe.screen_api(&|text| self.evidence.text_reflects(text)),
+                None,
+                dispatch,
+            );
         }
         self.finish(Settlement::Unknown(uncertain), partial)
     }
@@ -306,12 +330,14 @@ pub(super) fn write_operation(
     method: Method,
 ) -> Operation {
     Operation {
+        no_output: method != Method::POST,
         method,
         class: Classification::Write,
         retry: Retry::Once,
         success: WRITE_OK,
         allow_recovery: false,
         keep_status: true,
+        raw_body: false,
         overflow_overrides_status: false,
         ..write_read_settings(id, template)
     }
@@ -324,9 +350,10 @@ pub(super) fn guard_operation(id: &'static str, template: &'static str) -> Guard
 fn write_read_settings(id: &'static str, template: &'static str) -> Operation {
     Operation {
         allow_empty: false,
-        overflow_overrides_status: true,
+        overflow_overrides_status: false,
         sensitive: true,
         no_redirect: true,
+        report_redirect: true,
         ..read_operation(id, template)
     }
 }
@@ -345,15 +372,9 @@ pub(super) fn rejected_response(
     body: Option<&Value>,
     fixed_message: Option<&str>,
 ) -> Error {
-    let classified = response::classify(
-        op.id,
-        reply.status,
-        Bytes::copy_from_slice(&reply.body),
-        &[],
-        (true, fixed_message.is_some(), op.retry),
-        &reply.credentials,
-    )
-    .err();
+    let classified = reply
+        .classify(op.id, &[], (true, fixed_message.is_some(), op.retry), false)
+        .err();
     let api = classified.as_ref().and_then(|error| error.api_error());
     let message = fixed_message.unwrap_or_else(|| provider_message(reply, api, body));
     api_rejection(
@@ -415,16 +436,15 @@ fn provider_message<'a>(
     let unsafe_text = |text: &str| {
         text.len() > 512 || UNSAFE.as_ref().is_none_or(|pattern| pattern.is_match(text))
     };
-    let unsafe_wire = !Evidence::from_credentials(&reply.credentials)
-        .peer_body_screen(&reply.body)
-        .is_clean()
-        || serde_json::from_slice::<serde_json::Map<String, Value>>(&reply.body).is_ok_and(
+    let unsafe_wire = reply.clean_receipt().is_none_or(|receipt| {
+        serde_json::from_slice::<serde_json::Map<String, Value>>(receipt.body()).is_ok_and(
             |fields| {
                 fields.iter().any(|(key, value)| {
                     key.eq_ignore_ascii_case("message") && value.as_str().is_some_and(unsafe_text)
                 })
             },
-        );
+        )
+    });
     let mut input_evidence = Evidence::new();
     for value in input
         .and_then(Value::as_object)

@@ -123,7 +123,6 @@ impl Client {
             let mut evidence =
                 self.write_evidence(ctx, CREATE, &[], &[&input.name, &input.description])?;
             let operation = Operation {
-                keep_status: true,
                 ..write_operation(
                     CREATE,
                     Method::POST,
@@ -133,7 +132,7 @@ impl Client {
                 )
             };
             let body = json!({"name": input.name, "description": input.description, "mode": "iam"});
-            let id = self
+            let response = self
                 .write::<CreatedId, _>(
                     ctx,
                     Api::Policies,
@@ -143,9 +142,12 @@ impl Client {
                     &mut evidence,
                 )
                 .await
-                .map_err(|failed| create_failed(failed, &evidence))?
-                .0;
-            if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
+                .map_err(|failed| create_failed(failed, &evidence))?;
+            let acknowledged = response.acknowledged.as_ref();
+            let id = acknowledged
+                .and_then(|receipt| receipt.recheck(&evidence).ok())
+                .unwrap_or_default();
+            if !PathIds::WithUnderscore.allows(id) {
                 return Err(Failure::new(
                     Error::from_api(ApiError::without_fallback(
                         CREATE,
@@ -161,21 +163,42 @@ impl Client {
                     WriteDispatch::MayHaveBeenSent,
                 ));
             }
-            let confirmed = if Options::DEFAULT.path_ids.allows(&id) {
-                self.fetch_group(ctx, &id, false, &mut evidence).await
+            let receipt = acknowledged.ok_or_else(|| {
+                Failure::new(
+                    Error::new(crate::ErrorClass::NotSettled),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })?;
+            let refused = |error: Box<Error>, evidence: &Evidence| {
+                settle(
+                    Failure::new(*error, None, WriteDispatch::MayHaveBeenSent),
+                    None,
+                    "iam.CreateGroup: group confirmation could not be proven",
+                    evidence,
+                )
+            };
+            evidence
+                .keep_acknowledgement(receipt)
+                .map_err(|error| refused(error, &evidence))?;
+            let confirmed = if Options::DEFAULT.path_ids.allows(id) {
+                self.fetch_group(ctx, id, false, &mut evidence).await
             } else {
-                let shown_id = id.get(..64).unwrap_or(&id);
+                let shown_id = id.get(..64).unwrap_or(id);
                 Err(invalid_input(format!(
                     "iam.GetGroup requires GroupID to match ^[A-Za-z0-9-]+$, got {shown_id:?}"
                 )))
             };
+            receipt
+                .recheck(&evidence)
+                .map_err(|error| refused(error, &evidence))?;
             let group = confirmed.map_err(|failed| {
                 let mut group = Group::default();
-                group.id.clone_from(&id);
+                group.id = id.to_owned();
                 group.screen(&evidence);
                 settle(
                     failed,
-                    (!evidence.id_reflects(&id)).then_some(CreateGroupOutput { group }),
+                    (!evidence.id_reflects(id)).then_some(CreateGroupOutput { group }),
                     &format!("{CREATE}: group {id} was created but the read to confirm it failed"),
                     &evidence,
                 )
@@ -325,7 +348,7 @@ fn create_failed<O>(failed: Failure<O>, evidence: &Evidence) -> Failure<O> {
     if dispatch == WriteDispatch::NotSent
         || error
             .api_error()
-            .and_then(|api| api.status())
+            .and_then(crate::ApiError::observed_status)
             .is_some_and(|status| (400..500).contains(&status))
     {
         return Failure::new(error, None, dispatch);
@@ -343,7 +366,9 @@ fn create_failed<O>(failed: Failure<O>, evidence: &Evidence) -> Failure<O> {
 }
 
 #[derive(Default)]
-pub(super) struct CreatedId(pub(super) String);
+pub(super) struct CreatedId {
+    pub(super) acknowledged: Option<crate::wire::product::guard::AcknowledgedId>,
+}
 
 impl Wire for CreatedId {
     const SHAPE: Shape<'static> = Shape::Object(&[ShapeField {
@@ -351,15 +376,23 @@ impl Wire for CreatedId {
         shape: Shape::Any,
     }]);
 
-    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
+    fn decode(_: &RawValue) -> Result<Self, serde_json::Error> {
+        Ok(Self::default())
+    }
+
+    fn decode_acknowledgement(
+        raw: &RawValue,
+        receipt: crate::wire::product::guard::CleanReceipt<'_>,
+    ) -> Result<Self, serde_json::Error> {
         let fields = serde_json::from_str::<Option<BTreeMap<String, &RawValue>>>(raw.get())?
             .unwrap_or_default();
-        Ok(Self(
-            wire::field(&fields, "id")
-                .map(String::decode)
-                .transpose()?
-                .unwrap_or_default(),
-        ))
+        let id = wire::field(&fields, "id")
+            .map(String::decode)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(Self {
+            acknowledged: Some(receipt.bind_id(id)),
+        })
     }
 }
 

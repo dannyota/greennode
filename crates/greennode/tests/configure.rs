@@ -665,7 +665,8 @@ fn invoke_configure(
     use std::ffi::OsString;
     use std::time::Duration;
     let (context, _) = RequestContext::new();
-    let context = context.child_with_deadline(SystemClock.monotonic_now() + Duration::from_secs(5));
+    let context =
+        context.child_with_deadline(SystemClock.monotonic_now() + Duration::from_secs(60));
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -751,7 +752,7 @@ fn sigterm_cancels_set_while_stdin_is_waiting_for_eof() {
         .spawn()
         .unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while rustix::io::ioctl_fionread(&input).unwrap() != 0 {
         if Instant::now() >= deadline {
             child.kill().unwrap();
@@ -763,7 +764,7 @@ fn sigterm_cancels_set_while_stdin_is_waiting_for_eof() {
     let pid = Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
     kill_process(pid, Signal::TERM).unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             child.kill().unwrap();

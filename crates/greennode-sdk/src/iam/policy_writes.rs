@@ -150,16 +150,14 @@ impl Client {
                 guard.privileged(&input.statements)?,
                 "the statements grant an IAM write action",
             )?;
-            let mut operation = write_operation(
+            let operation = write_operation(
                 CREATE,
                 Method::POST,
                 POLICIES,
                 Retry::Once,
                 &[StatusCode::CREATED],
             );
-            operation.keep_status = true;
-            operation.overflow_overrides_status = true;
-            let CreatedId(id) = self
+            let CreatedId { acknowledged, .. } = self
                 .write(
                     ctx,
                     Api::Policies,
@@ -170,7 +168,11 @@ impl Client {
                 )
                 .await
                 .map_err(|failure| uncertain_create(failure, &evidence))?;
-            if !PathIds::WithUnderscore.allows(&id) || evidence.id_reflects(&id) {
+            let id = acknowledged
+                .as_ref()
+                .and_then(|id| id.recheck(&evidence).ok())
+                .unwrap_or_default();
+            if !PathIds::WithUnderscore.allows(id) {
                 return Err(Failure::new(
                     Error::from_api(ApiError::without_fallback(
                         CREATE,
@@ -186,13 +188,30 @@ impl Client {
                     WriteDispatch::MayHaveBeenSent,
                 ));
             }
-            let outcome = self.confirm_created_policy(ctx, &id, &mut evidence).await;
+            let receipt = acknowledged.as_ref().ok_or_else(|| {
+                Failure::new(
+                    Error::new(crate::ErrorClass::NotSettled),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            })?;
+            let refused = |error: Box<Error>| {
+                Failure::new(
+                    Error::new(crate::ErrorClass::NotSettled).with_cause(*error),
+                    None,
+                    WriteDispatch::MayHaveBeenSent,
+                )
+            };
+            let outcome = self
+                .confirm_created_policy(ctx, receipt, &mut evidence)
+                .await;
+            receipt.recheck(&evidence).map_err(refused)?;
             outcome
                 .map(|policy| CreatePolicyOutput { policy })
                 .map_err(|failed| {
                     settle(
                         failed,
-                        partial_policy(&id, &evidence).map(|policy| CreatePolicyOutput { policy }),
+                        partial_policy(id, &evidence).map(|policy| CreatePolicyOutput { policy }),
                         &format!(
                             "{CREATE}: policy {id} was created but the read to confirm it failed"
                         ),
@@ -205,9 +224,13 @@ impl Client {
     async fn confirm_created_policy<O>(
         &self,
         ctx: &RequestContext,
-        id: &str,
+        receipt: &crate::wire::product::guard::AcknowledgedId,
         evidence: &mut Evidence,
     ) -> Result<Policy, Failure<O>> {
+        let refused =
+            |error: Box<Error>| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent);
+        let id = receipt.recheck(evidence).map_err(refused)?;
+        evidence.keep_acknowledgement(receipt).map_err(refused)?;
         if !Options::DEFAULT.path_ids.allows(id) {
             return Err(guard_failed(invalid_input(
                 "iam.GetPolicy requires a valid PolicyID".into(),
@@ -437,35 +460,11 @@ fn refuse_privileged<O>(
 }
 
 fn uncertain_create<O>(failure: Failure<O>, evidence: &Evidence) -> Failure<O> {
-    let (mut error, _, dispatch) = failure.into_parts();
+    let (error, _, dispatch) = failure.into_parts();
     if dispatch == WriteDispatch::NotSent {
         return Failure::new(error, None, dispatch);
     }
-    if error
-        .http_status()
-        .is_some_and(|status| status.is_client_error())
-    {
-        if !error.is_body_too_large() {
-            let message = if error.has_identity(crate::ErrorClass::Cancelled) {
-                "canceled"
-            } else if error.has_identity(crate::ErrorClass::DeadlineExceeded) {
-                "timed out"
-            } else {
-                "network request failed"
-            };
-            error = Error::from_api(ApiError::without_fallback(
-                CREATE,
-                None,
-                SafeText::new("", &[]),
-                SafeText::new(message, &[]),
-                false,
-            ));
-        }
-    } else if error
-        .api_error()
-        .and_then(ApiError::status)
-        .is_some_and(|status| (400..500).contains(&status))
-    {
+    if observed_status(&error).is_some_and(|status| (400..500).contains(&status)) {
         return Failure::new(error, None, dispatch);
     }
     let advice = format!("{CREATE_ADVICE}: {}", error_reason(&error));
@@ -502,8 +501,5 @@ fn uncertain_update(
 }
 
 fn observed_status(error: &Error) -> Option<u16> {
-    error
-        .http_status()
-        .map(|status| status.as_u16())
-        .or_else(|| error.api_error().and_then(ApiError::status))
+    error.api_error().and_then(ApiError::observed_status)
 }

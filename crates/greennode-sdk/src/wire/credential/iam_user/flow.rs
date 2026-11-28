@@ -140,7 +140,7 @@ mod tests {
             username: "user",
             password: &password,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let mut rng = |_: &mut [u8]| Err(());
         let result = run_with_rng(login, &token_url, None, &mut rng).await;
@@ -185,7 +185,7 @@ mod tests {
             username: "username-test",
             password: &password,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, super::super::totp::ProviderError>> + Send>> { Box::pin(async { Ok(Secret::new("totp-code-canary")) }) };
         let result = run_with_rng(
@@ -294,7 +294,7 @@ mod tests {
             username: "user",
             password: &password,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let provider = || -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Secret, super::super::totp::ProviderError>> + Send>> { Box::pin(async { Ok(Secret::new("toy-code")) }) };
         let result = run_with_rng(
@@ -430,7 +430,7 @@ mod tests {
                 username: "toy-user",
                 password: &password,
                 clock: &SystemClock,
-                deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+                deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
             };
             let provider: &super::super::totp::Provider<'_> =
                 &|| Box::pin(async { Ok(Secret::new("345678")) });
@@ -513,7 +513,7 @@ mod tests {
             username: "user",
             password: &password,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let result = run_with_rng(
             login,

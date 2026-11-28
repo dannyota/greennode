@@ -18,8 +18,12 @@ fn response(status: &str, body: &[u8]) -> Response {
 }
 
 fn client(server: &Server, bearer: &str) -> Client {
+    client_with_options(server, bearer, ConfigOptions::default())
+}
+
+fn client_with_options(server: &Server, bearer: &str, options: ConfigOptions) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_region("hcm-3".into())
             .with_static_token(Secret::new(bearer))
             .with_endpoint_overrides(EndpointOverrides {
@@ -356,4 +360,195 @@ async fn reflected_billing_code_cannot_select_a_not_found_branch() {
         "InvalidResponse"
     );
     assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn envelope_refusals_screen_messages_before_exposing_diagnostics() {
+    for (bearer, message, expected) in [
+        ("test-token", "rejected test-token", "rejected [redacted]"),
+        ("test-token", "rejected test%2Dtoken", ""),
+        ("test-token", "rejected test-token and test%2Dtoken", ""),
+        ("test-token", "clientSecret was rejected", ""),
+        ("secret", "clientsecret was rejected", ""),
+        ("redacted", "rejected redacted", ""),
+    ] {
+        let body = serde_json::json!({"code": "Denied", "message": message}).to_string();
+        let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+        let failure = client(&server, bearer)
+            .get_budget(&RequestContext::new().0, GetBudgetInput::new(BUDGET_ID))
+            .await
+            .unwrap_err();
+        assert!(!failure.error().has_class(ErrorClass::NotFound));
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(200));
+        assert!(api.code() == "Denied");
+        assert!(api.message() == expected);
+        assert!(!format!("{failure:?} {}", failure.error()).contains(bearer));
+        assert_eq!(server.requests(), 1);
+    }
+}
+
+#[tokio::test]
+async fn billing_and_quota_body_interruptions_preserve_their_contracts() {
+    use crate::testing::ResponseBodyClock;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    for call in [
+        "billing.ListBudgets",
+        "billing.GetBalances",
+        "monitor.ListSyntheticPackages",
+    ] {
+        for end in [ErrorClass::Cancelled, ErrorClass::DeadlineExceeded] {
+            let clock = Arc::new(ResponseBodyClock::new());
+            let (head, _) = tokio::sync::oneshot::channel();
+            let server = Server::start(vec![Response::Stall(head, 10)]);
+            let config = Config::new(
+                ConfigOptions::default()
+                    .with_region("hcm-3".into())
+                    .with_static_token(Secret::new(BEARER))
+                    .with_clock(clock.clone())
+                    .with_endpoint_overrides(EndpointOverrides {
+                        billing: Some(server.origin.clone()),
+                        monitor: Some(server.origin.clone()),
+                        ..Default::default()
+                    }),
+            )
+            .unwrap();
+            config
+                .session()
+                .set_test_product_root(server.root_der.clone());
+            let (ctx, cancel) = RequestContext::new();
+            let work = async {
+                match call {
+                    "billing.ListBudgets" => {
+                        Client::new(&config)
+                            .list_budgets(&ctx, ListBudgetsInput::default())
+                            .await
+                            .unwrap_err()
+                            .into_parts()
+                            .0
+                    }
+                    "billing.GetBalances" => {
+                        Client::new(&config)
+                            .get_balances(&ctx, GetBalancesInput {})
+                            .await
+                            .unwrap_err()
+                            .into_parts()
+                            .0
+                    }
+                    _ => {
+                        crate::monitor::Client::new(&config)
+                            .list_synthetic_packages(
+                                &ctx,
+                                crate::monitor::ListSyntheticPackagesInput,
+                            )
+                            .await
+                            .unwrap_err()
+                            .into_parts()
+                            .0
+                    }
+                }
+            };
+            let interrupt = async {
+                clock.started().await;
+                match end {
+                    ErrorClass::Cancelled => cancel.cancel(),
+                    _ => clock.advance(Duration::from_secs(120)),
+                }
+            };
+            let (error, ()) = tokio::time::timeout(Duration::from_secs(60), async {
+                tokio::join!(work, interrupt)
+            })
+            .await
+            .unwrap();
+            assert!(error.has_identity(end), "{call} lost {end:?}");
+            let api = error.api_error().unwrap();
+            assert_eq!(api.operation(), call);
+            if call.starts_with("billing.") {
+                assert_eq!(
+                    (api.status(), api.code()),
+                    (Some(200), "InvalidResponse"),
+                    "{call} {end:?}"
+                );
+            } else {
+                assert_eq!(error.class(), end);
+                assert_eq!(
+                    (api.status(), api.code(), api.message()),
+                    (None, "InvalidResponse", "quota response withheld")
+                );
+            }
+            assert_eq!(server.requests(), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn billing_does_not_decode_error_fields_from_a_top_level_array() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        br#"[{"code":"Counterfeit","message":"Budget not found"}]"#,
+    )]);
+    let failure = client(&server, BEARER)
+        .get_budget(&RequestContext::new().0, GetBudgetInput::new(BUDGET_ID))
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), Some(200));
+    assert_eq!(api.code(), "InvalidResponse");
+}
+
+#[tokio::test]
+async fn http_error_arrays_classify_but_success_requires_canonical_billing_envelopes() {
+    let server = Server::start(vec![
+        response(
+            "400 Bad Request",
+            br#"[{"message":"Budget not found"},{"message":"ignored"}]"#,
+        ),
+        response(
+            "200 OK",
+            br#"{"code":200,"Code":"Denied","message":"Budget not found"}"#,
+        ),
+        response(
+            "200 OK",
+            br#"{"code":200,"code":"Denied","message":"Budget not found"}"#,
+        ),
+    ]);
+    let client = client(&server, BEARER);
+    let ctx = RequestContext::new().0;
+    for (status, code) in [
+        (400, "NotFound"),
+        (200, "InvalidResponse"),
+        (200, "InvalidResponse"),
+    ] {
+        let failure = client
+            .get_budget(&ctx, GetBudgetInput::new(BUDGET_ID))
+            .await
+            .unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(status));
+        assert_eq!(api.code(), code);
+    }
+}
+
+#[tokio::test]
+async fn billing_transport_arrays_validate_every_item_and_success_requires_exact_code() {
+    let server = Server::start(vec![
+        response(
+            "400 Bad Request",
+            br#"[{"message":"Budget not found"},{"title":9}]"#,
+        ),
+        response("200 OK", br#"{"Code":200,"data":{"uuid":"budget-1"}}"#),
+    ]);
+    let client = client(&server, BEARER);
+    let ctx = RequestContext::new().0;
+    for (status, code) in [(400, "BadRequest"), (200, "InvalidResponse")] {
+        let failure = client
+            .get_budget(&ctx, GetBudgetInput::new(BUDGET_ID))
+            .await
+            .unwrap_err();
+        let api = failure.error().api_error().unwrap();
+        assert_eq!(api.status(), Some(status));
+        assert_eq!(api.code(), code);
+    }
 }

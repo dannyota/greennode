@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use zeroize::{Zeroize, Zeroizing};
 
+pub(super) const SCAN_BLOCK: usize = 24 << 10;
+
 #[derive(Default)]
 struct Node {
     child: u32,
@@ -90,9 +92,17 @@ impl Automaton {
         self.nodes.len() == 1
     }
 
+    pub(super) fn starts(&self) -> impl Iterator<Item = u8> + '_ {
+        (0..=u8::MAX).filter(|&byte| self.root(byte) != 0)
+    }
+
+    pub(super) fn root(&self, byte: u8) -> u32 {
+        self.roots[usize::from(byte)]
+    }
+
     fn child(&self, state: u32, byte: u8, work: &mut usize) -> Option<u32> {
         if state == 0 {
-            return Some(self.roots[usize::from(byte)]);
+            return Some(self.root(byte));
         }
         let mut child = self.nodes[state as usize].child;
         while child != 0 {
@@ -153,11 +163,22 @@ impl Automaton {
 
     pub(super) fn contains(&self, input: &[u8], work: &mut usize) -> Option<bool> {
         charge(work, input.len())?;
+        let starts =
+            (input.len() >= SCAN_BLOCK).then(|| Zeroizing::new(self.starts().collect::<Vec<_>>()));
         let mut state = 0;
-        for &byte in input {
-            state = self.advance(state, byte, work)?;
-            if self.accepts(state, work, |_, _| true)? {
-                return Some(true);
+        for block in input.chunks(SCAN_BLOCK) {
+            if state == 0 && block_excludes_starts(block, starts.as_deref().map(Vec::as_slice)) {
+                continue;
+            }
+            for &byte in block {
+                state = if state == 0 {
+                    self.root(byte)
+                } else {
+                    self.advance(state, byte, work)?
+                };
+                if state != 0 && self.accepts(state, work, |_, _| true)? {
+                    return Some(true);
+                }
             }
         }
         Some(false)
@@ -167,7 +188,7 @@ impl Automaton {
         &self,
         mut state: u32,
         work: &mut usize,
-        accepts: impl Fn(usize, u8) -> bool,
+        mut accepts: impl FnMut(usize, u8) -> bool,
     ) -> Option<bool> {
         if state == 0 {
             return Some(false);
@@ -186,6 +207,10 @@ impl Automaton {
         }
         Some(false)
     }
+}
+
+pub(super) fn block_excludes_starts(block: &[u8], starts: Option<&[u8]>) -> bool {
+    starts.is_some_and(|bytes| bytes.len() <= 16 && !bytes.iter().any(|byte| block.contains(byte)))
 }
 
 #[cfg(test)]

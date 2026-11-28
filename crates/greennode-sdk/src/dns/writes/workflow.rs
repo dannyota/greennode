@@ -88,11 +88,32 @@ impl<'a> Workflow<'a> {
             },
             allow_recovery: false,
             keep_status: self.id == super::UPDATE_ZONE,
+            raw_body: false,
             no_output: acknowledgement,
-            no_redirect: true,
+            no_redirect: false,
+            report_redirect: self.id == super::UPDATE_ZONE,
             ..read_operation(self.id, template)
         };
         self.call(self.ctx, &operation, path, body).await
+    }
+
+    pub(super) async fn with_acknowledgement<O>(
+        &mut self,
+        id: &crate::wire::product::guard::AcknowledgedId,
+        settle: impl AsyncFnOnce(&mut Self, &str) -> Result<O, Failure<O>>,
+    ) -> Result<O, Failure<O>> {
+        let refusal = |error: Box<Error>| {
+            Failure::new(
+                Error::new(ErrorClass::NotSettled).with_cause(*error),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            )
+        };
+        let resource = id.recheck(&self.evidence).map_err(refusal)?;
+        self.evidence.keep_acknowledgement(id).map_err(refusal)?;
+        let result = settle(self, resource).await;
+        id.recheck(&self.evidence).map_err(refusal)?;
+        result
     }
 
     async fn call<T: Output>(
@@ -363,7 +384,16 @@ impl<'a> Workflow<'a> {
                     };
                     match read {
                         Ok(()) => Ok(None),
-                        Err(error) if error.has_class(ErrorClass::NotFound) => Ok(Some(())),
+                        Err(error)
+                            if crate::confirms_absence(
+                                &error,
+                                flow.id,
+                                "GET",
+                                if record_id.is_some() { RECORD } else { ZONE },
+                            ) =>
+                        {
+                            Ok(Some(()))
+                        }
                         Err(error) => Err(error),
                     }
                 },
@@ -520,29 +550,17 @@ pub(super) fn invalid(message: &str) -> Error {
 }
 
 pub(super) fn failure_reason(error: &Error) -> String {
-    use std::fmt::Write as _;
-
-    let reason = match error.class() {
-        ErrorClass::Cancelled => "context canceled",
-        ErrorClass::DeadlineExceeded => "context deadline exceeded",
-        _ => "request failed",
-    };
-    let Some(api) = error.api_error() else {
-        return reason.to_owned();
-    };
-    let mut message = String::new();
-    if !api.operation().is_empty() {
-        let _ = write!(message, "{}: ", api.operation());
-    }
-    message.push_str(if api.message().is_empty() {
-        reason
-    } else {
-        api.message()
-    });
-    if let Some(status) = api.status() {
-        let _ = write!(message, " (status {status})");
-    }
-    message
+    error.api_error().map_or_else(
+        || {
+            match error.class() {
+                ErrorClass::Cancelled => "context canceled",
+                ErrorClass::DeadlineExceeded => "context deadline exceeded",
+                _ => "request failed",
+            }
+            .to_owned()
+        },
+        crate::ApiError::go_text,
+    )
 }
 
 fn context_error(end: ContextEnd) -> Error {

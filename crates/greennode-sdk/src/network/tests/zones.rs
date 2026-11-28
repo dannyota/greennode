@@ -223,9 +223,6 @@ async fn region_name_fallback_zone_keeps_the_senders_error() {
 }
 
 fn assert_senders_refusal(error: &Error) {
-    let api = error.api_error().unwrap();
-    assert_eq!(
-        (error.class(), api.code(), api.message(), api.status()),
-        (ErrorClass::Api, "", "", None)
-    );
+    assert_eq!(error.class(), ErrorClass::InvalidInput);
+    assert!(error.api_error().is_none());
 }

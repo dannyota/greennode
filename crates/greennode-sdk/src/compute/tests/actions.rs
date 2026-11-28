@@ -389,3 +389,104 @@ fn settlement_advice_screens_the_final_safe_text() {
     assert_eq!(error.class(), ErrorClass::NotSettled);
     assert!(error.detail::<RecoveryAdvice>().is_none());
 }
+
+#[tokio::test]
+async fn rename_reports_an_oversized_200_as_invalid_response() {
+    let server = TestServer::start(vec![TestServer::oversized("200 OK")]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server)
+        .rename_server(
+            &ctx,
+            RenameServerInput {
+                server_id: "server-1".into(),
+                name: "renamed".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(
+        (api.operation(), api.status(), api.code()),
+        ("compute.RenameServer", Some(200), "InvalidResponse")
+    );
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+}
+
+#[tokio::test]
+async fn rename_server_refuses_reflected_acknowledgement() {
+    let server = TestServer::start(vec![http(
+        "200 OK",
+        r#"{"data":{"uuid":"server-1","name":"renamed"},"ignored":"toy-secret"}"#,
+    )]);
+    let failure = client(&server)
+        .rename_server(
+            &RequestContext::new().0,
+            RenameServerInput {
+                server_id: "server-1".into(),
+                name: "renamed".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+    assert!(failure.partial().is_none());
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn rename_malformed_acknowledgement_keeps_statusless_decode() {
+    let server = TestServer::start(vec![http("200 OK", "{")]);
+    let failure = client(&server)
+        .rename_server(
+            &RequestContext::new().0,
+            RenameServerInput {
+                server_id: "server-1".into(),
+                name: "ordinary".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert_eq!(api.status(), None);
+    assert_eq!(api.message(), "response failed to decode; body withheld");
+    assert_eq!(
+        api.to_string(),
+        "compute.RenameServer: response failed to decode; body withheld: response failed to decode"
+    );
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::DecodeFailure>()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn no_wait_reboot_checks_discarded_transport_credentials() {
+    let server = TestServer::start(vec![
+        response(r#"{"data":{"uuid":"server-1","status":"ACTIVE"}}"#),
+        http("202 Accepted", r#"{"ignored":"toy-secret"}"#),
+    ]);
+    let failure = client(&server)
+        .reboot_server(
+            &RequestContext::new().0,
+            RebootServerInput {
+                server_id: "server-1".into(),
+                no_wait: true,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+    assert_eq!(server.requests(), 2);
+}

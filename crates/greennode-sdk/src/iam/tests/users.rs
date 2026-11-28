@@ -292,15 +292,10 @@ async fn create_refuses_confirmation_redirect_reflecting_hex_encoded_password() 
     let (ctx, _) = RequestContext::new();
     let mut input = CreateUserInput::new("worker");
     input.password = Some(Secret::new(TOY_PASSWORD));
-    let failed = client(&server, "toy-bearer")
-        .create_user(&ctx, input)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        failed.error().detail::<WriteError>(),
-        Some(&WriteError::CreateUnconfirmed)
-    );
-    assert_eq!(server.requests(), 2);
+    let result = client(&server, "toy-bearer").create_user(&ctx, input).await;
+    assert!(result.is_ok());
+    assert_eq!(server.requests(), 3);
+    assert!(server.heads()[2].starts_with(b"GET /dashboard/accounts-api/v1/iam-users/user-1 "));
 }
 
 struct ConfirmationPasswordProvider(std::sync::Arc<Server>);

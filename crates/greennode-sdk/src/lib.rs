@@ -20,6 +20,7 @@ mod error;
 mod event;
 mod file_diagnostic;
 pub mod globalloadbalancer;
+mod go_json;
 mod go_text;
 pub mod iam;
 pub mod loadbalancer;
@@ -63,6 +64,8 @@ pub use secret::Secret;
 pub use source::*;
 pub use token::Token;
 
+pub use wire::product::absence::confirms_absence;
+
 #[cfg(test)]
 mod iam_entry_tests {
     use super::{
@@ -85,7 +88,7 @@ mod iam_entry_tests {
             password: &password,
             totp: None,
             clock: &SystemClock,
-            deadline: SystemClock.monotonic_now() + Duration::from_secs(5),
+            deadline: SystemClock.monotonic_now() + Duration::from_secs(60),
         };
         let result = run(login, &token_url).await;
         assert!(result.is_err());

@@ -38,6 +38,7 @@ fn config_with_project(
 ) -> Config {
     let endpoint = format!("{}/", server.origin);
     let mut options = ConfigOptions::default()
+        .with_clock(crate::testing::retry_clock())
         .with_region("hcm-3".into())
         .with_endpoint_overrides(EndpointOverrides {
             portal: Some(endpoint.clone()),
@@ -282,14 +283,13 @@ async fn preflight_refuses_quote_phase_when_distinct_requests_exceed_budget() {
         )
         .await
         .unwrap_err();
-    assert_eq!(failure.error().class(), ErrorClass::EstimateLimit);
-    assert!(
-        failure
-            .error()
-            .api_error()
-            .unwrap()
-            .message()
-            .contains("requires 2 requests")
+    let error = failure.error();
+    assert_eq!(error.class(), ErrorClass::EstimateLimit);
+    assert!(!error.has_class(ErrorClass::Api));
+    assert!(error.api_error().is_none());
+    assert_eq!(
+        error.to_string(),
+        "estimate limit exceeded: discovery limit exceeded: requires 2 requests, maximum 1"
     );
     assert_eq!(server.requests(), 0);
 }

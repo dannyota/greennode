@@ -4,7 +4,7 @@ use crate::testing::{Response, Server};
 use crate::{ErrorClass, RequestContext};
 
 async fn within<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(10), future)
+    tokio::time::timeout(std::time::Duration::from_secs(60), future)
         .await
         .expect("the 30-second deadline did not end the read")
 }

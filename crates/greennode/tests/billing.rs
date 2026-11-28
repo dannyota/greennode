@@ -4,6 +4,8 @@ mod budget_reads;
 mod budget_writes;
 #[path = "billing/cost.rs"]
 mod cost;
+#[path = "billing/validation.rs"]
+mod validation;
 
 use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;

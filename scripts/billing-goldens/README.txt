@@ -30,3 +30,14 @@ under crates/greennode/tests/fixtures/render/golden/.
 For the six budget and threshold writes, use '^TestBillingBudgetWriteGoldens$'
 with billing_goldens_test.go and the same setup. Copy the eighteen files to
 crates/greennode/tests/fixtures/billing/.
+
+For the response validation corpus, use vngcloud v1.8.0, commit
+85458dfb6b373116be410ec8be845257ad545f96, with Go 1.27.4 and its default
+JSON implementation. Copy billing_goldens_test.go into the archived module's
+internal/cli directory and run go test ./internal/cli
+-run '^TestBillingValidationGoldens$' -count=1 with the same offline setup.
+Copy validation-go-v1.8.0.json to crates/greennode/tests/fixtures/billing/.
+The generator runs all 17 billing commands against loopback responses and
+records full stdout, exit codes, and Go CLI error diagnostics. The generator
+and Rust replay default to the toy bearer test-token. Cases can override it
+to exercise short-credential redaction.

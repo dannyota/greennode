@@ -87,9 +87,7 @@ impl<'de> Deserialize<'de> for Project {
                         "isDefault" => {
                             project.is_default = map.next_value::<Option<_>>()?.unwrap_or_default()
                         }
-                        "userId" => {
-                            project.user_id = map.next_value::<Option<_>>()?.unwrap_or_default()
-                        }
+                        "userId" => project.user_id = map.next_value::<wire::Field<i64>>()?.0,
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }

@@ -94,9 +94,7 @@ pub(super) fn safe_request_error(
     if api.is_none() {
         return error;
     }
-    let status = error
-        .http_status()
-        .or_else(|| StatusCode::from_u16(api?.status()?).ok());
+    let status = api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
     let overflow = error.is_body_too_large();
     let mut safe = match status {
         _ if overflow && message == RESOURCE_WITHHELD => {
@@ -110,7 +108,8 @@ pub(super) fn safe_request_error(
             message,
             api.is_some_and(ApiError::retryable),
         ),
-    };
+    }
+    .retain_status_visibility(api);
     if overflow {
         safe = safe.with_body_too_large();
     }

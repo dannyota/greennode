@@ -101,11 +101,8 @@ async fn a_busy_refusal_rereads_then_resends_the_delete_only_once() {
 
 #[tokio::test]
 async fn an_incomplete_404_does_not_confirm_child_absence() {
-    let truncated = Response::Http {
-        status: "404 Not Found".into(),
-        headers: vec![("Content-Length".into(), ((8 << 20) + 1).to_string())],
-        body: Vec::new(),
-    };
+    let truncated =
+        Response::RawClose(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n{}".to_vec());
     let server = Server::start(vec![
         lb_status("CREATED"),
         response("200 OK", LISTENER_READY),
@@ -394,4 +391,73 @@ async fn child_delete_does_not_retry_for_busy_text_that_reflects_a_bearer() {
     assert_eq!(server.requests(), 3);
     let failure = result.unwrap_err();
     assert_eq!(failure.error().api_error().unwrap().status(), Some(409));
+}
+
+#[tokio::test]
+async fn child_delete_cannot_confirm_absence_from_an_oversized_404() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("202 Accepted", ""),
+        Server::oversized("404 Not Found"),
+        lb_status("CREATED"),
+    ]);
+    let (ctx, _) = RequestContext::new();
+    let failure = client(&server, CANARY)
+        .delete_listener(&ctx, listener_input(false))
+        .await
+        .unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(
+        failure.write_dispatch(),
+        crate::WriteDispatch::MayHaveBeenSent
+    );
+    assert_eq!(
+        failure.error().http_status(),
+        Some(http::StatusCode::NOT_FOUND)
+    );
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
+async fn child_delete_rechecks_a_busy_receipt_after_readiness() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response(
+            "409 Conflict",
+            r#"{"message":"listener is not ready","unknown":"confirmation-bearer"}"#,
+        ),
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("202 Accepted", ""),
+    ]);
+    let failure = super::receipt_fixtures::rotating_client(&server, 3)
+        .delete_listener(&RequestContext::new().0, listener_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert_eq!(server.requests(), 5);
+    assert!(
+        failure
+            .error()
+            .detail::<crate::wire::product::operation::RefusedGuard>()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn no_wait_child_delete_refuses_transport_reflection_in_accepted_body() {
+    let server = Server::start(vec![
+        lb_status("CREATED"),
+        response("200 OK", LISTENER_READY),
+        response("202 Accepted", r#"{"ignored":"toy-secret"}"#),
+    ]);
+    let failure = client(&server, CANARY)
+        .delete_listener(&RequestContext::new().0, listener_input(true))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(server.requests(), 3);
 }

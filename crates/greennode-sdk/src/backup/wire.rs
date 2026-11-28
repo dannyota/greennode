@@ -8,7 +8,7 @@ use crate::wire::product::{
     sender::{Response, SentCredentials},
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{ApiError, Error, ErrorClass};
+use crate::{ApiError, Error};
 
 use super::{Backend, GET_POLICY, Policy, model::reflects_integer};
 
@@ -108,9 +108,12 @@ impl Output for Detail {
 
         let mut output: Self = decode(operation, response)?;
         let invalid = || Box::new(invalid_body(operation));
-        let config =
-            serde_json::from_slice::<ConfigPresence<'_>>(&response.body).map_err(|_| invalid())?;
-        if output.policy.id.is_empty() || config.config.get() == "null" {
+        let null_config = response.decode_projection(|body| {
+            serde_json::from_slice::<ConfigPresence<'_>>(body)
+                .map(|config| config.config.get() == "null")
+                .map_err(|_| invalid())
+        })?;
+        if output.policy.id.is_empty() || null_config {
             return Err(invalid());
         }
         output.reflected = output.policy.reflects(&response.credentials);
@@ -123,8 +126,7 @@ fn decode<T: Output>(operation: &Operation, response: &Response) -> Result<T, Bo
         if response.status != StatusCode::OK {
             return error;
         }
-        if !response.body.is_empty() && serde_json::from_slice::<&RawValue>(&response.body).is_err()
-        {
+        if !response.empty_body() && response.malformed_json() {
             return Box::new(response_error(
                 operation,
                 response.status.as_u16(),
@@ -190,22 +192,21 @@ pub(super) fn reflected_credential(operation: &Operation) -> Error {
 
 pub(super) fn withhold(operation: &Operation, error: Error) -> Error {
     if error.is_body_too_large() {
-        if operation.id != GET_POLICY {
-            return Error::new(ErrorClass::Api)
-                .with_detail("transport: response body exceeds limit")
-                .with_body_too_large();
+        if operation.id == GET_POLICY
+            && error.api_error().and_then(ApiError::observed_status) == Some(200)
+        {
+            return response_error(operation, 200, "", WITHHELD, false)
+                .retain_status_visibility(error.api_error())
+                .with_cause(error);
         }
-        return match error.http_status() {
-            Some(status) => {
-                response_error(operation, status.as_u16(), "", WITHHELD, false).with_cause(error)
-            }
-            None => error,
-        };
+        return Error::bare_body_limit();
     }
     match error.api_error() {
-        Some(api) if api.operation() == operation.id => match api.status() {
+        Some(api) if api.is_for_operation(operation.id) => match api.observed_status() {
             Some(status) if status != 200 => {
-                response_error(operation, status, "", WITHHELD, api.retryable()).with_cause(error)
+                response_error(operation, status, "", WITHHELD, api.retryable())
+                    .retain_status_visibility(Some(api))
+                    .with_cause(error)
             }
             _ => error,
         },

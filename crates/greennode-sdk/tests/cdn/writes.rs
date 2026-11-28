@@ -254,6 +254,31 @@ async fn toggle_after_a_cancelled_send_is_unconfirmed_and_keeps_dispatch_evidenc
 }
 
 #[tokio::test]
+async fn settlement_returns_the_latest_safe_read_on_unexpected_status() {
+    let unexpected = r#"{"success":true,"data":{"cdnId":"cdn-1","status":42,"domainName":"unexpected.example.test"}}"#;
+    let server = Server::start(vec![reply(ACTIVE), reply(TOGGLED), reply(unexpected)]);
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateWebAcceleratorInput::new("cdn-1");
+    input.origin_host_header = Some("new.example.test".into());
+    let failure = client(&server, Some(CDN_KEY))
+        .update_web_accelerator(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        failure.error().detail::<ErrorDetail>(),
+        Some(&ErrorDetail::UnexpectedStatus)
+    );
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    let partial = serde_json::to_value(failure.partial().unwrap()).unwrap();
+    assert_eq!(partial["WebAccelerator"]["Status"], 42);
+    assert_eq!(
+        partial["WebAccelerator"]["DomainName"],
+        "unexpected.example.test"
+    );
+    assert_eq!(server.requests(), 3);
+}
+
+#[tokio::test]
 async fn settlement_refuses_a_reflected_reply_and_retains_the_last_safe_read() {
     let unexpected =
         r#"{"success":true,"data":{"cdnId":"cdn-1","status":42,"domainName":"TOY-CDN-KEY"}}"#;

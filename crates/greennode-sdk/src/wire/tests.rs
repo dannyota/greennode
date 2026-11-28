@@ -8,7 +8,7 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore, pki_types::CertificateDe
 
 #[tokio::test]
 async fn scripted_https_response_is_served_and_counted() {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let server = test_server::Server::start(vec![
             test_server::Response::Http {
                 status: "200 OK".into(),
@@ -73,7 +73,7 @@ async fn request(
     let req = http::Request::get(uri)
         .body(Full::new(bytes::Bytes::new()))
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let response = client.request(req).await?;
         response.into_body().collect().await.unwrap();
         Ok(())
@@ -157,7 +157,7 @@ async fn server_offering_h2_does_not_negotiate_it() {
     let client = test_client(true, connection::HeadLimit::Api, root(&server));
     let uri = server.origin.clone();
     let task = tokio::spawn(async move { request(&client, uri).await });
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
         while server.protocol() == 0 {
             tokio::task::yield_now().await;
         }

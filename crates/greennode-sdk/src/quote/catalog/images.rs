@@ -1,4 +1,4 @@
-use super::{Catalog, IMAGES, array, exact, unique};
+use super::{Catalog, IMAGES, array, exact, unique, wire_field};
 use crate::{Error, quote::request::invalid, wire::product::options::PathIds};
 use serde::Deserialize;
 use serde_json::Value;
@@ -6,8 +6,11 @@ use serde_json::Value;
 #[derive(Clone, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Image {
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) id: String,
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) image_type: String,
+    #[serde(default, deserialize_with = "wire_field")]
     pub(crate) image_version: String,
     licence: Option<Value>,
     package_limit: Option<serde_json::Map<String, Value>>,
@@ -45,7 +48,13 @@ impl Catalog<'_> {
         zone: &str,
     ) -> Result<Vec<Image>, Box<Error>> {
         let raw = self
-            .regional(IMAGES, "v1/{}/images/os", &[project], &[("zoneId", zone)])
+            .regional(
+                IMAGES,
+                IMAGES,
+                "v1/{}/images/os",
+                &[project],
+                &[("zoneId", zone)],
+            )
             .await?;
         let rows: Vec<Image> = array(
             IMAGES,

@@ -1,6 +1,6 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use super::{Refresh, client, client_with_token, response, target};
+use super::{Refresh, client, client_with_clock, client_with_token, response, target};
 use greennode_sdk::monitor::{
     Client, CreateSyntheticQuotaInput, ErrorDetail, RenewSyntheticQuotaInput,
 };
@@ -446,9 +446,13 @@ async fn deadline_during_quote_post_keeps_the_deadline_class() {
     responses.push(Response::StallBeforeHead(received));
     let server = Server::start(responses);
     let (ctx, _cancel) = RequestContext::new();
+    let clock = std::sync::Arc::new(greennode_sdk::TestClock::new(
+        time::OffsetDateTime::UNIX_EPOCH,
+    ));
+    let deadline = std::time::Duration::from_secs(1);
     let ctx =
-        ctx.child_with_deadline(tokio::time::Instant::now() + std::time::Duration::from_secs(3600));
-    let client = client(&server);
+        ctx.child_with_deadline(greennode_sdk::Clock::monotonic_now(clock.as_ref()) + deadline);
+    let client = client_with_clock(&server, "toy-monitor-token", clock.clone());
     let (result, ()) = tokio::join!(
         client.quote_create_synthetic_quota(
             &ctx,
@@ -456,8 +460,7 @@ async fn deadline_during_quote_post_keeps_the_deadline_class() {
         ),
         async {
             request.await.unwrap();
-            tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(7200)).await;
+            clock.advance(deadline);
         }
     );
     assert!(

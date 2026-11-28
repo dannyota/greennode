@@ -3,18 +3,18 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::pricing::{
-    DiscoveryFailure, DiscoveryMetadata, DiscoveryPrice, discovery_notes, note,
-};
+use crate::model::pricing::{DiscoveryMetadata, DiscoveryPrice, discovery_notes, note};
+use crate::pricing::failure as pricing_failure;
 use crate::quote::{
     catalog::{self, Catalog},
     input,
     request::{self, Product, Request, decode},
 };
+use crate::wire::product::options::PathIds;
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::wire::{failure, invalid};
-use super::{Client, VolumeType, inventory::response_id};
+use super::{Client, VolumeType, path_id};
 
 const OP: &str = "volume.ListVolumePrices";
 const QUOTE: &str = "pricing.GetQuote";
@@ -177,7 +177,12 @@ impl Client {
                 errors: Vec::new(),
                 allow_partial: input.allow_partial,
             };
-            run.discover(&input).await.map_err(failure)?;
+            run.discover(&input).await.map_err(|error| {
+                failure(Box::new(pricing_failure::screen(
+                    *error,
+                    &run.catalog.evidence,
+                )))
+            })?;
             run.finish()
         })
     }
@@ -192,13 +197,15 @@ fn validate(input: &ListVolumePricesInput) -> Result<(), Box<Error>> {
     for (name, value) in [
         ("ZoneID", &input.zone_id),
         ("VolumeTypeID", &input.volume_type_id),
-        ("Encryption", &input.encryption),
     ] {
-        if !value.is_empty() && !response_id(value) {
-            return Err(invalid(format!(
-                "vngcloud: invalid input: {OP} requires {name} to match ^[A-Za-z0-9_-]+$"
-            )));
+        if !value.is_empty() {
+            path_id(OP, name, value)?;
         }
+    }
+    if !input.encryption.is_empty() && !PathIds::WithUnderscore.allows(&input.encryption) {
+        return Err(invalid(format!(
+            "vngcloud: invalid input: {OP} requires Encryption to match ^[A-Za-z0-9_-]+$"
+        )));
     }
     if !(0..=2000).contains(&input.max_requests) {
         return Err(invalid(
@@ -211,12 +218,12 @@ fn validate(input: &ListVolumePricesInput) -> Result<(), Box<Error>> {
 impl Discovery<'_> {
     async fn discover(&mut self, input: &ListVolumePricesInput) -> Result<(), Box<Error>> {
         let project = self.catalog.project().await?;
-        let zones = schema_operation(self.catalog.zones(&project).await)?;
+        let zones = self.catalog.zones(&project, OP).await?;
         if !input.zone_id.is_empty() && !zones.iter().any(|zone| zone.id == input.zone_id) {
             return Err(invalid("vngcloud: invalid input: unknown ZoneID"));
         }
-        let parents = schema_operation(self.catalog.volume_parents(&project).await)?;
-        let encryptions = schema_operation(self.catalog.encryptions(&project).await)?;
+        let parents = self.catalog.volume_parents(&project, OP).await?;
+        let encryptions = self.catalog.encryptions(&project, OP).await?;
         let all_encryption = matches!(input.encryption.as_str(), "" | "all");
         let mut choices = Vec::new();
         if all_encryption || input.encryption == "none" {
@@ -229,17 +236,19 @@ impl Discovery<'_> {
                 .map(|row| row.key.as_str()),
         );
         for parent in parents {
-            let types =
-                match schema_operation(self.catalog.volume_types(&project, &parent.id, true).await)
-                {
-                    Ok(types) => types,
-                    Err(error) => {
-                        if self.record(catalog::TYPES, &parent.id, error)? {
-                            return Ok(());
-                        }
-                        continue;
+            let types = match self
+                .catalog
+                .volume_types(&project, &parent.id, true, OP)
+                .await
+            {
+                Ok(types) => types,
+                Err(error) => {
+                    if self.record(catalog::TYPES, &parent.id, error)? {
+                        return Ok(());
                     }
-                };
+                    continue;
+                }
+            };
             for volume_type in types {
                 if (!input.volume_type_id.is_empty()
                     && input.volume_type_id != volume_type.quote_id())
@@ -375,7 +384,7 @@ impl Discovery<'_> {
                     let key = row.item_key();
                     let error = result.as_ref().err().map_or_else(
                         || request::invalid(QUOTE, 200),
-                        |error| Box::new(copy_error(error)),
+                        |error| Box::new(pricing_failure::copy(error)),
                     );
                     stop |= self.record(QUOTE, &key, error)?;
                 }
@@ -425,7 +434,10 @@ impl Discovery<'_> {
         error: Box<Error>,
     ) -> Result<bool, Box<Error>> {
         if !self.allow_partial {
-            return Err(error);
+            return Err(Box::new(pricing_failure::screen(
+                *error,
+                &self.catalog.evidence,
+            )));
         }
         let stop = [
             ErrorClass::Auth,
@@ -438,22 +450,13 @@ impl Discovery<'_> {
         .any(|class| error.has_class(class))
             || error
                 .api_error()
-                .is_some_and(|api| matches!(api.status(), Some(401 | 429)));
-        let status = error.api_error().and_then(crate::ApiError::status);
-        let code = if error
-            .api_error()
-            .is_some_and(|api| api.code() == "InvalidResponse")
-        {
-            "InvalidResponse"
-        } else {
-            resolved_code(status, error.api_error().is_some())
-        };
-        self.out.metadata.failures.push(DiscoveryFailure {
-            operation: operation.into(),
-            item_key: safe_text(key, &self.catalog.evidence),
-            code: code.into(),
-            status: i64::from(status.unwrap_or_default()),
-        });
+                .is_some_and(|api| matches!(api.observed_status(), Some(401 | 429)));
+        self.out.metadata.failures.push(pricing_failure::row(
+            operation,
+            key,
+            &error,
+            pricing_failure::CodePolicy::Catalog,
+        ));
         self.out.metadata.complete = false;
         self.errors.push(*error);
         Ok(stop)
@@ -472,9 +475,7 @@ impl Discovery<'_> {
         for note in &mut self.out.metadata.notes {
             note.scope = safe_text(&note.scope, &self.catalog.evidence);
         }
-        for item in &mut self.out.metadata.failures {
-            item.item_key = safe_text(&item.item_key, &self.catalog.evidence);
-        }
+        pricing_failure::screen_rows(&mut self.out.metadata.failures, &self.catalog.evidence);
         let safe = serde_json::to_value(&self.out)
             .is_ok_and(|value| !self.catalog.evidence.output_reflects(&value));
         let rounded_reflection = self.out.items.iter().any(|row| {
@@ -490,71 +491,22 @@ impl Discovery<'_> {
             return Ok(self.out);
         }
         if self.out.items.is_empty() {
-            return Err(failure(Box::new(self.errors.remove(0))));
+            return Err(failure(Box::new(pricing_failure::screen(
+                self.errors.remove(0),
+                &self.catalog.evidence,
+            ))));
         }
-        let causes = self
-            .errors
-            .into_iter()
-            .rev()
-            .reduce(|tail, error| error.with_cause(tail));
-        let mut outcome = Error::new(ErrorClass::DiscoveryIncomplete);
-        if let Some(causes) = causes {
-            outcome = outcome.with_cause(causes);
-        }
+        let outcome = pricing_failure::incomplete(
+            self.errors
+                .into_iter()
+                .map(|error| pricing_failure::screen(error, &self.catalog.evidence)),
+        );
         Err(Failure::new(
             outcome,
             Some(self.out),
             WriteDispatch::NotAWrite,
         ))
     }
-}
-
-fn schema_operation<T>(result: Result<T, Box<Error>>) -> Result<T, Box<Error>> {
-    result.map_err(|error| {
-        if error
-            .api_error()
-            .is_some_and(|api| api.status() == Some(200) && api.code() == "InvalidResponse")
-        {
-            request::invalid(OP, 200)
-        } else {
-            error
-        }
-    })
-}
-
-fn resolved_code(status: Option<u16>, api: bool) -> &'static str {
-    match status {
-        Some(400) => "BadRequest",
-        Some(401) => "Unauthorized",
-        Some(403) => "Forbidden",
-        Some(404) => "NotFound",
-        Some(409) => "Conflict",
-        Some(429) => "Throttled",
-        Some(500..) => "ServerError",
-        Some(400..) => "ClientError",
-        _ if api => "",
-        _ => "DiscoveryIncomplete",
-    }
-}
-
-fn copy_error(error: &Error) -> Error {
-    error.api_error().map_or_else(
-        || Error::new(error.class()),
-        |api| {
-            let cause = request::api(
-                api.operation(),
-                api.status(),
-                api.code(),
-                api.message(),
-                api.retryable(),
-            );
-            if error.class() == cause.class() {
-                cause
-            } else {
-                Error::new(error.class()).with_cause(cause)
-            }
-        },
-    )
 }
 
 fn safe_text(text: &str, evidence: &crate::wire::product::evidence::Evidence) -> String {
@@ -637,5 +589,119 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn partial_volume_pricing_screens_each_failure_field_and_preserves_private_status() {
+        let config = crate::Config::new(
+            crate::ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(crate::Secret::new("toy-bearer")),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        let mut failures = Vec::new();
+        for (credential, code, status) in [("403", "Forbidden", 0), ("Forbidden", "", 403)] {
+            let mut catalog = Catalog::new(config.session(), &ctx, 0);
+            catalog.evidence.add_secret(&crate::Secret::new(credential));
+            let error = request::api(OP, Some(403), "", "provider refused", false)
+                .screen_api(&|text| catalog.evidence.text_reflects(text));
+            let mut run = Discovery {
+                catalog,
+                out: ListVolumePricesOutput {
+                    items: vec![VolumePrice {
+                        volume_type: VolumeType::default(),
+                        zone_id: String::new(),
+                        zone_name: String::new(),
+                        encryption_type_id: String::new(),
+                        zone_enabled: None,
+                        size_gb: 1,
+                        price_per_gb: None,
+                        price: DiscoveryPrice::default(),
+                    }],
+                    metadata: DiscoveryMetadata {
+                        region: "hcm-3".into(),
+                        complete: true,
+                        requests: 0,
+                        quoted_at: time::OffsetDateTime::UNIX_EPOCH,
+                        failures: Vec::new(),
+                        notes: Vec::new(),
+                        excluded_groups: None,
+                    },
+                },
+                errors: Vec::new(),
+                allow_partial: true,
+            };
+            let _ = run
+                .record(OP, "toy-item", Box::new(pricing_failure::copy(&error)))
+                .unwrap();
+            let failure = run.finish().unwrap_err();
+            if failure
+                .error()
+                .api_error()
+                .and_then(crate::ApiError::observed_status)
+                != Some(403)
+                || !failure.partial().is_some_and(|out| {
+                    out.metadata.failures[0].code == code
+                        && out.metadata.failures[0].status == status
+                })
+            {
+                failures.push(status);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "unexpected failure projections for visible status values {failures:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_volume_price_overflow_keeps_its_provenance_and_public_zero_status() {
+        let config = crate::Config::new(
+            crate::ConfigOptions::default()
+                .with_region("hcm-3".into())
+                .with_static_token(crate::Secret::new("toy-bearer")),
+        )
+        .unwrap();
+        let (ctx, _) = RequestContext::new();
+        let error = Error::from_api(
+            crate::ApiError::without_fallback(
+                "",
+                Some(200),
+                crate::error::SafeText::new("", &[]),
+                crate::error::SafeText::new("transport: response body exceeds limit", &[]),
+                false,
+            )
+            .with_status_evidence(),
+        )
+        .with_body_too_large();
+        let mut run = Discovery {
+            catalog: Catalog::new(config.session(), &ctx, 0),
+            out: ListVolumePricesOutput {
+                items: Vec::new(),
+                metadata: DiscoveryMetadata {
+                    region: "hcm-3".into(),
+                    complete: true,
+                    requests: 0,
+                    quoted_at: time::OffsetDateTime::UNIX_EPOCH,
+                    failures: Vec::new(),
+                    notes: Vec::new(),
+                    excluded_groups: None,
+                },
+            },
+            errors: Vec::new(),
+            allow_partial: true,
+        };
+        let _ = run
+            .record(OP, "toy", Box::new(pricing_failure::copy(&error)))
+            .unwrap();
+        assert_eq!(
+            (
+                run.out.metadata.failures[0].code.as_str(),
+                run.out.metadata.failures[0].status
+            ),
+            ("DiscoveryIncomplete", 0)
+        );
+        assert!(run.finish().unwrap_err().error().is_body_too_large());
     }
 }

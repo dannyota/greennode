@@ -1,3 +1,8 @@
+mod issuance;
+
+pub use issuance::issued_reset_service_account_secret;
+use issuance::{IssuedAccount, IssuedSecret};
+
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -18,7 +23,9 @@ use crate::wire::product::{
     redirect::Retry,
 };
 use crate::wire::strict_json::{Shape, ShapeField};
-use crate::{Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, Secret, WriteDispatch};
+use crate::{
+    ApiError, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, Secret, WriteDispatch,
+};
 
 const CREATE: &str = "iam.CreateServiceAccount";
 const UPDATE: &str = "iam.UpdateServiceAccount";
@@ -55,7 +62,7 @@ pub struct CreateServiceAccountOutput {
     #[serde(rename = "ServiceAccount")]
     pub service_account: ServiceAccount,
     #[serde(skip)]
-    cleanup_id: Option<String>,
+    cleanup_id: Option<crate::wire::product::guard::AcknowledgedId>,
     #[serde(rename = "ClientSecret", skip_serializing_if = "Option::is_none")]
     client_secret: Option<Secret>,
     #[serde(skip)]
@@ -81,15 +88,18 @@ impl CreateServiceAccountOutput {
     }
 
     fn cleanup(&self, issued: Option<&Secret>) -> Option<DeleteServiceAccountInput> {
-        let id = self.cleanup_id.as_ref()?;
+        let ownership = self.cleanup_id.as_ref()?;
         let mut evidence = Evidence::new();
         evidence.absorb(self.evidence.credentials());
         if let Some(secret) = issued {
             record_issued(&mut evidence, secret);
         }
         Some(DeleteServiceAccountInput {
-            service_account_id: id.clone(),
-            cleanup: Some(evidence.credentials().clone()),
+            service_account_id: ownership.recheck(&evidence).ok()?.to_owned(),
+            cleanup: Some(CleanupOwnership {
+                credentials: evidence.credentials().clone(),
+                id: ownership.clone(),
+            }),
         })
     }
 }
@@ -169,7 +179,7 @@ crate::wire::product::output::public_fields!(UpdateServiceAccountOutput { servic
 pub struct DeleteServiceAccountInput {
     /// Service-account resource ID.
     pub service_account_id: String,
-    cleanup: Option<SentCredentials>,
+    cleanup: Option<CleanupOwnership>,
 }
 
 crate::error::debug_record!(DeleteServiceAccountInput {
@@ -232,55 +242,10 @@ impl ResetServiceAccountSecretOutput {
     }
 }
 
-#[derive(Default)]
-struct IssuedAccount {
-    id: String,
-    secret: Option<Secret>,
-}
-
-impl Wire for IssuedAccount {
-    const SHAPE: Shape<'static> = Shape::Object(&[
-        ShapeField {
-            name: "id",
-            shape: Shape::Any,
-        },
-        ShapeField {
-            name: "clientSecret",
-            shape: Shape::Any,
-        },
-    ]);
-
-    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
-        let fields: BTreeMap<String, &RawValue> =
-            serde_json::from_str::<Option<_>>(raw.get())?.unwrap_or_default();
-        Ok(Self {
-            id: optional_field(&fields, "id")?.unwrap_or_default(),
-            secret: read_issued_secret(&fields)?,
-        })
-    }
-}
-
-#[derive(Default)]
-struct IssuedSecret(Option<Secret>);
-
-impl Wire for IssuedSecret {
-    const SHAPE: Shape<'static> = Shape::Object(&[ShapeField {
-        name: "clientSecret",
-        shape: Shape::Any,
-    }]);
-
-    fn decode(raw: &RawValue) -> Result<Self, serde_json::Error> {
-        let fields = serde_json::from_str::<Option<_>>(raw.get())?.unwrap_or_default();
-        read_issued_secret(&fields).map(Self)
-    }
-}
-
-fn read_issued_secret(
-    fields: &BTreeMap<String, &RawValue>,
-) -> Result<Option<Secret>, serde_json::Error> {
-    Ok(optional_field::<String>(fields, "clientSecret")?
-        .filter(|value| !value.is_empty())
-        .map(Secret::new))
+#[derive(Clone, Debug)]
+struct CleanupOwnership {
+    credentials: SentCredentials,
+    id: crate::wire::product::guard::AcknowledgedId,
 }
 
 #[expect(clippy::result_large_err, reason = "The SDK returns Failure by value")]
@@ -304,23 +269,43 @@ impl Client {
                 allow_empty: false,
                 ..secret_operation(CREATE, ACCOUNTS, &[StatusCode::CREATED])
             };
-            let IssuedAccount { id, secret } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
+            let IssuedAccount { acknowledged, secret, .. } = self.write(ctx, Api::Accounts, &op, &[], Some(json!({"name": input.name, "description": input.description})), &mut evidence).await
                 .map_err(|failed| uncertain(failed, &evidence, "iam.CreateServiceAccount: create may have already reached the server; check with list-service-accounts and match exactly; a service account found that way has lost its client secret and should have its secret reset"))?;
             let secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret()));
             if let Some(secret) = &secret {
                 record_issued(&mut evidence, secret);
             }
-            let confirmation = if usable_account_id(&id, &evidence) {
-                self.confirm_account::<CreateServiceAccountOutput>(ctx, &id, &mut evidence)
-                    .await
-                    .ok()
-            } else {
-                None
+            let confirmation = match acknowledged.as_ref() {
+                Some(receipt)
+                    if receipt
+                        .recheck(&evidence)
+                        .is_ok_and(|id| usable_account_id(id, &evidence))
+                        && evidence.keep_acknowledgement(receipt).is_ok() =>
+                {
+                    let result = self
+                        .confirm_account::<CreateServiceAccountOutput>(
+                            ctx,
+                            receipt.recheck(&evidence).unwrap_or_default(),
+                            &mut evidence,
+                        )
+                        .await
+                        .ok();
+                    result.filter(|_| receipt.recheck(&evidence).is_ok())
+                }
+                _ => None,
             };
             let secret = secret.filter(crate::wire::product::exit::private_safe);
             let confirmed = confirmation.is_some();
-            let account = confirmation.unwrap_or_else(|| safe_account_id(&id, &evidence));
-            let cleanup_id = usable_account_id(&account.id, &evidence).then(|| account.id.clone());
+            let id = acknowledged
+                .as_ref()
+                .and_then(|receipt| receipt.recheck(&evidence).ok())
+                .unwrap_or_default();
+            let account = confirmation.unwrap_or_else(|| safe_account_id(id, &evidence));
+            let cleanup_id = acknowledged.filter(|receipt| {
+                receipt
+                    .recheck(&evidence)
+                    .is_ok_and(|id| id == account.id && usable_account_id(id, &evidence))
+            });
             if secret.is_none() || !confirmed {
                 let (detail, message) = match (confirmed, secret.is_some()) {
                     (true, false) => (
@@ -445,7 +430,13 @@ impl Client {
             let mut evidence =
                 self.write_evidence(ctx, DELETE, &[("ServiceAccountID", id)], &[])?;
             if let Some(cleanup) = &input.cleanup {
-                evidence.absorb(cleanup);
+                evidence.absorb(&cleanup.credentials);
+                let owned = cleanup.id.recheck(&evidence).is_ok_and(|owned| owned == id);
+                if !owned || evidence.keep_acknowledgement(&cleanup.id).is_err() {
+                    return Err(guard_failed(invalid_input(
+                        "IAM cleanup ownership is unproven".into(),
+                    )));
+                }
             }
             if evidence.id_reflects(id) {
                 return Err(guard_failed(invalid_input(
@@ -486,9 +477,13 @@ impl Client {
                 "accounts-api/v1/service-accounts/{}/reset-secret",
                 &[StatusCode::OK],
             );
-            let IssuedSecret(secret) = self.write(ctx, Api::Accounts, &op, &[id], None, &mut evidence).await
+            let IssuedSecret { secret, field_only } = self.write(ctx, Api::Accounts, &op, &[id], None, &mut evidence).await
                 .map_err(|failed| uncertain(failed, &evidence, "iam.ResetServiceAccountSecret: reset may have reached the server; no read shows whether the secret changed, so treat the previous secret as revoked"))?;
-            let client_secret = secret.filter(|secret| !evidence.text_reflects(secret.expose_secret())).ok_or_else(|| Failure::new(
+            let client_secret = secret.and_then(|secret| {
+                let usable = !evidence.text_reflects(secret.expose_secret());
+                record_issued(&mut evidence, &secret);
+                usable.then_some(secret)
+            }).ok_or_else(|| Failure::new(
                 outcome(WriteError::NoSecret, &format!("service account {} secret was probably rotated by this call but not returned; no file was written; run reset-service-account-secret again to get a usable value", safe_text(&evidence, id)), &evidence),
                 None,
                 WriteDispatch::MayHaveBeenSent,
@@ -500,7 +495,22 @@ impl Client {
                     WriteDispatch::MayHaveBeenSent,
                 ));
             }
-            record_issued(&mut evidence, &client_secret);
+            if field_only {
+                let error = crate::Error::new(crate::ErrorClass::NotSettled);
+                let advice = RecoveryAdvice::screened(
+                    &[
+                        "iam.ResetServiceAccountSecret: reset may have reached the server; no read shows whether the secret changed, so treat the previous secret as revoked",
+                        "The secret reset could not be confirmed. Verify credential access before continuing.",
+                    ],
+                    |text| evidence.text_reflects(text),
+                );
+                let error = match advice {
+                    Some(advice) => error.with_detail(advice),
+                    None => error,
+                };
+                return Err(Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
+                    .with_private_delivery(client_secret));
+            }
             Ok(ResetServiceAccountSecretOutput {
                 client_secret,
                 evidence,
@@ -551,17 +561,16 @@ fn secret_operation(
 ) -> Operation {
     Operation {
         sensitive: true,
-        keep_status: true,
-        reflection: crate::wire::product::operation::Reflection::PrivateDelivery,
+        reflection: crate::wire::product::operation::Reflection::PrivateDelivery("clientSecret"),
         ..write_operation(id, Method::POST, template, Retry::Once, success)
     }
 }
 
 fn record_issued(evidence: &mut Evidence, secret: &Secret) {
-    evidence.add_redaction(secret);
+    evidence.add_issued_secret(secret);
     let trimmed = secret.expose_secret().trim();
     if trimmed.len() != secret.expose_secret().len() {
-        evidence.add_redaction(&Secret::new(trimmed));
+        evidence.add_issued_secret(&Secret::new(trimmed));
     }
 }
 
@@ -618,7 +627,7 @@ fn uncertain<O>(failed: Failure<O>, evidence: &Evidence, advice: &'static str) -
     if dispatch == WriteDispatch::NotSent
         || error
             .api_error()
-            .and_then(|api| api.status())
+            .and_then(ApiError::observed_status)
             .is_some_and(|status| (400..500).contains(&status))
     {
         return Failure::new(error, None, dispatch);

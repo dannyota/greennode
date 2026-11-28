@@ -1,4 +1,3 @@
-use super::wire::CompletedNotFound;
 use super::{Client, Instance};
 use crate::config::session::AuthKind;
 use crate::endpoint::Base;
@@ -92,7 +91,7 @@ impl Client {
     pub(super) async fn poll_instance<T>(
         &self,
         context: &RequestContext,
-        id: &str,
+        target: crate::wire::product::guard::ConfirmationTarget<'_>,
         evidence: &mut Evidence,
         interrupted: Settlement,
         mut check: impl FnMut(Option<Instance>) -> Poll<Result<T, Settlement>>,
@@ -104,15 +103,30 @@ impl Client {
             if ctx.check(clock).is_some() {
                 break;
             }
-            let instance = match self.get_instance::<()>(&ctx, id, evidence).await {
+            let refusal = |error| match &interrupted {
+                Settlement::NotSettled(reason) | Settlement::ReadFailed(reason, _) => {
+                    Settlement::ReadFailed(reason, error)
+                }
+                Settlement::Failed => Settlement::Failed,
+            };
+            let id = target.checked(evidence).map_err(refusal)?;
+            let result = self.get_instance::<()>(&ctx, id, evidence).await;
+            target.checked(evidence).map_err(refusal)?;
+            let instance = match result {
                 Ok(instance) => Some(instance),
-                Err(failure) if failure.error().detail::<CompletedNotFound>().is_some() => None,
+                Err(failure)
+                    if crate::confirms_absence(
+                        failure.error(),
+                        "GetDatabaseInstance",
+                        "GET",
+                        "vdb-relational/v1/database-instances/id/{}",
+                    ) =>
+                {
+                    None
+                }
                 Err(failure) => {
                     let error = Box::new(failure.into_parts().0);
-                    return Err(match interrupted {
-                        Settlement::NotSettled(reason) => Settlement::ReadFailed(reason, error),
-                        other => other,
-                    });
+                    return Err(refusal(error));
                 }
             };
             if ctx.check(clock).is_some() {
@@ -194,8 +208,7 @@ pub(super) fn safe_rejection(operation: &'static str, error: &Error, message: &s
 
 pub(super) fn rejection<T, O>(failure: Failure<T>, operation: &'static str) -> Option<Failure<O>> {
     let (error, _, dispatch) = failure.into_parts();
-    let api_status = error.api_error().and_then(ApiError::status);
-    let status = api_status.or_else(|| error.http_status().map(|status| status.as_u16()));
+    let status = error.api_error().and_then(ApiError::observed_status);
     if dispatch != WriteDispatch::NotSent
         && !status.is_some_and(|status| (400..500).contains(&status))
     {
@@ -205,9 +218,7 @@ pub(super) fn rejection<T, O>(failure: Failure<T>, operation: &'static str) -> O
         Some(fields) if !fields.0.is_empty() => {
             format!("invalid input rejected by the API: {}", fields.0.join(", "))
         }
-        _ if api_status.is_some_and(|status| status >= 400) => {
-            "request rejected by the API".to_owned()
-        }
+        _ if status.is_some_and(|status| status >= 400) => "request rejected by the API".to_owned(),
         _ => "request failed; response withheld".to_owned(),
     };
     Some(Failure::new(
@@ -274,10 +285,12 @@ pub(super) fn write_operation(
         allow_empty,
         no_output: false,
         keep_status: true,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }

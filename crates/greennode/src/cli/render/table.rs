@@ -4,6 +4,8 @@ use std::io::Write;
 use super::value::{cell, check_depth, convert, escape, escape_write, rows, write_cell};
 use super::{Error, Node, Projected, Value};
 
+const BYTE_LIMIT: usize = 64 << 20;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -28,17 +30,21 @@ mod tests {
     fn preflight_borrows_headers() {
         let key = "header".repeat(10000);
         let mut sizes = BTreeMap::new();
-        measure(&mut sizes, &key, &Value::Null).unwrap();
+        measure(&mut sizes, &key, &Value::Null, BYTE_LIMIT).unwrap();
         let stored = sizes.keys().next().unwrap();
         assert!(std::ptr::eq(stored.as_ptr(), key.as_ptr()));
     }
 
     #[test]
     fn preflight_refuses_large_escaped_cell() {
-        let input = Value::String("\0".repeat(32 * 1024 * 1024));
-        assert!(matches!(measure_cell(&input), Err(Error::TableLimit)));
+        let limit = 4 << 10;
+        let input = Value::String("\0".repeat(limit / 2));
         assert!(matches!(
-            write_table(&mut Vec::new(), &input),
+            measure_cell(&input, limit),
+            Err(Error::TableLimit)
+        ));
+        assert!(matches!(
+            write_table_with_columns(&mut Vec::new(), &input, None, limit),
             Err(Error::TableLimit)
         ));
     }
@@ -49,6 +55,7 @@ struct Counter {
     bytes: usize,
     width: usize,
     exceeded: bool,
+    limit: usize,
 }
 
 impl Write for Counter {
@@ -57,7 +64,7 @@ impl Write for Counter {
             .bytes
             .checked_add(data.len())
             .ok_or_else(|| std::io::Error::other("limit"))?;
-        if bytes > 64 * 1024 * 1024 {
+        if bytes > self.limit {
             self.exceeded = true;
             return Err(std::io::Error::other("limit"));
         }
@@ -74,8 +81,11 @@ impl Write for Counter {
     }
 }
 
-fn measure_cell(value: &Value) -> Result<(usize, usize), Error> {
-    let mut counter = Counter::default();
+fn measure_cell(value: &Value, limit: usize) -> Result<(usize, usize), Error> {
+    let mut counter = Counter {
+        limit,
+        ..Counter::default()
+    };
     let result = write_cell(&mut counter, value);
     if counter.exceeded {
         return Err(Error::TableLimit);
@@ -94,8 +104,12 @@ fn measure<'a>(
     sizes: &mut BTreeMap<&'a str, (usize, usize)>,
     key: &'a str,
     value: &Value,
+    limit: usize,
 ) -> Result<(), Error> {
-    let mut header = Counter::default();
+    let mut header = Counter {
+        limit,
+        ..Counter::default()
+    };
     let result = escape_write(&mut header, key);
     if header.exceeded {
         return Err(Error::TableLimit);
@@ -105,7 +119,7 @@ fn measure<'a>(
         .bytes
         .checked_sub(header.width)
         .ok_or(Error::TableLimit)?;
-    let (width, extra) = measure_cell(value)?;
+    let (width, extra) = measure_cell(value, limit)?;
     let size = sizes.entry(key).or_insert((header.width, header_extra));
     size.0 = size.0.max(width);
     size.1 = size.1.max(extra);
@@ -138,7 +152,7 @@ fn row<W: Write>(w: &mut W, cells: impl Iterator<Item = (String, usize)>) -> Res
 }
 
 pub fn write_table<W: Write>(w: &mut W, value: &Value) -> Result<(), Error> {
-    write_table_with_columns(w, value, None)
+    write_table_with_columns(w, value, None, BYTE_LIMIT)
 }
 
 #[derive(Clone, Copy)]
@@ -174,13 +188,14 @@ pub(crate) fn write_projected_table<W: Write>(
         }
         item => project_row(item)?,
     };
-    write_table_with_columns(w, &value, Some(view))
+    write_table_with_columns(w, &value, Some(view), BYTE_LIMIT)
 }
 
 fn write_table_with_columns<W: Write>(
     w: &mut W,
     value: &Value,
     view: Option<TableView>,
+    limit: usize,
 ) -> Result<(), Error> {
     check_depth(value)?;
     let items = rows(value);
@@ -190,7 +205,7 @@ fn write_table_with_columns<W: Write>(
     let mut sizes = BTreeMap::new();
     if let Some(columns) = columns {
         for key in columns {
-            measure(&mut sizes, key, &Value::Null)?;
+            measure(&mut sizes, key, &Value::Null, limit)?;
         }
     }
     for item in items {
@@ -198,15 +213,15 @@ fn write_table_with_columns<W: Write>(
             Value::Object(map) => {
                 for (key, value) in map {
                     if columns.is_none_or(|columns| columns.contains(&key.as_str())) {
-                        measure(&mut sizes, key, value)?;
+                        measure(&mut sizes, key, value, limit)?;
                     }
                 }
             }
-            _ => measure(&mut sizes, "Value", item)?,
+            _ => measure(&mut sizes, "Value", item, limit)?,
         }
     }
     if sizes.is_empty() && items.is_empty() {
-        measure(&mut sizes, "Value", &Value::Null)?;
+        measure(&mut sizes, "Value", &Value::Null, limit)?;
     }
     let count = items
         .len()
@@ -231,7 +246,7 @@ fn write_table_with_columns<W: Write>(
         .checked_add(4)
         .and_then(|n| n.checked_mul(row_bytes))
         .ok_or(Error::TableLimit)?;
-    if projected > 64 * 1024 * 1024 {
+    if projected > limit {
         return Err(Error::TableLimit);
     }
     let sizes: Vec<_> = match columns {

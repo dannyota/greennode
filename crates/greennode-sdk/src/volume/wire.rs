@@ -7,7 +7,6 @@ use serde_json::{Number, Value, value::RawValue};
 use crate::wire::product::{
     evidence::Evidence,
     operation::{Operation, Output},
-    response,
     sender::Response,
 };
 use crate::wire::strict_json::{self, FieldNames, Shape};
@@ -29,24 +28,24 @@ impl Output for Document {
     const SCHEMA: Shape<'static> = Shape::Any;
 
     fn decode_response(operation: &Operation, reply: &Response) -> Result<Self, Box<Error>> {
-        let body = response::classify(
+        reply.classify(
             operation.id,
-            reply.status,
-            bytes::Bytes::copy_from_slice(&reply.body),
             operation.success,
             (true, operation.sensitive, operation.retry),
-            &reply.credentials,
+            false,
         )?;
-        let body = normalize(&body);
-        let value = serde_json::from_str(&body).map_err(|_| {
-            Box::new(api(
-                operation.id,
-                None,
-                "",
-                "response failed to decode; body withheld",
-            ))
-        })?;
-        Ok(Self(Some(value)))
+        reply.decode_projection(|body| {
+            let body = normalize(body);
+            let value = serde_json::from_str(&body).map_err(|_| {
+                Box::new(api(
+                    operation.id,
+                    None,
+                    "",
+                    "response failed to decode; body withheld",
+                ))
+            })?;
+            Ok(Self(Some(value)))
+        })
     }
 }
 
@@ -105,7 +104,13 @@ fn normalize(bytes: &[u8]) -> String {
     String::from_utf8(output).unwrap_or_else(|_| text.into_owned())
 }
 
-pub(super) type ShapeResult<T> = Result<T, ()>;
+#[derive(Debug)]
+pub(super) enum ShapeIssue {
+    Invalid,
+    Alias,
+}
+
+pub(super) type ShapeResult<T> = Result<T, ShapeIssue>;
 
 pub(super) struct Object<'a>(BTreeMap<String, &'a RawValue>, FieldNames);
 
@@ -116,7 +121,22 @@ impl<'a> Object<'a> {
         }
         serde_json::from_str(raw.get())
             .map(|fields| Self(fields, names))
-            .map_err(|_| ())
+            .map_err(|_| ShapeIssue::Invalid)
+    }
+
+    pub(super) fn exact(&self, name: &str) -> ShapeResult<Option<&'a RawValue>> {
+        if self
+            .0
+            .keys()
+            .any(|key| key != name && strict_json::field_matches(name, key))
+        {
+            return Err(ShapeIssue::Invalid);
+        }
+        Ok(self
+            .0
+            .get(name)
+            .copied()
+            .filter(|value| value.get() != "null"))
     }
 
     pub(super) fn get(&self, name: &str) -> ShapeResult<Option<&'a RawValue>> {
@@ -132,9 +152,13 @@ impl<'a> Object<'a> {
         let Some((key, value)) = fields.next() else {
             return Ok(None);
         };
-        self.1.check(name, key).map_err(|_| ())?;
+        self.1.check(name, key).map_err(|_| ShapeIssue::Alias)?;
         if fields.next().is_some() {
-            return Err(());
+            return if matches!(self.1, FieldNames::Canonical) {
+                Err(ShapeIssue::Alias)
+            } else {
+                Err(ShapeIssue::Invalid)
+            };
         }
         Ok(Some(*value))
     }
@@ -150,7 +174,7 @@ impl<'a> Object<'a> {
     }
 
     pub(super) fn require<T: FromWire>(&self, name: &str) -> ShapeResult<T> {
-        self.optional(name)?.ok_or(())
+        self.optional(name)?.ok_or(ShapeIssue::Invalid)
     }
 }
 
@@ -167,7 +191,7 @@ impl Object<'_> {
 fn integral(raw: &RawValue) -> ShapeResult<i64> {
     let text = raw.get();
     if !matches!(text.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
-        return Err(());
+        return Err(ShapeIssue::Invalid);
     }
     let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((text, "0"));
     let negative = mantissa.starts_with('-');
@@ -177,20 +201,20 @@ fn integral(raw: &RawValue) -> ShapeResult<i64> {
     if digits.clone().all(|digit| digit == b'0') {
         return Ok(0);
     }
-    let length = i64::try_from(mantissa.len()).map_err(|_| ())?;
-    let exponent = exponent.parse::<i64>().map_err(|_| ())?;
+    let length = i64::try_from(mantissa.len()).map_err(|_| ShapeIssue::Invalid)?;
+    let exponent = exponent.parse::<i64>().map_err(|_| ShapeIssue::Invalid)?;
     if !(-length - 20..=length + 20).contains(&exponent) {
-        return Err(());
+        return Err(ShapeIssue::Invalid);
     }
-    let scale = exponent - i64::try_from(fractional.len()).map_err(|_| ())?;
+    let scale = exponent - i64::try_from(fractional.len()).map_err(|_| ShapeIssue::Invalid)?;
     let kept = (whole.len() + fractional.len())
-        .saturating_sub(usize::try_from((-scale).max(0)).map_err(|_| ())?);
+        .saturating_sub(usize::try_from((-scale).max(0)).map_err(|_| ShapeIssue::Invalid)?);
     if digits.clone().skip(kept).any(|digit| digit != b'0') {
-        return Err(());
+        return Err(ShapeIssue::Invalid);
     }
-    let zeros = usize::try_from(scale.max(0)).map_err(|_| ())?;
+    let zeros = usize::try_from(scale.max(0)).map_err(|_| ShapeIssue::Invalid)?;
     if zeros > 19 {
-        return Err(());
+        return Err(ShapeIssue::Invalid);
     }
     let result = digits
         .take(kept)
@@ -199,11 +223,11 @@ fn integral(raw: &RawValue) -> ShapeResult<i64> {
             sum.checked_mul(10)?
                 .checked_sub(i64::from(digit.checked_sub(b'0')?))
         })
-        .ok_or(())?;
+        .ok_or(ShapeIssue::Invalid)?;
     if negative {
         Ok(result)
     } else {
-        result.checked_neg().ok_or(())
+        result.checked_neg().ok_or(ShapeIssue::Invalid)
     }
 }
 
@@ -212,7 +236,8 @@ pub(super) trait FromWire: Sized {
 }
 
 pub(super) fn parse<T: DeserializeOwned>(raw: &RawValue) -> ShapeResult<T> {
-    serde_json::from_str(if raw.get() == "-0" { "0" } else { raw.get() }).map_err(|_| ())
+    serde_json::from_str(if raw.get() == "-0" { "0" } else { raw.get() })
+        .map_err(|_| ShapeIssue::Invalid)
 }
 
 macro_rules! scalar {
@@ -228,7 +253,8 @@ scalar!(String, bool, i64, u64);
 
 impl<T: FromWire + Default> FromWire for Vec<T> {
     fn from_wire(raw: &RawValue, names: FieldNames) -> ShapeResult<Self> {
-        let items: Vec<Option<&RawValue>> = serde_json::from_str(raw.get()).map_err(|_| ())?;
+        let items: Vec<Option<&RawValue>> =
+            serde_json::from_str(raw.get()).map_err(|_| ShapeIssue::Invalid)?;
         items
             .into_iter()
             .map(|item| item.map_or_else(|| Ok(T::default()), |raw| T::from_wire(raw, names)))
@@ -247,8 +273,10 @@ impl FromWire for Value {
                 .map(Value::Object),
             Some(b'[') => Vec::<Self>::from_wire(raw, names).map(Value::Array),
             Some(b'0'..=b'9' | b'-') => {
-                let amount = raw.get().parse::<f64>().map_err(|_| ())?;
-                Number::from_f64(amount).map(Value::Number).ok_or(())
+                let amount = raw.get().parse::<f64>().map_err(|_| ShapeIssue::Invalid)?;
+                Number::from_f64(amount)
+                    .map(Value::Number)
+                    .ok_or(ShapeIssue::Invalid)
             }
             _ => parse(raw),
         }
@@ -260,8 +288,8 @@ pub(super) fn decode<T>(
     names: FieldNames,
     decode: impl FnOnce(&RawValue, FieldNames) -> ShapeResult<T>,
 ) -> ShapeResult<T> {
-    let raw = document.0.as_deref().ok_or(())?;
-    strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| ())?;
+    let raw = document.0.as_deref().ok_or(ShapeIssue::Invalid)?;
+    strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| ShapeIssue::Invalid)?;
     decode(raw, names)
 }
 
@@ -347,13 +375,16 @@ pub(super) fn screen<T: serde::Serialize>(
     Ok(value)
 }
 
+#[derive(Debug)]
+pub(super) struct LocalShapeFailure;
+
 pub(super) fn shape(op: &'static str, message: &'static str) -> Box<Error> {
     let (status, code) = if message == SNAPSHOT_SHAPE {
         (None, "")
     } else {
         (Some(200), "InvalidResponse")
     };
-    Box::new(api(op, status, code, message))
+    Box::new(api(op, status, code, message).with_outer_detail(LocalShapeFailure))
 }
 
 pub(super) fn api(op: &'static str, status: Option<u16>, code: &str, message: &str) -> Error {

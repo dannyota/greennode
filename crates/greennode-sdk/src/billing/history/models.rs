@@ -1,7 +1,7 @@
 use super::{parse_date, security::Redactor};
-use crate::billing::model::{field, reflects_integer};
+use crate::billing::model::reflects_integer;
 use crate::output_number;
-use crate::wire::{product::sender::SentCredentials, strict_json::Shape};
+use crate::wire::{product::sender::SentCredentials, strict_json};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::sync::LazyLock;
 
@@ -98,33 +98,75 @@ crate::wire::product::output::public_fields!(Payment {
 });
 
 pub(super) trait HistoryRow: DeserializeOwned {
-    const SCHEMA: Shape<'static>;
-
     fn id(&self) -> i64;
     fn reflects_numbers(&self, credentials: &SentCredentials) -> bool;
     fn redact(&mut self, redactor: &Redactor);
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TransactionWire {
-    #[serde(rename = "transactionID")]
-    transaction_id: i64,
-    transaction_type: i64,
-    credit_status: bool,
-    transaction_value: f64,
-    cumulative_value: f64,
-    #[serde(deserialize_with = "nullable")]
-    source_reference: Option<String>,
-    #[serde(deserialize_with = "nullable")]
-    description: Option<String>,
-    #[serde(deserialize_with = "nullable")]
-    user_service_reference: Option<String>,
-    #[serde(deserialize_with = "nullable")]
-    invoice_id: Option<i64>,
-    #[serde(rename = "createTimeStamp")]
-    created_at: String,
+#[derive(Default)]
+struct RowField<T> {
+    has_exact_name: bool,
+    value: Option<T>,
 }
+
+impl<T: DeserializeOwned> RowField<T> {
+    fn finish<E: serde::de::Error>(self) -> Result<T, E> {
+        if !self.has_exact_name {
+            return Err(E::custom("missing exact history row field"));
+        }
+        self.value
+            .map_or_else(|| serde_json::from_str("null").map_err(E::custom), Ok)
+    }
+}
+
+macro_rules! history_row_wire {
+    ($name:ident { $($wire:literal => $field:ident: $ty:ty),+ $(,)? }) => {
+        struct $name {
+            $($field: $ty,)+
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct WireVisitor;
+                impl<'de> serde::de::Visitor<'de> for WireVisitor {
+                    type Value = $name;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        formatter.write_str("a billing history row")
+                    }
+
+                    fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                        $(let mut $field = RowField::<$ty>::default();)+
+                        while let Some(key) = map.next_key::<String>()? {
+                            match [$($wire),+].into_iter().find(|name| strict_json::field_matches(name, &key)) {
+                                $(Some($wire) => {
+                                    $field.has_exact_name |= key == $wire;
+                                    $field.value = map.next_value()?;
+                                })+
+                                _ => { map.next_value::<serde::de::IgnoredAny>()?; }
+                            }
+                        }
+                        Ok($name { $($field: $field.finish()?,)+ })
+                    }
+                }
+                deserializer.deserialize_map(WireVisitor)
+            }
+        }
+    };
+}
+
+history_row_wire!(TransactionWire {
+    "transactionID" => transaction_id: i64,
+    "transactionType" => transaction_type: i64,
+    "creditStatus" => credit_status: bool,
+    "transactionValue" => transaction_value: f64,
+    "cumulativeValue" => cumulative_value: f64,
+    "sourceReference" => source_reference: Option<String>,
+    "description" => description: Option<String>,
+    "userServiceReference" => user_service_reference: Option<String>,
+    "invoiceId" => invoice_id: Option<i64>,
+    "createTimeStamp" => created_at: String,
+});
 
 impl TryFrom<TransactionWire> for Transaction {
     type Error = &'static str;
@@ -166,19 +208,6 @@ impl TryFrom<TransactionWire> for Transaction {
 }
 
 impl HistoryRow for Transaction {
-    const SCHEMA: Shape<'static> = Shape::Object(&[
-        field("transactionID"),
-        field("transactionType"),
-        field("creditStatus"),
-        field("transactionValue"),
-        field("cumulativeValue"),
-        field("sourceReference"),
-        field("description"),
-        field("userServiceReference"),
-        field("invoiceId"),
-        field("createTimeStamp"),
-    ]);
-
     fn id(&self) -> i64 {
         self.id
     }
@@ -204,22 +233,16 @@ impl HistoryRow for Transaction {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PaymentWire {
-    #[serde(rename = "paymentID")]
-    payment_id: i64,
-    payment_type: i64,
-    payment_amount: f64,
-    #[serde(rename = "transactionID")]
-    transaction_id: String,
-    pay_gate: String,
-    payment_status: String,
-    #[serde(rename = "createTimeStamp")]
-    created_at: String,
-    #[serde(deserialize_with = "nullable")]
-    description: Option<String>,
-}
+history_row_wire!(PaymentWire {
+    "paymentID" => payment_id: i64,
+    "paymentType" => payment_type: i64,
+    "paymentAmount" => payment_amount: f64,
+    "transactionID" => transaction_id: String,
+    "payGate" => pay_gate: String,
+    "paymentStatus" => payment_status: String,
+    "createTimeStamp" => created_at: String,
+    "description" => description: Option<String>,
+});
 
 impl TryFrom<PaymentWire> for Payment {
     type Error = &'static str;
@@ -245,17 +268,6 @@ impl TryFrom<PaymentWire> for Payment {
 }
 
 impl HistoryRow for Payment {
-    const SCHEMA: Shape<'static> = Shape::Object(&[
-        field("paymentID"),
-        field("paymentType"),
-        field("paymentAmount"),
-        field("transactionID"),
-        field("payGate"),
-        field("paymentStatus"),
-        field("createTimeStamp"),
-        field("description"),
-    ]);
-
     fn id(&self) -> i64 {
         self.id
     }
@@ -280,12 +292,6 @@ impl HistoryRow for Payment {
             redactor.redact(text);
         }
     }
-}
-
-fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
-    decoder: D,
-) -> Result<Option<T>, D::Error> {
-    Option::deserialize(decoder)
 }
 
 fn valid_amount(amount: f64) -> bool {

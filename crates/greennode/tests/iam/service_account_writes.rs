@@ -334,3 +334,121 @@ async fn create_without_secret_and_failed_confirmation_reports_secret_file_failu
     assert!(!file.exists());
     assert_eq!(server.requests(), 2);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn secret_file_cleanup_distinguishes_attachment_404_from_delete_404() {
+    use greennode_sdk::{ConfigOptions, CredentialsProvider, Error, RequestContext, Secret, Token};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct RaceDestination(std::path::PathBuf, AtomicBool);
+
+    impl CredentialsProvider for RaceDestination {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+            Box::pin(async move {
+                if !self.1.swap(true, Ordering::Relaxed) {
+                    std::fs::write(&self.0, "keep").unwrap();
+                }
+                Ok(Token::new(Secret::new(BEARER), None))
+            })
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    for dispatched in [false, true] {
+        let directory = PrivateDir::new();
+        let file = directory.0.join("issued");
+        let mut replies = vec![
+            reply(201, r#"{"id":"sa-1","clientSecret":"private-toy"}"#),
+            reply(200, r#"{"id":"sa-1"}"#),
+        ];
+        let mut guard = guard_responses();
+        guard.truncate(if dispatched { 3 } else { 2 });
+        replies.extend(guard);
+        replies.push(reply(404, "{}"));
+        let server = Server::start(replies);
+        let options = ConfigOptions::default()
+            .with_credentials_provider(Arc::new(RaceDestination(file.clone(), false.into())));
+        let (status, stdout, stderr) = super::invoke_with_options(
+            &[
+                "iam",
+                "create-service-account",
+                "--name",
+                "new",
+                "--secret-file",
+                file.to_str().unwrap(),
+            ],
+            &server,
+            BEARER,
+            options,
+        )
+        .await;
+        assert_eq!(status, ExitCode::FAILURE);
+        assert!(stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(error["error"]["code"], "SecretFileFailed");
+        let message = error["error"]["message"].as_str().unwrap();
+        assert_eq!(
+            message.contains("new service account was deleted"),
+            dispatched
+        );
+        assert_eq!(
+            message.contains("cleanup could not be confirmed"),
+            !dispatched
+        );
+        assert!(std::fs::read_to_string(&file).is_ok_and(|text| text == "keep"));
+        assert_eq!(server.requests(), if dispatched { 6 } else { 5 });
+        assert_eq!(
+            server.heads().last().unwrap().starts_with(b"DELETE "),
+            dispatched
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unconfirmed_reset_writes_only_the_private_secret_file() {
+    let directory = PrivateDir::new();
+    let file = directory.0.join("issued");
+    let mut replies = guard_responses();
+    replies.push(reply(
+        200,
+        r#"{"clientSecret":"treat the previous secret as revoked","unknown":"toy/bearer"}"#,
+    ));
+    let server = Server::start(replies);
+    let (status, stdout, stderr) = invoke(
+        &[
+            "iam",
+            "reset-service-account-secret",
+            "--service-account-id",
+            "sa-1",
+            "--secret-file",
+            file.to_str().unwrap(),
+            "--yes",
+        ],
+        &server,
+        BEARER,
+    )
+    .await;
+    assert_eq!(status, ExitCode::FAILURE);
+    assert!(stdout.is_empty());
+    assert!(String::from_utf8_lossy(&stderr).contains("NotSettled"));
+    assert!(!String::from_utf8_lossy(&stderr).contains("treat the previous secret as revoked"));
+    assert!(
+        std::fs::read(&file).is_ok_and(|bytes| bytes == b"treat the previous secret as revoked\n")
+    );
+    assert_eq!(server.requests(), 4);
+}

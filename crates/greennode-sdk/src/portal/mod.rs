@@ -182,11 +182,13 @@ fn user_info_operation() -> Operation {
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: false,
         overflow_overrides_status: false,
         sensitive: true,
         reflection: crate::wire::product::operation::Reflection::Refuse,
         no_redirect: true,
+        report_redirect: true,
         retry_config: retry::Config::default(),
     }
 }

@@ -10,7 +10,7 @@ use crate::wire::product::{
     operation::{GuardOperation, Operation, RouteAuth, execute_raw},
     options::Options,
     redirect::{Classification, Retry},
-    response::{classify, decision_text, sanitize_error_text},
+    response::{decision_text, sanitize_error_text},
     retry,
 };
 use crate::wire::strict_json::{Shape, ShapeField, validate_shape};
@@ -96,19 +96,29 @@ impl Call {
         self.id.strip_prefix("cdn.").unwrap_or(self.id)
     }
 
-    fn refused(&self, status: u16, envelope: GuardEnvelope<'_>, evidence: &Evidence) -> Error {
+    fn refused(
+        &self,
+        status: u16,
+        envelope: GuardEnvelope<'_>,
+        evidence: &Evidence,
+        receipt: Option<crate::wire::product::absence::CleanRequest>,
+    ) -> Error {
         let GuardEnvelope(envelope) = envelope;
+        let absent = |error: Error| match receipt.clone() {
+            Some(receipt) => error.with_outer_detail(AbsentDetailEnvelope(receipt)),
+            None => error,
+        };
         if let Some(not_found) = self.not_found
             && empty_data(envelope.data.as_deref())
         {
-            return api_error(
+            return absent(api_error(
                 self.id,
                 status,
                 "NotFound",
                 &format!("vCDN {}: {not_found}", self.short()),
                 ErrorClass::NotFound,
                 false,
-            );
+            ));
         }
         let parsed = envelope.code.as_deref().and_then(parse_code);
         let effective = parsed
@@ -177,11 +187,29 @@ impl Call {
             class,
             false,
         );
+        if self.not_found.is_some() && class == ErrorClass::NotFound {
+            return absent(error);
+        }
         match detail {
             Some(detail) => error.with_outer_detail(detail),
             None => error,
         }
     }
+}
+
+struct AbsentDetailEnvelope(crate::wire::product::absence::CleanRequest);
+
+crate::error::debug_record!(AbsentDetailEnvelope unit);
+
+pub(super) fn confirms_missing_detail(error: &Error, operation: &str) -> bool {
+    crate::confirms_absence(error, operation, "GET", super::reads::GET_WEB.route)
+        || error
+            .internal_detail::<AbsentDetailEnvelope>()
+            .is_some_and(|proof| {
+                proof
+                    .0
+                    .matches(operation, "GET", super::reads::GET_WEB.route)
+            })
 }
 
 #[derive(Deserialize)]
@@ -287,6 +315,7 @@ impl Client {
             operation.class = Classification::Write;
         }
         operation.retry = call.retry;
+        operation.report_redirect = matches!(call.retry, Retry::Once);
         let sent_failure = |error| Failure::new(error, None, call.dispatch(true));
         let guarded;
         let operation = if guard {
@@ -309,15 +338,14 @@ impl Client {
                 {
                     return Failure::new(error, None, dispatch);
                 }
-                let status = error
-                    .http_status()
-                    .map(|status| status.as_u16())
-                    .or_else(|| error.api_error().and_then(ApiError::status));
+                let status = error.api_error().and_then(ApiError::observed_status);
                 let error = match status {
-                    Some(status) if let Some(message) = key_message(status) => {
-                        call.key_error(status, &error, message)
-                    }
-                    Some(status) if (200..300).contains(&status) => call.unexpected(status),
+                    Some(status) if let Some(message) = key_message(status) => call
+                        .key_error(status, &error, message)
+                        .retain_status_visibility(error.api_error()),
+                    Some(status) if (200..300).contains(&status) => call
+                        .unexpected(status)
+                        .retain_status_visibility(error.api_error()),
                     Some(400) if error.class() == ErrorClass::Api => {
                         Error::new(ErrorClass::InvalidInput).with_cause(error)
                     }
@@ -333,21 +361,21 @@ impl Client {
             if reply.status.is_success() {
                 return Err(sent_failure(call.unexpected(status)));
             }
+            let absence = reply.clean_absence();
             let fixed_key_message = key_message(status);
-            let error = classify(
-                call.id,
-                reply.status,
-                Bytes::from(reply.reply.body),
-                OK,
-                (
-                    true,
-                    call.sensitive && fixed_key_message.is_none(),
-                    operation.retry,
-                ),
-                evidence.credentials(),
-            )
-            .err()
-            .map_or_else(|| call.unexpected(status), |error| *error);
+            let error = reply
+                .classify(
+                    call.id,
+                    OK,
+                    (
+                        true,
+                        call.sensitive && fixed_key_message.is_none(),
+                        operation.retry,
+                    ),
+                    false,
+                )
+                .err()
+                .map_or_else(|| call.unexpected(status), |error| *error);
             let error = if let Some(message) = fixed_key_message {
                 call.key_error(status, &error, message)
             } else if status == 400 {
@@ -355,40 +383,46 @@ impl Client {
             } else {
                 error
             };
-            return Err(sent_failure(error));
+            return Err(sent_failure(error.with_clean_absence(absence)));
         }
-        let screen = if call.write {
-            let screen = evidence.transport_only().go_peer_body_screen(&reply.body);
-            screen.clean().ok_or_else(|| {
-                sent_failure(crate::wire::product::operation::unsafe_guard_response(
-                    call.id,
-                ))
-            })?;
-            screen
-        } else {
-            reply.reflection
-        };
+        let clean = reply.clean_receipt().is_some();
         let names = if guard {
             crate::wire::strict_json::FieldNames::Canonical
         } else {
             evidence.field_names()
         };
-        if names.has_case_variant(&reply.body, &ENVELOPE) {
-            return Err(sent_failure(
-                crate::wire::product::operation::unsafe_guard_response(call.id),
-            ));
-        }
-        names
-            .validate(&reply.body, &ENVELOPE, RESPONSE_CAP)
-            .map_err(|_| sent_failure(call.unexpected(status)))?;
-        let envelope: Envelope = serde_json::from_slice(&reply.body)
-            .map_err(|_| sent_failure(call.unexpected(status)))?;
-        if !envelope.success {
-            let checked = GuardEnvelope::checked(&envelope, screen)
-                .ok_or_else(|| sent_failure(call.unexpected(status)))?;
-            return Err(sent_failure(call.refused(status, checked, evidence)));
-        }
-        Ok(envelope.data)
+        reply
+            .decode_projection(|body| {
+                if names.has_case_variant(body, &ENVELOPE) {
+                    return Err(Box::new(
+                        crate::wire::product::operation::unsafe_guard_response(call.id),
+                    ));
+                }
+                names
+                    .validate(body, &ENVELOPE, RESPONSE_CAP)
+                    .map_err(|_| Box::new(call.unexpected(status)))?;
+                let envelope: Envelope =
+                    serde_json::from_slice(body).map_err(|_| Box::new(call.unexpected(status)))?;
+                if !envelope.success {
+                    let checked = GuardEnvelope::checked(
+                        &envelope,
+                        if clean {
+                            crate::wire::product::response::Screen::Clean
+                        } else {
+                            reply.reflection
+                        },
+                    )
+                    .ok_or_else(|| Box::new(call.unexpected(status)))?;
+                    return Err(Box::new(call.refused(
+                        status,
+                        checked,
+                        evidence,
+                        reply.clean_request(),
+                    )));
+                }
+                Ok(envelope.data)
+            })
+            .map_err(|error| sent_failure(*error))
     }
 }
 
@@ -411,10 +445,12 @@ pub(super) fn operation(
         allow_recovery: false,
         allow_empty: false,
         no_output: false,
-        keep_status: true,
+        keep_status: false,
+        raw_body: id == "cdn.ListIPRanges",
         overflow_overrides_status: false,
         reflection: crate::wire::product::operation::Reflection::Redact,
         no_redirect: false,
+        report_redirect: false,
         retry_config: retry::Config::default(),
     }
 }
@@ -448,7 +484,14 @@ pub(super) async fn raw(
         runtime,
         base,
         operation,
-        &Options::DEFAULT,
+        &Options {
+            receipt_policy: if matches!(operation.class, Classification::Write) {
+                crate::wire::product::guard::ReceiptPolicy::Transport
+            } else {
+                crate::wire::product::guard::ReceiptPolicy::All
+            },
+            ..Options::DEFAULT
+        },
         path,
         &[],
         auth,

@@ -67,6 +67,13 @@ def validate(text):
     assert 'cargo ' not in sections['receipt'] and 'scripts/check-crate-release.py receipt' in sections['receipt'], "clean receipt job"
     assert 'scripts/check-crate-release.py receipt' not in sections['packages'], "untrusted packaging runner"
     assert 'scripts/release-notes.sh' not in sections['release'], "release executes tagged script"
+    package = next(step['run'] for step in parsed_jobs['build']['steps'] if step.get('name') == 'Package')
+    archive_commands = [line for line in package.splitlines() if '7z a ' in line or 'tar -C dist ' in line]
+    assert len(archive_commands) == 2 and all('licenses/go-NOTICE' in line.rstrip(')').split() for line in archive_commands), "archive notice entry"
+    assert 'cp crates/greennode-sdk/licenses/go-NOTICE dist/licenses/go-NOTICE' in package, "archive notice source"
+    assert 'COPYFILE_DISABLE=1 tar -C dist' in package, "macOS archive metadata"
+    verify_archive = next(step['run'] for step in parsed_jobs['release']['steps'] if step.get('name') == 'Verify archive contents')
+    assert "'licenses/go-NOTICE': pathlib.Path('crates/greennode-sdk/licenses/go-NOTICE').read_bytes()" in verify_archive, "archive notice verification"
     assert 'verify-packages' in parsed_jobs['release']['needs'], "verified archives required"
     assert 'cargo +1.100.0 publish --workspace --dry-run --no-verify --locked --registry crates-io' in sections['packages'], "unbuilt staging"
     assert 'cargo +1.100.0 publish --workspace --dry-run --locked --registry crates-io' in sections['verify-packages'], "verified packaging"

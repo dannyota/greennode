@@ -33,13 +33,13 @@ pub enum DecodeError {
 crate::error::debug_record!(DecodeError; MalformedJson, InvalidShape, ReflectedCredential);
 
 #[derive(Debug)]
-pub(super) struct CompleteNotFound;
-
-#[derive(Debug)]
 pub(super) struct PoolInUseRefusal(pub(super) SafeText);
 
-pub(super) fn pool_in_use_refusal(body: &[u8], evidence: &Evidence) -> Option<PoolInUseRefusal> {
-    response::inspect_error_message(body, evidence.credentials(), |message| {
+pub(super) fn pool_in_use_refusal(
+    receipt: &crate::wire::product::guard::CleanReceipt<'_>,
+    evidence: &Evidence,
+) -> Option<PoolInUseRefusal> {
+    response::inspect_error_message(receipt, evidence.credentials(), |message| {
         let phrase = b"is used in listener";
         message
             .as_bytes()
@@ -338,10 +338,12 @@ impl Client {
             allow_empty: true,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: require_complete,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: false,
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: require_complete,
+            no_redirect: false,
+            report_redirect: false,
             retry_config: retry::Config::default(),
         };
         let guarded;
@@ -364,39 +366,42 @@ impl Client {
         )
         .await;
         let screen = |error: Error| Box::new(evidence.screen_error(error));
-        let received = result.map_err(|error| screen(error.into_parts().0))?;
+        let received = result.map_err(|failure| screen(failure.into_parts().0))?;
         let status = received.status;
-        let in_use = (require_complete && !operation.success.contains(&status))
-            .then(|| pool_in_use_refusal(&received.reply.body, evidence))
-            .flatten();
-        let body = response::classify(
-            read.id,
-            status,
-            Bytes::from(received.reply.body),
-            operation.success,
-            (true, false, operation.retry),
-            evidence.credentials(),
-        )
-        .map_err(|error| {
-            let mut error = *screen(*error);
-            if require_complete && status == StatusCode::NOT_FOUND {
-                error = error.with_outer_detail(CompleteNotFound);
-            }
-            if let Some(in_use) = in_use {
-                error = error.with_outer_detail(in_use);
-            }
-            Box::new(error)
-        })?;
-        let text = if body.is_empty() {
-            "null".into()
+        let absence = received.clean_absence();
+        let in_use = if require_complete && !operation.success.contains(&status) {
+            received
+                .clean_receipt()
+                .and_then(|receipt| pool_in_use_refusal(&receipt, evidence))
         } else {
-            go_json(&body).into_owned()
+            None
         };
-        serde_json::from_str::<&RawValue>(&text)
-            .map_err(|_| read.decode_error(evidence, DecodeError::MalformedJson))?;
-        strict_json::validate(text.as_bytes(), &[], text.len())
-            .map_err(|_| read.decode_error(evidence, DecodeError::InvalidShape))?;
-        Ok(text)
+        received
+            .classify(
+                read.id,
+                operation.success,
+                (true, false, operation.retry),
+                false,
+            )
+            .map_err(|error| {
+                let mut error = *screen(error.with_clean_absence(absence));
+                if let Some(in_use) = in_use {
+                    error = error.with_outer_detail(in_use);
+                }
+                Box::new(error)
+            })?;
+        received.decode_projection(|body| {
+            let text = if body.is_empty() {
+                "null".into()
+            } else {
+                go_json(body).into_owned()
+            };
+            serde_json::from_str::<&RawValue>(&text)
+                .map_err(|_| read.decode_error(evidence, DecodeError::MalformedJson))?;
+            strict_json::validate(text.as_bytes(), &[], text.len())
+                .map_err(|_| read.decode_error(evidence, DecodeError::InvalidShape))?;
+            Ok(text)
+        })
     }
 }
 

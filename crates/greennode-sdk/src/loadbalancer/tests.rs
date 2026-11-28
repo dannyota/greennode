@@ -1,9 +1,11 @@
+mod certificate_absence;
 mod child_deletes;
 mod create_writes;
 mod listener_writes;
 mod member_writes;
 mod policy_writes;
 mod pool_writes;
+mod receipt_fixtures;
 
 use super::*;
 use crate::wire::test_server::{Response, Server};
@@ -21,8 +23,24 @@ fn response(status: &str, raw: impl AsRef<[u8]>) -> Response {
 }
 
 fn client(server: &Server, token: &str) -> Client {
+    client_with_options(server, token, ConfigOptions::default())
+}
+
+fn settlement_client(server: &Server) -> Client {
+    let clock = crate::testing::clock_advancing_on_sleep(
+        crate::TestClock::new(time::OffsetDateTime::UNIX_EPOCH),
+        child_writes::INTERVAL,
+    );
+    client_with_options(
+        server,
+        CANARY,
+        ConfigOptions::default().with_clock(std::sync::Arc::new(clock)),
+    )
+}
+
+fn client_with_options(server: &Server, token: &str, options: ConfigOptions) -> Client {
     let config = Config::new(
-        ConfigOptions::default()
+        options
             .with_region("hcm-3".into())
             .with_project_id("proj-1".into())
             .with_static_token(Secret::new(token))
@@ -317,26 +335,24 @@ async fn load_balancer_delete_skips_an_in_progress_delete_and_obeys_no_wait() {
 }
 
 #[tokio::test]
-async fn load_balancer_delete_refuses_to_confirm_an_oversized_404() {
-    let overflow = Response::Http {
-        status: "404 Not Found".into(),
-        headers: vec![("Content-Length".into(), ((8 << 20) + 1).to_string())],
-        body: Vec::new(),
-    };
+async fn load_balancer_delete_cannot_confirm_an_oversized_404() {
     let server = Server::start(vec![
         lb_status("CREATED"),
         response("202 Accepted", ""),
-        overflow,
+        Server::oversized("404 Not Found"),
     ]);
-    let client = client(&server, CANARY);
     let (ctx, _) = RequestContext::new();
-    let error = client
+    let result = client(&server, CANARY)
         .delete_load_balancer(&ctx, delete_input(false))
-        .await
-        .unwrap_err();
-    assert!(error.error().has_class(ErrorClass::NotSettled));
-    assert_eq!(error.write_dispatch(), WriteDispatch::MayHaveBeenSent);
-    assert_eq!(error.partial(), Some(&DeleteLoadBalancerOutput {}));
+        .await;
+    let failure = result.unwrap_err();
+    assert!(failure.error().has_identity(ErrorClass::NotSettled));
+    assert_eq!(failure.write_dispatch(), WriteDispatch::MayHaveBeenSent);
+    assert!(failure.partial().is_some());
+    assert_eq!(
+        failure.error().http_status(),
+        Some(http::StatusCode::NOT_FOUND)
+    );
     assert_eq!(server.requests(), 3);
 }
 
@@ -523,18 +539,26 @@ async fn certificate_rejection_uses_only_screened_message() {
         ),
     ]);
     let (ctx, _) = RequestContext::new();
-    let deleted = client(&lb, "404")
-        .delete_load_balancer(&ctx, delete_input(false))
-        .await;
-    let error = client(&cert, CANARY)
-        .delete_certificate(
-            &ctx,
-            DeleteCertificateInput {
-                certificate_id: "cert-1".into(),
-            },
-        )
-        .await
-        .unwrap_err();
+    let deleted = client_with_options(
+        &lb,
+        "404",
+        ConfigOptions::default().with_clock(crate::testing::retry_clock()),
+    )
+    .delete_load_balancer(&ctx, delete_input(false))
+    .await;
+    let error = client_with_options(
+        &cert,
+        CANARY,
+        ConfigOptions::default().with_clock(crate::testing::retry_clock()),
+    )
+    .delete_certificate(
+        &ctx,
+        DeleteCertificateInput {
+            certificate_id: "cert-1".into(),
+        },
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.error().detail::<WriteError>(), None);
     let api = error.error().api_error().unwrap();
     assert_eq!(api.status(), Some(409));

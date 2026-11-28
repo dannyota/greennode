@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use clap::ArgMatches;
 use greennode_sdk::iam as sdk;
-use greennode_sdk::{Config, ErrorClass, Failure, RecoveryAdvice, RequestContext, Secret};
+use greennode_sdk::{Config, Failure, RecoveryAdvice, RequestContext, Secret};
 use serde::Serialize;
 
 use super::{
@@ -259,7 +259,14 @@ fn reset<'a>(
                 );
                 return Err(local_failure("SecretFileFailed", message.to_owned()).into());
             }
-            Err(failed) => return Err(operation_failure(failed)),
+            Err(failed) => {
+                if let Some(secret) = sdk::issued_reset_service_account_secret(&failed)
+                    && !persist(input, secret).await
+                {
+                    return Err(local_failure("SecretFileFailed", "could not write --secret-file; reset is unconfirmed and the issued secret could not be saved".to_owned()).into());
+                }
+                return Err(operation_failure(failed));
+            }
         };
         let secret = output.client_secret();
         if !persist(input, secret).await {
@@ -304,8 +311,13 @@ async fn save_created(
     let removed = match client.delete_service_account(&cleanup_ctx, cleanup).await {
         Ok(_) => true,
         Err(failed) => {
-            failed.error().has_identity(ErrorClass::NotFound)
-                || failed.error().api_error().and_then(|api| api.status()) == Some(404)
+            failed.write_dispatch() == greennode_sdk::WriteDispatch::MayHaveBeenSent
+                && greennode_sdk::confirms_absence(
+                    failed.error(),
+                    "iam.DeleteServiceAccount",
+                    "DELETE",
+                    "accounts-api/v1/service-accounts/{}",
+                )
         }
     };
     let message = if removed {

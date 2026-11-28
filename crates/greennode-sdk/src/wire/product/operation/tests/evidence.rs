@@ -604,7 +604,7 @@ async fn public_routes_send_no_credentials() {
     let reply = raw_route(&server, RouteAuth::PublicHtml, &mut Evidence::new())
         .await
         .unwrap();
-    assert_eq!(reply.body.as_slice(), b"<html></html>");
+    assert_eq!(reply.clean_receipt().unwrap().body(), b"<html></html>");
     let heads = server.heads();
     let req = String::from_utf8_lossy(&heads[0]).to_ascii_lowercase();
     assert!(req.contains("accept: text/html"));

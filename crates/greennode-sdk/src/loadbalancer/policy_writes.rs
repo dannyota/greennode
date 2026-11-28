@@ -317,11 +317,11 @@ impl Client {
                 read: &LIST_POLICIES,
                 ..policy_target("", &ids)
             };
-            let (status, response) = write
+            let response = write
                 .send(ctx, Method::POST, &target, bytes, None)
                 .await
                 .map_err(|failure| write.create_failure(failure, "list-policies"))?;
-            let uuid = write.acknowledged_id(status, &response, "list-policies", input.no_wait)?;
+            let uuid = write.acknowledged_id(&response, "list-policies", input.no_wait)?;
             let fallback = body.submitted(
                 Policy {
                     uuid: uuid.clone(),
@@ -424,7 +424,8 @@ impl Client {
             let bytes = encode_body(&body, &write.evidence).map_err(not_sent)?;
             write
                 .send(ctx, Method::PUT, &target, bytes, Some(&target))
-                .await?;
+                .await
+                .map(drop)?;
             let fallback = if input.no_wait {
                 body.submitted(policy.clone(), input.rules.is_some())
             } else {
@@ -558,6 +559,9 @@ async fn finish<O>(
     } else {
         settle(ctx, write, target, creating, &mut policy).await
     };
+    write
+        .check_acknowledgement(target)
+        .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
     let retained = PolicyProjection::retain(&mut policy, &write.evidence)
         .map(|projection| output(policy, projection))
         .map_err(|()| GET_POLICY.decode_error(&write.evidence, DecodeError::ReflectedCredential));

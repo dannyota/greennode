@@ -155,7 +155,7 @@ fn budget_reads_refuse_invalid_input_without_connecting() {
         (
             "list-budget-alerts",
             &["--budget-uuid", "a/b"][..],
-            "request failed",
+            "vngcloud: invalid input",
         ),
     ] {
         let mut argv = vec!["billing", command];

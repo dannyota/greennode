@@ -58,3 +58,136 @@ fn endpoint_quote_fixtures() -> [&'static str; 8] {
         include_str!("../../../tests/fixtures/network/quote_create_nat.json"),
     ]
 }
+
+#[tokio::test]
+async fn endpoint_quote_body_interruption_retains_context_at_discovery_and_price() {
+    use crate::testing::ResponseBodyClock;
+    use std::{sync::Arc, time::Duration};
+
+    for (price, status, bearer) in [
+        (false, 200, "toy-secret"),
+        (true, 200, "toy-secret"),
+        (false, 403, "toy-secret"),
+        (true, 403, "toy-secret"),
+        (false, 403, "403"),
+        (false, 503, "503"),
+        (false, 403, "canceled"),
+        (false, 200, "canceled"),
+    ] {
+        let clock = Arc::new(ResponseBodyClock::new());
+        let (head, _) = tokio::sync::oneshot::channel();
+        let stalled = if status != 200 {
+            let (eof, _) = tokio::sync::oneshot::channel();
+            Response::ObserveStall {
+                head: format!("HTTP/1.1 {status} Refused\r\nContent-Length: 10\r\n\r\n")
+                    .into_bytes(),
+                sent: head,
+                eof,
+            }
+        } else {
+            Response::Stall(head, 10)
+        };
+        let (projects, stages) = if price {
+            let project =
+                include_str!("../../../tests/fixtures/network/endpoint_quote_projects.json");
+            (
+                vec![response("200 OK", project)],
+                endpoint_quote_fixtures()
+                    .into_iter()
+                    .take(7)
+                    .map(|body| response("200 OK", body))
+                    .chain([stalled])
+                    .collect(),
+            )
+        } else {
+            (vec![stalled], vec![])
+        };
+        let vserver = Server::start(projects);
+        let vnetwork = Server::start(stages);
+        let options = with_product_loopback(
+            Product::Vserver,
+            options()
+                .with_static_token(Secret::new(bearer))
+                .with_clock(clock.clone()),
+            &vserver,
+        );
+        let config =
+            Config::new(with_product_loopback(Product::Vnetwork, options, &vnetwork)).unwrap();
+        let client = Client::new(&config);
+        let (ctx, cancel) = RequestContext::new();
+        let input = QuoteCreateEndpointInput::new(
+            "edge",
+            "net-00000000-0000-0000-0000-000000000002",
+            "sub-00000000-0000-0000-0000-000000000003",
+        );
+        let interrupt = async {
+            clock.wait_for_body(if price { 9 } else { 1 }).await;
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(60), async {
+            tokio::join!(client.quote_create_endpoint(&ctx, input), interrupt)
+        })
+        .await
+        .unwrap();
+        let failure = result.unwrap_err();
+        assert!(
+            failure.error().has_identity(ErrorClass::Cancelled),
+            "price stage: {price}"
+        );
+        if bearer == "canceled" {
+            let error = failure.error();
+            assert_eq!(vserver.requests(), 1);
+            assert_eq!(vnetwork.requests(), 0);
+            if status == 403 {
+                assert!(error.has_identity(ErrorClass::PermissionDenied));
+                let api = error.api_error().unwrap();
+                assert_eq!((api.status(), api.code()), (Some(403), "Forbidden"));
+                assert!(!format!("{api}").contains(bearer));
+            } else {
+                assert!(error.api_error().is_none());
+            }
+            assert!(!format!("{error} {failure:?}").contains(bearer));
+            assert!(
+                error
+                    .joined_diagnostic()
+                    .is_none_or(|message| !message.contains(bearer))
+            );
+            continue;
+        }
+        if status != 200 {
+            let error = failure.error();
+            if status == 403 {
+                assert!(error.has_identity(ErrorClass::PermissionDenied));
+            }
+            let api = error.api_error().expect("observed refusal lost");
+            let visible = (bearer == "toy-secret").then_some(status);
+            let suffix = visible.map_or_else(String::new, |status| format!(" (status {status})"));
+            assert_eq!(
+                (api.status(), api.code()),
+                (
+                    visible,
+                    if status == 403 {
+                        "Forbidden"
+                    } else {
+                        "ServerError"
+                    }
+                )
+            );
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "network.QuoteCreateEndpoint: endpoint response withheld{suffix}\nnetwork.QuoteCreateEndpoint: context canceled"
+                )
+            );
+        } else {
+            assert!(
+                failure.error().api_error().is_none(),
+                "price stage: {price}"
+            );
+            assert_eq!(
+                failure.error().to_string(),
+                "network.QuoteCreateEndpoint: context canceled"
+            );
+        }
+    }
+}

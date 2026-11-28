@@ -8,8 +8,12 @@ use crate::model::wire::{Field, WireField, go_json};
 use crate::wire::product::{evidence::Evidence, options::PathIds};
 use crate::{Error, ErrorClass, Failure, List, RequestContext};
 
-use super::wire::{Fields, PAGING, Read, Style};
-use super::{Client, failure};
+use super::Client;
+use super::wire::{Fields, PAGING, Read, Style, nat_diagnostic, nat_region_selection_error};
+
+pub(super) fn failure<T>(error: Error) -> Failure<T> {
+    super::failure(error.with_service_display())
+}
 
 const DETAIL: Read = Read::new(
     "network.GetNATInstance",
@@ -21,7 +25,6 @@ const RULES: Read = Read::new(
     "vnetwork/v1/{}/{}/nats/{}/sec-groups/rules",
     Style::Nat,
 );
-const INVALID_REGIONS: Read = Read::new("network.ListNATInstances", "", Style::Nat);
 const REGIONS: Read = Read::new(
     "network.ListVNetworkRegions",
     "vnetwork/v1/regions",
@@ -176,7 +179,46 @@ crate::wire::product::output::public_fields!(NatInboundRule {
 });
 
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
+impl Read {
+    pub(super) fn nat_input_error(self, reason: &str, evidence: &Evidence) -> Error {
+        nat_diagnostic(
+            ErrorClass::InvalidInput,
+            format!("vngcloud: invalid input: {} {reason}", self.id),
+            evidence,
+        )
+    }
+
+    pub(super) fn nat_path(self, field: &str, id: &str, evidence: &Evidence) -> Result<(), Error> {
+        if PathIds::Strict.allows(id) {
+            return Ok(());
+        }
+        let reason = if self.style == Style::Nat {
+            format!("requires a path-safe {field}")
+        } else {
+            format!("requires {field} to match ^[A-Za-z0-9-]+$")
+        };
+        Err(self.nat_input_error(&reason, evidence))
+    }
+
+    pub(super) fn nat_catalog_zone(self, zone: &str, evidence: &Evidence) -> Result<(), Error> {
+        if !zone.is_empty() {
+            self.nat_path("ZoneID", zone, evidence)?;
+            if evidence.id_reflects(zone) {
+                return Err(Error::new(ErrorClass::InvalidInput));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 impl Client {
+    pub(super) fn nat_evidence(&self) -> Evidence {
+        let mut evidence = Evidence::new();
+        evidence.absorb(self.session.configured_credentials());
+        evidence
+    }
+
     /// Reads one Public NAT instance in Hanoi or HCM.
     pub async fn get_nat_instance(
         &self,
@@ -220,9 +262,10 @@ impl Client {
         id: &str,
         mut zone: String,
     ) -> Result<(Vec<u8>, Evidence), Error> {
-        read.path("NATID", id)?;
+        let mut evidence = self.nat_evidence();
+        read.nat_path("NATID", id, &evidence)?;
         if !zone.is_empty() {
-            read.path("ZoneID", &zone)?;
+            read.nat_path("ZoneID", &zone, &evidence)?;
         }
         let project = self
             .session
@@ -230,10 +273,9 @@ impl Client {
             .await
             .map_err(|error| *error)?;
         if let Some(project) = &project {
-            read.path("ProjectID", project)?;
+            read.nat_path("ProjectID", project, &evidence)?;
         }
-        let base = self.nat_base()?;
-        let mut evidence = self.request_evidence(ctx)?;
+        let base = self.nat_base(&evidence)?;
         if [Some(id), Some(zone.as_str()), project.as_deref()]
             .into_iter()
             .flatten()
@@ -260,7 +302,7 @@ impl Client {
             }
         };
         if zone.is_empty() {
-            zone = self.nat_zone(ctx, &base, &mut evidence).await?;
+            zone = self.nat_zone(ctx, &base, Style::Nat, &mut evidence).await?;
         }
         if [zone.as_str(), project.as_str()]
             .into_iter()
@@ -274,9 +316,12 @@ impl Client {
         Ok((raw, evidence))
     }
 
-    pub(super) fn nat_base(&self) -> Result<Base, Error> {
+    pub(super) fn nat_base(&self, evidence: &Evidence) -> Result<Base, Error> {
         if !matches!(self.region.as_str(), "hcm-3" | "han-1") {
-            return Err(Error::new(ErrorClass::InvalidConfig));
+            return Err(nat_region_selection_error(
+                "network.ListNATInstances supports hcm-3 and han-1",
+                evidence,
+            ));
         }
         self.session
             .endpoints()
@@ -292,10 +337,14 @@ impl Client {
         &self,
         ctx: &RequestContext,
         base: &Base,
+        style: Style,
         evidence: &mut Evidence,
     ) -> Result<String, Error> {
-        let raw = self.read(ctx, base, REGIONS, &[], evidence).await?;
-        let invalid = || INVALID_REGIONS.invalid_as(evidence, "invalid regions envelope");
+        use super::wire::invalid_nat_regions;
+        let raw = self
+            .read(ctx, base, Read { style, ..REGIONS }, &[], evidence)
+            .await?;
+        let invalid = || invalid_nat_regions(evidence, "invalid regions envelope");
         let text = go_json(&raw);
         if !evidence.go_peer_body_screen(&raw).is_clean() {
             return Err(invalid());
@@ -304,7 +353,7 @@ impl Client {
         if data.get() == "null" {
             return Err(invalid());
         }
-        let row_invalid = || INVALID_REGIONS.invalid_as(evidence, "invalid regions data");
+        let row_invalid = || invalid_nat_regions(evidence, "invalid regions data");
         let regions: Vec<Fields<'_>> =
             serde_json::from_str(data.get()).map_err(|_| row_invalid())?;
         let origin = format!("https://{}-vnetwork.console.greennode.ai", self.region);
@@ -339,14 +388,28 @@ impl Client {
             if !matches(&origin) {
                 continue;
             }
-            if matches(&other_origin)
-                || !PathIds::Strict.allows(&zone)
-                || selected.replace(zone).is_some()
-            {
-                return Err(Error::new(ErrorClass::InvalidConfig));
+            if matches(&other_origin) {
+                return Err(nat_region_selection_error(
+                    "conflicting NAT region mapping",
+                    evidence,
+                ));
+            }
+            if !PathIds::Strict.allows(&zone) {
+                return Err(nat_region_selection_error(
+                    "invalid discovered NAT zone",
+                    evidence,
+                ));
+            }
+            if selected.replace(zone).is_some() {
+                return Err(nat_region_selection_error(
+                    "no unique NAT zone for selected region",
+                    evidence,
+                ));
             }
         }
-        selected.ok_or_else(|| Error::new(ErrorClass::InvalidConfig))
+        selected.ok_or_else(|| {
+            nat_region_selection_error("no unique NAT zone for selected region", evidence)
+        })
     }
 }
 

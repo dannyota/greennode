@@ -11,7 +11,8 @@ use super::*;
 
 pub(super) const LIST_SERVERS: Read =
     Read::new("compute.ListServers", "v2/{}/servers", ReadStyle::Server);
-const GET_SERVER: Read = Read::new("compute.GetServer", "v2/{}/servers/{}", ReadStyle::Server);
+pub(super) const GET_SERVER: Read =
+    Read::new("compute.GetServer", "v2/{}/servers/{}", ReadStyle::Server);
 const CONSOLE: Read = Read::new(
     "compute.GetServerConsoleLog",
     "v2/{}/servers/{}/console-log",

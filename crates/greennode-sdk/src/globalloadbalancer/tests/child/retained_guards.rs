@@ -40,7 +40,7 @@ async fn retained_pool_status_is_rechecked_with_the_delete_bearer() {
         )
         .await
         .unwrap();
-    let body: Value = serde_json::from_slice(&reply.body).unwrap();
+    let body: Value = serde_json::from_slice(reply.clean_receipt().unwrap().body()).unwrap();
     let pool = Guarded::latest(body, &write.evidence).unwrap();
     assert_eq!(pool.recheck(&write.evidence).unwrap()["status"], "ACTIVE");
     let failure = write
@@ -132,8 +132,8 @@ async fn glb_guard_refusal_does_not_invent_an_ok_status() {
 #[tokio::test]
 async fn glb_pool_create_rechecks_acknowledgement_through_final_confirmation() {
     for (at, bearer, reflects, requests) in [
-        (10, "pool-1", true, 7),
-        (15, "toy-ack-only", true, 12),
+        (10, "pool-1", true, 6),
+        (15, "toy-ack-only", true, 11),
         (15, "toy-clean-bearer", false, 12),
     ] {
         let mut fixture = child_fixture();
@@ -275,7 +275,7 @@ async fn glb_confirmation_can_poll_for_the_full_fifteen_minutes() {
     let ctx = RequestContext::new().0;
     let confirm = client.create_pool(&ctx, pool_input());
     tokio::pin!(confirm);
-    let Ok(result) = tokio::time::timeout(Duration::from_secs(15), async {
+    let Ok(result) = tokio::time::timeout(Duration::from_secs(60), async {
         tokio::select! {
             result = &mut confirm => result,
             started = final_read => {

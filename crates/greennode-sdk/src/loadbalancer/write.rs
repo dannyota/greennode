@@ -5,10 +5,12 @@ use zeroize::Zeroizing;
 
 use crate::wire::product::{
     evidence::Evidence,
+    guard::{CleanReceipt, Guarded},
     operation::{self, Operation, RouteAuth},
     options::Options,
     redirect::{Classification, Retry},
     response, retry,
+    sender::{Response, SentCredentials},
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RecoveryAdvice, RequestContext, WriteDispatch};
 
@@ -36,7 +38,7 @@ impl Client {
         ids: &[&str],
         body: impl Serialize,
         evidence: &mut Evidence,
-    ) -> Result<(StatusCode, Bytes), Failure<O>> {
+    ) -> Result<Response, Failure<O>> {
         let session = &self.session;
         let mut jitter = || session.retry_jitter();
         let runtime = session
@@ -70,10 +72,12 @@ impl Client {
             allow_empty: true,
             no_output: false,
             keep_status: false,
-            overflow_overrides_status: true,
+            raw_body: false,
+            overflow_overrides_status: false,
             sensitive: request.sensitive,
             reflection: crate::wire::product::operation::Reflection::Redact,
-            no_redirect: true,
+            no_redirect: false,
+            report_redirect: request.report_redirect,
             retry_config: retry::Config::default(),
         };
         let result = operation::execute_raw(
@@ -81,7 +85,11 @@ impl Client {
             base,
             &op,
             &Options {
-                report_redirect: request.report_redirect,
+                receipt_policy: if request.sensitive {
+                    crate::wire::product::guard::ReceiptPolicy::Transport
+                } else {
+                    crate::wire::product::guard::ReceiptPolicy::All
+                },
                 ..Options::DEFAULT
             },
             &path,
@@ -95,7 +103,7 @@ impl Client {
             let (error, _, dispatch) = failure.into_parts();
             Failure::new(evidence.screen_error(error), None, dispatch)
         })?;
-        Ok((reply.status, Bytes::from(reply.reply.body)))
+        Ok(reply)
     }
 }
 
@@ -105,28 +113,56 @@ impl Client {
 )]
 pub(super) fn reject<O>(
     request: &Write,
-    status: StatusCode,
-    body: Bytes,
+    reply: &Response,
     evidence: &Evidence,
     fixed_message: Option<&str>,
-) -> Result<Bytes, Failure<O>> {
-    response::classify(
-        request.id,
-        status,
-        body,
-        request.success,
-        (true, false, Retry::Once),
-        evidence.credentials(),
-    )
-    .map_err(|error| {
-        let error = if let Some(message) = fixed_message {
-            let code = error.api_error().map_or("", ApiError::code);
-            api(request.id, Some(status), code, message, evidence)
-        } else {
-            evidence.screen_error(*error)
-        };
-        Failure::new(error, None, WriteDispatch::MayHaveBeenSent)
-    })
+) -> Result<(), Failure<O>> {
+    let status = reply.status;
+    if request.success.contains(&status) {
+        return Ok(());
+    }
+    reply
+        .classify(
+            request.id,
+            request.success,
+            (true, false, Retry::Once),
+            false,
+        )
+        .map(drop)
+        .map_err(|error| {
+            let error = if let Some(message) = fixed_message {
+                let code = error.api_error().map_or("", ApiError::code);
+                api(request.id, Some(status), code, message, evidence)
+            } else {
+                evidence.screen_error(*error)
+            };
+            Failure::new(
+                error.with_clean_absence(reply.clean_absence()),
+                None,
+                WriteDispatch::MayHaveBeenSent,
+            )
+        })
+}
+
+#[derive(Clone)]
+pub(super) struct BusyRefusal(Guarded<()>);
+
+crate::error::debug_record!(BusyRefusal unit);
+
+impl BusyRefusal {
+    pub(super) fn from_receipt(
+        receipt: CleanReceipt<'_>,
+        credentials: &SentCredentials,
+        busy: impl FnOnce(&str) -> bool,
+    ) -> Option<Self> {
+        response::inspect_error_message(&receipt, credentials, busy)
+            .filter(|busy| *busy)
+            .map(|_| Self(receipt.guard(())))
+    }
+
+    pub(super) fn retain(&self, evidence: &mut Evidence) -> Result<(), Box<Error>> {
+        self.0.retain(evidence)
+    }
 }
 
 pub(super) fn api(
@@ -151,7 +187,7 @@ pub(super) fn advise<O>(failure: Failure<O>, message: &str, evidence: &Evidence)
     if dispatch != WriteDispatch::MayHaveBeenSent
         || error
             .api_error()
-            .and_then(ApiError::status)
+            .and_then(ApiError::observed_status)
             .is_some_and(|status| (400..500).contains(&status))
     {
         return Failure::new(error, None, dispatch);

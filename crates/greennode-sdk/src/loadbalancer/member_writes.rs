@@ -2,7 +2,7 @@ use crate::wire::product::guard::guarded_poll;
 use std::net::Ipv4Addr;
 
 use bytes::Bytes;
-use http::{Method, StatusCode};
+use http::Method;
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
 use crate::wire::product::{evidence::Evidence, redirect::Retry};
@@ -281,10 +281,15 @@ impl Client {
             ..pool_target(selection.pool, &ids)
         };
         let mut previous = WriteDispatch::NotSent;
+        let mut busy_receipt: Option<BusyRefusal> = None;
         guarded_poll!(write.evidence, {
             let prepared = prepare(ctx, &pre, &mut write, &target).await;
             let (mut pool, members) =
                 prepared.map_err(|error| Failure::new(*error, None, previous))?;
+            if let Some(busy) = busy_receipt.take() {
+                busy.retain(&mut write.evidence)
+                    .map_err(|error| Failure::new(*error, None, previous))?;
+            }
             let mut entries: Vec<_> = members.iter().map(Entry::from).collect();
             let changed = mutation
                 .apply(&selection, &write, &mut entries)
@@ -299,8 +304,9 @@ impl Client {
                 .map_err(|error| Failure::new(*error, None, previous))?;
             if let Err(failure) = &sent
                 && previous == WriteDispatch::NotSent
-                && failure.error().detail::<BusyRefusal>().is_some()
+                && let Some(busy) = failure.error().internal_detail::<BusyRefusal>()
             {
+                busy_receipt = Some(busy.clone());
                 previous = failure.write_dispatch();
                 continue;
             }
@@ -505,7 +511,7 @@ pub(super) async fn send_replacement(
     write: &mut ChildWriter<'_>,
     route: &ChildTarget<'_>,
     encoded: Bytes,
-) -> Result<Result<(StatusCode, Bytes), Failure<()>>, Box<Error>> {
+) -> Result<Result<crate::wire::product::sender::Response, Failure<()>>, Box<Error>> {
     preflight_time(ctx, pre, write)?;
     Ok(write
         .send_once::<()>(ctx, &Method::PUT, route, encoded, Retry::Once)

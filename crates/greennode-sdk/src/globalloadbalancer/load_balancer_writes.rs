@@ -170,12 +170,15 @@ impl Client {
                 .request(ctx, &operation, &[], Some(&body))
                 .await
                 .map_err(|failure| write.rejection(failure, None, "create request unconfirmed"))?;
-            let id = if operation.success.contains(&reply.status) {
-                let accepted: Accepted =
-                    decode(&operation, &reply.body, &ACCEPTED_SHAPE).map_err(|_| {
+            let acknowledged = if operation.success.contains(&reply.status) {
+                let receipt = reply.clean_receipt().ok_or_else(|| {
+                    write.finish(Settlement::Unknown("create request unconfirmed"), None)
+                })?;
+                let accepted: Accepted = decode(&operation, receipt.body(), &ACCEPTED_SHAPE)
+                    .map_err(|_| {
                         write.finish(Settlement::Unknown("create request unconfirmed"), None)
                     })?;
-                accepted.load_balancer.0.id
+                receipt.bind_id(accepted.load_balancer.0.id)
             } else if reply.status.is_client_error() {
                 return Err(Failure::new(
                     rejected_response(&operation, &reply, Some(&body), None),
@@ -185,25 +188,46 @@ impl Client {
             } else {
                 return Err(write.finish(Settlement::Unknown("create request unconfirmed"), None));
             };
-            if !Options::DEFAULT.path_ids.allows(&id) || write.evidence.text_reflects(&id) {
+            let invalid = |write: &Write<'_>| {
+                write.finish(
+                    Settlement::Unknown("create response lacks a valid ID"),
+                    None,
+                )
+            };
+            let id = acknowledged
+                .recheck(&write.evidence)
+                .map_err(|_| invalid(&write))?;
+            if !Options::DEFAULT.path_ids.allows(id) {
                 return Err(write.finish(
                     Settlement::Unknown("create response lacks a valid ID"),
                     None,
                 ));
             }
+            write
+                .evidence
+                .keep_acknowledgement(&acknowledged)
+                .map_err(|_| invalid(&write))?;
             let wait = write.wait_context(ctx, CREATE_TIMEOUT);
             let mut observed = LoadBalancer {
-                id: id.clone(),
+                id: id.to_owned(),
                 ..Default::default()
             };
             let reason = guarded_poll!(write.evidence, {
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
-                let Ok(guarded) = write.load_balancer_detail(&wait, &id).await else {
+                let Ok(guarded) = write
+                    .load_balancer_detail(
+                        &wait,
+                        crate::wire::product::guard::ConfirmationTarget::Acknowledged(
+                            &acknowledged,
+                        ),
+                    )
+                    .await
+                else {
                     break Settlement::Unknown("create confirmation interrupted");
                 };
-                if write.interrupted(&wait) {
+                if write.interrupted(&wait) || acknowledged.recheck(&write.evidence).is_err() {
                     break Settlement::Unknown("create confirmation interrupted");
                 }
                 let Ok(detail) = guarded.into_checked(&write.evidence) else {
@@ -232,7 +256,11 @@ impl Client {
                 }
                 write.pause(&wait).await;
             });
-            Err(write.finish(reason, Some(create_output(observed, &write.evidence))))
+            let partial = acknowledged
+                .recheck(&write.evidence)
+                .ok()
+                .map(|_| create_output(observed, &write.evidence));
+            Err(write.finish(reason, partial))
         })
     }
 
@@ -249,7 +277,10 @@ impl Client {
                 .map_err(|message| not_sent(invalid_input(message)))?;
             let mut write = self.start_write(DELETE)?;
             let detail = write
-                .load_balancer_detail(ctx, id)
+                .load_balancer_detail(
+                    ctx,
+                    crate::wire::product::guard::ConfirmationTarget::Explicit(id),
+                )
                 .await
                 .and_then(|detail| detail.into_checked(&write.evidence))
                 .map_err(|error| not_sent(*error))?;
@@ -293,12 +324,24 @@ impl Client {
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("delete confirmation interrupted");
                 }
-                let current = write.load_balancer_detail(&wait, id).await;
+                let current = write
+                    .load_balancer_detail(
+                        &wait,
+                        crate::wire::product::guard::ConfirmationTarget::Explicit(id),
+                    )
+                    .await;
                 if write.interrupted(&wait) {
                     break Settlement::Unknown("delete confirmation interrupted");
                 }
                 match current.and_then(|detail| detail.into_checked(&write.evidence)) {
-                    Err(error) if error.detail::<ConfirmedAbsence>().is_some() => {
+                    Err(error)
+                        if crate::confirms_absence(
+                            &error,
+                            "globalloadbalancer.WriteDetail",
+                            "GET",
+                            RESOURCE,
+                        ) =>
+                    {
                         let output = output(&write, true);
                         if write.safe_output(&output) {
                             return Ok(output);
@@ -318,9 +361,6 @@ impl Client {
         })
     }
 }
-
-#[derive(Debug)]
-struct ConfirmedAbsence;
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -371,8 +411,9 @@ impl Write<'_> {
     async fn load_balancer_detail(
         &mut self,
         ctx: &RequestContext,
-        id: &str,
+        target: crate::wire::product::guard::ConfirmationTarget<'_>,
     ) -> Result<Guarded<Detail>, Box<Error>> {
+        let id = target.checked(&self.evidence)?;
         let operation = guard_operation("globalloadbalancer.WriteDetail", RESOURCE);
         let reply = self
             .guard_on(
@@ -386,38 +427,28 @@ impl Write<'_> {
                 &[id],
             )
             .await
-            .map_err(|failure| {
-                let error = failure.into_parts().0;
-                if error.is_body_too_large() && error.http_status() == Some(StatusCode::NOT_FOUND) {
-                    Box::new(
-                        super::write::status_rejection(
-                            operation.id,
-                            StatusCode::NOT_FOUND,
-                            self.evidence.credentials(),
-                        )
-                        .with_cause(error),
-                    )
-                } else {
-                    Box::new(error)
-                }
-            })?;
+            .map_err(|failure| Box::new(failure.into_parts().0))?;
+        target.checked(&self.evidence)?;
         match reply.status {
             StatusCode::OK => Guarded::latest(
                 decode_with(
                     &operation,
-                    &reply.body,
+                    reply
+                        .clean_receipt()
+                        .ok_or_else(|| {
+                            Box::new(crate::wire::product::operation::unsafe_guard_response(
+                                operation.id,
+                            ))
+                        })?
+                        .body(),
                     &DETAIL_SHAPE,
                     strict_json::validate_canonical_shape,
                 )?,
                 &self.evidence,
             ),
-            status => {
+            _ => {
                 let error = rejected_response(&operation, &reply, None, Some("response withheld"));
-                if status == StatusCode::NOT_FOUND && reply.reflection.is_clean() {
-                    Err(Box::new(error.with_detail(ConfirmedAbsence)))
-                } else {
-                    Err(Box::new(error))
-                }
+                Err(Box::new(error.with_clean_absence(reply.clean_absence())))
             }
         }
     }

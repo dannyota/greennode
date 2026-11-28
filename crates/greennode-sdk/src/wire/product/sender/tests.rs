@@ -32,6 +32,8 @@ mod attempt_check;
 mod empty_bearer;
 mod evidence;
 mod pooling;
+mod redirect_reflection;
+mod redirects;
 mod reflection;
 mod traits;
 
@@ -105,6 +107,8 @@ fn operation(method: Method, retry: redirect::Retry) -> Operation<'static> {
         class: redirect::Classification::Read,
         retry,
         no_redirect: false,
+        report_redirect: false,
+        keep_status: true,
         allow_recovery: true,
         cap: 100,
         encoding: send::Encoding::Identity,
@@ -307,36 +311,6 @@ async fn same_origin_redirect() {
         h.windows(b"authorization: Bearer toy-first".len())
             .any(|x| x.eq_ignore_ascii_case(b"authorization: Bearer toy-first"))
     }));
-}
-#[tokio::test]
-async fn cross_origin_redirect_never_sends_credentials() {
-    let other = Server::start(vec![response("200 OK", &[])]);
-    let target = format!("{}/other", other.origin);
-    let server = Server::start(vec![response("302 Found", &[("Location", &target)])]);
-    let (ctx, clock, deadline) = ctx();
-    let source = Provider::default();
-    let sleeper = Immediate::default();
-    let result = run!(
-        &client(&server),
-        &ctx,
-        &clock,
-        deadline,
-        &operation(Method::GET, redirect::Retry::Repeatable),
-        Auth::Bearer(&PublicSource(&source)),
-        &request(&server.origin),
-        &sleeper,
-        &mut || 0
-    )
-    .await;
-    assert!(matches!(
-        result,
-        Err(Failure {
-            error: Error::Redirect(_),
-            ..
-        })
-    ));
-    assert_eq!(server.requests(), 1);
-    assert_eq!(other.requests(), 0);
 }
 struct BuiltIn {
     obtained: Instant,
@@ -688,7 +662,7 @@ async fn deadline_stops_retry_sleep() {
     };
     assert!(matches!(
         failure.error,
-        Error::Context(crate::ContextEnd::DeadlineExceeded)
+        Error::ActiveRequestContext(crate::ContextEnd::DeadlineExceeded)
     ));
     assert_eq!(failure.status, Some(http::StatusCode::TOO_MANY_REQUESTS));
     assert_eq!(failure.dispatch, crate::WriteDispatch::NotAWrite);

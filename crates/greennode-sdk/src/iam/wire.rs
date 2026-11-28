@@ -25,6 +25,17 @@ pub(super) trait Wire: Default {
 
     fn decode(raw: &RawValue) -> Result<Self, serde_json::Error>;
 
+    fn decode_acknowledgement(
+        raw: &RawValue,
+        _: crate::wire::product::guard::CleanReceipt<'_>,
+    ) -> Result<Self, serde_json::Error> {
+        Self::decode(raw)
+    }
+
+    fn issued_only(_: crate::Secret) -> Option<Self> {
+        None
+    }
+
     fn scan_operands(&self, _: &FieldScan<'_>, _: bool) -> bool {
         false
     }
@@ -373,41 +384,48 @@ impl<T: Wire> Output for Body<T> {
     fn decode_response(operation: &Operation, response: &Response) -> Result<Self, Box<Error>> {
         let account = account_label(operation.id).is_some();
         let private = operation.sensitive && operation.id != "iam.GetUser";
-        let body = response::classify(
-            operation.id,
-            response.status,
-            bytes::Bytes::copy_from_slice(&response.body),
-            operation.success,
-            (true, account || private, operation.retry),
-            &response.credentials,
-        )
-        .map_err(|error| {
-            Box::new(error.with_outer_detail(ObservedResponse::from_status(response.status)))
-        })?;
-        if operation.no_output || (body.is_empty() && operation.allow_empty) {
+        response
+            .classify(
+                operation.id,
+                operation.success,
+                (true, account || private, operation.retry),
+                false,
+            )
+            .map_err(|error| {
+                Box::new(error.with_outer_detail(ObservedResponse::from_status(response.status)))
+            })?;
+        if operation.no_output || (response.empty_body() && operation.allow_empty) {
             return Ok(Self::default());
         }
-        let body = text::go_json(&body);
         let error = |detail| Box::new(decode_error(operation, detail));
-        let raw = serde_json::from_str::<&RawValue>(&body)
-            .map_err(|_| error(super::DecodeError::MalformedJson))?;
-        strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
-            .map_err(|_| error(super::DecodeError::InvalidShape))?;
-        let value = T::decode(raw).map_err(|_| error(super::DecodeError::InvalidShape))?;
-        if operation.reflection == crate::wire::product::operation::Reflection::Refuse
-            && !Evidence::from_credentials(&response.credentials)
-                .go_peer_body_screen(&response.body)
-                .is_clean()
+        if response.clean_receipt().is_none()
+            && let Some(issued) = response.private_issuance().and_then(T::issued_only)
         {
-            return Err(Box::new(Error::new(crate::ErrorClass::Api).with_detail(
-                crate::RecoveryAdvice::new(if operation.id == "iam.GetServiceAccount" {
-                    "iam: iam.GetServiceAccount: unsafe guard response"
-                } else {
-                    "IAM user response withheld"
-                }),
-            )));
+            return Ok(Self(issued));
         }
-        Ok(Self(value))
+        if response.malformed_json() {
+            return Err(error(super::DecodeError::MalformedJson));
+        }
+        response.decode_projection(|raw_body| {
+            let body = text::go_json(raw_body);
+            let raw = serde_json::from_str::<&RawValue>(&body)
+                .map_err(|_| error(super::DecodeError::MalformedJson))?;
+            strict_json::validate_exact_shape(body.as_bytes(), &Self::SCHEMA, body.len())
+                .map_err(|_| error(super::DecodeError::InvalidShape))?;
+            let value = match response.clean_receipt() {
+                Some(receipt)
+                    if matches!(
+                        operation.class,
+                        crate::wire::product::redirect::Classification::Write
+                    ) =>
+                {
+                    T::decode_acknowledgement(raw, receipt)
+                }
+                _ => T::decode(raw),
+            }
+            .map_err(|_| error(super::DecodeError::InvalidShape))?;
+            Ok(Self(value))
+        })
     }
 }
 
@@ -430,12 +448,7 @@ impl ObservedResponse {
     }
 
     pub(super) fn status(error: &Error) -> Option<http::StatusCode> {
-        error.http_status().or_else(|| {
-            error
-                .api_error()
-                .and_then(|api| api.status())
-                .and_then(|status| http::StatusCode::from_u16(status).ok())
-        })
+        http::StatusCode::from_u16(error.api_error()?.observed_status()?).ok()
     }
 }
 
@@ -452,7 +465,7 @@ pub(super) fn private_status_error(
     }
     let Some(api) = error
         .api_error()
-        .filter(|api| api.operation() == operation.id)
+        .filter(|api| api.is_for_operation(operation.id))
     else {
         return error;
     };
@@ -481,14 +494,19 @@ pub(super) fn private_status_error(
             )
         },
     );
-    let private = Error::from_api(ApiError::new(
+    let api = ApiError::new(
         operation.id,
         Some(status.as_u16()),
         SafeText::new("", &[]),
         SafeText::new(&message, &[]),
         api.retryable(),
-    ));
-    private
+    );
+    let api = if label.is_some() {
+        api.with_formatted_message()
+    } else {
+        api
+    };
+    Error::from_api(api)
         .with_cause(error)
         .screen_api(&|value| response::reflects_credential_forms(value, evidence.credentials()))
         .with_outer_detail(ObservedResponse::from_status(status))
@@ -506,19 +524,28 @@ pub(super) fn account_error(id: &'static str, error: Error) -> Error {
     let Some((label, api)) = account_label(id).zip(error.api_error()) else {
         return error;
     };
-    if api.operation() == id
-        && let Some(status) = api.status()
+    if api.is_for_operation(id)
+        && let Some(status) = api.observed_status()
     {
-        let message = format!(
-            "{id}: read {label}: {id}: IAM user request failed; response withheld (status {status})"
-        );
-        return Error::from_api(ApiError::without_fallback(
-            id,
-            Some(status),
-            SafeText::new(api.code(), &[]),
-            SafeText::new(&message, &[]),
-            api.retryable(),
-        ));
+        let message = if api.status().is_some() {
+            format!(
+                "{id}: read {label}: {id}: IAM user request failed; response withheld (status {status})"
+            )
+        } else {
+            "IAM response withheld".to_owned()
+        };
+        return Error::from_api(
+            ApiError::without_fallback(
+                id,
+                Some(status),
+                SafeText::new(api.code(), &[]),
+                SafeText::new(&message, &[]),
+                api.retryable(),
+            )
+            .with_formatted_message(),
+        )
+        .retain_status_visibility(Some(api))
+        .with_clean_absence(error.clean_absence_proof());
     }
     if error.detail::<ObservedResponse>().is_some() && api.status().is_none() {
         let safe = Error::from_api(ApiError::without_fallback(
@@ -560,22 +587,27 @@ pub(super) fn guarded_decode_error(operation: &Operation, error: Error) -> Error
 
 fn decode_error(operation: &Operation, detail: super::DecodeError) -> Error {
     let id = operation.id;
-    let message = if let Some(label) = account_label(id) {
-        format!("{id}: read {label}: {id}: response failed to decode; body withheld")
-    } else if operation.sensitive {
-        "response failed to decode; body withheld".to_owned()
-    } else {
-        format!(
-            "{}: request failed: response failed to decode",
-            operation.id
+    let (message, formatted) = if let Some(label) = account_label(id) {
+        (
+            format!("{id}: read {label}: {id}: response failed to decode; body withheld"),
+            true,
         )
+    } else if operation.sensitive {
+        ("response failed to decode; body withheld".to_owned(), false)
+    } else {
+        (String::new(), false)
     };
-    Error::from_api(ApiError::without_fallback(
-        operation.id,
+    let mut api = ApiError::without_fallback(
+        id,
         None,
         SafeText::new("", &[]),
         SafeText::new(&message, &[]),
         false,
-    ))
-    .with_detail(detail)
+    );
+    if message.is_empty() {
+        api = api.with_request_cause(SafeText::new("response failed to decode", &[]));
+    } else if formatted {
+        api = api.with_formatted_message();
+    }
+    Error::from_api(api).with_detail(detail)
 }

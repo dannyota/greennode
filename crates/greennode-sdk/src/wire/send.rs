@@ -53,8 +53,9 @@ pub(crate) enum Error {
     Deadline,
     SwitchingProtocols,
     Encoding,
-    Transport(SendFailure),
+    Transport(SendFailure, NetworkCause),
     Body,
+    BodyNetwork(NetworkCause),
     AfterHead { reason: Box<Error>, head: Observed },
 }
 
@@ -74,7 +75,7 @@ impl fmt::Debug for Observed {
 impl Error {
     pub(crate) fn retry_outcome(&self) -> Option<Outcome<'static>> {
         match self {
-            Self::Transport(failure) => Some(Outcome::Send(*failure)),
+            Self::Transport(failure, _) => Some(Outcome::Send(*failure)),
             Self::AfterHead { .. } => Some(Outcome::Body),
             _ => None,
         }
@@ -138,22 +139,143 @@ async fn timed<T>(
     .await
 }
 
-fn transport_failure(error: &hyper_util::client::legacy::Error) -> SendFailure {
-    let mut cause = std::error::Error::source(error);
-    while let Some(current) = cause {
-        if error.is_connect() && current.is::<DialFailure>() {
-            return SendFailure::FailedDial;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NetworkCause {
+    Other,
+    Dial,
+    Read,
+    Write,
+    ConnectionRefused,
+    ConnectionReset,
+    DialConnectionReset,
+    WriteConnectionReset,
+    NoSuchHost,
+    TimedOut,
+    CertificateUnknownAuthority,
+    CertificateHostnameMismatch,
+    CertificateInvalid,
+}
+
+impl NetworkCause {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Other => "network request failed",
+            Self::Dial => "dial: network request failed",
+            Self::Read => "read: network request failed",
+            Self::Write => "write: network request failed",
+            Self::ConnectionRefused => "dial: connect: connection refused",
+            Self::ConnectionReset => "read: connection reset",
+            Self::DialConnectionReset => "dial: connection reset",
+            Self::WriteConnectionReset => "write: connection reset",
+            Self::NoSuchHost => "dial: no such host",
+            Self::TimedOut => "timed out",
+            Self::CertificateUnknownAuthority => {
+                "TLS certificate verification failed: unknown authority"
+            }
+            Self::CertificateHostnameMismatch => {
+                "TLS certificate verification failed: hostname mismatch"
+            }
+            Self::CertificateInvalid => "TLS certificate verification failed: invalid certificate",
         }
-        cause = current.source();
     }
-    SendFailure::PossiblySent
+}
+
+fn error_chain<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> + Clone {
+    std::iter::successors(error.source(), |cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .and_then(io::Error::get_ref)
+            .map(|inner| inner as &(dyn std::error::Error + 'static))
+            .or_else(|| cause.source())
+    })
+}
+
+fn body_frame_failure(error: hyper::Error) -> Error {
+    error_chain(&error)
+        .filter_map(|cause| cause.downcast_ref::<io::Error>())
+        .find_map(|io| io_failure_cause(io, false))
+        .map_or(Error::Body, Error::BodyNetwork)
+}
+
+fn io_failure_cause(error: &io::Error, dial: bool) -> Option<NetworkCause> {
+    use super::connection::IoPhase;
+    let phase = error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<IoPhase>());
+    match error.kind() {
+        io::ErrorKind::TimedOut => Some(NetworkCause::TimedOut),
+        io::ErrorKind::ConnectionRefused if dial => Some(NetworkCause::ConnectionRefused),
+        io::ErrorKind::ConnectionReset if dial => Some(NetworkCause::DialConnectionReset),
+        io::ErrorKind::ConnectionReset if phase == Some(&IoPhase::Write) => {
+            Some(NetworkCause::WriteConnectionReset)
+        }
+        io::ErrorKind::ConnectionReset => Some(NetworkCause::ConnectionReset),
+        _ if dial => None,
+        _ => phase.map(|phase| match phase {
+            IoPhase::Read => NetworkCause::Read,
+            IoPhase::Write => NetworkCause::Write,
+        }),
+    }
+}
+
+pub(super) fn transport_failure(error: &hyper_util::client::legacy::Error) -> Error {
+    let causes = error_chain(error);
+    let dial = error.is_connect() && causes.clone().any(|cause| cause.is::<DialFailure>());
+    let failure = if dial {
+        SendFailure::FailedDial
+    } else {
+        SendFailure::PossiblySent
+    };
+    let detail = causes.clone().find_map(|cause| {
+        if let Some(rustls::Error::InvalidCertificate(reason)) =
+            cause.downcast_ref::<rustls::Error>()
+        {
+            return Some(match reason {
+                rustls::CertificateError::UnknownIssuer => {
+                    NetworkCause::CertificateUnknownAuthority
+                }
+                rustls::CertificateError::NotValidForName
+                | rustls::CertificateError::NotValidForNameContext { .. } => {
+                    NetworkCause::CertificateHostnameMismatch
+                }
+                _ => NetworkCause::CertificateInvalid,
+            });
+        }
+        io_failure_cause(cause.downcast_ref::<io::Error>()?, dial)
+    });
+    let dns_not_found = || {
+        causes
+            .filter_map(|cause| cause.downcast_ref::<io::Error>())
+            .any(|cause| {
+                let text = cause.to_string();
+                text.starts_with("failed to lookup address information: ")
+                    && [
+                        "Name or service not known",
+                        "nodename nor servname provided, or not known",
+                        "No address associated with hostname",
+                    ]
+                    .iter()
+                    .any(|suffix| text.ends_with(suffix))
+            })
+    };
+    let detail = detail.unwrap_or_else(|| {
+        if !dial {
+            NetworkCause::Other
+        } else if dns_not_found() {
+            NetworkCause::NoSuchHost
+        } else {
+            NetworkCause::Dial
+        }
+    });
+    Error::Transport(failure, detail)
 }
 
 #[derive(Default)]
 pub(crate) struct Evidence<'a> {
     #[cfg(test)]
     pub(crate) attempt_counter: Option<&'a dyn crate::wire::product::sender::Sleeper>,
-    #[cfg(test)]
     pub(crate) attempted: bool,
     #[cfg(not(test))]
     marker: std::marker::PhantomData<&'a ()>,
@@ -169,14 +291,14 @@ pub(crate) async fn once(
     clock: &dyn Clock,
     deadline: Instant,
 ) -> Result<Reply, Error> {
-    once_with_evidence(
+    once_inner(
         client,
         request,
         cap,
         encoding,
         clock,
         deadline,
-        &mut Evidence::default(),
+        (&mut Evidence::default(), |_, _| true),
     )
     .await
 }
@@ -188,18 +310,12 @@ pub(crate) async fn once_with_evidence(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    evidence: &mut Evidence<'_>,
+    action: (
+        &mut Evidence<'_>,
+        impl FnOnce(StatusCode, &HeaderMap) -> bool + Send,
+    ),
 ) -> Result<Reply, Error> {
-    once_inner(
-        client,
-        request,
-        cap,
-        encoding,
-        clock,
-        deadline,
-        (evidence, None),
-    )
-    .await
+    once_inner(client, request, cap, encoding, clock, deadline, action).await
 }
 
 pub(crate) async fn once_with_expected(
@@ -218,7 +334,7 @@ pub(crate) async fn once_with_expected(
         encoding,
         clock,
         deadline,
-        (evidence, Some(expected)),
+        (evidence, |status, _| expected.contains(&status)),
     )
     .await
 }
@@ -230,7 +346,10 @@ async fn once_inner(
     encoding: Encoding,
     clock: &dyn Clock,
     deadline: Instant,
-    (evidence, expected): (&mut Evidence<'_>, Option<&[StatusCode]>),
+    (evidence, read_body): (
+        &mut Evidence<'_>,
+        impl FnOnce(StatusCode, &HeaderMap) -> bool + Send,
+    ),
 ) -> Result<Reply, Error> {
     let method = request.method();
     if !matches!(
@@ -266,9 +385,9 @@ async fn once_inner(
     let is_head = request.method() == Method::HEAD;
     let mut request = Box::pin(client.request(request));
     let send = poll_fn(|cx| {
-        #[cfg(test)]
         if !evidence.attempted {
             evidence.attempted = true;
+            #[cfg(test)]
             if let Some(counter) = evidence.attempt_counter {
                 counter.record_write_attempt();
             }
@@ -279,7 +398,7 @@ async fn once_inner(
     });
     let response = timed(clock, deadline, send)
         .await?
-        .map_err(|error| Error::Transport(transport_failure(&error)))?;
+        .map_err(|error| transport_failure(&error))?;
     let (parts, mut body) = response.into_parts();
     evidence.status = Some(parts.status);
     let head = Observed {
@@ -292,7 +411,7 @@ async fn once_inner(
     if head.status == StatusCode::SWITCHING_PROTOCOLS {
         return Err(Error::SwitchingProtocols.with_head(head));
     }
-    if expected.is_some_and(|statuses| !statuses.contains(&head.status)) {
+    if !read_body(head.status, &headers) {
         drop(guard);
         drop(body);
         return Ok(Reply {
@@ -346,7 +465,7 @@ async fn once_inner(
             if clock.monotonic_now() >= deadline {
                 return Err(Error::Deadline);
             }
-            let frame = frame.map_err(|_| Error::Body)?;
+            let frame = frame.map_err(body_frame_failure)?;
             if let Ok(data) = frame.into_data() {
                 if data.get(encoded_cap.saturating_sub(encoded)).is_some() {
                     return Err(Error::BodyTooLarge);
@@ -398,6 +517,8 @@ async fn once_inner(
         }
         Ok(bytes)
     };
+    #[cfg(any(test, feature = "test-support"))]
+    clock.response_body_started();
     let result = match timed(clock, deadline, read).await {
         Ok(result) => result,
         Err(error) => Err(error),

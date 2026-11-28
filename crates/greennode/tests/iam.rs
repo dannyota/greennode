@@ -44,17 +44,33 @@ fn response(status: u16, body: Vec<u8>) -> Response {
 }
 
 async fn invoke(args: &[&str], server: &Server, bearer: &str) -> (ExitCode, Vec<u8>, Vec<u8>) {
+    invoke_with_options(
+        args,
+        server,
+        bearer,
+        greennode_sdk::testing::with_clock(
+            ConfigOptions::default().with_static_token(Secret::new(bearer)),
+            greennode_sdk::testing::retry_clock(),
+        ),
+    )
+    .await
+}
+
+async fn invoke_with_options(
+    args: &[&str],
+    server: &Server,
+    bearer: &str,
+    options: ConfigOptions,
+) -> (ExitCode, Vec<u8>, Vec<u8>) {
     let (context, _) = RequestContext::new();
     let (mut stdin, mut stdout, mut stderr) = (std::io::empty(), Vec::new(), Vec::new());
     let config_options = with_product_loopback(
         Product::Iam,
-        ConfigOptions::default()
-            .with_static_token(Secret::new(bearer))
-            .with_endpoint_overrides(EndpointOverrides {
-                dashboard: Some(format!("{}/dashboard/", server.origin)),
-                iam: Some(format!("{}/iam/", server.origin)),
-                ..Default::default()
-            }),
+        options.with_endpoint_overrides(EndpointOverrides {
+            dashboard: Some(format!("{}/dashboard/", server.origin)),
+            iam: Some(format!("{}/iam/", server.origin)),
+            ..Default::default()
+        }),
         server,
     );
     let status = run_invocation(Invocation {

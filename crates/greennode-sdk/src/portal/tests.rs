@@ -203,6 +203,7 @@ fn client(server: &Server) -> Client {
 
 fn client_with_bearer(server: &Server, bearer: &str) -> Client {
     let options = ConfigOptions::default()
+        .with_clock(crate::testing::retry_clock())
         .with_region("hcm-3".into())
         .with_project_id("project-1".into())
         .with_static_token(Secret::new(bearer))

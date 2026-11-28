@@ -11,6 +11,14 @@ pub trait Clock: Send + Sync {
     fn monotonic_now(&self) -> Instant;
     /// Completes when the monotonic deadline is reached.
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    fn response_body_started(&self) {}
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Lets test clocks interrupt settlement after a confirmation read completes.
+    fn volume_confirmation_read_completed(&self) {}
 }
 
 /// Uses the system wall clock and Tokio monotonic clock.
