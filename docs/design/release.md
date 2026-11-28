@@ -245,7 +245,8 @@ proof. A mismatch blocks the affected publish path.
 
 The Mac path requires a passing macOS proof with the pinned Cargo version. The
 script passed on macOS on 2026-11-26 for both toy secret sources. The Ubuntu
-proof is a prerequisite for the first CI upload and is still to run.
+24.04 proof passed on 2026-11-28 on aarch64 for both sources. The publish job
+runs on x86_64, so the first CI upload is the proof on that architecture.
 
 ## CI cutover
 
