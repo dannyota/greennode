@@ -215,9 +215,10 @@ receipt or reuse a tag.
 ## Local checker contracts
 
 - `tree` checks the bounded tagged tree without GitHub evidence. Reject
-  symlinks, submodules and paths whose last two components are `.cargo/config`
-  or `.cargo/config.toml`, case-insensitively. Allow `.cargo/sub/config`. The CI
-  `evidence` tree policy remains in force for the workflow.
+  symlinks, submodules and the two root paths `.cargo/config` and
+  `.cargo/config.toml`, case-insensitively. Allow nested paths such as
+  `examples/.cargo/config` and `.cargo/sub/config`. The CI `evidence` tree
+  policy remains in force for the workflow.
 - `owners` checks the exact requested name and registration state against
   crates.io. Registry lookups use unauthenticated HTTPS, with no redirects and
   fresh revalidation, bounded to 30 seconds and 1 MiB per response.
