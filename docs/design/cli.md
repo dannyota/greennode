@@ -356,7 +356,7 @@ implicit help/JSON arguments separately. An absent unported op is fine; extra,
 duplicate or mismatched entries are failures.
 
 The wiki proves inventory and stated metadata, not parser defaults, exclusive
-flags, side effects or output. Independently port root, version and hidden
+flags, side effects or output. Independently build root, version and hidden
 `gen-docs` tests; verify positional counts, global flags before and after the
 leaf, implicit flag presence/absence, empty input, real parser types, defaults
 (such as quota `--max-days-left=7`), and mutually exclusive options (such as

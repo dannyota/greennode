@@ -86,11 +86,11 @@ each of these through concrete code paths:
 Every read fed by a response or a file has a bound. The
 [request policies](sdk-requests.md#contract) set the response bounds, the
 [configuration design](config.md#offline-resolution-and-file-safety) the file
-bounds, and the [CLI design](cli.md#input-json) the input bounds. A ported
+bounds, and the [CLI design](cli.md#input-json) the input bounds. A shipped
 operation keeps the baseline's bound for that operation.
 
 ## Unverified
 
-Tests use loopback servers and fixtures copied from the baseline. They prove the
-port matches the Go code, not that the service still behaves that way. A claim
-about live behavior stays unverified until an approved live run checks it.
+Tests use loopback servers and fixtures copied from the baseline. They prove
+greennode matches the Go code, not that the service still behaves that way. A
+claim about live behavior stays unverified until an approved live run checks it.

@@ -1,6 +1,6 @@
 # Roles
 
-The [roles table](../AGENTS.md#roles) assigns each role a model family. Each brief names one role and tells the worker to follow this file for it. Every worker reads `AGENTS.md`, [workflow](workflow.md), and the designs, ADRs, and baseline paths the brief names; also [Rust](rust.md) and [testing](testing.md) for code, [porting](porting.md) for a ported command, [security](security.md) for auth, credential, or write paths, and [documentation](documentation.md) for documents.
+The [roles table](../AGENTS.md#roles) assigns each role a model family. Each brief names one role and tells the worker to follow this file for it. Every worker reads `AGENTS.md`, [workflow](workflow.md), and the designs, ADRs, and baseline paths the brief names; also [Rust](rust.md) and [testing](testing.md) for code, [compatibility](compatibility.md) for a vngcloud-compatible command, [security](security.md) for auth, credential, or write paths, and [documentation](documentation.md) for documents.
 
 ## Every role
 
@@ -38,7 +38,7 @@ Report: exact new, changed, and deleted files; red-then-green evidence per chang
 
 Review; never implement. Read-only: no edits, no writing commands, no Git changes, no live calls. Run `git status --short` before and after and report both. Read the diff, the base and head commits, the gate output the brief supplies, every touched file, its design, and the baseline code it ports. Never review work you wrote.
 
-Code review covers correctness against the design and the baseline, tests that prove the change, error handling, bounds, hostile input, and the threats in the [security design](../docs/design/security.md#threats) wherever the change touches auth, credentials, or writes. For a ported operation, compare the request method, path, query, and body, the output keys, the guards, and the exit code against the baseline source, not against the implementer's summary.
+Code review covers correctness against the design and the baseline, tests that prove the change, error handling, bounds, hostile input, and the threats in the [security design](../docs/design/security.md#threats) wherever the change touches auth, credentials, or writes. For an operation built from the baseline, compare the request method, path, query, and body, the output keys, the guards, and the exit code against the baseline source, not against the implementer's summary.
 
 Design review covers contradictions, gaps, unclear contracts, missing failure behavior, cost for a one-person project, alternatives not considered, and security traced end to end.
 

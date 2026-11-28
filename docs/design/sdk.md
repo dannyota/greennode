@@ -382,7 +382,7 @@ An input field states accepted units and ranges, default, and what omission,
 null, empty, or zero mean when distinct. Do not copy the identifier into a
 sentence or put design decisions in private code comments.
 
-Port sanitized fixture and loopback tests with each operation. Include exact
+Adopt sanitized fixture and loopback tests with each operation. Include exact
 method, path, query and request body, bounds, decode and status errors,
 projection order and exact numbers, and write outcome on cancellation. Core adds
 policy conformance, shared refresh/discovery contention, cache identity and

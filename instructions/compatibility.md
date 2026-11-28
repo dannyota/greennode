@@ -1,6 +1,6 @@
-# Porting
+# Compatibility
 
-Rules for moving a command or service from the Go SDK and CLI to Rust. The [architecture](../docs/design/architecture.md) owns the contract; this file says how to work from the Go source.
+Rules for building a command or service that is compatible with the Go SDK and CLI. The [architecture](../docs/design/architecture.md) owns the contract; this file says how to work from the Go source.
 
 ## Baseline
 
@@ -32,14 +32,14 @@ Read only the tag. A newer vngcloud commit is not the contract until the owner m
 
 ## What differs
 
-The [architecture](../docs/design/architecture.md#differences-from-the-baseline) lists every intended difference. Anything else that differs is a defect. When a faithful port looks wrong or unsafe, stop and report it with the baseline `path:line`; the primary decides and records the answer in the design.
+The [architecture](../docs/design/architecture.md#differences-from-the-baseline) lists every intended difference. Anything else that differs is a defect. When matching the baseline looks wrong or unsafe, stop and report it with the baseline `path:line`; the primary decides and records the answer in the design.
 
-## How to port
+## How to add an operation
 
 1. Read the baseline's design for the operation, then its Go source and tests.
 2. Copy the sanitized fixtures the tests use from `testdata/<service>/` to `crates/greennode-sdk/tests/fixtures/<service>/` unchanged. Never copy from `examples/`, never copy a `.env`, and never take values from a live run.
-3. Port the baseline's tests for the operation as the failing tests. SDK tests cover the request shape, decoding, and each documented error status. Tool tests cover flags, the printed output, each guard, and the exit code.
-4. Write idiomatic Rust that passes them, the SDK method first and then the command that calls it. Port behavior, not structure: no reflection, no package-level state, no line-by-line translation of Go idioms.
+3. Adopt the baseline's tests for the operation as the failing tests. SDK tests cover the request shape, decoding, and each documented error status. Tool tests cover flags, the printed output, each guard, and the exit code.
+4. Write idiomatic Rust that passes them, the SDK method first and then the command that calls it. Match behavior, not structure: no reflection, no package-level state, no line-by-line translation of Go idioms.
 5. Check the operation against the parity test, which compares its name, kind, and flags with the baseline.
 6. List in the report anything the baseline does that the tests do not prove.
 
@@ -51,6 +51,6 @@ Billing is the template; copy its shape:
 - Tests: SDK loopback tests per operation; CLI in-process tests that build `Config` through the SDK `test-support` feature and compare stdout with the goldens; built-binary tests only for offline paths.
 - Finish with `shipped-commands.json` entries and the `docs/wiki/CLI-<Service>.md` page from `gen-docs`.
 
-## Limits of a port
+## Limits of fixture tests
 
-Fixtures and mocks prove the port matches the Go code. They do not prove the GreenNode API still behaves that way. State which claims rest only on the baseline, and leave live verification to the primary under the [security rules](security.md#live-calls).
+Fixtures and mocks prove greennode matches the Go code. They do not prove the GreenNode API still behaves that way. State which claims rest only on the baseline, and leave live verification to the primary under the [security rules](security.md#live-calls).

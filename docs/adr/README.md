@@ -4,6 +4,6 @@ One topic per record, numbered. The
 [engineering standard](../standards/engineering.md#adr-rules) defines the format
 and how a decision changes.
 
-| ADR                                           | Topic                                          |
-| --------------------------------------------- | ---------------------------------------------- |
-| [0001](0001-rust-port-of-the-vngcloud-cli.md) | greennode is the Rust port of the vngcloud CLI |
+| ADR                                                       | Topic                                                                   |
+| --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [0001](0001-rust-sdk-and-cli-compatible-with-vngcloud.md) | greennode is a Rust SDK and CLI for GreenNode, compatible with vngcloud |

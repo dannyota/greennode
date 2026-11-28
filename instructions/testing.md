@@ -8,7 +8,7 @@
 - When you set `HOME` for a test run from a shell, set it for the test command only, never for Git commands, because Git reads the commit identity and signing key from it. Tests must not spawn Git.
 - Name a test after the behavior it proves.
 - Keep tests minimal: one test per rule, with a hostile and a legitimate case. No exhaustive variants.
-- A ported operation has tests for its request, its success output, each documented error status, and each guard, as [porting](porting.md#how-to-port) describes.
+- A shipped operation has tests for its request, its success output, each documented error status, and each guard, as [compatibility](compatibility.md#how-to-add-an-operation) describes.
 - A decoding test reads a raw fixture, not output the code produced, because decoding drops unknown fields silently.
 - Auth, credential, debug-output, and error tests plant canary values and assert they appear nowhere in stdout, stderr, or error text. Compare; never print the value in an assertion message.
 - Security fixes include the hostile case and the legitimate case that must keep working.
