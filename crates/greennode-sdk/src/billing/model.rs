@@ -163,48 +163,10 @@ pub(super) fn reflects_integer(value: i64, credentials: &SentCredentials) -> boo
     credentials.integer_output_reflects(value)
 }
 
-pub(super) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
-    deserializer: D,
-) -> Result<T, D::Error> {
-    Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
-}
+use crate::model::wire::exact_integer;
+pub(super) use crate::model::wire::null_default;
 
 fn limit_amount<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
     let raw = <&RawValue>::deserialize(deserializer)?;
     exact_integer(raw.get()).ok_or_else(|| serde::de::Error::custom("invalid limitAmount"))
-}
-
-pub(super) fn exact_integer(raw: &str) -> Option<i64> {
-    if raw.len() > 128 || !matches!(raw.as_bytes().first(), Some(b'-' | b'0'..=b'9')) {
-        return None;
-    }
-    let (mantissa, exponent) = match raw.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
-        None => (raw, 0),
-    };
-    if !(-128..=128).contains(&exponent) {
-        return None;
-    }
-    let negative = mantissa.starts_with('-');
-    let mantissa = mantissa.strip_prefix('-').unwrap_or(mantissa);
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = whole.bytes().chain(fraction.bytes());
-    let shift = exponent - i32::try_from(fraction.len()).ok()?;
-    let keep = (whole.len() + fraction.len()).saturating_sub(shift.min(0).unsigned_abs() as usize);
-    if digits.clone().skip(keep).any(|digit| digit != b'0') {
-        return None;
-    }
-    let zeros = std::iter::repeat_n(b'0', usize::try_from(shift.max(0)).ok()?);
-    let number = digits
-        .take(keep)
-        .chain(zeros)
-        .try_fold(0_i64, |sum, digit| {
-            let digit = digit.checked_sub(b'0')?;
-            sum.checked_mul(10)?.checked_sub(i64::from(digit))
-        })?;
-    if negative {
-        Some(number)
-    } else {
-        number.checked_neg()
-    }
 }

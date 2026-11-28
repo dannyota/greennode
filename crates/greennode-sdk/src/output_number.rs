@@ -149,3 +149,19 @@ pub(crate) fn any_spelling(
             format(&shortest, json_scientific(value), style).is_none_or(|text| reflects(&text))
         })
 }
+
+pub(crate) fn rendered_matches(value: f64, matches: impl Fn(&str) -> bool) -> bool {
+    if !value.is_finite() {
+        return true;
+    }
+    let Ok(shortest) = serde_json::to_string(&value) else {
+        return true;
+    };
+    matches(&shortest)
+        || matches(&fixed_two(value))
+        || [Style::Json, Style::Fixed, Style::Key]
+            .into_iter()
+            .any(|style| {
+                format(&shortest, json_scientific(value), style).is_none_or(|text| matches(&text))
+            })
+}

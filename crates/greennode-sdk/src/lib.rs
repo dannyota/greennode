@@ -4,6 +4,7 @@
 
 pub mod backup;
 pub mod billing;
+mod billing_resources;
 mod cache;
 #[allow(clippy::result_large_err)]
 pub mod cdn;
