@@ -34,8 +34,10 @@ const RULE_FIELDS: [&str; 7] = [
 ];
 
 /// The requested floating IP could expose guest login, or the rules could not establish restricted login access.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct OpenLogin;
+
+crate::error::debug_record!(OpenLogin unit);
 
 pub(super) fn groups<'a>(operation: &str, ids: &'a [String]) -> Result<Vec<&'a str>, Box<Error>> {
     let mut seen = HashSet::new();

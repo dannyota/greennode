@@ -30,7 +30,7 @@ impl PatternBudget {
 impl Patterns {
     pub(in crate::wire::product) fn compile(secrets: &[crate::Secret]) -> Option<Self> {
         let mut budget = PatternBudget {
-            remaining_parts: 512,
+            remaining_parts: 2048,
             remaining_bytes: 4 << 20,
         };
         let mut needles = Vec::new();
@@ -120,7 +120,7 @@ impl Patterns {
             .map(|secret| secret.expose_secret().as_bytes())
             .filter(|value| !value.is_empty())
             .map(|value| (value, LITERAL));
-        let mut compiled_bytes = MAX_COMPILED_BYTES;
+        let mut compiled_bytes = MAX_COMPILED_BYTES * secrets.len().div_ceil(16).clamp(1, 16);
         let mut compile_work = 32 << 20;
         Some(Self {
             folded: Automaton::build(literal.chain(hex), &mut compiled_bytes, &mut compile_work)?,
@@ -288,6 +288,33 @@ mod tests {
             );
             clean[start..end].fill(b'x');
         }
+    }
+
+    #[test]
+    fn compiler_accepts_256_bearers_and_wire_headers() {
+        let secrets: Vec<_> = (1..=256)
+            .flat_map(|index| {
+                [
+                    crate::Secret::new(format!("toy-rotating-bearer-{index}")),
+                    crate::Secret::new(format!("Bearer toy-rotating-bearer-{index}")),
+                ]
+            })
+            .collect();
+        assert!(Patterns::compile(&secrets).is_some());
+    }
+
+    #[test]
+    fn compiler_accepts_256_long_bearers_and_wire_headers() {
+        let secrets: Vec<_> = (1..=256)
+            .flat_map(|index| {
+                let value = format!("{}-{index}", "toy-credential".repeat(8));
+                [
+                    crate::Secret::new(&value),
+                    crate::Secret::new(format!("Bearer {value}")),
+                ]
+            })
+            .collect();
+        assert!(Patterns::compile(&secrets).is_some());
     }
 
     #[test]

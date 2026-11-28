@@ -409,28 +409,63 @@ async fn floating_login_guard_combines_ipv4_and_ipv6_ingress_ranges_per_family()
 }
 
 #[tokio::test]
-async fn floating_create_refuses_when_credential_patterns_exhaust_budget() {
-    let mut input = floating_input();
-    input.no_wait = true;
-    input.security_group_ids = (0..64).map(|index| format!("sg-{index}")).collect();
-    let mut replies = vec![response(LIST)];
-    for id in &input.security_group_ids {
-        replies.push(response(&serde_json::json!({"data":{"id":id}}).to_string()));
-        replies.push(response(SAFE));
+async fn floating_create_accepts_256_distinct_bearers_and_refuses_the_257th() {
+    for limit in [256, 257] {
+        let mut input = floating_input();
+        input.no_wait = true;
+        input.security_group_ids = (0..64).map(|index| format!("sg-{index}")).collect();
+        let mut replies = vec![response(LIST)];
+        let mut expected = vec![ROUTES[0].to_owned()];
+        for pass in 0..2 {
+            if pass == 1 {
+                replies.push(response(QUOTE));
+                expected.push(ROUTES[3].into());
+            }
+            for id in &input.security_group_ids {
+                replies.push(response(&serde_json::json!({"data":{"id":id}}).to_string()));
+                replies.push(response(SAFE));
+                expected.push(format!("GET /v2/project-1/secgroups/{id} "));
+                expected.push(format!("GET /v2/project-1/secgroups/{id}/secGroupRules "));
+            }
+        }
+        if limit == 256 {
+            replies.push(http("202 Accepted", ACK));
+            expected.push(ROUTES[6].into());
+        } else {
+            replies.truncate(256);
+            expected.truncate(256);
+        }
+        let server = TestServer::start(replies);
+        let provider = Arc::new(Rotating(AtomicUsize::new(0), limit));
+        let options = ConfigOptions::default().with_credentials_provider(provider.clone());
+        let (ctx, _) = RequestContext::new();
+        let result = floating_client(&server, options)
+            .create_server(&ctx, input)
+            .await;
+        if limit == 256 {
+            assert_eq!(result.unwrap().server.uuid, "server-1");
+        } else {
+            let failure = result.unwrap_err();
+            assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
+            assert_eq!(
+                failure.error().api_error().unwrap().code(),
+                "InvalidResponse"
+            );
+            assert!(failure.partial().is_none());
+        }
+        let heads = server.heads();
+        assert_eq!(heads.len(), expected.len());
+        assert!(
+            heads
+                .iter()
+                .zip(&expected)
+                .all(|(head, route)| head.starts_with(route.as_bytes()))
+        );
+        assert_eq!(
+            provider.0.load(Ordering::SeqCst),
+            if limit == 256 { expected.len() } else { 257 }
+        );
     }
-    replies.truncate(128);
-    let server = TestServer::start(replies);
-    let provider = Arc::new(Rotating(AtomicUsize::new(0), usize::MAX));
-    let options = ConfigOptions::default().with_credentials_provider(provider.clone());
-    let (ctx, _) = RequestContext::new();
-    let failure = floating_client(&server, options)
-        .create_server(&ctx, input)
-        .await
-        .unwrap_err();
-    assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
-    assert!(failure.partial().is_none());
-    assert_eq!(server.heads().len(), 128);
-    assert_eq!(provider.0.load(Ordering::SeqCst), 129);
 }
 
 #[tokio::test]
@@ -608,158 +643,4 @@ async fn floating_override_keeps_the_rule_limit() {
     routes(&server, 3);
 }
 
-#[tokio::test]
-async fn floating_create_refuses_reflected_acknowledgement() {
-    for (token, acknowledgement) in [
-        ("jkl", r#"{"data":{"uuid":"prefix6A6b6Csuffix"}}"#),
-        (
-            "toy-token",
-            r#"{"data":{"uuid":"server-1","extra":"dG95LXRva2Vu"}}"#,
-        ),
-    ] {
-        let server = TestServer::start(vec![
-            response(LIST),
-            response(GROUP),
-            response(SAFE),
-            response(QUOTE),
-            response(GROUP),
-            response(SAFE),
-            http("202 Accepted", acknowledgement),
-        ]);
-        let (ctx, _) = RequestContext::new();
-        let options = ConfigOptions::default().with_static_token(Secret::new(token));
-        let failure = floating_client(&server, options)
-            .create_server(&ctx, floating_input())
-            .await
-            .unwrap_err();
-        assert_eq!(
-            failure.write_dispatch(),
-            crate::WriteDispatch::MayHaveBeenSent
-        );
-        assert!(failure.partial().is_none());
-        assert_eq!(server.heads().len(), 7);
-    }
-}
-
-#[tokio::test]
-async fn regression_partial_price_screens_fixed_decimal_encoding() {
-    struct Late(AtomicUsize);
-    impl CredentialsProvider for Late {
-        fn token<'a>(
-            &'a self,
-            _: &'a RequestContext,
-        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
-            Box::pin(async move {
-                Ok(Token::new(
-                    Secret::new(if self.0.fetch_add(1, Ordering::SeqCst) < 7 {
-                        CANARY
-                    } else {
-                        "12"
-                    }),
-                    None,
-                ))
-            })
-        }
-        fn invalidate<'a>(
-            &'a self,
-            _: &'a RequestContext,
-            _: &'a Secret,
-        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
-            Box::pin(async { Ok(()) })
-        }
-    }
-    let quote = r#"{"optimumPrice":0.00003132,"originalPrice":0.00003132,"discountPrice":0,"discountPercent":0,"propertiesPrice":[]}"#;
-    let server = TestServer::start(vec![
-        response(LIST),
-        response(GROUP),
-        response(SAFE),
-        response(quote),
-        response(GROUP),
-        response(SAFE),
-        http("202 Accepted", ACK),
-        response(r#"{"data":{"uuid":"server-1","status":"ERROR"}}"#),
-    ]);
-    let (ctx, _) = RequestContext::new();
-    let options =
-        ConfigOptions::default().with_credentials_provider(Arc::new(Late(AtomicUsize::new(0))));
-    let failure = floating_client(&server, options)
-        .create_server(&ctx, floating_input())
-        .await
-        .unwrap_err();
-    assert!(failure.partial().is_none());
-    assert_eq!(
-        failure.write_dispatch(),
-        crate::WriteDispatch::MayHaveBeenSent
-    );
-}
-
-#[tokio::test]
-async fn regression_guard_rejects_top_level_encoded_identity() {
-    let inventory = r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":1,"totalItem":0,"projectId":"prefix6A6b6Csuffix"}"#;
-    let server = TestServer::start(vec![response(inventory), response(GROUP), response(SAFE)]);
-    let (ctx, _) = RequestContext::new();
-    let options = ConfigOptions::default().with_static_token(Secret::new("jkl"));
-    let failure = floating_client(&server, options)
-        .create_server(&ctx, floating_input())
-        .await
-        .unwrap_err();
-    assert_eq!(
-        failure.error().api_error().unwrap().code(),
-        "InvalidResponse"
-    );
-    assert_eq!(server.heads().len(), 1);
-}
-
-#[tokio::test]
-async fn regression_confirmation_rejects_top_level_encoded_identity() {
-    let confirmation =
-        r#"{"projectId":"prefix6A6b6Csuffix","data":{"uuid":"server-1","status":"ACTIVE"}}"#;
-    let server = TestServer::start(vec![
-        response(LIST),
-        response(GROUP),
-        response(SAFE),
-        response(QUOTE),
-        response(GROUP),
-        response(SAFE),
-        http("202 Accepted", ACK),
-        response(confirmation),
-    ]);
-    let (ctx, _) = RequestContext::new();
-    let options = ConfigOptions::default().with_static_token(Secret::new("jkl"));
-    let failure = floating_client(&server, options)
-        .create_server(&ctx, floating_input())
-        .await
-        .unwrap_err();
-    assert!(failure.error().has_class(ErrorClass::NotSettled));
-    assert_eq!(server.heads().len(), 8);
-}
-
-#[tokio::test]
-async fn regression_local_inventory_errors_screen_credentials() {
-    for (token, inventory) in [
-        (
-            "incomplete",
-            r#"{"listData":[],"page":1,"pageSize":10000,"totalPage":2,"totalItem":1}"#,
-        ),
-        (
-            "already",
-            r#"{"listData":[{"uuid":"server-1","name":"example"}],"page":1,"pageSize":10000,"totalPage":1,"totalItem":1}"#,
-        ),
-    ] {
-        let server = TestServer::start(vec![response(inventory)]);
-        let (ctx, _) = RequestContext::new();
-        let options = ConfigOptions::default().with_static_token(Secret::new(token));
-        let failure = floating_client(&server, options)
-            .create_server(&ctx, floating_input())
-            .await
-            .unwrap_err();
-        assert!(
-            !failure
-                .error()
-                .api_error()
-                .unwrap()
-                .message()
-                .contains(token)
-        );
-    }
-}
+mod screening;
