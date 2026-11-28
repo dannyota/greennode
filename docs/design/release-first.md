@@ -172,9 +172,12 @@ owner of both names. Record the confirmed results against the receipt.
 
 ## Recover a CI release
 
-Use this when a CI publish leaves the SDK published and the tool absent, and a
-fresh CI dispatch for that tag cannot finish it. Get the owner's approval for
-the Mac upload of the missing crate.
+Use this when a CI publish leaves the SDK published and the tool absent, the
+tag's exact-run artifacts still exist, and a fresh CI dispatch for that tag
+cannot finish it. If the artifacts have expired, follow the
+[expiry rule](release.md#release-evidence-for-ci-publishing) instead: cut a new
+shared version. Get the owner's approval for the Mac upload of the missing
+crate.
 
 1. Run the [tag checks](release.md#tag-checks) against the existing tag.
 2. Download `crate-checksums.json` from the tag's immutable GitHub Release into

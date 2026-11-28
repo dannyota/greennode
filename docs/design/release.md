@@ -33,7 +33,7 @@ A version-only release commit changes the root and tool `Cargo.toml` plus
 `Cargo.lock`. Refresh with `cargo +1.100.0 check --workspace --all-targets`,
 then repeat with `--locked`. Do not edit a member's inherited version.
 
-## Releases from the owner's Mac
+## Mac recovery
 
 Use the [Mac release procedure](release-first.md) only when the owner approves
 recovering an upload the CI path cannot complete. It uses the owner's existing
@@ -47,8 +47,9 @@ and checks the actual archive before upload.
 ### Tag checks
 
 With the owner's approval for the tag, its GitHub Release and both uploads,
-select the [version commit](#versions) as `$COMMIT`. Fetch `origin/master` and
-require branch protection,
+select as `$COMMIT` the approved protected `master` commit that contains the
+[version commit](#versions), such as its pull request's merge commit. Fetch
+`origin/master` and require branch protection,
 `git merge-base --is-ancestor "$COMMIT" origin/master`, and a successful `ci`
 job from `.github/workflows/ci.yml` on the `master` push for that exact SHA,
 checked on the run itself. Create the signed annotated tag `vX.Y.Z`, verify it
@@ -58,12 +59,13 @@ tag, and verify that the remote tag object equals the local one. Stop on a
 failed identity, signature, ancestry or check result. These checks matter
 because a tag push runs the workflow file from the tagged commit.
 
-### Workflow `.github/workflows/release.yml` runs on `v*` tag pushes, one run at a
+### Workflow
 
-time. As defense in depth, its first job fails unless the tag's commit is in
-protected `master`'s history; later jobs check out that SHA, and no step that
-runs tagged code holds a token. Validate the tag, manifests, lockfile,
-dependency policy and tests with pinned tools. Build only the tool with
+`.github/workflows/release.yml` runs on `v*` tag pushes, one run at a time. As
+defense in depth, its first job fails unless the tag's commit is in protected
+`master`'s history; later jobs check out that SHA, and no step that runs tagged
+code holds a token. Validate the tag, manifests, lockfile, dependency policy and
+tests with pinned tools. Build only the tool with
 `cargo build --locked --release --package greennode --target TARGET`, check its
 version against the tag, and smoke-test the extracted Windows archive.
 
@@ -240,13 +242,15 @@ stopped job that started Cargo without confirming the upload is also unknown.
 The owner checks the preceding attempt before another upload. If both readers
 still say absent after an ambiguous write, get confirmation from crates.io that
 the write did not land and is no longer in flight. A red job, old 404 or elapsed
-time does not clear it. For Mac recovery, use the
-[saved local receipt and archives](release-first.md#resume-a-release). For CI
-recovery, dispatch the same tag for a new approval while the exact-run artifacts
-still exist. Publish only confirmed missing versions. Investigate yanks and
-mismatches before any write. Never automatically unyank or retag. Correct an
-accidental yank only after verifying the approved bytes. A version with
-different bytes needs a new shared tag.
+time does not clear it. To finish a Mac attempt, use the
+[saved local receipt and archives](release-first.md#resume-a-release). To finish
+a CI attempt from the Mac, use
+[Recover a CI release](release-first.md#recover-a-ci-release). For CI recovery,
+dispatch the same tag for a new approval while the exact-run artifacts still
+exist. Publish only confirmed missing versions. Investigate yanks and mismatches
+before any write. Never automatically unyank or retag. Correct an accidental
+yank only after verifying the approved bytes. A version with different bytes
+needs a new shared tag.
 
 ## GitHub Release setup
 
