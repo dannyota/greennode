@@ -1510,5 +1510,51 @@ class Evidence(unittest.TestCase):
         self.assertIsNone(self.validate())
 
 
+class Standalone(unittest.TestCase):
+    def test_tree_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tree"
+            entry = b"100644 blob " + b"a" * 40 + b"\t"
+            path.write_bytes(entry + b"file\0")
+            self.assertEqual(check.main(["tree", str(path)]), 0)
+            for bad in (entry + b".cargo/sub/config\0", entry + b"file", b"120000 blob " + b"a" * 40 + b"\tlink\0"):
+                path.write_bytes(bad)
+                self.assertNotEqual(check.main(["tree", str(path)]), 0)
+
+    def test_owners_command(self):
+        good = json.dumps({"users": [{"kind": "user", "login": "dannyota"}]}).encode()
+        missing = json.dumps({"errors": [{"detail": "crate `greennode` does not exist"}]}).encode()
+        self.assertEqual(check.main(["owners", "greennode"], fetch=lambda _: (200, good)), 0)
+        self.assertEqual(check.main(["owners", "--unregistered", "greennode"], fetch=lambda _: (404, missing)), 0)
+        self.assertNotEqual(check.main(["owners", "greennode"], fetch=lambda _: (404, missing)), 0)
+        self.assertNotEqual(check.main(["owners", "--unregistered", "greennode-sdk"], fetch=lambda _: (404, missing)), 0)
+
+    def test_owners_rejects_bad_responses(self):
+        for payload in ({"users": [{"kind": "team", "login": "dannyota"}]},
+                        {"users": [{"kind": "user", "login": "dannyota"}, None]}):
+            self.assertNotEqual(check.main(["owners", "greennode"], fetch=lambda _: (200, json.dumps(payload).encode())), 0)
+        self.assertNotEqual(check.main(["owners", "greennode"], fetch=lambda _: (200, b"x" * (1024 * 1024 + 1))), 0)
+        self.assertNotEqual(check.main(["owners", "other"], fetch=lambda _: (200, b"{}")), 0)
+
+    def test_previous_command(self):
+        rows = [{"name": "greennode", "vers": version, "cksum": "a" * 64, "yanked": yanked}
+                for version, yanked in (("0.1.0", False), ("0.2.0", True))]
+        index = b"".join(json.dumps(row).encode() + b"\n" for row in rows)
+        api = json.dumps({"version": {"crate": "greennode", "num": "0.2.0",
+                                      "checksum": "a" * 64, "yanked": True}}).encode()
+        def fetch(url):
+            return (200, index if "index.crates.io" in url else api)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(check.main(["previous", "v0.3.0"], fetch=fetch), 0)
+        self.assertEqual(output.getvalue(), "v0.2.0\n")
+        self.assertNotEqual(check.main(["previous", "v0.2.0"], fetch=fetch), 0)
+        self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda _: (200, index + index)), 0)
+        for broken in (index[:-1], b"", index + b"{}\n"):
+            self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda _: (200, broken)), 0)
+        wrong = json.loads(api); wrong["version"]["yanked"] = False
+        self.assertNotEqual(check.main(["previous", "v0.3.0"], fetch=lambda url: (200, index if "index.crates.io" in url else json.dumps(wrong).encode())), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

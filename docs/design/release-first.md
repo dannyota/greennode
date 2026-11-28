@@ -44,10 +44,9 @@ two READMEs with the tool and SDK respectively. Complete the
 
 ## 2. Check the tree, packages and inventory
 
-Before any credentialed Cargo command, run the
-[standalone tagged-tree check](#required-checker-changes) from the trusted
-helpers on the NUL-delimited output of
-`git ls-tree -r -z --full-tree "$COMMIT"`. Run
+Before any credentialed Cargo command, save the NUL-delimited output of
+`git ls-tree -r -z --full-tree "$COMMIT"` to `TREE` and run
+`python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" tree "$TREE"`. Run
 `check-crate-release.py manifest --release --tag "$TAG"` from the root of the
 fresh checkout of that SHA, using the trusted copy of the script. Use only clean
 checkouts with that exact HEAD. Refuse Cargo configuration in the checkout, in
@@ -69,11 +68,11 @@ that export to `crates/greennode/tests/parity/shipped-commands.json` at the tag
 using `check-crate-release.py shipped CANDIDATE COMMITTED PREVIOUS`. On the
 first release, pass `--first` in place of `PREVIOUS`. For a later release, use
 the committed inventory at the verified signed tag for the most recent crates.io
-`greennode` version, selected by the
-[bounded registry lookup](#required-checker-changes). Verify the previous tag's
-signature and protected `master` ancestry. Stop if the registry lookup or the
-inventory check fails. The GitHub Release workflow runs a separate comparison
-against the previous published GitHub Release.
+`greennode` version, selected by
+`python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" previous "$TAG"`. Verify
+the previous tag's signature and protected `master` ancestry. Stop if the
+registry lookup or the inventory check fails. The GitHub Release workflow runs a
+separate comparison against the previous published GitHub Release.
 
 Before any upload, keep the staged archives in an owner-only directory next to
 the Mac receipt, outside all checkouts. Use a new directory for the tag, such as
@@ -103,8 +102,11 @@ Run `check-crate-release.py state RECEIPT` against the saved receipt and require
 both versions to report `absent`. Pass `--first` only for the first release,
 when the two crate names must also be unregistered. For later releases, omit
 `--first` and check that both existing names list `dannyota` as a user owner
-using the [bounded owners lookup](#required-checker-changes). Require the same
-state and ownership checks immediately before starting the SDK upload.
+using
+`python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" owners greennode-sdk greennode`.
+For an expected unregistered name, insert `--unregistered` before its name and
+check it separately. Require the same state and ownership checks immediately
+before starting the SDK upload.
 
 Use a plain Bash session in the fresh publish checkout. Refuse a set
 `CARGO_REGISTRY_TOKEN` or any `CARGO_REGISTRIES_*_TOKEN`, even an empty one.
@@ -186,30 +188,12 @@ crates.io that the attempted upload did not land and is no longer in flight.
 Preserve `unknown` until then. Stop on missing local records, invalid evidence,
 yanks, mismatches, or unresolved uploads. Never overwrite the saved receipt.
 
-## Required checker changes
+## Standalone checks
 
-The following checks need standalone support in `scripts/check-crate-release.py`
-before the Mac procedure can run. The existing `evidence` command couples the
-tagged tree and owners checks to GitHub Release evidence. `manifest`, `receipt`,
-`shipped`, and `state` already work locally without it.
-
-- Extract the tagged-tree validator from `evidence` and expose it on its own.
-  Apply the existing 8 MiB bound and NUL-delimited tree checks. Require unique
-  canonical paths to regular Git blobs. Reject symlinks, submodules, malformed
-  entries and `.cargo/config` or `.cargo/config.toml` anywhere in the tree,
-  case-insensitively. Return failure without consulting a Release or run.
-- For each requested crate, use the existing bounded HTTPS reader for
-  `https://crates.io/api/v1/crates/CRATE/owners`. Cap each lookup at 30 seconds
-  total and 1 MiB with no redirects, credentials or cache reuse. For registered
-  names, require a valid HTTP 200 `users` array of objects with a `user` entry
-  whose `login` is `dannyota`. Where an unregistered name is expected, require
-  HTTP 404 and the exact crate-specific not-found body. Fail on any other
-  response, timeout or decode error.
-- Use that bounded reader for the `greennode` sparse index to find the highest
-  published `X.Y.Z` tool version, including yanked versions. Require valid index
-  framing, unique version records and a version strictly below the candidate.
-  Recheck the chosen version against the version API and require agreement on
-  its name, version, checksum and yank status. Missing or inconsistent data
-  blocks a later release.
+The `tree` command checks the bounded tagged tree independently of release and
+run evidence. `owners` checks each requested name against crates.io, and
+`previous` prints the highest published stable tool tag, including yanked
+versions, after checking the index against the version API. Registry lookups are
+limited to 30 seconds and 1 MiB each.
 
 [Cargo login]: https://doc.rust-lang.org/cargo/commands/cargo-login.html

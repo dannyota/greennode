@@ -223,7 +223,7 @@ def fetch_url(url, timeout=30, allow_loopback=False, deadline=None, clock=None, 
 
     request = urllib.request.Request(url, headers={"User-Agent": "release-checker", "Cache-Control": "no-cache"})
     try:
-        response = urllib.request.build_opener(NoRedirect(), HTTPHandler(), HTTPSHandler(context=context)).open(request, timeout=timeout)
+        response = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect(), HTTPHandler(), HTTPSHandler(context=context)).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
     except urllib.error.URLError as error:
@@ -513,6 +513,27 @@ def artifact_entries_match(entries, expected):
     return not remaining
 
 
+def tagged_tree(tree):
+    if not isinstance(tree, bytes) or not tree or len(tree) > 8 * 1024 * 1024 or not tree.endswith(b"\0"):
+        raise GateError("greennode: invalid tagged tree")
+    paths = set()
+    for entry in tree[:-1].split(b"\0"):
+        try:
+            header, path = entry.split(b"\t", 1)
+            mode, kind, oid = header.split(b" ")
+        except ValueError as error:
+            raise GateError("greennode: invalid tagged tree") from error
+        parts = path.split(b"/")
+        if (mode not in (b"100644", b"100755") or kind != b"blob"
+                or not re.fullmatch(rb"[0-9a-f]{40}", oid) or not path or path in paths
+                or any(part in (b"", b".", b"..") for part in parts)):
+            raise GateError("greennode: unsafe tagged tree")
+        paths.add(path)
+        if (parts[-1].lower() in (b"config", b"config.toml")
+                and b".cargo" in [part.lower() for part in parts[:-1]]):
+            raise GateError("greennode: Cargo config in tagged tree")
+
+
 def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False):
     if not isinstance(tag, str) or not TAG.fullmatch(tag):
         raise GateError("greennode: invalid release tag")
@@ -549,23 +570,7 @@ def evidence(tag, commit, release, runs, owners, artifacts, tree, publish=False)
         if (not isinstance(users, list) or not all(isinstance(user, dict) for user in users)
                 or not any(user.get("kind") == "user" and user.get("login") == "dannyota" for user in users)):
             raise GateError(f"{name}: required owner missing")
-    if not isinstance(tree, bytes) or not tree or len(tree) > 8 * 1024 * 1024 or not tree.endswith(b"\0"):
-        raise GateError("greennode: invalid tagged tree")
-    paths = set()
-    for entry in tree[:-1].split(b"\0"):
-        try:
-            header, path = entry.split(b"\t", 1)
-            mode, kind, oid = header.split(b" ")
-        except ValueError as error:
-            raise GateError("greennode: invalid tagged tree") from error
-        parts = path.split(b"/")
-        if (mode not in (b"100644", b"100755") or kind != b"blob"
-                or not re.fullmatch(rb"[0-9a-f]{40}", oid) or not path or path in paths
-                or any(part in (b"", b".", b"..") for part in parts)):
-            raise GateError("greennode: unsafe tagged tree")
-        paths.add(path)
-        if len(parts) >= 2 and parts[-2].lower() == b".cargo" and parts[-1].lower() in (b"config", b"config.toml"):
-            raise GateError("greennode: Cargo config in tagged tree")
+    tagged_tree(tree)
     assets = release.get("assets")
     if not isinstance(assets, list) or not all(isinstance(asset, dict) for asset in assets):
         raise GateError("greennode: invalid release assets")
@@ -649,6 +654,62 @@ def evidence_file(path, limit):
     return data
 
 
+def bounded_fetch(url, fetch=None):
+    try:
+        status, data = deadline_fetch(lambda: (fetch or fetch_url)(url), 30)
+    except Exception as error:
+        raise GateError("greennode: registry lookup failed") from error
+    if type(status) is not int or not isinstance(data, bytes) or len(data) > 1024 * 1024:
+        raise GateError("greennode: invalid registry response")
+    return status, data
+
+
+def check_owners(names, unregistered, fetch=None):
+    if not names or len(set(names)) != len(names) or any(name not in NAMES for name in names):
+        raise GateError("greennode: invalid owner arguments")
+    for name in names:
+        status, data = bounded_fetch(f"https://crates.io/api/v1/crates/{name}/owners", fetch)
+        if unregistered:
+            if status != 404 or not api_not_found(data, name):
+                raise GateError(f"{name}: unregistered name required")
+        else:
+            payload = read_json(data) if status == 200 else None
+            users = payload.get("users") if isinstance(payload, dict) else None
+            if (not isinstance(users, list) or not all(isinstance(user, dict) for user in users)
+                    or not any(user.get("kind") == "user" and user.get("login") == "dannyota" for user in users)):
+                raise GateError(f"{name}: required owner missing")
+
+
+def previous_release(tag, fetch=None):
+    if not isinstance(tag, str) or not TAG.fullmatch(tag) or not valid_semver(tag[1:]):
+        raise GateError("greennode: invalid candidate tag")
+    status, data = bounded_fetch("https://index.crates.io/gr/ee/greennode", fetch)
+    if status != 200 or not data or not data.endswith(b"\n"):
+        raise GateError("greennode: invalid registry index")
+    seen = set()
+    versions = []
+    for line in data.split(b"\n")[:-1]:
+        row = read_json(line)
+        if not index_record_valid(row, "greennode") or row["vers"] in seen:
+            raise GateError("greennode: invalid registry index")
+        seen.add(row["vers"])
+        if VERSION.fullmatch(row["vers"]):
+            versions.append((tuple(map(int, row["vers"].split("."))), row))
+    if not versions:
+        raise GateError("greennode: previous release missing")
+    version, row = max(versions, key=lambda item: item[0])
+    if version >= tuple(map(int, tag[1:].split("."))):
+        raise GateError("greennode: previous release is not below candidate")
+    status, data = bounded_fetch(f'https://crates.io/api/v1/crates/greennode/{row["vers"]}', fetch)
+    payload = read_json(data) if status == 200 else None
+    api = payload.get("version") if isinstance(payload, dict) else None
+    if (not isinstance(api, dict) or api.get("crate") != "greennode" or api.get("num") != row["vers"]
+            or api.get("checksum") != row["cksum"] or type(api.get("yanked")) is not bool
+            or api["yanked"] != row["yanked"]):
+        raise GateError("greennode: registry version mismatch")
+    return "v" + row["vers"]
+
+
 def main(args, root=None, fetch=None, sleep=None):
     if len(args) == 8 and args[0] == "receipt" and args[4] == "--commit" and args[6] == "--toolchain":
         try:
@@ -661,6 +722,16 @@ def main(args, root=None, fetch=None, sleep=None):
             print("greennode: receipt validation failed", file=sys.stderr)
             return 1
     try:
+        if len(args) == 2 and args[0] == "tree":
+            tagged_tree(evidence_file(args[1], 8 * 1024 * 1024))
+            return 0
+        if args and args[0] == "owners":
+            unregistered = len(args) > 1 and args[1] == "--unregistered"
+            check_owners(args[2:] if unregistered else args[1:], unregistered, fetch)
+            return 0
+        if len(args) == 2 and args[0] == "previous":
+            print(previous_release(args[1], fetch))
+            return 0
         if args and args[0] == "evidence" and len(args) in (9, 10):
             publish = len(args) == 10
             if publish and args[9] != "--publish":
@@ -709,7 +780,7 @@ def main(args, root=None, fetch=None, sleep=None):
     except GateError as error:
         print(str(error), file=sys.stderr)
         return 1
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, TimeoutError, TransientError):
         print("greennode: invalid command input", file=sys.stderr)
         return 1
     print("greennode: release checker command unavailable", file=sys.stderr)
