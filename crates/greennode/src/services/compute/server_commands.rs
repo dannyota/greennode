@@ -188,7 +188,7 @@ server_operation!(
     "compute.QuoteCreateServer",
     Read,
     "Quote create server",
-    "Quotes the priced server fields without ordering.",
+    "Quotes the priced server fields without ordering. With `--attach-floating-ip`, the server quote includes the IP for monthly creates in `han-1` and `hcm-3`. In other regions the quote adds a conservative Elastic IP estimate from the same zone.",
     sdk::CreateServerInput,
     quote_create_server,
     &[
@@ -415,7 +415,11 @@ server_operation!(
     "compute.CreateServer",
     Write,
     "Create server",
-    "Checks inventory and price before placing one order. Supply an SSH key or `--user-data-file` for cloud-init login. Floating IP attachment is unavailable.",
+    "Checks inventory and price before placing one order. Supply an SSH key or `--user-data-file` for cloud-init login.
+
+With `--attach-floating-ip`, create checks the named security groups before the quote and again before ordering. The `OpenLogin` refusal covers unrestricted TCP login on ports 22, 234, 3389, and 3490. `--allow-open-login` requires `--attach-floating-ip` and bypasses only the login-exposure check. Use narrow source prefixes and consider disabling password login in the guest. Rules can still change after the final check.
+
+The monthly server quote includes the IP in `han-1` and `hcm-3`. Other regions add a conservative Elastic IP estimate in the same zone. `--max-price` caps the estimate. After `ACTIVE`, create allows up to two more minutes to confirm the address and IP ID. With `--no-wait`, the address remains unobserved. Verify console detach/release controls and permissions before creating. IP management commands are unavailable; server deletion does not prove release.",
     CreateArgs,
     create_server,
     &[
@@ -619,6 +623,13 @@ server_operation!(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn create_note_explains_floating_ip_release() {
+        let note = super::CREATE_SERVER.notes.join(" ");
+        assert!(note.contains("console detach/release"));
+        assert!(note.contains("server deletion does not prove release"));
+    }
+
     #[test]
     fn empty_user_data_file_is_rejected() {
         let path =

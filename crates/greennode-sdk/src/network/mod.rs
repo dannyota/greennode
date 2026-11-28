@@ -57,6 +57,7 @@ pub use prices::*;
 pub use server_reads::*;
 
 pub use vpc::*;
+pub(crate) use vpc::{exposure_invalid, exposure_reflects, read_security_group_exposure};
 
 use std::sync::{Arc, OnceLock};
 

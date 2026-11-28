@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::pricing::{GetQuoteInput, GetQuoteOutput, PriceProperty};
 use crate::quote::{input, request::decode::invalid_quote};
 use crate::wire::product::evidence::Evidence;
-use crate::wire::product::options::PathIds;
+use crate::wire::product::options::{AttemptCheck, PathIds};
 use crate::{Error, ErrorClass, Failure, RequestContext, Secret};
 
 use super::wire::{api, invalid_input};
@@ -121,7 +121,7 @@ impl Client {
                 .map_err(|error| failure(*error))?;
             let mut evidence = Evidence::new();
             add_user_data(&input, &mut evidence);
-            self.create_quote(ctx, &input, info, &mut evidence)
+            self.create_quote(ctx, &input, info, &mut evidence, None)
                 .await
                 .map_err(|error| failure(*error))
         })
@@ -150,16 +150,17 @@ impl Client {
         input: &CreateServerInput,
         info: BTreeMap<String, Value>,
         evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
     ) -> Result<GetQuoteOutput, Box<Error>> {
         let ctx = self.server_deadline(ctx);
         let mut server = self
-            .server_quote(
+            .server_quote_with_attempt(
                 &ctx,
-                "server",
-                "create",
+                ("server", "create"),
                 info,
                 input.attach_floating_ip,
                 evidence,
+                attempt_check,
             )
             .await?;
         if !input.attach_floating_ip {
@@ -174,10 +175,9 @@ impl Client {
             });
         } else {
             let ip = self
-                .server_quote(
+                .server_quote_with_attempt(
                     &ctx,
-                    "elastic-ip",
-                    "create",
+                    ("elastic-ip", "create"),
                     BTreeMap::from([
                         ("zoneId".into(), json!(input.zone_id)),
                         ("period".into(), json!(1)),
@@ -185,6 +185,7 @@ impl Client {
                     ]),
                     true,
                     evidence,
+                    attempt_check,
                 )
                 .await?;
             validate_component(&ip, evidence)?;
@@ -206,6 +207,19 @@ impl Client {
         component: bool,
         evidence: &mut Evidence,
     ) -> Result<GetQuoteOutput, Box<Error>> {
+        self.server_quote_with_attempt(ctx, (resource, action), info, component, evidence, None)
+            .await
+    }
+
+    async fn server_quote_with_attempt(
+        &self,
+        ctx: &RequestContext,
+        (resource, action): (&str, &str),
+        info: BTreeMap<String, Value>,
+        component: bool,
+        evidence: &mut Evidence,
+        attempt_check: Option<AttemptCheck<'_>>,
+    ) -> Result<GetQuoteOutput, Box<Error>> {
         let ctx = self.server_deadline(ctx);
         let input = GetQuoteInput {
             resource_type: resource.into(),
@@ -213,7 +227,7 @@ impl Client {
             resource_info: Some(info),
         };
         self.pricing
-            .compute_quote_with_evidence(&ctx, input, evidence, component)
+            .compute_quote_with_evidence(&ctx, input, evidence, component, attempt_check)
             .await
             .map_err(|error| Box::new(error.into_parts().0))
     }

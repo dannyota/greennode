@@ -1,0 +1,1 @@
+{"data":[{"direction":"ingress","etherType":"IPv4","protocol":"tcp","portRangeMin":22,"portRangeMax":22,"remoteIpPrefix":"192.0.2.8/32","remoteGroupId":"sg-1"}]}

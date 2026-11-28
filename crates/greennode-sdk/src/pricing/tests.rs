@@ -112,6 +112,19 @@ async fn quote_defaults_to_create_and_preserves_signed_resize_credit() {
 }
 
 #[tokio::test]
+async fn quote_screens_synthetic_status_against_operation_evidence() {
+    let server = Server::start(vec![response(OK, "{}")]);
+    let (ctx, _) = RequestContext::new();
+    let mut evidence = crate::wire::product::evidence::Evidence::new();
+    evidence.add_bearer(&Secret::new("200"));
+    let failure = client(&server)
+        .quote_with_evidence(&ctx, GetQuoteInput::new(RESOURCE_SERVER), &mut evidence)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error().api_error().unwrap().status(), None);
+}
+
+#[tokio::test]
 async fn quote_rejects_ambiguous_success_and_preserves_observed_status() {
     for (status, body, expected) in [
         (OK, "{", 200),

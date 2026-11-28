@@ -3,7 +3,7 @@ use crate::quote::{
     input,
     request::{self, Product, Request, decode},
 };
-use crate::wire::product::evidence::Evidence;
+use crate::wire::product::{evidence::Evidence, options::AttemptCheck};
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 use serde::Serialize;
 use serde_json::Value;
@@ -113,7 +113,7 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote(ctx, input, evidence, false).await
+        self.quote(ctx, input, evidence, false, None).await
     }
 
     pub(crate) async fn compute_quote_with_evidence(
@@ -122,8 +122,10 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
         require_totals: bool,
+        attempt_check: Option<AttemptCheck<'_>>,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
-        self.quote(ctx, input, evidence, require_totals).await
+        self.quote(ctx, input, evidence, require_totals, attempt_check)
+            .await
     }
 
     async fn quote(
@@ -132,6 +134,7 @@ impl Client {
         input: GetQuoteInput,
         evidence: &mut Evidence,
         require_totals: bool,
+        attempt_check: Option<AttemptCheck<'_>>,
     ) -> Result<GetQuoteOutput, Failure<GetQuoteOutput>> {
         let failure = |error| Failure::new(error, None, WriteDispatch::NotAWrite);
         if input.resource_type.is_empty() {
@@ -151,7 +154,7 @@ impl Client {
             &input.action
         };
         let body = input::regional(&input.resource_type, action, input.resource_info.as_ref());
-        let raw = request::exchange(
+        let raw = request::exchange_with_attempt(
             &self.session,
             ctx,
             evidence,
@@ -164,11 +167,12 @@ impl Client {
                 body: Some(&body),
             },
             None,
+            attempt_check,
         )
         .await
         .map_err(|error| Box::new(evidence.screen_error(*error)));
         let numeric = evidence.credentials().has_numeric_product_credential();
-        match raw {
+        let result = match raw {
             Err(error) => {
                 let api = error.api_error();
                 let observed = api.and_then(ApiError::observed_status);
@@ -193,7 +197,15 @@ impl Client {
                 });
                 output.ok_or_else(|| failure(decode::invalid_quote(OP, Some(200))))
             }
-        }
+        };
+        result.map_err(|failed| {
+            let (error, partial, dispatch) = failed.into_parts();
+            Failure::new(
+                error.screen_api(&|text| evidence.text_reflects(text)),
+                partial,
+                dispatch,
+            )
+        })
     }
 }
 

@@ -649,7 +649,7 @@ async fn create_server_retains_a_screened_partial_after_settlement_failure() {
 }
 
 #[tokio::test]
-async fn create_server_refuses_floating_attachment_before_network() {
+async fn floating_create_refuses_more_than_64_groups_before_network() {
     let server = TestServer::start(vec![]);
     let (ctx, _) = RequestContext::new();
     let failure = server_order_client(&server)
@@ -657,6 +657,7 @@ async fn create_server_refuses_floating_attachment_before_network() {
             &ctx,
             CreateServerInput {
                 attach_floating_ip: true,
+                security_group_ids: (0..65).map(|index| format!("sg-{index}")).collect(),
                 ..server_order()
             },
         )
