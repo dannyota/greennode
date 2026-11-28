@@ -475,7 +475,7 @@ fn decode_key(
             name: "data",
             children: FIELDS,
         }],
-        8 << 20,
+        text.len(),
     )
     .map_err(|_| invalid())?;
     if !text
@@ -573,8 +573,11 @@ pub(super) fn withhold_key_error(body: &[u8]) -> bool {
         name,
         children: &[],
     });
+    if body.len() > 8 << 20 {
+        return true;
+    }
     let text = zeroize::Zeroizing::new(go_json(body).into_owned());
-    if strict_json::validate(text.as_bytes(), &fields, 8 << 20).is_err() {
+    if strict_json::validate(text.as_bytes(), &fields, text.len()).is_err() {
         return true;
     }
     serde_json::from_str::<&RawValue>(&text)

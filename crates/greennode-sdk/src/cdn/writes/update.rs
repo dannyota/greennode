@@ -8,11 +8,11 @@ use serde_json::{
 };
 
 use super::{
-    Call, Client, WebAccelerator, WriteKind, encode, invalid, possibly_applied, record_user_uuids,
+    Call, Client, WebAccelerator, WriteKind, encode, invalid, possibly_applied,
     settle::{Poll, Target, finish},
 };
 use crate::cdn::wire::convert;
-use crate::wire::product::options::PathIds;
+use crate::wire::product::{lossy, options::PathIds};
 use crate::{Failure, RequestContext};
 
 const UPDATE: Call = Call::write("cdn.UpdateWebAccelerator", "v1/cdn/update", &Method::PUT);
@@ -205,20 +205,22 @@ impl Client {
                 .map_err(convert)?;
             let merged = merge_update(initial.raw.get(), &input).map_err(convert)?;
             let malformed = |_| invalid("the merged CDN detail is not valid JSON");
-            let original: Value = serde_json::from_str(initial.raw.get()).map_err(malformed)?;
-            let projected = serde_json::to_value(&merged).map_err(malformed)?;
+            let original: Value =
+                lossy::from_slice(initial.raw.get().as_bytes()).map_err(malformed)?;
+            let body = encode(&merged)?;
+            let projected = lossy::from_slice(&body).map_err(malformed)?;
             let output = |web_accelerator| UpdateWebAcceleratorOutput { web_accelerator };
             if original == projected {
                 return finish(initial, None, &mut evidence, output);
             }
-            let body = encode(&merged)?;
-            if evidence.output_reflects(&projected) || !evidence.peer_body_screen(&body).is_clean()
+            if evidence.output_reflects(&projected)
+                || !evidence.go_peer_body_screen(&body).is_clean()
             {
                 return Err(invalid(
                     "the merged CDN detail contains a configured credential",
                 ));
             }
-            record_user_uuids(initial.raw.get(), &mut evidence);
+            initial.record_user_uuids(&mut evidence);
             if let Err(failure) = self
                 .call_with_evidence(ctx, &UPDATE, &[], body, &mut evidence)
                 .await
@@ -240,8 +242,10 @@ impl Client {
 }
 
 fn merge_update(raw: &str, input: &UpdateWebAcceleratorInput) -> Result<Object, Failure<()>> {
-    let mut object: Object =
-        serde_json::from_str(raw).map_err(|_| invalid("the CDN detail is not an object"))?;
+    let mut object = lossy::with_normalized(raw.as_bytes(), |text| {
+        serde_json::from_str(text).and_then(owned_object)
+    })
+    .map_err(|_| invalid("the CDN detail is not an object"))?;
     if !input.set_rule_actions.is_empty() || !input.remove_rule_actions.is_empty() {
         let actions = merge_actions(object.get("defaultRuleAction").map(Box::as_ref), input)?;
         set(&mut object, "defaultRuleAction", &actions)?;
@@ -273,9 +277,22 @@ fn merge_update(raw: &str, input: &UpdateWebAcceleratorInput) -> Result<Object, 
 fn collection(value: Option<&RawValue>) -> Result<Vec<Object>, Failure<()>> {
     match value.map(RawValue::get) {
         None | Some("null" | "\"\"") => Ok(Vec::new()),
-        Some(text) => serde_json::from_str(text)
-            .map_err(|_| invalid("the CDN detail does not have a valid list of rules or origins")),
+        Some(text) => lossy::with_normalized(text.as_bytes(), |text| {
+            let objects: Vec<BTreeMap<String, &RawValue>> = serde_json::from_str(text)?;
+            objects
+                .into_iter()
+                .map(owned_object)
+                .collect::<serde_json::Result<_>>()
+        })
+        .map_err(|_| invalid("the CDN detail does not have a valid list of rules or origins")),
     }
+}
+
+fn owned_object(fields: BTreeMap<String, &RawValue>) -> serde_json::Result<Object> {
+    fields
+        .into_iter()
+        .map(|(key, raw)| Ok((key, lossy::to_owned(raw)?)))
+        .collect()
 }
 
 fn set(object: &mut Object, key: &str, value: &impl Serialize) -> Result<(), Failure<()>> {
@@ -286,7 +303,7 @@ fn set(object: &mut Object, key: &str, value: &impl Serialize) -> Result<(), Fai
 }
 
 fn string(object: &Object, key: &str) -> Option<String> {
-    serde_json::from_str(object.get(key)?.get()).ok()
+    lossy::from_slice(object.get(key)?.get().as_bytes()).ok()
 }
 
 fn merge_actions(
@@ -329,7 +346,7 @@ fn merge_upstreams(
         });
         if !upstream.id.is_empty() {
             let id = existing.iter().filter_map(|origin| origin.get("cdnUpstreamId"))
-                .filter_map(|raw| serde_json::from_str::<Value>(raw.get()).ok())
+                .filter_map(|raw| lossy::from_slice::<Value>(raw.get().as_bytes()).ok())
                 .find(|raw| match raw {
                     Value::String(id) => *id == upstream.id,
                     Value::Number(id) => id.as_str() == upstream.id,

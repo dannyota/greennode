@@ -367,7 +367,7 @@ impl<'a> Reads<'a> {
         }
         let raw =
             serde_json::from_str::<&RawValue>(&text).map_err(|_| self.screen(read.syntax()))?;
-        strict_json::validate(raw.get().as_bytes(), &[], CAP).map_err(|_| {
+        strict_json::validate(raw.get().as_bytes(), &[], raw.get().len()).map_err(|_| {
             self.screen(if protected {
                 read.protected_invalid()
             } else {

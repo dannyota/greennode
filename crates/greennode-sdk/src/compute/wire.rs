@@ -358,7 +358,7 @@ impl Client {
                     })
                 };
                 let raw = serde_json::from_str::<&RawValue>(&text).map_err(|_| syntax_error())?;
-                strict_json::validate(raw.get().as_bytes(), &[], operation.cap)
+                strict_json::validate(raw.get().as_bytes(), &[], raw.get().len())
                     .map_err(|_| Box::new(read.invalid(evidence)))?;
                 let fields = serde_json::from_str::<Option<_>>(raw.get())
                     .map_err(|_| Box::new(read.invalid(evidence)))?;

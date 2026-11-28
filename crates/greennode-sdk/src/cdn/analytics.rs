@@ -327,7 +327,8 @@ impl Client {
             }
             let malformed = || read_failure(REPORT.unexpected(200));
             let text = answer.data.as_deref().ok_or_else(malformed)?.get();
-            let rows: Vec<ReportWire> = serde_json::from_str(text).map_err(|_| malformed())?;
+            let rows: Vec<ReportWire> = crate::wire::product::lossy::from_slice(text.as_bytes())
+                .map_err(|_| malformed())?;
             let evidence = &answer.evidence;
             let mut items = Vec::with_capacity(rows.len());
             for mut row in rows {
@@ -378,7 +379,7 @@ impl Client {
         let malformed = || read_failure(call.unexpected(200));
         let text = answer.data.as_deref().ok_or_else(malformed)?.get();
         let rows: BTreeMap<String, CacheWire> =
-            serde_json::from_str(text).map_err(|_| malformed())?;
+            crate::wire::product::lossy::from_slice(text.as_bytes()).map_err(|_| malformed())?;
         let rows = sorted(rows).ok_or_else(malformed)?;
         Ok(rows
             .into_iter()
@@ -406,12 +407,13 @@ impl Client {
         let answer = self.call(ctx, call, &[], body.to_string().into()).await?;
         let malformed = || read_failure(call.unexpected(200));
         let text = answer.data.as_deref().ok_or_else(malformed)?.get();
-        let decoded: String = serde_json::from_str(text).map_err(|_| malformed())?;
+        let decoded: String =
+            crate::wire::product::lossy::from_slice(text.as_bytes()).map_err(|_| malformed())?;
         if decoded.trim() == "[]" {
             return Ok(Some(BTreeMap::new()));
         }
         let mut counts: Option<BTreeMap<String, Field<f64>>> =
-            serde_json::from_str(&decoded).map_err(|_| malformed())?;
+            crate::wire::product::lossy::from_slice(decoded.as_bytes()).map_err(|_| malformed())?;
         if let Some(counts) = &mut counts {
             counts.retain(|key, value| {
                 value.redact(&answer.evidence);

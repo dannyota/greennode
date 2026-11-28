@@ -8,6 +8,27 @@ PATH = "greennode-sdk/src/model.rs"
 
 
 class RawValueAuditTests(unittest.TestCase):
+    def test_rejects_unresolved_deserialize_and_raw_value_import_aliases(self):
+        source = """
+use serde::{Deserialize as Decode, Serialize};
+use serde_json::value::RawValue as Raw;
+#[derive(Decode)]
+struct A(Raw);
+"""
+        self.assertEqual(GATE["violations"](PATH, source), [2, 3])
+
+    def test_checks_fields_after_parenthesized_where_bounds(self):
+        source = """
+#[derive(Deserialize)]
+struct Model<T> where T: Fn(u64) -> u64 {
+    callable: T,
+    raw: Box<RawValue>,
+}
+#[derive(Deserialize)]
+enum Reply<T> where T: Fn() { Payload(T, Box<RawValue>) }
+"""
+        self.assertEqual(GATE["violations"](PATH, source), [5, 8])
+
     def test_reports_all_unannotated_raw_forms(self):
         source = '''
 #[derive(Clone, serde::Deserialize)]
@@ -71,7 +92,7 @@ enum Reply { Paged(Vec<Option<Box<RawValue>>>) }
             ''')
             self.assertEqual(
                 GATE["audit"](root),
-                [f"{PATH}:3: deserialize RawValue through wire::product::lossy"],
+                [f"{PATH}:3: deserialize RawValue through wire::product::lossy and use unaliased imports"],
             )
 
     def test_accepts_shared_helpers_and_non_deserialized_fields(self):

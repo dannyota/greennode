@@ -238,11 +238,14 @@ impl<T: WireField> Output for Field<T> {
             if body.is_empty() {
                 return Ok(Self::default());
             }
-            let body = go_json(body);
             let error = |detail| Box::new(response_error(operation, detail));
+            if body.len() > operation.cap {
+                return Err(error(DecodeError::InvalidShape));
+            }
+            let body = go_json(body);
             let raw = serde_json::from_str::<&RawValue>(&body)
                 .map_err(|_| error(DecodeError::MalformedJson))?;
-            strict_json::validate_shape(body.as_bytes(), &Self::SCHEMA, operation.cap)
+            strict_json::validate_shape(body.as_bytes(), &Self::SCHEMA, body.len())
                 .map_err(|_| error(DecodeError::InvalidShape))?;
             serde_json::from_str(raw.get()).map_err(|_| error(DecodeError::InvalidShape))
         })

@@ -1,20 +1,17 @@
 mod settle;
 mod update;
 
-use std::collections::BTreeMap;
-
 use bytes::Bytes;
 use http::Method;
 use serde::Serialize;
-use serde_json::{Value, json, value::RawValue};
+use serde_json::{Value, json};
 
 use super::{
     Client, ErrorDetail, WebAccelerator, models::redact_text, reads::WebDetail, status_name,
     wire::Call,
 };
 use crate::wire::product::{evidence::Evidence, options::PathIds, redirect::Retry};
-use crate::wire::strict_json::field_matches;
-use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, Secret, WriteDispatch};
+use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 pub use update::{
     RuleActionInput, UpdateWebAcceleratorInput, UpdateWebAcceleratorOutput, UpstreamInput,
@@ -395,21 +392,9 @@ fn rejected(failure: &Failure<()>) -> bool {
 }
 
 fn redact(mut detail: WebDetail, evidence: &mut Evidence) -> WebAccelerator {
-    record_user_uuids(detail.raw.get(), evidence);
+    detail.record_user_uuids(evidence);
     detail.model.redact(evidence);
     detail.model
-}
-
-fn record_user_uuids(raw: &str, evidence: &mut Evidence) {
-    if let Ok(fields) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw) {
-        for (key, item) in fields {
-            if field_matches(&key, "userUuid")
-                && let Ok(uuid) = serde_json::from_str::<String>(item.get())
-            {
-                evidence.add_redaction(&Secret::new(uuid));
-            }
-        }
-    }
 }
 
 fn safe_status(status: i64, evidence: &Evidence) -> String {

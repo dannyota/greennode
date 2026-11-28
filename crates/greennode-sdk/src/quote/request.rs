@@ -100,7 +100,8 @@ impl Output for Document {
         let status = response.status.as_u16();
         check_response(op, response)?;
         response.decode_projection(|body| {
-            let raw = serde_json::from_slice::<Box<RawValue>>(body).map_err(|_| {
+            let text = crate::model::wire::go_json(body);
+            let raw = serde_json::from_str::<Box<RawValue>>(&text).map_err(|_| {
                 if op.id == "pricing.GetQuote" {
                     return invalid(op.id, status);
                 }
@@ -113,7 +114,10 @@ impl Output for Document {
                 ))
             })?;
             let peer_reflects = !response.reflection.is_clean();
-            if strict_json::validate(body, &[], op.cap).is_err() || peer_reflects {
+            if body.len() > op.cap
+                || strict_json::validate(text.as_bytes(), &[], text.len()).is_err()
+                || peer_reflects
+            {
                 return Err(invalid(op.id, status));
             }
             Ok(Self {
@@ -140,7 +144,10 @@ impl Output for VnetworkDocument {
                 .clean_receipt()
                 .ok_or_else(|| invalid(op.id, response.status.as_u16()))?;
             let normalized = crate::model::wire::go_json(receipt.body());
-            strict_json::validate(normalized.as_bytes(), &[], op.cap)
+            if receipt.body().len() > op.cap {
+                return Err(invalid(op.id, response.status.as_u16()));
+            }
+            strict_json::validate(normalized.as_bytes(), &[], normalized.len())
                 .map_err(|_| invalid(op.id, response.status.as_u16()))?;
             let raw = serde_json::from_str::<Box<RawValue>>(&normalized)
                 .map_err(|_| invalid(op.id, response.status.as_u16()))?;
@@ -161,8 +168,12 @@ fn guard_discovery(
     known: &sender::SentCredentials,
     sent: &sender::SentCredentials,
 ) -> Option<Box<Error>> {
-    (op != "pricing.GetQuote" && operation::unsafe_json_response(body, known, sent))
-        .then(|| invalid(op, status.as_u16()))
+    if op == "pricing.GetQuote" {
+        return None;
+    }
+    let mut evidence = Evidence::from_credentials(known);
+    evidence.absorb(sent);
+    (!evidence.go_peer_body_screen(body).is_clean()).then(|| invalid(op, status.as_u16()))
 }
 
 fn guard_catalogue(

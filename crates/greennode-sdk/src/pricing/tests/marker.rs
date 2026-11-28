@@ -45,3 +45,21 @@ async fn quote_redacts_client_secret_marker_in_property_text() {
     assert_eq!(output.properties[1].name, "disk");
     assert_eq!(output.properties[1].description, "normal");
 }
+
+#[tokio::test]
+async fn quote_accepts_go_lossy_strings() {
+    let body = include_str!("../../../tests/fixtures/pricing/GetQuoteSnapshot.json").replacen(
+        '{',
+        r#"{"\ud800":"\udc00","#,
+        1,
+    );
+    let server = Server::start(vec![response(OK, &body)]);
+    let quote = client(&server)
+        .get_quote(
+            &RequestContext::new().0,
+            GetQuoteInput::new(RESOURCE_SNAPSHOT),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quote.optimum_price, 5040.0);
+}

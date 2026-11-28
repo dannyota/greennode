@@ -369,6 +369,18 @@ async fn dynamic_booleans_and_nulls_check_their_rendered_spellings() {
 }
 
 #[tokio::test]
+async fn go_lossy_expansion_is_charged_at_wire_size() {
+    let mut body = br#"[{"ignored":""#.to_vec();
+    body.extend(std::iter::repeat_n(0xff, 3 << 20));
+    body.extend_from_slice(br#""}]"#);
+    let server = Server::start(vec![response("200 OK", body)]);
+    let result = client(&server, TOKEN)
+        .list_packages(&RequestContext::new().0, ListPackagesInput {})
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
 async fn invalid_unicode_is_replaced_before_shape_validation_and_redaction() {
     let body = b"[{\"name\":\"\xE2\x82x\",\"detail\":{\"\\uDC00\":\"\\uD800toy-glb-session-bearer\",\"pair\":\"\\uD834\\uDD1E\",\"literal\":\"\\\\uD800\"}}]";
     let server = Server::start(vec![

@@ -155,6 +155,26 @@ async fn decision_snapshot_refuses_a_reflection_even_for_a_noop() {
 }
 
 #[tokio::test]
+async fn guarded_tag_snapshot_accepts_go_lossy_keys() {
+    let server = Server::start(vec![http_response(
+        r#"[{"key":"env","value":"test","systemTag":false,"\ud800":true}]"#,
+    )]);
+    let result = test_client(&server, "toy-token")
+        .untag_resource(
+            &RequestContext::new().0,
+            UntagResourceInput {
+                resource_id: "res-1".into(),
+                resource_type: "SERVER".into(),
+                key: "absent".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["Changed"], false);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
 async fn untag_noop_sends_no_write() {
     let server = Server::start(vec![http_response("[]")]);
     let (ctx, _) = RequestContext::new();

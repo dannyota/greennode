@@ -38,6 +38,21 @@ fn resize() -> ResizeVolumeInput {
 }
 
 #[tokio::test]
+async fn create_volume_accepts_go_lossy_acknowledgement_keys() {
+    let server = Server::start(vec![
+        response(EMPTY),
+        response(QUOTE),
+        reply(ACCEPTED, r#"{"data":{"uuid":"volume-1"},"\ud800":true}"#),
+        response(AVAILABLE),
+    ]);
+    let output = client(&server, "hcm-3")
+        .create_volume(&RequestContext::new().0, create())
+        .await;
+    assert!(output.is_ok());
+    assert_eq!(server.requests(), 4);
+}
+
+#[tokio::test]
 async fn repeatable_attach_retries_then_confirms_in_use_by_target() {
     let server = Server::start(vec![
         response(AVAILABLE),

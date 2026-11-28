@@ -117,13 +117,17 @@ impl<'de> Deserialize<'de> for Accepted {
 }
 
 fn decode_accepted(body: &[u8], limit: usize) -> Outcome {
-    if validate_shape(body, &CreateReply::SCHEMA, limit).is_err() {
+    if body.len() > limit {
+        return Outcome::Unconfirmed(CreateClusterOutput::default());
+    }
+    let text = crate::model::wire::go_json(body);
+    if validate_shape(text.as_bytes(), &CreateReply::SCHEMA, text.len()).is_err() {
         return Outcome::Unconfirmed(CreateClusterOutput::default());
     }
     let Ok(Accepted {
         mut output,
         wrong_type,
-    }) = serde_json::from_slice(body)
+    }) = serde_json::from_str(&text)
     else {
         return Outcome::Unconfirmed(CreateClusterOutput::default());
     };
@@ -163,7 +167,7 @@ fn rejection_reason(body: &[u8]) -> Option<String> {
             r"[\w.+-]+@[\w.-]+\.[a-z]{2,}",
         ))
     });
-    let envelope: Envelope = serde_json::from_slice(body).ok()?;
+    let envelope: Envelope = crate::wire::product::lossy::from_slice(body).ok()?;
     let message = envelope.error.message.trim();
     if message.is_empty()
         || message.len() > MESSAGE_LIMIT
@@ -206,6 +210,15 @@ pub(super) fn refusal<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn create_ack_accepts_go_lossy_unknown_keys() {
+        let body = br#"{"id":"cluster-1","status":"CREATING","\ud800":true}"#;
+        assert!(matches!(
+            decode_accepted(body, body.len()),
+            Outcome::Accepted(_)
+        ));
+    }
+
     use super::*;
     use crate::{ErrorClass, Secret};
 

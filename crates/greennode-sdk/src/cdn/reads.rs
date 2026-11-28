@@ -3,6 +3,7 @@ use bytes::Bytes;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 
 use crate::wire::product::lossy;
 use sha2::Sha256;
@@ -159,6 +160,15 @@ pub(super) struct WebDetail {
     pub(super) raw: Box<RawValue>,
     pub(super) status: i64,
     pub(super) model: WebAccelerator,
+    user_uuids: Vec<Secret>,
+}
+
+impl WebDetail {
+    pub(super) fn record_user_uuids(&self, evidence: &mut Evidence) {
+        for uuid in &self.user_uuids {
+            evidence.add_redaction(uuid);
+        }
+    }
 }
 
 fn screened<T: serde::Serialize>(
@@ -208,6 +218,7 @@ impl Client {
                 .read_web_detail(ctx, GET_WEB.id, &input.cdn_id, &mut evidence)
                 .await
                 .map_err(convert)?;
+            detail.record_user_uuids(&mut evidence);
             detail.model.redact(&evidence);
             screened(
                 GetWebAcceleratorOutput {
@@ -369,7 +380,7 @@ fn decode_web_detail(
 ) -> Result<WebDetail, Failure<()>> {
     let malformed = || read_failure(call.unexpected(200));
     let raw = data.ok_or_else(malformed)?;
-    let (state, mut model): (State, WebAccelerator) =
+    let (state, mut model, user_uuids): (State, WebAccelerator, Vec<Secret>) =
         lossy::with_normalized(raw.get().as_bytes(), |text| {
             if names.has_case_variant(text.as_bytes(), &STATE) {
                 return Err(read_failure(
@@ -384,12 +395,23 @@ fn decode_web_detail(
                 return Err(malformed());
             }
             let model = serde_json::from_str(text).map_err(|_| malformed())?;
-            Ok((state, model))
+            let fields: BTreeMap<String, &RawValue> =
+                serde_json::from_str(text).map_err(|_| malformed())?;
+            let mut user_uuids = Vec::new();
+            for (key, raw) in fields {
+                if crate::wire::strict_json::field_matches(&key, "userUuid") {
+                    let uuid: Option<String> =
+                        serde_json::from_str(raw.get()).map_err(|_| malformed())?;
+                    user_uuids.extend(uuid.filter(|value| !value.is_empty()).map(Secret::new));
+                }
+            }
+            Ok((state, model, user_uuids))
         })?;
     model.status = super::Field::Value(state.status);
     Ok(WebDetail {
         raw,
         status: state.status,
         model,
+        user_uuids,
     })
 }

@@ -165,7 +165,7 @@ impl Response {
         rules: (bool, bool, redirect::Retry),
     ) -> Result<(), Box<crate::Error>> {
         let body = if self.body.trim_ascii().starts_with(b"[")
-            && response::first_transport_error_entry(&self.body).is_none()
+            && !response::has_transport_error_entries(&self.body)
         {
             &[]
         } else {
@@ -193,8 +193,12 @@ impl Response {
                 shape: Shape::Any,
             },
         ]);
-        validate_folded_canonical_shape(&self.body, &FIELDS, self.body_cap).ok()?;
-        let (code, message) = response::billing_envelope_fields(&self.body)?;
+        if self.body.len() > self.body_cap {
+            return None;
+        }
+        let text = crate::model::wire::go_json(&self.body);
+        validate_folded_canonical_shape(text.as_bytes(), &FIELDS, text.len()).ok()?;
+        let (code, message) = response::billing_envelope_fields(&text)?;
         let code = response::sanitize_error_text(&code, &self.credentials);
         if code.as_str().is_empty() {
             return None;
@@ -281,7 +285,7 @@ impl Response {
             #[serde(rename = "fieldError")]
             entries: Vec<Entry>,
         }
-        let Ok(fields) = serde_json::from_slice::<Fields>(&self.body) else {
+        let Ok(fields) = crate::wire::product::lossy::from_slice::<Fields>(&self.body) else {
             return Vec::new();
         };
         let mut names = Vec::new();

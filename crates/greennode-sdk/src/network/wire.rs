@@ -600,7 +600,7 @@ pub(super) struct Fields<'a>(
 
 impl<'a> Fields<'a> {
     pub(super) fn decode(text: &'a str) -> Result<Self, ()> {
-        strict_json::validate(text.as_bytes(), &[], CAP).map_err(|_| ())?;
+        strict_json::validate(text.as_bytes(), &[], text.len()).map_err(|_| ())?;
         serde_json::from_str(text).map_err(|_| ())
     }
 

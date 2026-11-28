@@ -553,3 +553,61 @@ async fn direct_cdn_docs_404_carries_absence_proof() {
         );
     }
 }
+
+#[tokio::test]
+async fn lossy_detail_redacts_user_uuid_in_returned_models() {
+    let body = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"domainName":"local-owner-canary.invalid","USERUUID":"local-owner-canary","\ud800":true}}"#;
+    let server = Server::start(vec![
+        response(body, "application/json"),
+        response(body, "application/json"),
+    ]);
+    let cdn = client(&server, Some(CDN_KEY));
+    let (ctx, _) = RequestContext::new();
+    let read = cdn
+        .get_web_accelerator(&ctx, GetWebAcceleratorInput::new("cdn-1"))
+        .await
+        .unwrap();
+    let write = cdn
+        .enable_web_accelerator(&ctx, EnableWebAcceleratorInput::new("cdn-1"))
+        .await
+        .unwrap();
+    assert!(read.web_accelerator.domain_name == "<redacted>");
+    assert!(write.web_accelerator.domain_name == "<redacted>");
+    let malformed = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"userUuid":{}}}"#;
+    let server = Server::start(vec![response(malformed, "application/json")]);
+    let result = client(&server, Some(CDN_KEY))
+        .get_web_accelerator(&ctx, GetWebAcceleratorInput::new("cdn-1"))
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn lossy_update_compares_normalized_values_and_preserves_raw_fields() {
+    let body = r#"{"success":true,"data":{"cdnId":"cdn-1","status":1,"cName":[],"childrenRule":{"note":"\ud800"}}}"#;
+    let server = Server::start(vec![
+        response(body, "application/json"),
+        response(body, "application/json"),
+        response(
+            include_str!("fixtures/cdn/write-update.json"),
+            "application/json",
+        ),
+        response(body, "application/json"),
+    ]);
+    let cdn = client(&server, Some(CDN_KEY));
+    let (ctx, _) = RequestContext::new();
+    let mut input = UpdateWebAcceleratorInput::new("cdn-1");
+    input.c_names = Some(vec![]);
+    input.no_wait = true;
+    cdn.update_web_accelerator(&ctx, input)
+        .await
+        .unwrap_or_else(|failure| panic!("{} requests: {}", server.requests(), failure.error()));
+    assert_eq!(server.requests(), 1);
+    let mut input = UpdateWebAcceleratorInput::new("cdn-1");
+    input.c_names = Some(vec!["edge.invalid".into()]);
+    input.no_wait = true;
+    cdn.update_web_accelerator(&ctx, input)
+        .await
+        .unwrap_or_else(|failure| panic!("{} requests: {}", server.requests(), failure.error()));
+    assert_eq!(server.requests(), 4);
+    assert!(server.bodies()[2].windows(6).any(|part| part == br"\ud800"));
+}

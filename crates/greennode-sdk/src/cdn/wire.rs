@@ -547,7 +547,7 @@ pub(super) fn list<T: serde::de::DeserializeOwned>(
 
 fn parse_code(raw: &RawValue) -> Option<String> {
     if raw.get().starts_with('"') {
-        return serde_json::from_str::<String>(raw.get()).ok();
+        return lossy::from_slice::<String>(raw.get().as_bytes()).ok();
     }
     serde_json::from_str::<serde_json::Number>(raw.get())
         .ok()

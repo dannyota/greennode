@@ -182,7 +182,7 @@ impl Header {
     fn proved_code(&self, credentials: &SentCredentials) -> Option<(&str, response::Clean)> {
         let raw = self.code.as_deref()?.get();
         let clean = crate::wire::product::evidence::Evidence::from_credentials(credentials)
-            .peer_body_screen(raw.as_bytes())
+            .go_peer_body_screen(raw.as_bytes())
             .clean()?;
         Some((self.screened_code(credentials)?, clean))
     }
@@ -193,7 +193,7 @@ impl Header {
             return None;
         }
         if wire.starts_with('"') {
-            let decoded = serde_json::from_str::<String>(wire).ok()?;
+            let decoded = lossy::from_slice::<String>(wire.as_bytes()).ok()?;
             response::decision_text(&decoded, credentials)?;
         }
         Some(wire)
@@ -205,7 +205,7 @@ fn success_code(code: &str) -> Option<bool> {
         b'n' if code == "null" => Some(true),
         b'0'..=b'9' | b'-' => Some(matches!(code.parse::<u16>(), Ok(200..=299))),
         b'"' => {
-            let text: String = serde_json::from_str(code).ok()?;
+            let text: String = lossy::from_slice(code.as_bytes()).ok()?;
             (!text.is_empty() && !matches!(text.parse::<i64>(), Ok(200..=299))).then_some(false)
         }
         _ => None,

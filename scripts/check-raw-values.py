@@ -16,6 +16,9 @@ FIELD = re.compile(
 )
 VARIANT = re.compile(rf"\s*(?:{ATTRIBUTE})*(?:r\#)?\w+\s*(?=[{{(])")
 TYPE_ALIAS = re.compile(r"\btype\s+(\w+)\s*(?:<[^;=]*?>\s*)?=\s*([^;]+);")
+USE = re.compile(r"\buse\s+[^;]+;")
+IMPORT_ALIAS = re.compile(r"\b(?:RawValue|Deserialize)\s+as\s+(?:r#)?\w+")
+WHERE = re.compile(r"\bwhere\b")
 IDENTIFIER = re.compile(r"\b\w+\b")
 SERDE = re.compile(r"#\s*\[\s*serde\s*\(")
 WITH = re.compile(
@@ -26,14 +29,16 @@ DELIMITER = re.compile(r"->|[<>{}\[\](),;]")
 CLOSING = {"<": ">", "{": "}", "[": "]", "(": ")"}
 
 
-def item_body(code, start):
+def item_body(code, start, kind):
     pending = []
+    tuple_allowed = kind == "struct"
     for token in DELIMITER.finditer(code, start):
         symbol = token[0]
         if not pending:
             if symbol == ";":
-                return None
-            if symbol in "{(":
+                return token.start()
+            tuple_allowed &= WHERE.search(code, start, token.start()) is None
+            if symbol == "{" or (symbol == "(" and tuple_allowed):
                 return token.start()
         if symbol in CLOSING:
             pending.append(CLOSING[symbol])
@@ -58,9 +63,8 @@ def entries(code, opening):
                 break
 
 
-def field_ranges(code, item):
-    opening = item_body(code, item.end())
-    if opening is None:
+def field_ranges(code, item, opening):
+    if code[opening] == ";":
         return
     if item["kind"] == "struct":
         yield from entries(code, opening)
@@ -102,17 +106,25 @@ def checked_attribute(code, source, start, end):
 def check(path, without_comments, code, names):
     if path == HELPER:
         return []
-    lines = []
+    starts = [
+        alias.start()
+        for use in USE.finditer(code)
+        for alias in IMPORT_ALIAS.finditer(code, *use.span())
+    ]
     for item in ITEM.finditer(code):
         if not DERIVE.search(item["attrs"]):
             continue
-        for start, end in field_ranges(code, item):
+        opening = item_body(code, item.end(), item["kind"])
+        if opening is None:
+            starts.append(item.start())
+            continue
+        for start, end in field_ranges(code, item, opening):
             field = FIELD.fullmatch(code, start, end)
             if field is None or names.isdisjoint(IDENTIFIER.findall(field["type"])):
                 continue
             if not checked_attribute(code, without_comments, *field.span("attrs")):
-                lines.append(code.count("\n", 0, field.start("type")) + 1)
-    return lines
+                starts.append(field.start("type"))
+    return [code.count("\n", 0, start) + 1 for start in sorted(starts)]
 
 
 def violations(path, source):
@@ -129,7 +141,7 @@ def audit(workspace):
     ]
     names = raw_names(code for _, _, code in sources)
     return [
-        f"{path}:{line}: deserialize RawValue through wire::product::lossy"
+        f"{path}:{line}: deserialize RawValue through wire::product::lossy and use unaliased imports"
         for path, without_comments, code in sources
         for line in check(path, without_comments, code, names)
     ]

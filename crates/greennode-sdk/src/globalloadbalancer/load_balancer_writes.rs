@@ -479,7 +479,13 @@ pub(super) fn decode_with<T: serde::de::DeserializeOwned + Default>(
                 .with_outer_detail(DecodeError::InvalidShape),
         ));
     }
-    validate(body.as_bytes(), shape, operation.cap)
+    if bytes.len() > operation.cap {
+        return Err(Box::new(response_error(
+            operation,
+            DecodeError::InvalidShape,
+        )));
+    }
+    validate(body.as_bytes(), shape, body.len())
         .map_err(|_| Box::new(response_error(operation, DecodeError::InvalidShape)))?;
     raw.map(|raw| {
         serde_json::from_str(raw.get())

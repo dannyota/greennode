@@ -15,8 +15,10 @@ impl Output for RawSnapshot {
                 op.id,
             ))
         })?;
-        strict_json::validate_shape(receipt.body(), &Self::SCHEMA, op.cap)
-            .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
+        crate::wire::product::lossy::validate(receipt.body(), op.cap, |bytes, limit| {
+            strict_json::validate_shape(bytes, &Self::SCHEMA, limit)
+        })
+        .map_err(|_| Box::new(Error::new(ErrorClass::Api)))?;
         decode_snapshot(receipt.body())
             .map(Self)
             .map_err(|_| Box::new(Error::new(ErrorClass::Api)))

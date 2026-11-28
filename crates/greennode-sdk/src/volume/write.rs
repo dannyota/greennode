@@ -89,11 +89,15 @@ impl Output for Acknowledgement {
                 "create acknowledgement withheld",
             ))
         })?;
-        let raw: Box<serde_json::value::RawValue> =
-            serde_json::from_slice(receipt.body()).map_err(|_| malformed())?;
-        crate::wire::strict_json::validate(raw.get().as_bytes(), &[], CAP)
+        if receipt.body().len() > CAP {
+            return Err(malformed());
+        }
+        let text = crate::model::wire::go_json(receipt.body());
+        let raw: &serde_json::value::RawValue =
+            serde_json::from_str(&text).map_err(|_| malformed())?;
+        crate::wire::strict_json::validate(raw.get().as_bytes(), &[], raw.get().len())
             .map_err(|_| malformed())?;
-        let envelope = Object::parse(&raw, crate::wire::strict_json::FieldNames::Compatible)
+        let envelope = Object::parse(raw, crate::wire::strict_json::FieldNames::Compatible)
             .map_err(|_| malformed())?;
         let Some(data) = envelope.exact("data").map_err(|_| noncanonical())? else {
             return Ok(Self::default());
