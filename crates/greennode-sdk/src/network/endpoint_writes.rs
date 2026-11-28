@@ -120,7 +120,7 @@ impl Client {
                 .map_err(not_sent)?;
             check_input(&input, &evidence)
                 .map_err(|error| not_sent(scope_error(CREATE.id, error, &evidence)))?;
-            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
+            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, CREATE.id).await {
                 Ok(scope) => scope,
                 Err(error) => return Err(not_sent(scope_error(CREATE.id, error, &evidence))),
             };
@@ -132,9 +132,7 @@ impl Client {
                 .check_placement(&input, &offer)
                 .await
                 .map_err(|error| not_sent(scope_error(CREATE.id, error, scope.evidence)))?;
-            let before = endpoint_rows(&mut scope, CREATE.id, true)
-                .await
-                .map_err(not_sent)?;
+            let before = endpoint_rows(&mut scope, true).await.map_err(not_sent)?;
             if before
                 .iter()
                 .any(|row| row.name == input.name && row.vpc == input.vpc_id)
@@ -273,13 +271,11 @@ impl Client {
                 None,
             )
             .map_err(not_sent)?;
-            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, true).await {
+            let mut scope = match EndpointQuote::new(self, ctx, &mut evidence, DELETE.id).await {
                 Ok(scope) => scope,
                 Err(error) => return Err(not_sent(scope_error(DELETE.id, error, &evidence))),
             };
-            let before = endpoint_rows(&mut scope, DELETE.id, false)
-                .await
-                .map_err(not_sent)?;
+            let before = endpoint_rows(&mut scope, false).await.map_err(not_sent)?;
             let Some(row) = before.iter().find(|row| row.id == input.endpoint_id) else {
                 return Err(not_sent(typed_error(
                     ErrorClass::NotFound,
@@ -351,7 +347,7 @@ impl Client {
             let result = async {
                 guarded_poll!(scope.evidence, {
                     check_context(&wait, clock)?;
-                    let rows = endpoint_rows(&mut scope, DELETE.id, false).await;
+                    let rows = endpoint_rows(&mut scope, false).await;
                     acceptance.recheck(scope.evidence).map_err(|error| *error)?;
                     let rows = rows?;
                     check_context(&wait, clock)?;
@@ -394,7 +390,7 @@ async fn wait_for_create(
     let clock = scope.client.session.clock();
     guarded_poll!(scope.evidence, {
         check_context(ctx, clock)?;
-        let rows = endpoint_rows(scope, CREATE.id, true).await;
+        let rows = endpoint_rows(scope, true).await;
         if let Err(error) = acknowledged.recheck(scope.evidence) {
             output.endpoint_id.clear();
             output.status.clear();
@@ -429,16 +425,15 @@ async fn wait_for_create(
 #[expect(clippy::result_large_err, reason = "SDK errors are returned by value")]
 async fn endpoint_rows(
     scope: &mut EndpointQuote<'_>,
-    op: &'static str,
     create: bool,
 ) -> Result<Vec<EndpointRow>, Error> {
     scope
-        .endpoint_inventory(op)
+        .endpoint_inventory()
         .await?
         .iter()
         .map(|raw| {
             parse_row(raw, &scope.project, create, scope.evidence)
-                .map_err(|()| invalid(op, scope.evidence))
+                .map_err(|()| invalid(scope.operation, scope.evidence))
         })
         .collect()
 }

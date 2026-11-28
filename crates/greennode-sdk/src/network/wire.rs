@@ -486,7 +486,7 @@ impl Client {
             }
             if read.style == Style::EndpointQuote
                 && let Some(interruption) =
-                    super::endpoint_quote::endpoint_interruption(&error, evidence)
+                    super::endpoint_quote::endpoint_interruption(read.id, &error, evidence)
             {
                 return interruption;
             }

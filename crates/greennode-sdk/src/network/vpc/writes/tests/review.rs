@@ -354,3 +354,70 @@ async fn rename_confirmation_requires_canonical_fields() {
         assert!(error.has_class(ErrorClass::NotSettled));
     }
 }
+
+#[tokio::test]
+async fn acl_create_screens_legacy_vpc_identifier_before_any_request() {
+    struct Provider;
+    impl crate::CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::Token, crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(crate::Token::new(Secret::new("f"), None)) })
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), crate::Error>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    for options in [
+        options().with_static_token(Secret::new("f")),
+        ConfigOptions::default()
+            .with_region("hcm-3".into())
+            .with_project_id("proj-1".into())
+            .with_credentials_provider(Arc::new(Provider)),
+    ] {
+        let server = Server::start(vec![reply(
+            "201 Created",
+            r#"{"data":{"uuid":"acl-1","status":"ACTIVE"}}"#,
+        )]);
+        let cfg = Config::new(with_product_loopback(Product::Vserver, options, &server)).unwrap();
+        let input = CreateNetworkAclInput::new("net-aZgb", "demo");
+        let client = crate::network::Client::new(&cfg);
+        let result = client
+            .create_network_acl(&RequestContext::new().0, input)
+            .await;
+        assert_eq!(server.requests(), 0);
+        let error = result.unwrap_err();
+        assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+        assert!(error.error().has_class(ErrorClass::InvalidInput));
+    }
+}
+
+#[tokio::test]
+async fn route_replacement_screens_nested_legacy_target_before_writing() {
+    let table = r#"{"data":{"uuid":"rt-1","status":"ACTIVE","routes":[{"destinationCidrBlock":"10.0.0.0/8","target":"net-aZgb"}]}}"#;
+    let server = Server::start(vec![
+        reply("200 OK", table),
+        reply("200 OK", table),
+        reply("200 OK", ""),
+    ]);
+    let cfg = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_static_token(Secret::new("f")),
+        &server,
+    ))
+    .unwrap();
+    let client = crate::network::Client::new(&cfg);
+    let mut input = AddRouteInput::new("rt-1", "192.0.2.0/24", "198.51.100.1");
+    input.no_wait = true;
+    let result = client.add_route(&RequestContext::new().0, input).await;
+    assert_eq!(server.requests(), 2);
+    let error = result.unwrap_err();
+    assert_eq!(error.write_dispatch(), WriteDispatch::NotSent);
+    assert!(error.error().has_class(ErrorClass::InvalidInput));
+}

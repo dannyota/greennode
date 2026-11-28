@@ -1,10 +1,11 @@
 use http::{Method, StatusCode};
-use serde_json::json;
+use serde::Serialize;
 
 use crate::network::NetworkAcl;
 use crate::{Error, Failure, RequestContext, WriteDispatch};
 
 use super::super::super::Client;
+use super::body::{IdentifierPath, RequestModel};
 use super::models::*;
 use super::wire::{BOUND, INTERVAL, NetworkWriteError, Request, Write, is_4xx, is_5xx, not_sent};
 
@@ -23,6 +24,17 @@ const DELETE: Request = Request::new(
 .once();
 const CREATE_ADVICE: &str = "the ACL may exist, list network ACLs by name in this VPC and compare createdAt, since a same-name ACL may already exist";
 
+#[derive(Serialize)]
+struct CreateBody<'a> {
+    name: &'a str,
+    #[serde(rename = "vpc")]
+    vpc_id: &'a str,
+}
+
+impl RequestModel for CreateBody<'_> {
+    const IDENTIFIER_PATHS: &'static [IdentifierPath] = &[&["vpc"]];
+}
+
 #[expect(
     clippy::result_large_err,
     reason = "SDK failures are returned by value"
@@ -40,17 +52,14 @@ impl Client {
                 ctx,
                 crate::wire::product::evidence::Evidence::for_write(),
             )?;
-            write.check(
-                CREATE.id,
-                &[("VPCID", &input.vpc_id), ("Name", &input.name)],
-                &[],
-            )?;
+            super::wire::required(CREATE.id, "VPCID", !input.vpc_id.is_empty())?;
+            write.check(CREATE.id, &[("Name", &input.name)], &[])?;
+            let body = CreateBody {
+                name: &input.name,
+                vpc_id: &input.vpc_id,
+            };
             let reply = write
-                .send(
-                    CREATE,
-                    &[],
-                    Some(json!({"name": input.name, "vpc": input.vpc_id})),
-                )
+                .send_model(CREATE, &[], &body)
                 .await
                 .map_err(|error| write.advise(error, CREATE_ADVICE))?;
             let acl = write.created(

@@ -218,11 +218,36 @@ impl<'a> Write<'a> {
         ids: &[&str],
         body: Option<Value>,
     ) -> Result<Response, Failure<O>> {
+        self.send_body(request, ids, body, &[]).await
+    }
+
+    pub(super) async fn send_model<O, M: super::body::RequestModel>(
+        &mut self,
+        request: Request,
+        ids: &[&str],
+        model: &M,
+    ) -> Result<Response, Failure<O>> {
+        let body = serde_json::to_value(model)
+            .map_err(|_| input(request.id, "requires an encodable request body"))?;
+        self.send_body(request, ids, Some(body), M::IDENTIFIER_PATHS)
+            .await
+    }
+
+    async fn send_body<O>(
+        &mut self,
+        request: Request,
+        ids: &[&str],
+        body: Option<Value>,
+        identifiers: &[super::body::IdentifierPath],
+    ) -> Result<Response, Failure<O>> {
         let check = |evidence: &Evidence| {
             if ids.iter().any(|id| evidence.id_reflects(id))
-                || body
-                    .as_ref()
-                    .is_some_and(|value| evidence.output_reflects(value))
+                || body.as_ref().is_some_and(|value| {
+                    evidence.output_reflects(value)
+                        || identifiers
+                            .iter()
+                            .any(|path| super::body::reflects_identifier(value, path, evidence))
+                })
             {
                 Err(input(
                     request.id,

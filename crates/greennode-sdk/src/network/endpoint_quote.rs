@@ -94,7 +94,7 @@ impl Client {
         crate::wire::product::exit::finish!(async {
             let mut evidence = self.request_evidence(ctx).map_err(failure)?;
             check_input(&input, &evidence).map_err(|error| failure(screen(error, &evidence)))?;
-            let mut quote = EndpointQuote::new(self, ctx, &mut evidence, false)
+            let mut quote = EndpointQuote::new(self, ctx, &mut evidence, OP)
                 .await
                 .map_err(failure)?;
             let offer = quote
@@ -133,6 +133,10 @@ impl EndpointQuote<'_> {
         input: &QuoteCreateEndpointInput,
         offer: &Offer,
     ) -> Result<QuoteCreateEndpointOutput, Error> {
+        let price = Read {
+            id: self.operation,
+            ..PRICE
+        };
         let body = self.purchase_body(input, offer);
         if self.evidence.output_reflects(&body) {
             return Err(Error::new(ErrorClass::InvalidInput));
@@ -142,8 +146,8 @@ impl EndpointQuote<'_> {
             self.ctx,
             self.evidence,
             Request {
-                operation: OP,
-                template: PRICE.template,
+                operation: price.id,
+                template: price.template,
                 product: Product::Vnetwork(&self.base),
                 path: &[&self.zone, &self.project],
                 query: &[],
@@ -152,12 +156,12 @@ impl EndpointQuote<'_> {
             None,
         )
         .await
-        .map_err(|error| endpoint_error(*error, self.evidence))?;
+        .map_err(|error| endpoint_error(price, *error, self.evidence))?;
         self.evidence
             .recheck_read_proofs()
             .map_err(|error| *error)?;
         let text = go_json(raw.get().as_bytes());
-        let invalid = || PRICE.invalid(self.evidence);
+        let invalid = || price.invalid(self.evidence);
         let raw = catalog_data(&text, 0, self.evidence).map_err(|()| invalid())?;
         let quote: Fields<'_> = serde_json::from_str(raw.get()).map_err(|_| invalid())?;
         let amount = |row: &Fields<'_>, name| {
@@ -189,7 +193,7 @@ impl EndpointQuote<'_> {
             return Err(invalid());
         }
         super::mutations::guard_operands(
-            OP,
+            price.id,
             QuoteCreateEndpointOutput {
                 monthly_price: optimum,
                 currency: "VND".into(),
@@ -313,14 +317,18 @@ pub(super) fn local_error(class: ErrorClass, detail: &str) -> Error {
     Error::new(class).with_cause(request::api("", None, code, &message, false))
 }
 
-pub(super) fn endpoint_interruption(error: &Error, evidence: &Evidence) -> Option<Error> {
+pub(super) fn endpoint_interruption(
+    operation: &'static str,
+    error: &Error,
+    evidence: &Evidence,
+) -> Option<Error> {
     let (class, reason) = [
         (ErrorClass::Cancelled, "context canceled"),
         (ErrorClass::DeadlineExceeded, "context deadline exceeded"),
     ]
     .into_iter()
     .find(|(class, _)| error.has_identity(*class))?;
-    let context = super::wire::nat_diagnostic(class, format!("{OP}: {reason}"), evidence)
+    let context = super::wire::nat_diagnostic(class, format!("{operation}: {reason}"), evidence)
         .with_service_display();
     let Some(api) = error
         .api_error()
@@ -329,12 +337,13 @@ pub(super) fn endpoint_interruption(error: &Error, evidence: &Evidence) -> Optio
         return Some(context);
     };
     let refusal = request::api(
-        OP,
-        api.status(),
+        operation,
+        api.observed_status(),
         api.code(),
         "endpoint response withheld",
         api.retryable(),
-    );
+    )
+    .retain_status_visibility(Some(api));
     let http_class = [
         ErrorClass::Auth,
         ErrorClass::PermissionDenied,
@@ -355,8 +364,8 @@ pub(super) fn endpoint_interruption(error: &Error, evidence: &Evidence) -> Optio
     ))
 }
 
-fn endpoint_error(error: Error, evidence: &Evidence) -> Error {
-    if let Some(interruption) = endpoint_interruption(&error, evidence) {
+fn endpoint_error(read: Read, error: Error, evidence: &Evidence) -> Error {
+    if let Some(interruption) = endpoint_interruption(read.id, &error, evidence) {
         return interruption;
     }
     if error.is_body_too_large()
@@ -365,20 +374,13 @@ fn endpoint_error(error: Error, evidence: &Evidence) -> Error {
                 || api.code() == "InvalidResponse" && api.observed_status().is_none()
         })
     {
-        return PRICE.invalid(evidence);
+        return read.invalid(evidence);
     }
-    let error = if let Some(api) = error.api_error() {
-        request::api(
-            OP,
-            api.status(),
-            api.code(),
-            "endpoint response withheld",
-            api.retryable(),
-        )
+    if error.api_error().is_some() {
+        super::mutations::with_write_message(read.id, error, "endpoint response withheld", evidence)
     } else {
-        error
-    };
-    screen(error, evidence)
+        screen(error, evidence)
+    }
 }
 
 pub(super) fn fields<'a>(raw: &'a RawValue) -> Result<Fields<'a>, ()> {

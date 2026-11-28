@@ -270,7 +270,12 @@ pub(super) async fn exchange_validated(
         allow_recovery: true,
         allow_empty: false,
         no_output: false,
-        keep_status: pricing_quote || (vnetwork && req.operation == "network.QuoteCreateEndpoint"),
+        keep_status: pricing_quote
+            || (vnetwork
+                && matches!(
+                    req.operation,
+                    "network.QuoteCreateEndpoint" | "network.CreateEndpoint"
+                )),
         raw_body: false,
         overflow_overrides_status: false,
         sensitive: !direct,

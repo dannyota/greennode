@@ -300,8 +300,6 @@ fn sdk_status_decisions_use_private_response_evidence() {
         ("iam/wire.rs", "account_error", 2),
         ("monitor/quota/status.rs", "unavailable_row", 1),
         ("monitor/quota/wire.rs", "get_status", 1),
-        ("network/endpoint_quote.rs", "endpoint_error", 1),
-        ("network/endpoint_quote.rs", "endpoint_interruption", 1),
         ("network/mutations.rs", "error_description", 1),
         ("network/wire.rs", "nat_safe_error", 1),
         ("portal/envelope.rs", "withheld", 1),

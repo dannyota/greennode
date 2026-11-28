@@ -1,5 +1,6 @@
 mod acls;
 mod associations;
+mod body;
 mod dhcp;
 mod models;
 mod reads;

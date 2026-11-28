@@ -3,12 +3,12 @@ use std::net::IpAddr;
 
 use http::{Method, StatusCode};
 use serde::Serialize;
-use serde_json::json;
 
 use crate::network::{Route, RouteTable};
 use crate::{Error, ErrorClass, Failure, RequestContext, WriteDispatch};
 
 use super::super::super::Client;
+use super::body::{IdentifierPath, RequestModel};
 use super::models::*;
 use super::wire::{
     BOUND, INTERVAL, NetworkWriteError, Request, Write, input, is_4xx, not_sent, prefix, sent,
@@ -36,6 +36,15 @@ struct Entry {
     #[serde(rename = "destinationCidrBlock")]
     destination: String,
     target: String,
+}
+
+#[derive(Serialize)]
+struct ReplaceBody<'a> {
+    routes: &'a [Entry],
+}
+
+impl RequestModel for ReplaceBody<'_> {
+    const IDENTIFIER_PATHS: &'static [IdentifierPath] = &[&["routes", "target"]];
 }
 
 impl From<&Route> for Entry {
@@ -246,7 +255,7 @@ impl Write<'_> {
             return Err(not_sent(self.guard_error(NetworkWriteError::Busy, &format!("{op}: route table {id} changed since it was read; nothing sent, run the call again"))));
         }
         if let Err(failure) = self
-            .send(request, &[id], Some(json!({"routes": entries})))
+            .send_model(request, &[id], &ReplaceBody { routes: &entries })
             .await
         {
             if failure.write_dispatch() == WriteDispatch::NotSent || is_4xx(failure.error()) {

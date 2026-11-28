@@ -40,6 +40,7 @@ const OTHER_ORIGIN: &str = "https://han-1-vnetwork.console.greennode.ai";
 
 pub(super) struct EndpointQuote<'a> {
     pub(super) client: &'a Client,
+    pub(super) operation: &'static str,
     pub(super) ctx: &'a RequestContext,
     pub(super) evidence: &'a mut Evidence,
     pub(super) base: Base,
@@ -97,8 +98,9 @@ impl<'a> EndpointQuote<'a> {
         client: &'a Client,
         ctx: &'a RequestContext,
         evidence: &'a mut Evidence,
-        write: bool,
+        operation: &'static str,
     ) -> Result<Self, Error> {
+        let write = operation != OP;
         let session = &client.session;
         let endpoints = session.endpoints();
         let defaults = session.default_endpoints();
@@ -155,17 +157,25 @@ impl<'a> EndpointQuote<'a> {
         if configured.is_some_and(|id| evidence.id_reflects(id)) {
             return Err(Error::new(ErrorClass::InvalidInput));
         }
-        let project_body = client.read(ctx, vserver, PROJECTS, &[], evidence).await?;
+        let projects = Read {
+            id: operation,
+            ..PROJECTS
+        };
+        let regions = Read {
+            id: operation,
+            ..REGIONS
+        };
+        let project_body = client.read(ctx, vserver, projects, &[], evidence).await?;
         let project = project(&go_json(&project_body), configured, evidence)?;
-        let project = super::mutations::guard_operands(PROJECTS.id, project, evidence)?;
+        let project = super::mutations::guard_operands(projects.id, project, evidence)?;
         let zone = if write {
-            let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
+            let zone_body = client.read(ctx, &base, regions, &[], evidence).await?;
             let zone = region(&go_json(&zone_body), evidence)?;
-            super::mutations::guard_operands(REGIONS.id, zone, evidence)?
+            super::mutations::guard_operands(regions.id, zone, evidence)?
         } else if let Some(zone) = client.endpoint_verified_zone.get() {
             zone.clone()
         } else {
-            let zone_body = client.read(ctx, &base, REGIONS, &[], evidence).await?;
+            let zone_body = client.read(ctx, &base, regions, &[], evidence).await?;
             let zone = region(&go_json(&zone_body), evidence)?;
             if client.endpoint_verified_zone.get_or_init(|| zone.clone()) != &zone {
                 return Err(REGIONS.invalid(evidence));
@@ -178,6 +188,7 @@ impl<'a> EndpointQuote<'a> {
         }
         Ok(Self {
             client,
+            operation,
             ctx,
             evidence,
             base,
@@ -362,15 +373,12 @@ impl<'a> EndpointQuote<'a> {
         Ok(())
     }
 
-    pub(super) async fn endpoint_inventory(
-        &mut self,
-        operation: &'static str,
-    ) -> Result<Vec<Box<RawValue>>, Error> {
+    pub(super) async fn endpoint_inventory(&mut self) -> Result<Vec<Box<RawValue>>, Error> {
         self.scan(Scan {
             require_paging: true,
             ..Scan::new(
                 Read::new(
-                    operation,
+                    self.operation,
                     "vnetwork/v1/{}/{}/endpoints",
                     Style::EndpointQuote,
                 ),
@@ -381,6 +389,10 @@ impl<'a> EndpointQuote<'a> {
     }
 
     async fn scan(&mut self, spec: Scan<'_>) -> Result<Vec<Box<RawValue>>, Error> {
+        let read = Read {
+            id: self.operation,
+            ..spec.read
+        };
         let ctx = self.ctx.child_with_deadline(
             self.client.session.clock().monotonic_now() + Duration::from_secs(30),
         );
@@ -410,7 +422,7 @@ impl<'a> EndpointQuote<'a> {
                 .read_query(
                     &ctx,
                     &self.base,
-                    spec.read,
+                    read,
                     Selection {
                         path: &path,
                         query: &query,
@@ -419,7 +431,7 @@ impl<'a> EndpointQuote<'a> {
                     self.evidence,
                 )
                 .await?;
-            let invalid = || spec.read.invalid(self.evidence);
+            let invalid = || read.invalid(self.evidence);
             retained = retained.saturating_add(body.len());
             if retained > 4 << 20 {
                 return Err(invalid());
@@ -461,8 +473,8 @@ impl<'a> EndpointQuote<'a> {
             }) {
                 return Err(invalid());
             }
-            let data = super::mutations::guard_operands(spec.read.id, data, self.evidence)?;
-            let invalid = || spec.read.invalid(self.evidence);
+            let data = super::mutations::guard_operands(read.id, data, self.evidence)?;
+            let invalid = || read.invalid(self.evidence);
             for raw in data {
                 let row = fields(raw).map_err(|()| invalid())?;
                 for key in spec.required {
@@ -495,7 +507,7 @@ impl<'a> EndpointQuote<'a> {
                 return Ok(rows);
             }
         }
-        Err(spec.read.invalid(self.evidence))
+        Err(read.invalid(self.evidence))
     }
 }
 
