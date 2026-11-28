@@ -4,13 +4,13 @@ use http::{Method, StatusCode};
 use serde::Serialize;
 use serde_json::{json, value::RawValue};
 
-use crate::model::wire::go_json;
 use crate::wire::product::{
     evidence::Evidence,
     guard::{AcknowledgedId, guarded_poll},
     options::Options,
 };
 use crate::{ApiError, Error, ErrorClass, Failure, RequestContext, WriteDispatch};
+use crate::{error::SafeText, model::wire::go_json};
 
 use super::endpoint_quote::{self, check_input};
 use super::endpoint_quote_scope::{EndpointQuote, Offer, hex24, uuid};
@@ -313,19 +313,26 @@ impl Client {
                 endpoint_id: input.endpoint_id,
                 deleted: false,
             };
-            match result {
+            let acceptance = match result {
                 Ok(raw) => {
-                    if let Err(error) = raw.decode_projection(|body| {
-                        checked_response(DELETE.id, &go_json(body), scope.evidence)
-                            .map(|_| ())
-                            .map_err(Box::new)
-                    }) {
-                        return Err(endpoint_failure(
-                            DELETE.id,
-                            Some(*error),
-                            output,
-                            scope.evidence,
-                        ));
+                    let receipt = raw
+                        .clean_receipt()
+                        .ok_or_else(|| Box::new(invalid(DELETE.id, scope.evidence)));
+                    let accepted = receipt.and_then(|receipt| {
+                        checked_response(DELETE.id, &go_json(receipt.body()), scope.evidence)
+                            .map_err(Box::new)?;
+                        Ok(receipt.guard(()))
+                    });
+                    match accepted {
+                        Ok(acceptance) => acceptance,
+                        Err(error) => {
+                            return Err(endpoint_failure(
+                                DELETE.id,
+                                Some(*error),
+                                output,
+                                scope.evidence,
+                            ));
+                        }
                     }
                 }
                 Err(failure) if definite(&failure) => return Err(failure),
@@ -337,14 +344,16 @@ impl Client {
                         scope.evidence,
                     ));
                 }
-            }
+            };
             let clock = self.session.clock();
             let wait = ctx.child_with_deadline(clock.monotonic_now() + Duration::from_secs(600));
             scope.ctx = &wait;
             let result = async {
                 guarded_poll!(scope.evidence, {
                     check_context(&wait, clock)?;
-                    let rows = endpoint_rows(&mut scope, DELETE.id, false).await?;
+                    let rows = endpoint_rows(&mut scope, DELETE.id, false).await;
+                    acceptance.recheck(scope.evidence).map_err(|error| *error)?;
+                    let rows = rows?;
                     check_context(&wait, clock)?;
                     let Some(row) = rows.iter().find(|row| row.id == output.endpoint_id) else {
                         return Ok(());
@@ -562,24 +571,14 @@ fn scope_error(op: &'static str, error: Error, evidence: &Evidence) -> Error {
     let Some(detail) = error.api_error() else {
         return screen(error, evidence);
     };
-    let message = detail.message().replace(endpoint_quote::OP, op);
-    let operation = if detail.operation().is_empty() {
-        ""
-    } else {
-        op
-    };
-    let mapped = api(
-        operation,
-        detail.status(),
-        detail.code(),
-        &message,
+    let code = SafeText::new(detail.code(), &[]);
+    let message = SafeText::new(&detail.message().replace(endpoint_quote::OP, op), &[]);
+    screen(
+        error
+            .with_api_operation(op)
+            .with_api_diagnostic(code, message),
         evidence,
-    );
-    if error.class() == ErrorClass::Api {
-        mapped
-    } else {
-        Error::new(error.class()).with_cause(mapped)
-    }
+    )
 }
 
 fn definite<T>(failure: &Failure<T>) -> bool {
@@ -587,7 +586,7 @@ fn definite<T>(failure: &Failure<T>) -> bool {
         || failure
             .error()
             .api_error()
-            .and_then(ApiError::observed_status)
+            .and_then(ApiError::observed_response_status)
             .is_some_and(|status| (400..500).contains(&status) && status != 408)
 }
 

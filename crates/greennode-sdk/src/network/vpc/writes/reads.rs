@@ -167,15 +167,13 @@ fn identified<T>(row: T, id: &str, identity: impl FnOnce(&T) -> &str) -> Result<
 }
 
 fn vpc_output(raw: &str, id: &str) -> Result<Vpc, ()> {
+    let fields = exact(raw, VPC)?;
+    if let Some(zone) = fields.raw("zone")?.filter(|value| value.get() != "null") {
+        exact(zone.get(), ZONE)?;
+    }
     let mut row: Vpc = identified(decode(raw)?, id, |row: &Vpc| &row.uuid)?;
     row.zone.ip_ranges.get_or_insert_default();
     Ok(row)
-}
-
-fn subnet_output(raw: &str, id: &str) -> Result<Subnet, ()> {
-    identified(Subnet::from(decode::<SubnetWire>(raw)?), id, |row| {
-        &row.uuid
-    })
 }
 
 fn nested<'a>(raw: &'a str, required: &[&str], keys: &[&str]) -> Result<(&'a str, Fields<'a>), ()> {
@@ -218,10 +216,6 @@ impl<'a> Write<'a> {
     pub(super) async fn vpc(&mut self, ctx: &RequestContext, id: &str) -> Result<Vpc, Error> {
         GET_VPC.path("VPCID", id)?;
         self.guard(ctx, "network.GetVPC", GET_VPC, &[id], |raw| {
-            let fields = exact(raw, VPC)?;
-            if let Some(zone) = fields.raw("zone")?.filter(|value| value.get() != "null") {
-                exact(zone.get(), ZONE)?;
-            }
             vpc_output(raw, id)
         })
         .await
@@ -234,7 +228,7 @@ impl<'a> Write<'a> {
 
     pub(super) async fn renamed_subnet(&mut self, vpc: &str, id: &str) -> Result<Subnet, Error> {
         self.rename_output("network.GetSubnet", GET_SUBNET, &[vpc, id], |raw| {
-            subnet_output(raw, id)
+            identified(subnet_created(raw)?, id, |row| &row.uuid)
         })
         .await
     }
@@ -423,6 +417,7 @@ impl<'a> Write<'a> {
                 "status",
                 "createdAt",
             ],
+            |item: &ElasticNetworkInterface| (&item.uuid, &item.id),
             |item: &ElasticNetworkInterface| item.subnet_id == subnet || item.subnet_uuid == subnet,
         )
         .await
@@ -450,6 +445,7 @@ impl<'a> Write<'a> {
                 "mode",
                 "zone",
             ],
+            |item: &VirtualIpAddress| (&item.uuid, &item.id),
             |item: &VirtualIpAddress| item.subnet_id == subnet,
         )
         .await
@@ -459,6 +455,7 @@ impl<'a> Write<'a> {
         &mut self,
         read: InventoryRead,
         keys: &[&str],
+        identities: fn(&T) -> (&str, &str),
         attached: impl Fn(&T) -> bool,
     ) -> Result<usize, Error> {
         let ctx = self.scoped(super::super::wire::walk_deadline());
@@ -467,6 +464,7 @@ impl<'a> Write<'a> {
         let base = client.vserver_inventory_base()?;
         let size = DEFAULT_PAGE_SIZE.to_string();
         let mut metadata = None;
+        let mut seen = HashSet::new();
         let mut found = 0;
         for page in DEFAULT_PAGE..=MAX_DEPENDENT_PAGES {
             let page_text = page.to_string();
@@ -519,6 +517,22 @@ impl<'a> Write<'a> {
             let rows: Vec<T> = decode(raw).map_err(|()| read.invalid(evidence))?;
             super::wire::screen_value(&rows, evidence).map_err(|()| read.invalid(evidence))?;
             let rows = crate::network::mutations::guard_operands(read.id, rows, evidence)?;
+            for row in &rows {
+                let (uuid, alternate) = identities(row);
+                let distinct_alias = (alternate != uuid).then_some(alternate);
+                if (uuid.is_empty() && alternate.is_empty())
+                    || std::iter::once(uuid)
+                        .chain(distinct_alias)
+                        .filter(|id| !id.is_empty())
+                        .any(|id| {
+                            !PathIds::WithUnderscore.allows(id)
+                                || evidence.id_reflects(id)
+                                || !seen.insert(id.to_owned())
+                        })
+                {
+                    return Err(read.incomplete(evidence));
+                }
+            }
             found += rows.iter().filter(|row| attached(row)).count();
             if page >= pages {
                 return Ok(found);

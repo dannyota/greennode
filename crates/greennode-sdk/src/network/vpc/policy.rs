@@ -142,7 +142,7 @@ impl Client {
             let mut reads = Reads::new(self, ctx).map_err(failure)?;
             let row = reads
                 .decode(GET_GROUP, &[&input.security_group_id], |raw| {
-                    field(&objects(raw)?, "data")
+                    decode_lenient(|| field(&objects(raw)?, "data"))
                 })
                 .await
                 .map_err(failure)?;

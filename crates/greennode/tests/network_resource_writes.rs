@@ -572,3 +572,62 @@ fn nat_create_requires_egress_and_explicit_price_consent() {
     }
     assert!(vnetwork.heads().is_empty());
 }
+
+#[tokio::test]
+async fn sdk_test_support_does_not_trust_custom_network_write_providers() {
+    use greennode_sdk::network::{Client, DeleteEndpointInput, DeleteNatInstanceInput};
+    use greennode_sdk::{CredentialsProvider, Error, ErrorClass, Token, WriteDispatch};
+    use std::{future::Future, pin::Pin, sync::Arc};
+
+    struct Provider;
+    impl CredentialsProvider for Provider {
+        fn token<'a>(
+            &'a self,
+            _: &'a RequestContext,
+        ) -> Pin<Box<dyn Future<Output = Result<Token, Error>> + Send + 'a>> {
+            panic!("paid write acquired a custom credential");
+        }
+
+        fn invalidate<'a>(
+            &'a self,
+            _: &'a RequestContext,
+            _: &'a Secret,
+        ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+            panic!("paid write invalidated a custom credential");
+        }
+    }
+
+    let vnetwork = Server::start(vec![]);
+    let vserver = Server::start(vec![]);
+    let options = ConfigOptions::default()
+        .with_region("hcm-3".into())
+        .with_project_id(PROJECT.into())
+        .with_credentials_provider(Arc::new(Provider));
+    let options = with_write_loopback(Product::Vnetwork, options, &vnetwork);
+    let options = with_write_loopback(Product::Vserver, options, &vserver);
+    let client = Client::new(&greennode_sdk::Config::new(options).unwrap());
+    let ctx = RequestContext::new().0;
+    let nat = client
+        .delete_nat_instance(
+            &ctx,
+            DeleteNatInstanceInput::new("zone-1", "vpc-1", "nat-1"),
+        )
+        .await
+        .unwrap_err();
+    let endpoint = client
+        .delete_endpoint(
+            &ctx,
+            DeleteEndpointInput::new(
+                "enp-00000000-0000-0000-0000-0000000000c1",
+                "net-00000000-0000-0000-0000-000000000002",
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(nat.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(endpoint.write_dispatch(), WriteDispatch::NotSent);
+    assert!(nat.error().has_class(ErrorClass::InvalidConfig));
+    assert!(endpoint.error().has_class(ErrorClass::InvalidConfig));
+    assert_eq!(vnetwork.requests(), 0);
+    assert_eq!(vserver.requests(), 0);
+}

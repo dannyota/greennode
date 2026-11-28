@@ -1,4 +1,5 @@
 mod endpoint_quotes;
+mod paid_receipts;
 mod paid_writes;
 mod receipts;
 mod refusals;

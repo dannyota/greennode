@@ -177,7 +177,10 @@ impl Client {
             {
                 let error = failure.error();
                 let network = error.class() == ErrorClass::Api
-                    && error.api_error().is_some_and(|api| api.status().is_none());
+                    && error.http_status().is_none()
+                    && error
+                        .api_error()
+                        .is_some_and(|api| api.observed_status().is_none());
                 if failure.write_dispatch() == WriteDispatch::MayHaveBeenSent
                     && super::wire::can_confirm(error)
                     && (network || is_5xx(error))
@@ -254,9 +257,9 @@ impl Write<'_> {
                     Err(error)
                         if crate::confirms_absence(
                             &error,
-                            "network.GetSubnet",
+                            "network.GetNetworkACL",
                             "GET",
-                            "v2/{}/networks/{}/subnets/{}",
+                            "v2/{}/network-acl/{}",
                         ) =>
                     {
                         continue;

@@ -153,7 +153,10 @@ impl Client {
                     .http_status()
                     .as_ref()
                     .is_some_and(|status| !status.is_redirection())
-                    && error.api_error().is_none_or(|api| api.status().is_none())
+                    && error
+                        .api_error()
+                        .and_then(ApiError::observed_response_status)
+                        .is_none()
             });
             if input.no_wait {
                 return match send_error {
@@ -270,8 +273,8 @@ impl Client {
             totals = Some(page_info);
             for row in output.items {
                 if !PathIds::Strict.allows(&row.uuid)
-                    || !PathIds::WithUnderscore.allows(&row.vpc.uuid)
-                    || !PathIds::WithUnderscore.allows(&row.nat_package.uuid)
+                    || !PathIds::Strict.allows(&row.vpc.uuid)
+                    || !PathIds::Strict.allows(&row.nat_package.uuid)
                     || row.nat_name.is_empty()
                     || row.status.is_empty()
                     || row.project_uuid != scope.project
@@ -349,37 +352,20 @@ pub(super) fn nat_error(op: &'static str, error: Error, evidence: &Evidence) -> 
     let Some(detail) = error.api_error() else {
         return screen(error, evidence);
     };
-    let operation = if detail.operation().is_empty() {
-        ""
-    } else {
-        op
-    };
-    let message = detail.message().replace(super::nat_quote::OP, op);
-    let observed = error.http_status().as_ref().copied();
-    let mut mapped = screen(
-        Error::from_api(ApiError::without_fallback(
-            operation,
-            detail.status(),
-            SafeText::new(detail.code(), &[]),
-            SafeText::new(&message, &[]),
-            detail.retryable(),
-        )),
+    let code = SafeText::new(detail.code(), &[]);
+    let message = SafeText::new(&detail.message().replace(super::nat_quote::OP, op), &[]);
+    screen(
+        error
+            .with_api_operation(op)
+            .with_api_diagnostic(code, message),
         evidence,
-    );
-    if let Some(status) = observed {
-        mapped = mapped.with_outer_detail(status);
-    }
-    if error.class() == ErrorClass::Api {
-        mapped
-    } else {
-        Error::new(error.class()).with_cause(mapped)
-    }
+    )
 }
 
 pub(super) fn definite_refusal(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::observed_status)
+        .and_then(ApiError::observed_response_status)
         .is_some_and(|status| (400..500).contains(&status) && !matches!(status, 408 | 429))
 }
 

@@ -220,9 +220,9 @@ impl<'a> Write<'a> {
     ) -> Result<Response, Failure<O>> {
         let check = |evidence: &Evidence| {
             if ids.iter().any(|id| evidence.id_reflects(id))
-                || body.as_ref().is_some_and(|value| {
-                    evidence.output_reflects(value) || unsafe_value(value, evidence, false)
-                })
+                || body
+                    .as_ref()
+                    .is_some_and(|value| evidence.output_reflects(value))
             {
                 Err(input(
                     request.id,
@@ -408,8 +408,7 @@ impl<'a> Write<'a> {
             return Err(invalid());
         }
         let acknowledged = receipt.bind_id(id.to_owned());
-        let value = serde_json::to_value(&out).map_err(|_| invalid())?;
-        if unsafe_value(&value, self.evidence(), false) || !out.redact(self.evidence()) {
+        if !out.redact(self.evidence()) {
             return Err(invalid());
         }
         self.safe(request.id, &out)
@@ -519,7 +518,7 @@ impl<'a> Write<'a> {
 
 pub(super) fn screen_value<T: Serialize>(row: &T, evidence: &Evidence) -> Result<(), ()> {
     let value = serde_json::to_value(row).map_err(|_| ())?;
-    if unsafe_value(&value, evidence, false) || evidence.output_reflects(&value) {
+    if evidence.output_reflects(&value) {
         return Err(());
     }
     Ok(())
@@ -540,37 +539,14 @@ fn error_text(error: &Error) -> &str {
     }
 }
 
-fn unsafe_value(value: &Value, evidence: &Evidence, identity: bool) -> bool {
-    match value {
-        Value::String(value) if identity => evidence.id_reflects(value),
-        Value::Number(value) => {
-            evidence.credentials().has_numeric_product_credential()
-                || evidence.id_reflects(value.as_str())
-                || evidence.text_reflects(value.as_str())
-        }
-        Value::Array(items) => items
-            .iter()
-            .any(|item| unsafe_value(item, evidence, identity)),
-        Value::Object(fields) => fields.iter().any(|(key, value)| {
-            let identity = key == "vpc"
-                || ["ID", "IDs", "UUID", "UUIDs", "Id", "Uuid", "Uuids"]
-                    .iter()
-                    .any(|suffix| key.ends_with(suffix));
-            evidence.text_reflects(key) || unsafe_value(value, evidence, identity)
-        }),
-        Value::Bool(value) => evidence.text_reflects(if *value { "true" } else { "false" }),
-        Value::Null => evidence.text_reflects("null"),
-        _ => false,
-    }
-}
-
 fn withhold(error: Error, request: Request) -> Error {
     if let Some(message) = request.withheld
         && let Some(api_error) = error.api_error()
-        && api_error.operation() == request.id
-        && api_error.status().is_some()
+        && api_error.is_for_operation(request.id)
+        && api_error.observed_response_status().is_some()
     {
-        return api(request.id, api_error.status(), api_error.code(), message).with_cause(error);
+        let code = SafeText::new(api_error.code(), &[]);
+        return error.with_api_diagnostic(code, SafeText::new(message, &[]));
     }
     error
 }
@@ -595,14 +571,14 @@ pub(super) fn can_confirm(error: &Error) -> bool {
 pub(super) fn is_4xx(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::observed_status)
+        .and_then(ApiError::observed_response_status)
         .is_some_and(|status| (400..500).contains(&status))
 }
 
 pub(super) fn is_5xx(error: &Error) -> bool {
     error
         .api_error()
-        .and_then(ApiError::observed_status)
+        .and_then(ApiError::observed_response_status)
         .is_some_and(|status| status >= 500)
 }
 

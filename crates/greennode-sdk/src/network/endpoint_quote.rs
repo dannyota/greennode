@@ -153,6 +153,9 @@ impl EndpointQuote<'_> {
         )
         .await
         .map_err(|error| endpoint_error(*error, self.evidence))?;
+        self.evidence
+            .recheck_read_proofs()
+            .map_err(|error| *error)?;
         let text = go_json(raw.get().as_bytes());
         let invalid = || PRICE.invalid(self.evidence);
         let raw = catalog_data(&text, 0, self.evidence).map_err(|()| invalid())?;

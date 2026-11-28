@@ -229,3 +229,128 @@ async fn prewrite_wait_preserves_a_shorter_caller_deadline() {
     assert_eq!(error.class(), ErrorClass::DeadlineExceeded);
     assert_eq!(error.detail::<NetworkWriteError>(), None);
 }
+
+#[tokio::test]
+async fn subnet_delete_does_not_reconcile_a_withheld_conflict() {
+    let server = Server::start(vec![
+        reply("200 OK", SUBNET),
+        reply("200 OK", "[]"),
+        reply("200 OK", EMPTY_INVENTORY),
+        reply("200 OK", EMPTY_INVENTORY),
+        reply("200 OK", EMPTY_INVENTORY),
+        reply("409 Conflict", "{}"),
+        reply("200 OK", EMPTY_INVENTORY),
+    ]);
+    let options = options().with_static_token(Secret::new("409"));
+    let cfg = Config::new(with_product_loopback(Product::Vserver, options, &server)).unwrap();
+    let mut input = DeleteSubnetInput::new("vpc-1", "subnet-1");
+    input.no_wait = true;
+    let failure = crate::network::Client::new(&cfg)
+        .delete_subnet(&RequestContext::new().0, input)
+        .await
+        .unwrap_err();
+    let api = failure.error().api_error().unwrap();
+    assert!(api.status().is_none());
+    assert!(api.observed_response_status() == Some(StatusCode::CONFLICT.as_u16()));
+    assert_eq!(server.requests(), 6);
+}
+
+#[tokio::test]
+async fn subnet_delete_requires_distinct_interface_and_vip_identities_across_pages() {
+    for first_inventory in [true, false] {
+        let mut replies = vec![reply("200 OK", SUBNET), reply("200 OK", "[]")];
+        if !first_inventory {
+            replies.push(reply("200 OK", EMPTY_INVENTORY));
+        }
+        let second = FIRST_INTERFACE_PAGE.replace("\"page\":1", "\"page\":2");
+        replies.extend([
+            reply("200 OK", FIRST_INTERFACE_PAGE),
+            reply("200 OK", &second),
+        ]);
+        let expected = replies.len();
+        replies.extend([
+            reply("200 OK", EMPTY_INVENTORY),
+            reply("200 OK", EMPTY_INVENTORY),
+            reply("200 OK", ""),
+        ]);
+        let server = Server::start(replies);
+        let mut input = DeleteSubnetInput::new("vpc-1", "subnet-1");
+        input.no_wait = true;
+        let failure = client(&server)
+            .delete_subnet(&RequestContext::new().0, input)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(server.requests(), expected);
+    }
+}
+
+#[tokio::test]
+async fn subnet_delete_accepts_clean_absence_of_an_acl_listed_earlier() {
+    let server = Server::start(vec![
+        reply("200 OK", SUBNET),
+        reply("200 OK", "[]"),
+        reply("200 OK", EMPTY_INVENTORY),
+        reply("200 OK", EMPTY_INVENTORY),
+        reply(
+            "200 OK",
+            r#"{"listData":[{"uuid":"acl-1","networkId":"vpc-1"}],"page":1,"pageSize":1,"totalPage":1,"totalItem":1}"#,
+        ),
+        reply("404 Not Found", "{}"),
+        reply("200 OK", ""),
+    ]);
+    let mut input = DeleteSubnetInput::new("vpc-1", "subnet-1");
+    input.no_wait = true;
+    client(&server)
+        .delete_subnet(&RequestContext::new().0, input)
+        .await
+        .unwrap();
+    assert_eq!(server.requests(), 7);
+}
+
+#[tokio::test]
+async fn dhcp_create_accepts_an_mtu_distinct_from_a_numeric_credential() {
+    let server = Server::start(vec![reply(
+        "201 Created",
+        r#"{"data":{"uuid":"dhcp-1","name":"custom","mtu":1450}}"#,
+    )]);
+    let cfg = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_static_token(Secret::new("409")),
+        &server,
+    ))
+    .unwrap();
+    let mut input = CreateDhcpOptionsInput::new("custom", vec!["192.0.2.1".into()]);
+    input.mtu = Some(1450);
+    let out = crate::network::Client::new(&cfg)
+        .create_dhcp_options(&RequestContext::new().0, input)
+        .await
+        .unwrap();
+    assert_eq!(out.dhcp_options.mtu, 1450);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn rename_confirmation_requires_canonical_fields() {
+    let vpc = Server::start(vec![
+        reply("200 OK", ""),
+        reply("200 OK", r#"{"id":"vpc-1","Zone":{"description":"test"}}"#),
+    ]);
+    let subnet = Server::start(vec![
+        reply("200 OK", SUBNET),
+        reply("200 OK", ""),
+        reply("200 OK", r#"{"uuid":"subnet-1","Name":"renamed"}"#),
+    ]);
+    let ctx = RequestContext::new().0;
+    let vpc = client(&vpc)
+        .update_vpc(&ctx, UpdateVpcInput::new("vpc-1", "renamed"))
+        .await
+        .unwrap_err();
+    let subnet = client(&subnet)
+        .update_subnet(&ctx, UpdateSubnetInput::new("vpc-1", "subnet-1", "renamed"))
+        .await
+        .unwrap_err();
+    for error in [vpc.error(), subnet.error()] {
+        assert!(error.has_class(ErrorClass::NotSettled));
+    }
+}

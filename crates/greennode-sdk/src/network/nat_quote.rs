@@ -134,8 +134,7 @@ struct PickerVpc {
     region: String,
     #[serde(rename = "regionUuid")]
     region_uuid: Option<String>,
-    #[serde(default)]
-    zones: Option<Vec<PickerZone>>,
+    zones: Vec<PickerZone>,
 }
 
 #[derive(Deserialize)]
@@ -201,6 +200,7 @@ impl Client {
                 evidence,
             )
             .await?;
+        evidence.recheck_read_proofs().map_err(|error| *error)?;
         let quote =
             decode_quote(&go_json(&raw), evidence).map_err(|error| screen(error, evidence))?;
         super::mutations::guard_operands(operation, quote, evidence)
@@ -358,9 +358,9 @@ impl Client {
                 for name in ["uuid", "projectUuid", "regionId", "regionUuid", "zones"] {
                     fields.raw(name).map_err(|()| invalid())?;
                 }
-                let zone_rows: Option<Vec<Fields<'_>>> =
-                    fields.optional("zones").map_err(|()| invalid())?;
-                for zone in zone_rows.into_iter().flatten() {
+                let zone_rows: Vec<Fields<'_>> =
+                    fields.required("zones").map_err(|()| invalid())?;
+                for zone in zone_rows {
                     zone.raw("uuid").map_err(|()| invalid())?;
                 }
                 let vpc: PickerVpc = serde_json::from_str(row.get()).map_err(|_| invalid())?;
@@ -377,7 +377,7 @@ impl Client {
                     return Err(invalid());
                 }
                 let mut zones = HashSet::new();
-                for zone in vpc.zones.into_iter().flatten() {
+                for zone in vpc.zones {
                     if !PathIds::Strict.allows(&zone.uuid)
                         || evidence.id_reflects(&zone.uuid)
                         || !zones.insert(zone.uuid)

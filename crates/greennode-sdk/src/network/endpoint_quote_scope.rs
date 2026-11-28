@@ -420,6 +420,10 @@ impl<'a> EndpointQuote<'a> {
                 )
                 .await?;
             let invalid = || spec.read.invalid(self.evidence);
+            retained = retained.saturating_add(body.len());
+            if retained > 4 << 20 {
+                return Err(invalid());
+            }
             let text = go_json(&body);
             let envelope = endpoint_envelope(&text, self.evidence).map_err(|()| invalid())?;
             if !envelope.only(&[
@@ -481,7 +485,7 @@ impl<'a> EndpointQuote<'a> {
                 {
                     return Err(invalid());
                 }
-                retained = retained.saturating_add(raw.get().len().saturating_add(128));
+                retained = retained.saturating_add(128);
                 if retained > 4 << 20 {
                     return Err(invalid());
                 }
@@ -520,7 +524,7 @@ fn page_info(envelope: &Fields<'_>, page: i64, require: bool) -> Result<Option<P
 }
 
 fn endpoint_envelope<'a>(text: &'a str, evidence: &Evidence) -> Result<Fields<'a>, ()> {
-    if reflects(text, evidence) {
+    if !evidence.guards_reads() && reflects(text, evidence) {
         return Err(());
     }
     let fields = Fields::decode(text)?;

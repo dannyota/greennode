@@ -236,14 +236,16 @@ impl Client {
             let error = match (write.withhold, error.api_error()) {
                 (Some(message), Some(api))
                     if dispatch == WriteDispatch::MayHaveBeenSent
-                        && api.operation() == write.id
-                        && api.status().is_some_and(|status| status >= 300)
+                        && api.is_for_operation(write.id)
+                        && api
+                            .observed_response_status()
+                            .is_some_and(|status| status >= 300)
                         && !matches!(
                             error.class(),
                             ErrorClass::Cancelled | ErrorClass::DeadlineExceeded
                         ) =>
                 {
-                    with_write_message(write.id, api, message, evidence)
+                    with_write_message(write.id, error, message, evidence)
                 }
                 _ => screen(error, evidence),
             };
@@ -258,8 +260,8 @@ impl Client {
             )
             .map_err(|error| {
                 let error = match (write.withhold, error.api_error()) {
-                    (Some(message), Some(detail)) => {
-                        with_write_message(write.id, detail, message, evidence)
+                    (Some(message), Some(_)) => {
+                        with_write_message(write.id, *error, message, evidence)
                     }
                     _ => screen(*error, evidence),
                 };
@@ -274,18 +276,16 @@ impl Client {
 
 pub(super) fn with_write_message(
     op: &'static str,
-    detail: &ApiError,
+    error: Error,
     message: &str,
     evidence: &Evidence,
 ) -> Error {
+    let code = error.api_error().map_or("", ApiError::code);
+    let code = SafeText::new(code, &[]);
     screen(
-        Error::from_api(ApiError::new(
-            op,
-            detail.status(),
-            SafeText::new(detail.code(), &[]),
-            SafeText::new(message, &[]),
-            detail.retryable(),
-        )),
+        error
+            .with_api_operation(op)
+            .with_api_diagnostic(code, SafeText::new(message, &[])),
         evidence,
     )
 }
@@ -403,7 +403,7 @@ pub(super) fn advise<T>(
     let error = if dispatch == WriteDispatch::MayHaveBeenSent
         && !error
             .api_error()
-            .and_then(ApiError::status)
+            .and_then(ApiError::observed_response_status)
             .is_some_and(|status| (400..500).contains(&status))
         && !evidence.text_reflects(&advice)
     {

@@ -104,7 +104,8 @@ async fn endpoint_delete_reports_status_on_oversized_inventory_refusal() {
 
 const PAID_PROJECT: &str = "pro-00000000-0000-0000-0000-000000000001";
 const PAID_ZONE: &str = "66b500000000000000000001";
-const NO_NATS: &str = r#"{"success":true,"page":1,"size":1000,"totalPage":0,"total":0,"data":[]}"#;
+pub(super) const NO_NATS: &str =
+    r#"{"success":true,"page":1,"size":1000,"totalPage":0,"total":0,"data":[]}"#;
 
 #[tokio::test]
 async fn nat_delete_keeps_truncated_response_unsettled_after_empty_inventory() {
@@ -181,9 +182,9 @@ async fn nat_delete_refuses_alias_and_wrong_type_in_ack_paging() {
 }
 
 #[tokio::test]
-async fn nat_delete_accepts_vpc_without_zones_and_numeric_inventory_code() {
+async fn nat_delete_accepts_empty_picker_zones_and_numeric_inventory_code() {
     use crate::testing::with_write_loopback;
-    let picker = r#"{"success":true,"page":1,"size":1000,"totalPage":1,"total":1,"data":[{"uuid":"vpc-1","projectUuid":"pro-00000000-0000-0000-0000-000000000001","regionId":"66b500000000000000000001"}]}"#;
+    let picker = r#"{"success":true,"page":1,"size":1000,"totalPage":1,"total":1,"data":[{"uuid":"vpc-1","projectUuid":"pro-00000000-0000-0000-0000-000000000001","regionId":"66b500000000000000000001","zones":[]}]}"#;
     let inventory = include_str!("../../../tests/fixtures/network/nat_write_inventory.json")
         .replacen('{', r#"{"code":200,"#, 1);
     let server = Server::start(vec![
@@ -207,13 +208,76 @@ async fn nat_delete_accepts_vpc_without_zones_and_numeric_inventory_code() {
     assert_eq!(server.heads().len(), 3);
 }
 
-const ENDPOINT_ROW: &str = r#"{"success":true,"page":1,"size":1000,"totalPage":1,"total":1,"data":[{"uuid":"enp-00000000-0000-0000-0000-0000000000c1","endpointName":"demo","endpointServiceId":"66b500000000000000000009","vpcId":"net-00000000-0000-0000-0000-000000000002","status":"ACTIVE","endpointType":"Gateway","zoneUuid":"HCM03-1C","enableDnsName":false,"service":{"uuid":"00000000-0000-0000-0000-0000000000a1","name":"vstorage.hcm03"},"subnet":{"uuid":"sub-00000000-0000-0000-0000-000000000003"},"packageId":{"uuid":"00000000-0000-0000-0000-0000000000b1"},"project":{"VServerProjectId":"pro-00000000-0000-0000-0000-000000000001"},"endpointResource":null,"endpointDomains":[]}]}"#;
-const ENDPOINT_REGIONS: &str =
-    include_str!("../../../tests/fixtures/network/endpoint_quote_regions.json");
-const PAID_ENDPOINT: &str = "enp-00000000-0000-0000-0000-0000000000c1";
-const PAID_VPC: &str = "net-00000000-0000-0000-0000-000000000002";
+#[tokio::test]
+async fn nat_delete_refuses_a_picker_row_without_zones() {
+    use crate::testing::with_write_loopback;
+    let picker = r#"{"success":true,"page":1,"size":1000,"totalPage":1,"total":1,"data":[{"uuid":"vpc-1","projectUuid":"pro-00000000-0000-0000-0000-000000000001","regionId":"66b500000000000000000001"}]}"#;
+    let inventory = include_str!("../../../tests/fixtures/network/nat_write_inventory.json")
+        .replacen('{', r#"{"code":200,"#, 1);
+    let server = Server::start(vec![
+        response("200 OK", picker),
+        response("200 OK", &inventory),
+        response("200 OK", r#"{"success":true,"code":0}"#),
+    ]);
+    let config = Config::new(with_write_loopback(
+        Product::Vnetwork,
+        options().with_project_id(PAID_PROJECT.into()),
+        &server,
+    ))
+    .unwrap();
+    let (ctx, _) = RequestContext::new();
+    let mut input = DeleteNatInstanceInput::new(PAID_ZONE, "vpc-1", "nat-1");
+    input.no_wait = true;
+    let failure = Client::new(&config)
+        .delete_nat_instance(&ctx, input)
+        .await
+        .unwrap_err();
+    assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+    assert_eq!(server.requests(), 1);
+}
 
-fn endpoint_session(project: &Server, endpoint: &Server) -> Client {
+#[tokio::test]
+async fn nat_delete_refuses_non_path_identifiers_in_inventory() {
+    use crate::testing::with_write_loopback;
+    for (original, invalid) in [("vpc-1", "vpc_1"), ("package-1", "package_1")] {
+        let row = include_str!("../../../tests/fixtures/network/nat_write_inventory.json")
+            .replace(original, invalid);
+        let server = Server::start(vec![
+            response(
+                "200 OK",
+                include_str!("../../../tests/fixtures/network/nat_vpc_picker.json"),
+            ),
+            response("200 OK", &row),
+            response("200 OK", r#"{"success":true,"code":0}"#),
+        ]);
+        let options = with_write_loopback(
+            Product::Vnetwork,
+            options().with_project_id(PAID_PROJECT.into()),
+            &server,
+        );
+        let client = Client::new(&Config::new(options).unwrap());
+        let mut input = DeleteNatInstanceInput::new(PAID_ZONE, "vpc-1", "nat-1");
+        input.no_wait = true;
+        let failure = client
+            .delete_nat_instance(&RequestContext::new().0, input)
+            .await
+            .unwrap_err();
+        assert_eq!(failure.write_dispatch(), WriteDispatch::NotSent);
+        assert_eq!(
+            failure.error().api_error().unwrap().code(),
+            "InvalidResponse"
+        );
+        assert_eq!(server.requests(), 2);
+    }
+}
+
+pub(super) const ENDPOINT_ROW: &str = r#"{"success":true,"page":1,"size":1000,"totalPage":1,"total":1,"data":[{"uuid":"enp-00000000-0000-0000-0000-0000000000c1","endpointName":"demo","endpointServiceId":"66b500000000000000000009","vpcId":"net-00000000-0000-0000-0000-000000000002","status":"ACTIVE","endpointType":"Gateway","zoneUuid":"HCM03-1C","enableDnsName":false,"service":{"uuid":"00000000-0000-0000-0000-0000000000a1","name":"vstorage.hcm03"},"subnet":{"uuid":"sub-00000000-0000-0000-0000-000000000003"},"packageId":{"uuid":"00000000-0000-0000-0000-0000000000b1"},"project":{"VServerProjectId":"pro-00000000-0000-0000-0000-000000000001"},"endpointResource":null,"endpointDomains":[]}]}"#;
+pub(super) const ENDPOINT_REGIONS: &str =
+    include_str!("../../../tests/fixtures/network/endpoint_quote_regions.json");
+pub(super) const PAID_ENDPOINT: &str = "enp-00000000-0000-0000-0000-0000000000c1";
+pub(super) const PAID_VPC: &str = "net-00000000-0000-0000-0000-000000000002";
+
+pub(super) fn endpoint_session(project: &Server, endpoint: &Server) -> Client {
     use crate::testing::with_write_loopback;
     let options = with_write_loopback(Product::Vserver, options(), project);
     let options = with_write_loopback(Product::Vnetwork, options, endpoint);
@@ -479,16 +543,18 @@ async fn nat_create_orders_once_and_confirms_manual_billing_after_renewal_write(
             .starts_with(format!("POST /vnetwork/v1/{PAID_ZONE}/{PAID_PROJECT}/nats ").as_bytes())
     );
     let order: serde_json::Value = serde_json::from_slice(&vnetwork.bodies()[6]).unwrap();
-    assert_eq!(
-        order,
-        serde_json::json!({"resourceType":"nat","action":"create","resourceInfo":{"isPoc":false,"isEnableAutoRenew":false,"isBuyMorePoc":false,"natName":"example","packageUuid":"package-1","vpcUuid":"vpc-1","regionUuid":PAID_ZONE,"projectUuid":PAID_PROJECT},"tagDetails":[]})
+    assert!(
+        order
+            == serde_json::json!({"resourceType":"nat","action":"create","resourceInfo":{"isPoc":false,"isEnableAutoRenew":false,"isBuyMorePoc":false,"natName":"example","packageUuid":"package-1","vpcUuid":"vpc-1","regionUuid":PAID_ZONE,"projectUuid":PAID_PROJECT},"tagDetails":[]}),
+        "NAT order request differed"
     );
     let requests = billing.heads();
     assert_eq!(requests.len(), 4);
     assert!(requests[2].starts_with(b"PUT /gateway/api/v1/resources/autoRenew "));
     let update: serde_json::Value = serde_json::from_slice(&billing.bodies()[2]).unwrap();
-    assert_eq!(
-        update,
-        serde_json::json!([{"product":"vserver","artifactType":"nat","artifactId":"nat-1","channel":3,"autoRenewInfo":{"isEnable":false,"period":43200}}])
+    assert!(
+        update
+            == serde_json::json!([{"product":"vserver","artifactType":"nat","artifactId":"nat-1","channel":3,"autoRenewInfo":{"isEnable":false,"period":43200}}]),
+        "NAT renewal request differed"
     );
 }

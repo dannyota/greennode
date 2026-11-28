@@ -191,7 +191,7 @@ impl Client {
             {
                 return super::mutations::with_write_message(
                     read.id,
-                    api,
+                    error,
                     "server response withheld",
                     evidence,
                 );

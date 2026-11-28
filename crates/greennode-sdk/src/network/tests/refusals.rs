@@ -662,3 +662,26 @@ async fn oversized_nat_region_lookup_reports_the_regions_envelope() {
     );
     assert_eq!(server.requests(), 1);
 }
+
+#[tokio::test]
+async fn security_group_read_ignores_a_lone_alias_inside_data() {
+    let server = Server::start(vec![response(
+        "200 OK",
+        r#"{"data":{"id":"group-1","Name":"example"}}"#,
+    )]);
+    let config = Config::new(with_product_loopback(
+        Product::Vserver,
+        options().with_project_id("proj-1".into()),
+        &server,
+    ))
+    .unwrap();
+    let result = Client::new(&config)
+        .get_security_group(
+            &RequestContext::new().0,
+            GetSecurityGroupInput::new("group-1"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.security_group.id, "group-1");
+    assert!(result.security_group.name.is_empty());
+}
