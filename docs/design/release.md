@@ -178,8 +178,11 @@ attempt, not a rerun. Default permissions are `{}`.
    minutes ([crates.io guide source]).
 3. Publish only missing versions in SDK-first order. Use a fresh empty Cargo
    home, pinned Rust and the checksum-checking provider. No compilation or
-   restored build cache. Give `CARGO_REGISTRY_TOKEN` only to Cargo and its
-   provider for uploads, never workflow-wide or in files.
+   restored build cache. Give `CARGO_REGISTRY_TOKEN` only to the environment of
+   the two upload steps, never workflow-wide or in files. Each upload step's
+   process tree inherits it: its shell, Cargo, the provider and the pinned
+   `rustc -vV` probe Cargo runs while packaging. Run nothing else in those
+   steps.
 
 ### Approve the bytes Cargo uploads
 
@@ -248,16 +251,19 @@ workflow's exact Cargo arguments, `--registry crates-io` and
 `scripts/publish-cargo.toml`, against the loopback registry through Cargo
 1.100's test-only crates.io URL override, because Cargo ignores source
 replacement for an explicitly named registry ([Cargo 1.100 registry source]). A
-gate compares the workflow's Cargo arguments with the proof's. Cargo rebuilds
-the packaged lockfile, so byte equality must be established by the proof. A
-mismatch blocks the affected publish path.
+gate requires exactly one upload command per crate with the proof's arguments,
+the shared config and an executable helper, and rejects any Cargo test override
+in the release workflows. CI runs the proof on the publish job's runner image,
+Ubuntu 24.04 x86_64, as a required check. Cargo rebuilds the packaged lockfile,
+so byte equality must be established by the proof. A mismatch blocks the
+affected publish path.
 
 The Mac path requires a passing macOS proof with the pinned Cargo version. The
 script passed on macOS on 2026-11-26 for both toy secret sources. The first live
 CI upload, for `v0.1.1` on 2026-11-28, stopped before upload because the proof
 had not run the workflow's provider configuration. The corrected proof passed on
-macOS and on Ubuntu 24.04 (aarch64) on 2026-11-28 for both sources. The publish
-job runs on x86_64, so the next CI upload is the proof on that architecture.
+macOS and on Ubuntu 24.04 (aarch64) on 2026-11-28 for both sources, and the
+required CI job covers x86_64.
 
 ## CI cutover
 

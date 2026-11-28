@@ -21,7 +21,9 @@ def parse_workflow(text):
 
 
 def validate(text):
+    assert '__CARGO_TEST' not in text, 'Cargo test override'
     workflow = parse_workflow(text)
+    assert '__CARGO_TEST' not in json.dumps(workflow), 'Cargo test override'
     assert workflow.get('on') == {'push': {'tags': ['v*']}}, "trigger"
     assert workflow.get('permissions') == {}, "default permissions"
     jobs = re.split(r"(?m)^  ([a-z][a-z-]*):\n", text.split("\njobs:\n", 1)[1])
@@ -199,6 +201,13 @@ class WorkflowTest(unittest.TestCase):
 
     def test_release(self):
         validate(WORKFLOW.read_text())
+
+    def test_cargo_test_variables_rejected(self):
+        text = WORKFLOW.read_text()
+        for variable in ('__CARGO_TEST_CRATES_IO_URL_DO_NOT_USE_THIS', '__CARGO_TEST_OTHER'):
+            with self.subTest(variable=variable):
+                with self.assertRaisesRegex(AssertionError, 'Cargo test override'):
+                    validate(text.replace('  packages:\n', f'  packages:\n    env:\n      {variable}: fixture\n', 1))
 
     def test_commented_permission_and_trigger_regressions(self):
         text = WORKFLOW.read_text()

@@ -5,21 +5,34 @@ import runpy
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/publish-crates.yml'
 PROOF = runpy.run_path(str(ROOT / 'scripts/test/loopback-registry-proof.py'))
+PROVIDER = 'scripts/check-crate-publish-credential.py'
+UPLOADS = {'Upload SDK': ('greennode-sdk', 'SDK_SHA256'), 'Upload tool': ('greennode', 'TOOL_SHA256')}
+CARGO_PUBLISH = re.compile(r'\bcargo\s+(?:\+\S+\s+)?publish\b')
 
 
-def parse():
+def parse(path=WORKFLOW):
+    text = path.read_text()
+    if path == WORKFLOW:
+        assert '__CARGO_TEST' not in text, 'Cargo test override'
     script = "const y=require(process.argv[1]);let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(y.load(s))));"
-    result = subprocess.run(['node', '-e', script, str(ROOT / 'node_modules/js-yaml')], input=WORKFLOW.read_text(), text=True, capture_output=True, check=True)
+    result = subprocess.run(['node', '-e', script, str(ROOT / 'node_modules/js-yaml')], input=text, text=True, capture_output=True, check=True)
     return json.loads(result.stdout)
 
 
+def validate_provider(config, entries):
+    assert tomllib.loads(config) == {'registry': {'credential-provider': [f'./{PROVIDER}']}}, 'upload provider config'
+    assert re.fullmatch(r'100755 [0-9a-f]+ 0\t' + re.escape(PROVIDER) + '\0', entries), 'upload provider Git mode'
+
+
 def validate(w):
+    assert '__CARGO_TEST' not in json.dumps(w), 'Cargo test override'
     assert set(w['on']) == {'workflow_dispatch'}, 'trigger'
     inputs = w['on']['workflow_dispatch']['inputs']
     assert inputs['tag']['type'] == 'string' and inputs['tag']['required'] is True, 'tag input'
@@ -80,8 +93,6 @@ def validate(w):
         'Recheck release evidence': ('gh run download "$RELEASE_RUN"', 'gh release download "$TAG"', 'cmp "$receipt"', 'check-crate-release.py evidence', '"$RECEIPT_SHA256"', 'check-crate-release.py state', 'needed=false'),
         'Check SDK registry state': ('check-crate-release.py state', 'greennode-sdk: absent'),
         'Check tool registry state': ('check-crate-release.py state', 'greennode-sdk: present-and-approved', 'greennode: absent', '/owners'),
-        'Upload SDK': ('unknown version=',),
-        'Upload tool': ('unknown version=',),
         'Confirm SDK upload': ('--wait greennode-sdk',),
         'Confirm tool upload': ('--wait greennode',),
     }.items():
@@ -100,12 +111,7 @@ case "$states" in
   *) exit 1 ;;
 esac
 ''', 'sdk registry decision'
-    config = f'"$GITHUB_WORKSPACE/{PROOF["PUBLISH_CONFIG"].relative_to(ROOT)}"'
-    for name, crate in (('Upload SDK', 'greennode-sdk'), ('Upload tool', 'greennode')):
-        step = publish_steps[names.index(name)]
-        assert step.get('env', {}).get('CARGO_REGISTRY_TOKEN') == '${{ steps.auth.outputs.token }}', 'registry token scope'
-        upload = ' '.join(('cargo', '+"$TOOLCHAIN"', *PROOF['upload_args'](crate, config)))
-        assert upload in step['run'].splitlines(), 'upload provider'
+    validate_uploads(w['jobs'])
     assert 'success()' in publish_steps[names.index('Check tool registry state')].get('if', ''), 'registry gate'
     for step in publish_steps:
         if 'steps.auth.outputs.token' in json.dumps(step):
@@ -130,6 +136,37 @@ esac
             assert re.search(r'\bgh\s', step.get('run', '')), 'token scope'
 
 
+def validate_uploads(jobs):
+    config = f'"$GITHUB_WORKSPACE/{PROOF["PUBLISH_CONFIG"].relative_to(ROOT)}"'
+    publish_steps = jobs['publish']['steps']
+    for name, (crate, checksum) in UPLOADS.items():
+        steps = [step for step in publish_steps if step.get('name') == name]
+        assert len(steps) == 1, 'upload provider'
+        step = steps[0]
+        assert step.get('env', {}).get('CARGO_REGISTRY_TOKEN') == '${{ steps.auth.outputs.token }}', 'registry token scope'
+        upload = ' '.join(('cargo', '+"$TOOLCHAIN"', *PROOF['upload_args'](crate, config)))
+        assert step['run'].splitlines() == [
+            'set +x',
+            f'''printf '{crate}: unknown version=%s sha256=%s until confirmed\\n' "${{TAG#v}}" "${checksum}" >> "$GITHUB_STEP_SUMMARY"''',
+            'export CARGO_HOME="$RUNNER_TEMP/publish-cargo"',
+            'export GREENNODE_RELEASE_RECEIPT="$RUNNER_TEMP/publish-evidence/artifacts/crate-checksums/crate-checksums.json"',
+            'cd "$RUNNER_TEMP/publish-tagged"',
+            upload,
+        ], 'upload provider'
+    dry_run = 'cargo +"$TOOLCHAIN" publish --workspace --dry-run --no-verify --locked --registry crates-io'
+    for job, details in jobs.items():
+        for step in details['steps']:
+            if job == 'publish' and step.get('name') in UPLOADS:
+                continue
+            run = step.get('run', '').replace('\\\n', '')
+            if job == 'package' and step.get('name') == 'Package workspace and compare':
+                lines = run.splitlines()
+                assert lines.count(dry_run) == 1, 'package dry run'
+                lines.remove(dry_run)
+                run = '\n'.join(lines)
+            assert not CARGO_PUBLISH.search(run), 'upload provider'
+
+
 def validate_publish(job):
     assert job.get('needs') == ['verify', 'package'], 'publish needs'
     assert job.get('if') == '${{ inputs.publish && github.run_attempt == 1 }}', 'publish condition'
@@ -140,7 +177,7 @@ def validate_publish(job):
     assert len(auth) == 1 and auth[0]['uses'] == 'rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9', 'auth pin'
     for step in job.get('steps', []):
         if 'CARGO_REGISTRY_TOKEN' in step.get('env', {}):
-            assert re.search(r'\bcargo\s+(?:\+\S+\s+)?publish\b', step.get('run', '')), 'registry token scope'
+            assert CARGO_PUBLISH.search(step.get('run', '')), 'registry token scope'
 
 
 class PublishWorkflowTest(unittest.TestCase):
@@ -246,13 +283,58 @@ printf 404
     def test_workflow(self):
         validate(parse())
 
+    def test_provider_config_and_git_mode(self):
+        entries = subprocess.run(['git', 'ls-files', '--stage', '-z', '--', PROVIDER],
+                                 cwd=ROOT, text=True, capture_output=True, check=True).stdout
+        validate_provider(PROOF['PUBLISH_CONFIG'].read_text(), entries)
+
+    def test_provider_config_and_git_mode_mutations(self):
+        config = '[registry]\ncredential-provider = ["./scripts/check-crate-publish-credential.py"]\n'
+        entry = f'100755 {"a" * 40} 0\tscripts/check-crate-publish-credential.py\0'
+        validate_provider(config, entry)
+        with self.assertRaisesRegex(AssertionError, 'upload provider config'):
+            validate_provider(config.replace(f'./{PROVIDER}', 'cargo:token'), entry)
+        with self.assertRaisesRegex(AssertionError, 'upload provider Git mode'):
+            validate_provider(config, entry.replace('100755', '100644'))
+
+    def test_ci_requires_loopback_proof(self):
+        jobs = parse(WORKFLOW.with_name('ci.yml'))['jobs']
+        proof = jobs.get('publish-proof', {})
+        self.assertEqual(proof.get('runs-on'), parse()['jobs']['publish']['runs-on'])
+        self.assertEqual(proof.get('permissions'), {})
+        self.assertNotIn('if', proof)
+        checkout = proof['steps'][0]
+        self.assertTrue(checkout.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout.get('with'), {'persist-credentials': False})
+        self.assertNotRegex(json.dumps(proof), r'github\s*\.\s*token|secrets\s*[.\[]')
+        self.assertIn('publish-proof', jobs['ci']['needs'])
+        self.assertTrue(any(step.get('run') == 'python3 -I scripts/test/loopback-registry-proof.py' for step in proof['steps']))
+        aggregate = jobs['ci']['steps'][0]['run']
+        needs = {name: {'result': 'success'} for name in jobs['ci']['needs']}
+        for result in ('success', 'failure', 'skipped'):
+            with self.subTest(result=result):
+                needs['publish-proof']['result'] = result
+                run = subprocess.run(['/bin/bash', '-e', '-o', 'pipefail', '-c', aggregate],
+                                     env={'PATH': str(Path(shutil.which('python3')).parent) + ':/usr/bin:/bin',
+                                          'EVENT': 'pull_request', 'NEEDS': json.dumps(needs)},
+                                     capture_output=True, text=True)
+                self.assertEqual(run.returncode == 0, result == 'success', run.stderr)
+                if result != 'success':
+                    self.assertIn(f'publish-proof: {result}', run.stderr)
+
     def test_mutations(self):
         original = parse()
         def change_run(w, job, name, old, new):
             step = next(s for s in w['jobs'][job]['steps'] if s.get('name') == name)
             assert old in step['run']
             step['run'] = step['run'].replace(old, new, 1)
+        sdk_upload = next(s['run'].splitlines()[-1] for s in original['jobs']['publish']['steps'] if s.get('name') == 'Upload SDK')
         mutations = [
+            ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', sdk_upload, f'{sdk_upload}\n{sdk_upload}')),
+            ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', sdk_upload, f'{sdk_upload}; {sdk_upload}')),
+            ('upload provider', lambda w: w['jobs']['publish']['steps'].append({'name': 'Extra upload', 'shell': 'bash', 'run': sdk_upload})),
+            ('Cargo test override', lambda w: w['jobs']['publish'].update(env={'__CARGO_TEST_CRATES_IO_URL_DO_NOT_USE_THIS': 'fixture'})),
+            ('Cargo test override', lambda w: change_run(w, 'publish', 'Upload SDK', sdk_upload, f'export __CARGO_TEST_OTHER=fixture\n{sdk_upload}')),
             ('approval condition', lambda w: next(s for s in w['jobs']['publish']['steps'] if s.get('name') == 'Verify owner approval').update({'if': '${{ false }}'})),
             ('upload provider', lambda w: change_run(w, 'publish', 'Upload SDK', '--config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml"', '')),
             ('upload provider', lambda w: change_run(w, 'publish', 'Upload tool', '--config "$GITHUB_WORKSPACE/scripts/publish-cargo.toml"', '')),

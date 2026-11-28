@@ -175,9 +175,23 @@ jobs:
           CRATE_AGE_EXEMPT: ${{ vars.CRATE_AGE_EXEMPT }}
         run: python3 -I scripts/check-crate-age.py "$BASE_SHA"
 
+  publish-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust
+        run: |
+          test "$RUNNER_ARCH" = X64
+          rustup toolchain install 1.100.0 --profile minimal
+      - run: python3 -I scripts/test/loopback-registry-proof.py
+
   ci:
     if: ${{ always() }}
-    needs: [gates, lint, test, deny, gitleaks, crate-age]
+    needs: [gates, lint, test, deny, gitleaks, crate-age, publish-proof]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -192,7 +206,7 @@ jobs:
           import sys
 
           needs = json.loads(os.environ["NEEDS"])
-          expected = {"gates", "lint", "test", "deny", "gitleaks", "crate-age"}
+          expected = {"gates", "lint", "test", "deny", "gitleaks", "crate-age", "publish-proof"}
           if set(needs) != expected:
               sys.exit(f"needed jobs {sorted(needs)} differ from {sorted(expected)}")
           failed = []
