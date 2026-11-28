@@ -42,10 +42,11 @@ The sender records every credential it sends, including the exact header values
 as sent, before the bytes leave, so a failure or a dropped future keeps them.
 Per-attempt credentials stay available only within the logical request,
 including across retries. Matching compiles the credentials once per set into
-one multi-pattern pass with a body-wide work and memory budget. The set holds
-the 256 distinct credentials Go allows in one operation, each with its wire
-forms, and compiled storage grows with the count under a fixed ceiling; the
-257th fails closed, as Go does.
+one multi-pattern pass with a body-wide work and memory budget. The set holds up
+to 256 distinct credentials per operation, Go's limit, and up to 256 KiB of
+their raw bytes, each with its wire forms; compiled storage is sized so any set
+within both bounds compiles. Recording a credential that would cross either
+bound refuses that request with nothing sent.
 
 ## Screening a body
 

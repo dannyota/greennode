@@ -149,8 +149,10 @@ async fn write_route_and_body_cannot_reflect_the_full_credential_header() {
 }
 
 #[tokio::test]
-async fn raw_uri_and_header_checks_refuse_uncompiled_credentials() {
-    let credentials = SentCredentials::for_test(vec![Secret::new("x".repeat(64 << 10))]);
+async fn raw_uri_and_header_checks_refuse_excess_credential_history() {
+    let oversized = Secret::new("x".repeat((256 << 10) + 1));
+    let mut credentials = SentCredentials::default();
+    credentials.record_product_credential(&oversized);
     let mut refused = [false; 2];
     for (index, raw_header) in [false, true].into_iter().enumerate() {
         let server = Server::start(vec![response("200 OK", &[])]);
@@ -165,7 +167,7 @@ async fn raw_uri_and_header_checks_refuse_uncompiled_credentials() {
         } else {
             req.credentials.push(CredentialHeader {
                 name: http::header::AUTHORIZATION,
-                value: credentials.values()[0].clone(),
+                value: oversized.clone(),
                 bearer: true,
             });
             Auth::Key
@@ -186,10 +188,9 @@ async fn raw_uri_and_header_checks_refuse_uncompiled_credentials() {
             RouteInputs::default(),
         )
         .await;
-        refused[index] = result
-            .err()
-            .is_some_and(|failure| matches!(failure.error, Error::InvalidRequest))
-            && server.requests() == 0;
+        refused[index] = result.err().is_some_and(|failure| {
+            matches!(failure.error, Error::Provider(error) if error.has_class(crate::ErrorClass::InvalidInput))
+        }) && server.requests() == 0;
     }
     assert_eq!(refused, [true, true]);
 }

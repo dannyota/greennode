@@ -30,7 +30,12 @@ impl<'a> BodyMatcher<'a> {
     pub(in crate::wire::product) fn new(credentials: &'a SentCredentials, len: usize) -> Self {
         Self {
             credentials,
-            remaining: std::cell::Cell::new(matching_work_limit(len, false)),
+            remaining: std::cell::Cell::new(grouped_work_limit(
+                credentials,
+                len,
+                false,
+                matching_work_limit(len, false),
+            )),
         }
     }
 
@@ -40,7 +45,12 @@ impl<'a> BodyMatcher<'a> {
     ) -> Self {
         Self {
             credentials,
-            remaining: std::cell::Cell::new(len.saturating_mul(48).clamp(8 << 20, 1 << 30)),
+            remaining: std::cell::Cell::new(grouped_work_limit(
+                credentials,
+                len,
+                false,
+                len.saturating_mul(48).clamp(8 << 20, 1 << 30),
+            )),
         }
     }
 
@@ -59,7 +69,7 @@ impl<'a> BodyMatcher<'a> {
     }
 
     pub(in crate::wire::product) fn raw(&self, bytes: &[u8]) -> bool {
-        if bytes.is_empty() || self.credentials.values().is_empty() {
+        if bytes.is_empty() || !self.credentials.requires_screening() {
             return false;
         }
         let Some(patterns) = self.credentials.patterns() else {
@@ -75,7 +85,7 @@ impl<'a> BodyMatcher<'a> {
         if self.raw(bytes) {
             return true;
         }
-        if self.credentials.values().is_empty() {
+        if !self.credentials.requires_screening() {
             return false;
         }
         let Some(remaining) = self.remaining.get().checked_sub(bytes.len()) else {
@@ -93,7 +103,7 @@ impl<'a> BodyMatcher<'a> {
     }
 
     pub(in crate::wire::product) fn scan(&self, bytes: &[u8], identifier: bool) -> Screen {
-        if self.credentials.values().is_empty() {
+        if !self.credentials.requires_screening() {
             return Screen::Clean;
         }
         let context = if identifier {
@@ -129,6 +139,26 @@ fn match_with_budget(
     let reflects = matches_forms(MatchInput::Borrowed(text), [0; 4], &mut state);
     *work = state.work;
     reflects
+}
+
+pub(in crate::wire::product) fn grouped_work_limit(
+    credentials: &SentCredentials,
+    length: usize,
+    error_text: bool,
+    base: usize,
+) -> usize {
+    if error_text {
+        return base;
+    }
+    let groups = credentials
+        .patterns()
+        .map_or(1, Patterns::group_count)
+        .min(256);
+    let extra = length
+        .min(64 << 20)
+        .saturating_mul(groups.saturating_sub(1))
+        .saturating_mul(4);
+    base.saturating_add(extra)
 }
 
 pub(super) fn matching_work_limit(length: usize, error_text: bool) -> usize {

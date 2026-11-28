@@ -127,7 +127,7 @@ impl CookieJar {
         self.sent.record(value);
         let encoded: String =
             url::form_urlencoded::byte_serialize(value.expose_secret().as_bytes()).collect();
-        self.sent.record(&Secret::new(encoded));
+        self.sent.record_wire(&Secret::new(encoded));
     }
 
     fn header(&mut self, url: &url::Url, clock: &dyn crate::Clock) -> Option<Secret> {
@@ -163,7 +163,7 @@ impl CookieJar {
                 .collect::<Vec<_>>()
                 .join("; "),
         );
-        self.sent.record(&header);
+        self.sent.record_wire(&header);
         Some(header)
     }
 }

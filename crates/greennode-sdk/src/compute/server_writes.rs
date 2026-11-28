@@ -204,6 +204,7 @@ impl Client {
                     )
                     .await
                     .map_err(|error| not_sent(*error))?;
+                decide(&evidence, |_| ()).map_err(|error| not_sent(*error))?;
                 if current != snapshot {
                     let error = api(
                         "",
@@ -225,9 +226,7 @@ impl Client {
             let body = self
                 .send_mutation(ctx, &CREATE, &[], Some(&body), policy, &mut evidence)
                 .await
-                .map_err(|failed| {
-                    create_error(failed, sensitive, input.attach_floating_ip, &evidence)
-                })?;
+                .map_err(|failed| create_error(failed, sensitive, &evidence))?;
             let receipt = create_id(&body, &evidence)
                 .map_err(|error| Failure::new(*error, None, WriteDispatch::MayHaveBeenSent))?;
             let id = receipt

@@ -151,6 +151,15 @@ impl Envelope {
         self.reflects(evidence)
     }
 
+    pub(super) fn has_multiple_fields(&self, names: &[&str]) -> bool {
+        self.fields
+            .keys()
+            .filter(|key| names.iter().any(|name| field_matches(key, name)))
+            .take(2)
+            .count()
+            > 1
+    }
+
     pub(super) fn field<T: WireField, O>(
         &self,
         name: &str,

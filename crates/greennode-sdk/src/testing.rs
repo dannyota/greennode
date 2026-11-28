@@ -1,5 +1,41 @@
 use crate::{ApiError, Error, ErrorClass, LoginError, error::SafeText};
 
+#[cfg(feature = "test-support")]
+pub fn allocation_probe(
+    secrets: &[crate::Secret],
+    trace: fn(u8),
+    body: &[u8],
+) -> (u8, std::time::Duration, std::time::Duration, usize) {
+    let started = std::time::Instant::now();
+    crate::wire::product::response::set_allocation_trace(trace);
+    let mut credentials = crate::wire::product::evidence::SentCredentials::default();
+    for secret in secrets {
+        trace(6);
+        let previous = credentials.clone();
+        trace(7);
+        credentials.record_bearer(secret);
+        credentials.record_wire(&crate::Secret::new(format!(
+            "Bearer {}",
+            secret.expose_secret()
+        )));
+        if credentials.id_reflects("unrelated-probe") {
+            return (3, started.elapsed(), std::time::Duration::ZERO, 0);
+        }
+        drop(previous);
+    }
+    let compile = started.elapsed();
+    let started = std::time::Instant::now();
+    trace(0);
+    let evidence = crate::wire::product::evidence::Evidence::from_credentials(&credentials);
+    let result = u8::from(!evidence.peer_body_screen(body).is_clean());
+    (
+        result,
+        compile,
+        started.elapsed(),
+        credentials.pattern_peak_bytes().unwrap_or_default(),
+    )
+}
+
 pub fn identity(class: ErrorClass) -> Error {
     Error::new(class)
 }

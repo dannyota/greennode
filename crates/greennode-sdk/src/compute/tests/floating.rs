@@ -437,7 +437,11 @@ async fn floating_create_accepts_256_distinct_bearers_and_refuses_the_257th() {
         }
         let server = TestServer::start(replies);
         let provider = Arc::new(Rotating(AtomicUsize::new(0), limit));
-        let options = ConfigOptions::default().with_credentials_provider(provider.clone());
+        let options = ConfigOptions::default()
+            .with_clock(Arc::new(crate::TestClock::new(
+                time::OffsetDateTime::UNIX_EPOCH,
+            )))
+            .with_credentials_provider(provider.clone());
         let (ctx, _) = RequestContext::new();
         let result = floating_client(&server, options)
             .create_server(&ctx, input)
@@ -447,10 +451,7 @@ async fn floating_create_accepts_256_distinct_bearers_and_refuses_the_257th() {
         } else {
             let failure = result.unwrap_err();
             assert_eq!(failure.write_dispatch(), crate::WriteDispatch::NotSent);
-            assert_eq!(
-                failure.error().api_error().unwrap().code(),
-                "InvalidResponse"
-            );
+            assert!(failure.error().has_class(ErrorClass::InvalidInput));
             assert!(failure.partial().is_none());
         }
         let heads = server.heads();

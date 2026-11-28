@@ -159,7 +159,11 @@ pub(super) fn check_proofs(
 ) -> Option<Box<Error>> {
     let transport = credentials.transport_only();
     let guard = credentials.guard_credentials();
-    let mut remaining = 192 << 20;
+    let retained_bytes = proofs
+        .iter()
+        .fold(0usize, |sum, proof| sum.saturating_add(proof.body.len()));
+    let mut remaining =
+        super::response::grouped_work_limit(credentials, retained_bytes, false, 192 << 20);
     proofs.iter().find_map(|proof| {
         let credentials = match proof.policy {
             ReceiptPolicy::All => credentials,

@@ -507,6 +507,22 @@ fn parse_page<T: WireField, O>(
     strict: bool,
     guard: bool,
 ) -> Result<PagedList<T>, Failure<O>> {
+    if envelope.has_multiple_fields(&[
+        "listData",
+        "data",
+        "items",
+        "content",
+        "results",
+        "projects",
+        "regions",
+        "zones",
+        "quotas",
+        "quotaUsed",
+        "volumeTypes",
+        "volumeTypeZones",
+    ]) {
+        return Err(failure(read.invalid(evidence)));
+    }
     let items: Option<Vec<T>> = envelope.field("listData", read, evidence)?;
     let page: Option<i64> = envelope.field("page", read, evidence)?;
     let page_size: Option<i64> = envelope.field("pageSize", read, evidence)?;
@@ -524,7 +540,11 @@ fn parse_page<T: WireField, O>(
         )));
     }
     if strict && !valid_page(items.as_deref(), page, page_size, total_page, total_item) {
-        return Err(failure(read.invalid(evidence)));
+        return if guard {
+            Err(failure(evidence.screen_error(super::wire::invalid_input("compute.CreateServer: could not confirm no server has the requested name: incomplete inventory"))))
+        } else {
+            Err(failure(read.invalid(evidence)))
+        };
     }
     Ok(PagedList {
         items: items.unwrap_or_default(),

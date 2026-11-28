@@ -70,9 +70,11 @@ use full_error::full_error;
 
 use http::StatusCode;
 pub(crate) use marker::has_credential_marker;
-pub(super) use matching::BodyMatcher;
+pub(super) use matching::{BodyMatcher, grouped_work_limit};
 use matching::{MatchContext, matches_credential_forms};
 pub(super) use patterns::Patterns;
+#[cfg(feature = "test-support")]
+pub(crate) use patterns::set_allocation_trace;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
@@ -323,17 +325,17 @@ pub(crate) fn reflects_credential_forms(text: &str, credentials: &SentCredential
 }
 
 pub(super) fn reflects_credential(text: &str, credentials: &SentCredentials) -> bool {
-    !credentials.values().is_empty()
+    credentials.requires_screening()
         && matches_credential_forms(text.as_bytes(), credentials, MatchContext::Text)
 }
 
 pub(super) fn reflects_identifier(value: &str, credentials: &SentCredentials) -> bool {
-    !credentials.values().is_empty()
+    credentials.requires_screening()
         && matches_credential_forms(value.as_bytes(), credentials, MatchContext::Identifier)
 }
 
 pub(crate) fn reflects_bytes(bytes: &[u8], credentials: &SentCredentials) -> bool {
-    !credentials.values().is_empty()
+    credentials.requires_screening()
         && matches_credential_forms(bytes, credentials, MatchContext::Text)
 }
 

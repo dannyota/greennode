@@ -1,3 +1,4 @@
+mod output;
 mod peer;
 mod roles;
 
@@ -12,6 +13,7 @@ enum Source {
     Redaction,
     Issued,
     OperationPassword,
+    Wire,
     Credential,
     Bearer,
 }
@@ -22,6 +24,7 @@ pub(crate) struct SentCredentials {
     sources: Vec<Source>,
     numeric_product_credential: bool,
     incomplete_signin: bool,
+    history_exhausted: bool,
     patterns: Arc<OnceLock<Option<response::Patterns>>>,
 }
 impl SentCredentials {
@@ -30,6 +33,21 @@ impl SentCredentials {
         Self {
             sources: vec![Source::Credential; values.len()],
             values,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::wire::product) fn for_test_with_patterns(
+        values: Vec<Secret>,
+        patterns: response::Patterns,
+    ) -> Self {
+        let cache = OnceLock::new();
+        let _ = cache.set(Some(patterns));
+        Self {
+            sources: vec![Source::Credential; values.len()],
+            values,
+            patterns: Arc::new(cache),
             ..Self::default()
         }
     }
@@ -46,10 +64,18 @@ impl SentCredentials {
         self.record_from(secret, Source::Credential);
     }
 
+    pub(super) fn record_redaction(&mut self, secret: &Secret) {
+        self.record_from(secret, Source::Redaction);
+    }
+
+    pub(crate) fn record_wire(&mut self, secret: &Secret) {
+        self.record_from(secret, Source::Wire);
+    }
+
     pub(crate) fn record_basic(&mut self, authorization: &str) {
-        self.record(&Secret::new(authorization));
+        self.record_wire(&Secret::new(authorization));
         if let Some(payload) = authorization.strip_prefix("Basic ") {
-            self.record(&Secret::new(payload));
+            self.record_wire(&Secret::new(payload));
         }
     }
 
@@ -70,6 +96,25 @@ impl SentCredentials {
         if secret.expose_secret().is_empty() {
             return;
         }
+        if source >= Source::Credential {
+            let known = self.values.iter().zip(&self.sources).any(|(value, known)| {
+                *known >= Source::Credential && value.expose_secret() == secret.expose_secret()
+            });
+            if !known {
+                let mut count = 0usize;
+                let mut bytes = 0usize;
+                for (value, known) in self.values.iter().zip(&self.sources) {
+                    if *known >= Source::Credential {
+                        count += 1;
+                        bytes = bytes.saturating_add(value.expose_secret().len());
+                    }
+                }
+                if count >= 256 || bytes.saturating_add(secret.expose_secret().len()) > 256 << 10 {
+                    self.history_exhausted = true;
+                    return;
+                }
+            }
+        }
         if let Some((_, known_source)) = self
             .values
             .iter()
@@ -78,9 +123,15 @@ impl SentCredentials {
         {
             *known_source = (*known_source).max(source);
         } else {
+            let previous = self.patterns.get().cloned();
             self.values.push(secret.clone());
             self.sources.push(source);
-            self.patterns = Arc::default();
+            let next = OnceLock::new();
+            if let Some(previous) = previous {
+                let _ =
+                    next.set(previous.and_then(|patterns| patterns.append(secret, &self.values)));
+            }
+            self.patterns = Arc::new(next);
         }
     }
 
@@ -103,6 +154,7 @@ impl SentCredentials {
             sources,
             numeric_product_credential: self.numeric_product_credential,
             incomplete_signin: self.incomplete_signin,
+            history_exhausted: self.history_exhausted,
             patterns: Arc::default(),
         }
     }
@@ -129,6 +181,7 @@ impl SentCredentials {
 
     pub(crate) fn extend(&mut self, credentials: &Self) {
         self.incomplete_signin |= credentials.incomplete_signin;
+        self.history_exhausted |= credentials.history_exhausted;
         self.numeric_product_credential |= credentials.numeric_product_credential;
         for (secret, source) in credentials
             .values
@@ -146,7 +199,23 @@ impl SentCredentials {
             || crate::output_number::reflects(value as f64, self, false)
     }
 
+    #[cfg(feature = "test-support")]
+    pub(crate) fn pattern_peak_bytes(&self) -> Option<usize> {
+        self.patterns().map(response::Patterns::peak_bytes)
+    }
+
+    pub(crate) fn requires_screening(&self) -> bool {
+        self.history_exhausted || !self.values.is_empty()
+    }
+
+    pub(crate) fn history_exhausted(&self) -> bool {
+        self.history_exhausted
+    }
+
     pub(super) fn patterns(&self) -> Option<&response::Patterns> {
+        if self.history_exhausted {
+            return None;
+        }
         self.patterns
             .get_or_init(|| response::Patterns::compile(&self.values))
             .as_ref()
@@ -310,7 +379,7 @@ impl Evidence {
 
     pub(crate) fn add_secret(&mut self, secret: &Secret) {
         self.credentials.record(secret);
-        super::exit::record_secret(secret);
+        super::exit::record_credential(secret);
     }
 
     #[cfg(test)]
@@ -446,109 +515,6 @@ impl Evidence {
 
     pub(crate) fn can_retain_partial(&self) -> bool {
         !self.credentials.has_incomplete_signin()
-    }
-
-    pub(crate) fn serialized_output_reflects(&self, value: &impl serde::Serialize) -> bool {
-        if self.credentials.values().is_empty() {
-            return false;
-        }
-        super::identifier::checking(&self.credentials, || serde_json::to_vec(value))
-            .map_or(true, |body| !peer::output_reflects(self, &body).is_clean())
-    }
-
-    pub(crate) fn output_reflects(&self, value: &Value) -> bool {
-        self.output_value_reflects(value, false, false, &|_| false)
-    }
-
-    pub(crate) fn output_fields_reflect(&self, value: &Value) -> bool {
-        self.output_fields_reflect_with(value, &|_| false)
-    }
-
-    pub(crate) fn identifier_output_reflects(&self, value: &Value) -> bool {
-        self.output_value_reflects(value, true, true, &|_| false)
-    }
-
-    pub(crate) fn output_fields_reflect_with(
-        &self,
-        value: &Value,
-        number_policy: &impl Fn(&serde_json::Number) -> bool,
-    ) -> bool {
-        self.output_value_reflects(value, false, true, number_policy)
-    }
-
-    fn output_value_reflects(
-        &self,
-        value: &Value,
-        identifier: bool,
-        immutable_only: bool,
-        number_policy: &impl Fn(&serde_json::Number) -> bool,
-    ) -> bool {
-        match value {
-            Value::Array(items) => items.iter().any(|item| {
-                self.output_value_reflects(item, identifier, immutable_only, number_policy)
-            }),
-            Value::Object(map) => map.iter().any(|(key, item)| {
-                (!immutable_only && self.text_reflects(key))
-                    || (identifier && self.id_reflects(key))
-                    || self.output_value_reflects(
-                        item,
-                        identifier || identifier_key(key),
-                        immutable_only,
-                        number_policy,
-                    )
-            }),
-            Value::Number(number) if number_policy(number) => true,
-            Value::String(_) | Value::Bool(_) | Value::Null if immutable_only && !identifier => {
-                false
-            }
-            _ => self.output_scalar_reflects(value, identifier),
-        }
-    }
-
-    pub(crate) fn redact(&self, value: &mut Value) -> bool {
-        self.redact_value(value, false);
-        !self.output_reflects(value)
-    }
-
-    pub(crate) fn redact_identifier_value(&self, value: &mut Value) -> bool {
-        self.redact_value(value, true);
-        !self.identifier_output_reflects(value)
-    }
-
-    fn redact_value(&self, value: &mut Value, identifier: bool) {
-        match value {
-            Value::Array(items) => items
-                .iter_mut()
-                .for_each(|item| self.redact_value(item, identifier)),
-            Value::Object(map) => map.retain(|key, item| {
-                if self.string_reflects(key, identifier) {
-                    return false;
-                }
-                self.redact_value(item, identifier || identifier_key(key));
-                true
-            }),
-            _ if self.output_scalar_reflects(value, identifier) => {
-                *value = Value::String(REDACTED.to_owned());
-            }
-            _ => {}
-        }
-    }
-
-    fn output_scalar_reflects(&self, value: &Value, identifier: bool) -> bool {
-        match value {
-            Value::String(text) => self.string_reflects(text, identifier),
-            Value::Number(number) => {
-                self.string_reflects(number.as_str(), identifier)
-                    || number.as_f64().is_some_and(|amount| {
-                        crate::output_number::any_spelling(amount, false, |text| {
-                            self.string_reflects(text, identifier)
-                        })
-                    })
-            }
-            Value::Null => self.text_reflects("null"),
-            Value::Bool(value) => self.text_reflects(if *value { "true" } else { "false" }),
-            _ => false,
-        }
     }
 
     pub(crate) fn with_partial<T>(
@@ -707,13 +673,32 @@ mod tests {
     }
 
     #[test]
+    fn credential_history_refuses_count_and_byte_excess() {
+        let mut count = SentCredentials::default();
+        for index in 0..256 {
+            count.record_product_credential(&Secret::new(format!("toy-{index:03}")));
+        }
+        assert!(count.patterns().is_some());
+        count.record_product_credential(&Secret::new("toy-extra"));
+        assert!(count.patterns().is_none());
+        let mut bytes = SentCredentials::default();
+        bytes.record_product_credential(&Secret::new("x".repeat((256 << 10) - 1)));
+        assert!(bytes.patterns().is_some());
+        bytes.record_product_credential(&Secret::new("xx"));
+        assert!(bytes.patterns().is_none());
+    }
+
+    #[test]
     fn literal_byte_scan_keeps_its_rules_and_refuses_uncompiled_credentials() {
         let exact = SentCredentials::for_test(vec![crate::Secret::new("Toy-A\nlong-line")]);
         assert!(exact.reflects(b"\xffToy-A\nlong-line\xff"));
         assert!(!exact.reflects(b"toy-a\nlong-line"));
         assert!(!exact.reflects(b"long-line"));
         let oversized = SentCredentials::for_test(vec![crate::Secret::new("x".repeat(64 << 10))]);
-        assert!(oversized.reflects(b"ordinary"));
+        assert!(!oversized.reflects(b"ordinary"));
+        let mut exhausted = SentCredentials::default();
+        exhausted.record_product_credential(&crate::Secret::new("x".repeat((256 << 10) + 1)));
+        assert!(exhausted.reflects(b"ordinary"));
     }
 
     #[test]
@@ -817,16 +802,21 @@ mod tests {
     }
 
     #[test]
-    fn oversized_multiline_credential_fails_closed_during_pattern_construction() {
+    fn multiline_credential_within_byte_limit_matches_its_lines() {
         let long = (0..600)
             .map(|index| format!("synthetic-{index:04}-segment"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(evidence(&[&long]).text_reflects("ordinary output"));
-        assert!(
-            !evidence(&["synthetic-0000-segment\nsynthetic-0001-segment"])
-                .text_reflects("ordinary output")
-        );
+        let evidence = evidence(&[&long]);
+        assert!(!evidence.text_reflects("ordinary output"));
+        let line = b"synthetic-0000-segment";
+        for text in [
+            String::from_utf8(line.to_vec()).unwrap(),
+            data_encoding::HEXLOWER.encode(line),
+            data_encoding::BASE64.encode(line),
+        ] {
+            assert!(evidence.text_reflects(&text));
+        }
     }
 
     #[test]

@@ -61,15 +61,10 @@ pub(super) fn create_body(input: &CreateServerInput) -> Result<Value, Box<Error>
 pub(super) fn create_error(
     failed: Failure<CreateServerOutput>,
     sensitive: bool,
-    floating: bool,
     evidence: &Evidence,
 ) -> Failure<CreateServerOutput> {
     let (error, _, dispatch) = failed.into_parts();
-    let remote_status = if floating {
-        error.api_error().and_then(ApiError::status)
-    } else {
-        status(&error)
-    };
+    let remote_status = status(&error);
     let error = if remote_status == Some(400)
         || (sensitive && remote_status.is_some_and(|status| (400..600).contains(&status)))
     {
@@ -86,13 +81,16 @@ pub(super) fn create_error(
         } else {
             message.to_owned()
         };
-        evidence.screen_error(Error::from_api(ApiError::new(
-            CREATE.id,
-            remote_status,
-            SafeText::new(code, &[]),
-            SafeText::new(&message, &[]),
-            observed.is_some_and(ApiError::retryable),
-        )))
+        evidence.screen_error(
+            Error::from_api(ApiError::new(
+                CREATE.id,
+                remote_status,
+                SafeText::new(code, &[]),
+                SafeText::new(&message, &[]),
+                observed.is_some_and(ApiError::retryable),
+            ))
+            .retain_status_visibility(observed),
+        )
     } else {
         error
     };

@@ -62,8 +62,12 @@ pub(super) fn observe_operation_password(slot: super::options::PasswordSlot<'_>)
     record_secret(password);
 }
 
-pub(super) fn record_secret(secret: &crate::Secret) {
+pub(super) fn record_credential(secret: &crate::Secret) {
     let _ = OBSERVED.try_with(|state| state.borrow_mut().public.record(secret));
+}
+
+pub(super) fn record_secret(secret: &crate::Secret) {
+    let _ = OBSERVED.try_with(|state| state.borrow_mut().public.record_redaction(secret));
 }
 
 pub(crate) fn bytes_reflect(bytes: &[u8]) -> bool {
@@ -115,7 +119,7 @@ pub(crate) fn verify<T: Serialize + super::output::PublicOutput>(
     scope(async move {
         let result = future.await;
         let state = OBSERVED.with(|state| state.borrow().clone());
-        if state.public.values().is_empty() {
+        if !state.public.requires_screening() {
             return result.map_err(Box::new);
         }
         let evidence = Evidence::from_credentials(&state.public);
@@ -145,6 +149,20 @@ pub(crate) fn verify<T: Serialize + super::output::PublicOutput>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn redaction_secret_does_not_exhaust_credential_history() {
+        scope(async {
+            let mut credentials = SentCredentials::default();
+            for index in 0..256 {
+                credentials.record(&crate::Secret::new(format!("toy-{index:03}")));
+            }
+            observe_sent(&credentials);
+            record_secret(&crate::Secret::new("toy-operation-secret"));
+            assert!(!OBSERVED.with(|state| state.borrow().public.history_exhausted()));
+        })
+        .await;
+    }
 
     #[test]
     fn public_product_methods_have_a_screened_exit() {

@@ -1,3 +1,5 @@
+mod credential_limits;
+
 use super::models::*;
 use crate::network::Client;
 use crate::testing::{Product, Response, Server, with_product_loopback};

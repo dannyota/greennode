@@ -15,7 +15,7 @@ use url::Url;
 mod credentials;
 mod response_body;
 mod uri;
-use credentials::attempt_headers;
+use credentials::{active_request_context, attempt_headers, check_history};
 use uri::redirect_target;
 use uri::uri_contains_credential;
 pub(super) use uri::uri_reflects_credential_forms;
@@ -223,13 +223,6 @@ async fn acquire_bearer(
     result
 }
 
-fn active_request_context(error: Error) -> Error {
-    match error {
-        Error::Context(end) => Error::ActiveRequestContext(end),
-        error => error,
-    }
-}
-
 fn unauthorized_decision<'a>(
     auth: Auth<'_>,
     bearer: Option<&'a BearerToken>,
@@ -377,6 +370,7 @@ async fn run_inner(
         jitter,
         configured_credentials: _,
     } = runtime;
+    check_history(&[reflection])?;
     if request.url.scheme() != "https"
         || request.url.host().is_none()
         || !request.url.username().is_empty()
@@ -430,6 +424,7 @@ async fn run_inner(
             reflection.extend(credentials);
             sent.extend(credentials);
         }
+        check_history(&[reflection, sent])?;
         evidence.status = None;
         let (headers, header_credentials) = attempt_headers(request, bearer.as_ref())?;
         let mut outgoing_credentials = sent.clone();
@@ -437,6 +432,7 @@ async fn run_inner(
         reflection.extend(&header_credentials);
         let mut credentials = reflection.clone();
         credentials.extend(&outgoing_credentials);
+        check_history(&[&credentials])?;
         if let Some(check) = op.attempt_check
             && let Some(error) = (check.0)(&credentials)
         {

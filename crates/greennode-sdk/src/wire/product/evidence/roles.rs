@@ -17,11 +17,13 @@ impl SentCredentials {
         if self
             .sources
             .iter()
-            .all(|role| matches!(role, Source::Credential | Source::Bearer))
+            .all(|role| matches!(role, Source::Wire | Source::Credential | Source::Bearer))
         {
             self.clone()
         } else {
-            self.filtered(|_, role| matches!(role, Source::Credential | Source::Bearer))
+            self.filtered(|_, role| {
+                matches!(role, Source::Wire | Source::Credential | Source::Bearer)
+            })
         }
     }
 

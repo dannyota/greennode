@@ -89,33 +89,16 @@ impl Client {
                 }
                 check_rule_keys(&rule).map_err(|()| exposure_invalid(evidence))?;
                 hash_raw(&rule, &mut digest).map_err(|_| exposure_invalid(evidence))?;
-                rules.push((rule, evidence.credentials().values().len()));
+                rules.push(rule);
             }
         }
         if let Some(end) = ctx.check(self.session.clock()) {
             return Err(Box::new(end.into()));
         }
-        let credentials = evidence.credentials().values();
-        for (rule, observed) in &rules {
-            if let Some(end) = ctx.check(self.session.clock()) {
-                return Err(Box::new(end.into()));
-            }
-            let later = credentials
-                .get(*observed..)
-                .ok_or_else(|| exposure_invalid(evidence))?;
-            if !later.is_empty() {
-                let mut new_evidence = Evidence::new();
-                for credential in later {
-                    new_evidence.add_secret(credential);
-                }
-                if exposure_reflects(rule.get(), &new_evidence) {
-                    return Err(exposure_invalid(evidence));
-                }
-            }
-        }
+        crate::wire::product::guard::decide(evidence, |_| ())?;
         if !allow_open_login {
             check_exposure(
-                rules.iter().map(|(rule, _)| rule.as_ref()),
+                rules.iter().map(Box::as_ref),
                 evidence,
                 &ctx,
                 self.session.clock(),
@@ -346,6 +329,7 @@ pub(super) struct FloatingWatch {
 }
 
 struct WatchedQuote {
+    quote: GetQuoteOutput,
     value: Value,
     screened: HashSet<[u8; 32]>,
 }
@@ -368,16 +352,17 @@ impl FloatingWatch {
         };
         let watched = quote.as_mut()?;
         let mut newly_screened = Vec::new();
-        let mut evidence = Evidence::new();
+        let evidence = Evidence::from_credentials(credentials);
         for credential in credentials.values() {
             let id = fingerprint(credential);
             if !watched.screened.contains(&id) {
-                evidence.add_secret(credential);
                 newly_screened.push(id);
             }
         }
-        if !newly_screened.is_empty() && quote_reflects(&watched.value, &evidence) {
-            evidence.absorb(credentials);
+        if !newly_screened.is_empty()
+            && (evidence.serialized_output_reflects(&watched.quote)
+                || quote_reflects(&watched.value, &evidence))
+        {
             return Some(quote_invalid(&evidence));
         }
         watched.screened.extend(newly_screened);
@@ -390,7 +375,7 @@ impl FloatingWatch {
         evidence: &Evidence,
     ) -> Result<(), Box<Error>> {
         let value = serde_json::to_value(quote).map_err(|_| quote_invalid(evidence))?;
-        if quote_reflects(&value, evidence) {
+        if evidence.serialized_output_reflects(quote) || quote_reflects(&value, evidence) {
             return Err(quote_invalid(evidence));
         }
         let screened = evidence
@@ -399,8 +384,11 @@ impl FloatingWatch {
             .iter()
             .map(fingerprint)
             .collect();
-        *self.quote.lock().map_err(|_| quote_invalid(evidence))? =
-            Some(WatchedQuote { value, screened });
+        *self.quote.lock().map_err(|_| quote_invalid(evidence))? = Some(WatchedQuote {
+            quote: quote.clone(),
+            value,
+            screened,
+        });
         Ok(())
     }
 }
@@ -460,6 +448,22 @@ fn quote_reflects(value: &Value, evidence: &Evidence) -> bool {
 #[cfg(test)]
 mod quote_tests {
     use super::*;
+
+    #[test]
+    fn retained_quote_checks_struct_field_order() {
+        let watch = FloatingWatch::default();
+        let quote = GetQuoteOutput {
+            optimum_price: 20.0,
+            original_price: 25.0,
+            discount_price: 5.0,
+            discount_percent: 20.0,
+            properties: vec![],
+        };
+        watch.retain_quote(&quote, &Evidence::new()).unwrap();
+        let credentials =
+            SentCredentials::for_test(vec![crate::Secret::new("25.0,\"DiscountPrice\"")]);
+        assert!(watch.check(&credentials).is_some());
+    }
 
     #[test]
     fn quote_screens_cross_field_boundary_and_null() {
