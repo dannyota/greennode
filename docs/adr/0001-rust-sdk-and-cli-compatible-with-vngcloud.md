@@ -1,4 +1,4 @@
-# 0001: greennode is the Rust port of the vngcloud CLI
+# 0001: greennode is a Rust SDK and CLI for GreenNode, compatible with vngcloud
 
 ## Status
 
@@ -17,13 +17,13 @@ published on crates.io under the current name.
 1. The product is written in Rust and named `greennode`: the command, the
    command-line crate, and the repository `dannyota/greennode`, public, with
    `master` as its default branch.
-2. It is a port of vngcloud. vngcloud at tag `v1.8.0` is the baseline that
-   defines commands, flags, output, and exit codes.
+2. It is its own SDK and CLI, compatible with vngcloud. vngcloud at tag `v1.8.0`
+   is the baseline that defines commands, flags, output, and exit codes.
 3. Releases go to crates.io. The owner publishes the first version from the
    owner's Mac; later versions publish from GitHub Actions through Trusted
    Publishing, as the [release design](../design/release.md) describes.
-4. The port moves in small releases. Each release adds whole commands that match
-   the baseline. A command that is not ported yet is absent, never a stub.
+4. The project moves in small releases. Each release adds whole commands that
+   match the baseline. A command that is not built yet is absent, never a stub.
 5. Two crates. `greennode-sdk` is a supported Rust SDK, as vngcloud has a
    supported Go SDK. `greennode` is the command-line tool and calls the API only
    through the SDK's public interface.
@@ -36,8 +36,8 @@ published on crates.io under the current name.
 
 ## Consequences
 
-- A vngcloud user can run a ported greennode command with no setup, and a script
-  written for vngcloud runs after its command name changes.
+- A vngcloud user can run a shipped greennode command with no setup, and a
+  script written for vngcloud runs after its command name changes.
 - Two crates publish for every release, the SDK first. Each needs its own first
   publish by hand and its own Trusted Publisher.
 - The SDK's public types and functions are a second contract beside the command
@@ -51,10 +51,10 @@ published on crates.io under the current name.
 ## Alternatives rejected
 
 - **A drop-in replacement in one release.** The baseline is about 84,000 lines
-  of Go without tests. Nothing would ship until all of it is ported and
+  of Go without tests. Nothing would ship until all of it is rewritten and
   reviewed.
 - **A wrapper that calls the Go binary.** It keeps the Go toolchain requirement
-  the port exists to remove.
+  greennode exists to remove.
 - **One crate with no supported library.** Proposed first. It publishes less,
   but a Rust program could not call GreenNode without running the command.
 - **No fallback to vngcloud settings.** Proposed first. It never leaves the
@@ -71,6 +71,8 @@ published on crates.io under the current name.
   crates with a supported SDK, and changed decision 6 to add the fallback.
 - 2026-11-25: The owner moved the baseline from `v1.0.1` to `v1.2.0` before any
   service was ported.
-
 - 2026-11-26: The owner moved the baseline from `v1.2.0` to `v1.7.0`.
 - 2026-11-26: The owner moved the baseline from `v1.7.0` to `v1.8.0`.
+- 2026-11-28: The owner renamed the record and reworded decisions 2 and 4:
+  greennode is its own SDK and CLI, compatible with vngcloud, not a port. The
+  compatibility contract is unchanged.

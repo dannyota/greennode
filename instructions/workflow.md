@@ -5,7 +5,7 @@ The primary designs and decides. Implementers change code. Reviewers judge work 
 ## Flow
 
 1. Read the relevant design, accepted ADRs, and the plan task. Create one worktree under `.worktrees/<task>` on branch `wip/<task>`.
-2. A change to architecture, a contract, or a security boundary starts with a design or ADR update that an independent reviewer accepts. The primary may brief a designer for the draft, relays what parallel designers need from each other, and edits the result before review. Porting an operation whose behavior the [baseline](porting.md#baseline) already defines skips this step.
+2. A change to architecture, a contract, or a security boundary starts with a design or ADR update that an independent reviewer accepts. The primary may brief a designer for the draft, relays what parallel designers need from each other, and edits the result before review. Building an operation whose behavior the [baseline](compatibility.md#baseline) already defines skips this step.
 3. Brief one implementer per bounded task, as [briefs](#briefs) describes.
 4. Failing test first, then the smallest correct change. Hostile input, authorization, races, and bounds belong to the author.
 5. The primary inspects the diff, confirms the changed files match the report and the owned paths, runs the gates, and commits.

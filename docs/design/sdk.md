@@ -371,7 +371,7 @@ Core owns the first billing read through both crates to prove the interfaces.
 Land shared model and quote/discovery prerequisites before releasing those
 services to parallel work. Split large domains such as network by disjoint
 concerns; their service owner integrates `mod.rs` and fixtures. A new common
-contract goes through the integration owner before dependent ports.
+contract goes through the integration owner before dependent implementations.
 
 ## Public docs and checks
 
@@ -382,7 +382,7 @@ An input field states accepted units and ranges, default, and what omission,
 null, empty, or zero mean when distinct. Do not copy the identifier into a
 sentence or put design decisions in private code comments.
 
-Port sanitized fixture and loopback tests with each operation. Include exact
+Adopt sanitized fixture and loopback tests with each operation. Include exact
 method, path, query and request body, bounds, decode and status errors,
 projection order and exact numbers, and write outcome on cancellation. Core adds
 policy conformance, shared refresh/discovery contention, cache identity and

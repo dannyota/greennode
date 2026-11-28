@@ -4,7 +4,7 @@ Shared rules live here and in `instructions/`. [CLAUDE.md](CLAUDE.md) adds Claud
 
 ## State
 
-`greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. It is the Rust port of [vngcloud](https://github.com/dannyota/vngcloud), licensed under Apache-2.0, and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
+`greennode` is Danny's personal, unofficial Rust SDK and AWS-style command-line tool for GreenNode, formerly VNG Cloud. Its compatibility baseline is [vngcloud](https://github.com/dannyota/vngcloud), the Go SDK and CLI whose commands, flags and output it matches. It is licensed under Apache-2.0 and not affiliated with GreenNode or VNG. Two crates publish to crates.io: `greennode-sdk` and the tool `greennode`. The repository and CI logs are public.
 
 The SDK has configuration, both sign-in kinds with the token cache, the request stack, project discovery and the shared quote code. The tool ships `version`, `configure`, and the services of waves 1 to 3 that have landed (billing, project, backup, portal, tagging, vks, dns, database, containerregistry, globalloadbalancer reads, cdn reads); the rest is in the [foundation plan](docs/plans/foundation.md).
 
@@ -21,14 +21,14 @@ The SDK has configuration, both sign-in kinds with the token cache, the request 
 |Why was a choice made?|[ADRs](docs/adr/README.md)|
 |What work remains, in what order?|[Plans](docs/plans/)|
 |How should documents and comments be written?|[Engineering standard](docs/standards/engineering.md)|
-|What did the Go CLI do?|The [baseline](instructions/porting.md#baseline), `vngcloud` at tag `v1.8.0`|
+|What did the Go CLI do?|The [baseline](instructions/compatibility.md#baseline), `vngcloud` at tag `v1.8.0`|
 |What does the system do now?|Code and tests|
 
 |Doing|Read first|
 |-|-|
 |Planning, briefing, implementing, reviewing|[Workflow](instructions/workflow.md)|
 |Working as a briefed implementer or reviewer|[Roles](instructions/roles.md)|
-|Porting a command or service from the Go CLI|[Porting](instructions/porting.md)|
+|Adding a command or service compatible with vngcloud|[Compatibility](instructions/compatibility.md)|
 |Writing Rust|[Rust](instructions/rust.md)|
 |Writing or running tests|[Testing](instructions/testing.md)|
 |Touching auth, credentials, writes, dependencies, or workflows|[Security](instructions/security.md)|
@@ -47,13 +47,13 @@ Direct owner instructions and platform safety rules come first. An accepted ADR 
 |`crates/greennode/tests/cli.rs`|Process tests of the built binary|
 |`crates/greennode/src/cli/render.rs`, `src/cli/render/`|Go-compatible JSON writer, projection with dynamic-map redaction, table and text renderers|
 |`crates/greennode/tests/render.rs`, `tests/fixtures/render/`|Golden inventory and float corpus from the baseline|
-|`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|Port of go-jmespath v0.4.0: lexer, parser, `compile`, evaluation and all built-in functions; its license and compliance suite|
-|`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Port of Go's `html.UnescapeString` and `strconv.Quote`, plus the letter/digit and ASCII-lowercase tables behind the monitor credential-key check (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
+|`crates/greennode/src/cli/query/`, `licenses/`, `tests/fixtures/query/`|go-jmespath v0.4.0 semantics, derived from its source: lexer, parser, `compile`, evaluation and all built-in functions; its license and compliance suite|
+|`crates/greennode-sdk/src/go_text/`, `licenses/`, `scripts/go-text-tables/`, `tests/fixtures/go_text/`|Go-compatible `html.UnescapeString` and `strconv.Quote`, derived from Go's source, plus the letter/digit and ASCII-lowercase tables behind the monitor credential-key check (crate-private): tables generated from Go's source with Go's BSD license, and a Go-rendered corpus|
 |`crates/greennode-sdk/src/lib.rs`|SDK crate root and re-exports|
 |`crates/greennode-sdk/src/{context,clock,secret,token,error,source,event}.rs`, `src/model/`|Shared contracts: request context, clock, secrets, tokens, errors, configuration source, debug events, list models|
 |`crates/greennode-sdk/src/config/`, `src/provider.rs`, `src/file_diagnostic.rs`|Configuration: INI readers, safe file opening with the alias check, mode and path selection, settings resolution, credential selection; public `Config::load`, `Config::resolve_profile`, `ResolvedProfile`, `CredentialsProvider`, `FileDiagnostic`|
-|`crates/greennode-sdk/src/billing/`, `crates/greennode/src/services/billing.rs`, `src/services/billing/`|The billing service: SDK client, models and private envelope; CLI operations; the template every service port copies|
-|`crates/greennode-sdk/src/<service>/`, `crates/greennode/src/services/<service>.rs`, `src/services/<service>/`, `scripts/<service>-goldens/`|Each other ported service, on the billing template: SDK client and models, CLI operations, and the generator for its Go-rendered goldens|
+|`crates/greennode-sdk/src/billing/`, `crates/greennode/src/services/billing.rs`, `src/services/billing/`|The billing service: SDK client, models and private envelope; CLI operations; the template every service copies|
+|`crates/greennode-sdk/src/<service>/`, `crates/greennode/src/services/<service>.rs`, `src/services/<service>/`, `scripts/<service>-goldens/`|Each other service, on the billing template: SDK client and models, CLI operations, and the generator for its Go-rendered goldens|
 |`crates/greennode-sdk/src/quote/`|Shared price catalog, quote request and quote input code reused by pricing, volume, compute, storage, network and monitor (crate-private)|
 |`crates/greennode/src/cli/secret_file.rs`, `src/cli/password.rs`, `src/cli/stdin.rs`|Shared secret-file delivery, post-guard password input and deadline-bounded stdin|
 |`crates/greennode-sdk/src/cache/`|Token cache: safe path selection, the anchored Unix store, the lock, the entry format and the one-time-code marker (crate-private)|
@@ -91,7 +91,7 @@ Each name is a model family that resolves to its newest model, so plans, briefs,
 
 1. Start with `git status --short`. Existing changes belong to someone else unless the brief says otherwise.
 2. Put security before features and convenience. Never read, print, or commit credential values, including `.env`, `~/.greennode`, and `~/.vngcloud`.
-3. Keep the ported contract: command names, flags, output keys, query keys, and exit codes match the [baseline](instructions/porting.md#baseline) except where the [architecture](docs/design/architecture.md#differences-from-the-baseline) says otherwise. Report a needed difference instead of deciding it.
+3. Keep the compatibility contract: command names, flags, output keys, query keys, and exit codes match the [baseline](instructions/compatibility.md#baseline) except where the [architecture](docs/design/architecture.md#differences-from-the-baseline) says otherwise. Report a needed difference instead of deciding it.
 4. Write no code comments except the exceptions in the [engineering standard](docs/standards/engineering.md#code-comments). Put decisions in the design that owns them.
 5. Tests stay hermetic: loopback servers, toy credentials, temporary directories, and no call to the real GreenNode API.
 6. Live calls to GreenNode need the owner's approval for that run. Workers never make them.

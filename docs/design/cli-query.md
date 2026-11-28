@@ -1,9 +1,9 @@
 # CLI query engine
 
-Port [go-jmespath v0.4.0][go-jmespath], the baseline's query engine, into
-`crates/greennode/src/cli/query/`. Match what Go accepts before dispatch and
-what it evaluates after dispatch. No SDK dependency on the query engine and no
-JMESPath crate dependency.
+Implement [go-jmespath v0.4.0][go-jmespath], the baseline's query engine, from
+its source in `crates/greennode/src/cli/query/`. Match what Go accepts before
+dispatch and what it evaluates after dispatch. No SDK dependency on the query
+engine and no JMESPath crate dependency.
 
 ## Approaches
 
@@ -11,7 +11,7 @@ JMESPath crate dependency.
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Use another Rust JMESPath engine directly | Small integration, but nominal compliance does not preserve which syntax can reach a write or how Go evaluates it.                                        |
 | Adapt another engine                      | AST rewrites can fix number equality but cannot recover a missing comma that the lexer/parser already accepted. Function differences need separate fixes. |
-| Port the pinned baseline (chosen)         | Own the lexer, parser, evaluator and function semantics. Test both stages against the exact Go oracle without shipping Go.                                |
+| Derive from the pinned baseline (chosen)  | Own the lexer, parser, evaluator and function semantics. Test both stages against the exact Go oracle without shipping Go.                                |
 
 ## Module boundary
 
@@ -50,7 +50,7 @@ value only as a direct function argument; anywhere else Go would store or return
 one (a multiselect, an index, a pipe, a projection or the result) is an
 evaluation error instead.
 
-Port the functions as Go implements them, not as a newer specification might.
+Implement the functions as Go does them, not as a newer specification might.
 `to_number('true')` returns null, and string parsing follows Go's `ParseFloat`
 grammar, not JSON parsing. Values round exactly; Go truncates a decimal past 800
 significant digits, so a few such inputs differ. For arrays, `contains` uses the
@@ -128,8 +128,8 @@ The [upstream license][go-license] is Apache-2.0 and names
 `v0.4.0`. Keep the upstream copyright and license attribution in the repository
 and in the published CLI package for the translated source and copied fixtures.
 Mark translated sources as changed under [Apache-2.0 section 4][apache-license];
-keep the pinned source and fixture provenance with the port. The existing
-project license does not replace the upstream copyright notice.
+keep the pinned source and fixture provenance with the implementation. The
+existing project license does not replace the upstream copyright notice.
 
 Concretely: copy the upstream license unchanged to
 `crates/greennode/licenses/go-jmespath-LICENSE`, which the published package and

@@ -1,13 +1,13 @@
 # Architecture
 
-[ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md) holds the owner's
-decisions this design builds on.
+[ADR 0001](../adr/0001-rust-sdk-and-cli-compatible-with-vngcloud.md) holds the
+owner's decisions this design builds on.
 
-greennode is the Rust port of vngcloud. It has two parts: `greennode-sdk`, a
-library that calls the GreenNode API, and `greennode`, a command-line tool in
-the style of the AWS CLI that inspects and changes resources from a terminal or
-a script. Users install the tool with Cargo or from a release archive, with no
-Go toolchain.
+greennode is a Rust SDK and CLI for GreenNode, compatible with vngcloud. It has
+two parts: `greennode-sdk`, a library that calls the GreenNode API, and
+`greennode`, a command-line tool in the style of the AWS CLI that inspects and
+changes resources from a terminal or a script. Users install the tool with Cargo
+or from a release archive, with no Go toolchain.
 
 This document owns the contract with the baseline and how the parts fit. Each
 part has its own design:
@@ -19,7 +19,7 @@ part has its own design:
 | [SDK request policies](sdk-requests.md) | The three kinds of request, their limits, and the SDK's crates              |
 | [Command line](cli.md)                  | Command declarations, guards, dispatch, errors, exit codes, and `configure` |
 | [CLI output](cli-output.md)             | The JSON projection, table, and text                                        |
-| [CLI query](cli-query.md)               | The `--query` engine, a port of go-jmespath v0.4.0                          |
+| [CLI query](cli-query.md)               | The `--query` engine, compatible with go-jmespath v0.4.0                    |
 | [Security](security.md)                 | Trust boundaries, secure defaults, and threats                              |
 | [Release publishing](release.md)        | GitHub Releases and crates.io publishing                                    |
 
@@ -27,11 +27,11 @@ part has its own design:
 
 The baseline is [vngcloud](https://github.com/dannyota/vngcloud) at tag
 `v1.8.0`, commit `85458dfb6b373116be410ec8be845257ad545f96`. Its
-`docs/design/cli.md` and `docs/design/sdk-and-cli.md` define the contract this
-port keeps, and its per-domain designs define each operation. Only the owner
-moves the baseline to a newer tag. A move updates this section, the baseline
-values in the `Makefile`, and the parity list, and the plan gains a task to port
-what changed between the two tags.
+`docs/design/cli.md` and `docs/design/sdk-and-cli.md` define the contract
+greennode keeps, and its per-domain designs define each operation. Only the
+owner moves the baseline to a newer tag. A move updates this section, the
+baseline values in the `Makefile`, and the parity list, and the plan gains a
+task to build what changed between the two tags.
 
 The baseline has 373 operations in 19 services:
 
@@ -53,7 +53,7 @@ The counts are the operation headings in the baseline's generated
 
 ## The contract greennode keeps
 
-For every ported command, these match the baseline:
+For every shipped command, these match the baseline:
 
 - The shape `greennode <service> <operation> [flags]`, the service and operation
   names, and each flag's name, type, and required state.
@@ -95,13 +95,14 @@ For every ported command, these match the baseline:
 | Help and usage text        | cobra's wording                         | clap's wording; names, streams, and exit codes unchanged                                                                                                                                                                                                             |
 | Library                    | Go module `danny.vn/vngcloud`           | Rust crate `greennode-sdk`                                                                                                                                                                                                                                           |
 | Install                    | `go install`                            | `cargo install greennode --locked` or a release archive                                                                                                                                                                                                              |
-| Unported commands          | Not applicable                          | Absent from help until ported                                                                                                                                                                                                                                        |
+| Commands not yet built     | Not applicable                          | Absent from help until built                                                                                                                                                                                                                                         |
 | Argument encoding          | Any bytes; JSON then sends U+FFFD       | Arguments read as text, inline `--cli-input-json` included, must be UTF-8 or the command exits 2 before any request; `--password-file`, the docs directory and `configure set` values keep their bytes, and `file://` documents get Go's per-byte U+FFFD replacement |
 | Other intended differences |                                         | Listed in the [configuration](config.md#differences-from-the-baseline), [SDK](sdk.md#differences-from-the-baseline), and [CLI](cli.md#differences-from-the-baseline) designs                                                                                         |
 
 Error and help text names `greennode` and `GREENNODE_` wherever the baseline
 names `vngcloud` and `VNGCLOUD_`. Any other difference is a defect.
-[ADR 0001](../adr/0001-rust-port-of-the-vngcloud-cli.md) records why.
+[ADR 0001](../adr/0001-rust-sdk-and-cli-compatible-with-vngcloud.md) records
+why.
 
 ## Layout
 
@@ -184,14 +185,14 @@ every service, operation, kind, flag, and input field that only
 `--cli-input-json` can set, generated from the baseline's `docs/wiki/CLI-*.md`
 pages at the pinned commit. One test compares each command greennode registers
 with its entry and fails on any difference. The same list shows what is left to
-port.
+build.
 
 The list proves names, kinds, and stated flags. It does not state defaults,
 mutually exclusive flags, global flags, `configure`, or `version`; the
 [CLI design](cli.md#layout-parity-and-tests) covers those with their own tests.
-Behavior is checked by porting the baseline's tests for each operation, as
-[porting](../../instructions/porting.md) describes, and output bytes by
-[goldens](cli-output.md#goldens) taken from the baseline. None of this proves
+Behavior is checked by adopting the baseline's tests for each operation, as
+[compatibility](../../instructions/compatibility.md) describes, and output bytes
+by [goldens](cli-output.md#goldens) taken from the baseline. None of this proves
 the GreenNode API still behaves as the baseline recorded; only an approved live
 run does.
 
@@ -211,6 +212,6 @@ depends on that exact SDK version.
 
 Versions before `1.0.0` may change the command line and the SDK's interface, but
 a command that shipped in one release does not disappear in the next. `1.0.0` is
-the release in which every baseline operation is ported. From then on, a change
-to a command name, flag, query key, or exit code, or a breaking change to a
-public SDK item, needs a new major version.
+the release in which every baseline operation ships. From then on, a change to a
+command name, flag, query key, or exit code, or a breaking change to a public
+SDK item, needs a new major version.
