@@ -19,9 +19,12 @@ published on crates.io under the current name.
    `master` as its default branch.
 2. It is its own SDK and CLI, compatible with vngcloud. vngcloud at tag `v1.8.0`
    is the baseline that defines commands, flags, output, and exit codes.
-3. Releases go to crates.io. The owner publishes the first version from the
-   owner's Mac; later versions publish from GitHub Actions through Trusted
-   Publishing, as the [release design](../design/release.md) describes.
+3. Incremental `0.x.y` releases go to crates.io from the owner's Mac with
+   `cargo publish` and the owner's existing Cargo login. The owner approves
+   cutover to GitHub Actions through Trusted Publishing once the CI publish
+   workflow is proven. The owner releases `1.0.0` once every baseline operation
+   has shipped and the owner judges the product stable. The
+   [release design](../design/release.md) owns the procedure.
 4. The project moves in small releases. Each release adds whole commands that
    match the baseline. A command that is not built yet is absent, never a stub.
 5. Two crates. `greennode-sdk` is a supported Rust SDK, as vngcloud has a
@@ -76,3 +79,5 @@ published on crates.io under the current name.
 - 2026-11-28: The owner renamed the record and reworded decisions 2 and 4:
   greennode is its own SDK and CLI, compatible with vngcloud, not a port. The
   compatibility contract is unchanged.
+- 2026-11-28: The owner chose incremental Mac releases with the existing Cargo
+  login until the proven CI workflow is approved, and set the `1.0.0` criteria.

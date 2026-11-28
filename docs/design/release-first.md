@@ -1,145 +1,215 @@
 # Releases from the owner's Mac
 
-Until the CI publish workflow is proven, every `0.x.y` release of
-`greennode-sdk` and `greennode` is published from the owner's Mac with
-`cargo publish`; Trusted Publishing also needs each crate to exist first. The
-owner decides each release and declares `1.0.0` once every baseline operation
-ships and the owner judges it stable. The [release design](release.md) owns
-versions, packaging and recovery.
+The Mac is the active crates.io publishing path until the owner approves the
+[CI cutover](release.md#ci-cutover). Each upload uses `cargo publish` and the
+owner's existing default Cargo login. The [release design](release.md) owns
+versions, packaging and the registry gate.
 
-1. The release commit is on protected `master` with the `ci` check green, and
-   its version commit has landed as [versions](release.md#versions) describes.
-   With the owner's approval for this release, the primary creates the signed
-   annotated tag `vX.Y.Z` on that commit and pushes it. Use Bash, Python 3.11 or
-   later, `jq`, and `gh` as `dannyota`, from a clean checkout of protected
-   `master` used only for release helpers, never to compile the tag:
+The owner chose the existing login over minting a short-lived scoped token for
+each release. The existing token has broader permissions. Only the owner may
+narrow or revoke it. Agents never open, read, print or copy the token or its
+credential file.
 
-   ```bash
-   set +x
-   export TAG=vX.Y.Z TRUSTED_SCRIPTS="$PWD/scripts"
-   git fetch origin master --tags
-   COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
-   git merge-base --is-ancestor "$COMMIT" origin/master
-   ```
+## 1. Verify the commit and tag
 
-   The tag push also runs the release workflow, which may build the GitHub
-   Release; crates.io publication below does not depend on it. Later steps run
-   commands one at a time without abort-on-error, so the wait checks and step 7
-   cleanup always run. After login always clean up in step 7.
+Use Bash, Python 3.11 or later and `gh` as `dannyota`, with tracing and `gh`
+debug output off. Use release helpers from a clean, reviewed checkout of
+protected `master` that never builds the tag. Keep that checkout separate from
+the build, publish and receipt directories.
 
-2. In a disposable macOS checkout of `$COMMIT`, with no credentials or write
-   access to the owner's trusted checkout or receipt directory, run
-   [workspace packaging](release.md#workspace-packaging). Read both file lists:
+Before the first tag, remove the claim that nothing is on crates.io from the
+root `README.md`. Replace the claim that nothing is implemented in
+`crates/greennode-sdk/README.md` with the SDK capabilities. Cargo packages those
+two READMEs with the tool and SDK respectively. Complete the
+[Mac packaging proof](release.md#packaging-proof) and the
+[GitHub Release setup](release.md#github-release-setup) before tagging.
 
-   ```bash
-   cargo +1.100.0 package --list --locked --registry crates-io -p greennode-sdk
-   cargo +1.100.0 package --list --locked --registry crates-io -p greennode
-   ```
+1. Select the exact approved release commit after the
+   [version commit](release.md#versions) lands. Fetch `origin/master`. Require
+   branch protection, `git merge-base --is-ancestor "$COMMIT" origin/master`,
+   and a successful `ci` job from `.github/workflows/ci.yml` on the `master`
+   push for that exact SHA. Check the SHA on the run itself. The PR's head check
+   alone is insufficient.
+2. Obtain the owner's approval for the signed annotated tag `vX.Y.Z`, the
+   resulting GitHub Release and the two crates.io uploads at that commit. Create
+   the tag locally, verify its signature against the authorized signer with
+   `git verify-tag`, and require `git rev-parse "refs/tags/$TAG^{commit}"` to
+   equal `$COMMIT`. Only then push the tag. The push starts
+   `.github/workflows/release.yml`, which publishes an immutable GitHub Release
+   and its assets when its checks pass.
+3. Verify that the remote tag object equals the signed local tag object. Stop on
+   a failed identity, signature, ancestry or check result. The Mac upload uses
+   the exact-SHA `ci` check and the signed tag. The GitHub Release and tag-push
+   workflow artifacts are required for CI publishing.
 
-   In a second disposable checkout, run the same dry run without `--no-verify`.
-   Back on the owner's Mac, pass only both archive pairs as data and stop unless
-   each pair hashes the same; the `--no-verify` pair is the staged one. In a
-   fresh checkout of `$COMMIT` that never built the tag, with no Cargo config or
-   overrides, use the helpers at `$TRUSTED_SCRIPTS`. Check LICENSE, README,
-   sources, and no private or untracked files. Record the approved Mac hashes
-   and archives before creating a token. `STAGE` is the transferred directory.
+## 2. Check the tree, packages and inventory
 
-   ```bash
-   test "$(git rev-parse HEAD)" = "$COMMIT"
-   umask 077
-   RECEIPT_DIR="$HOME/.local/state/greennode/releases/$TAG"
-   mkdir -p "$(dirname "$RECEIPT_DIR")"
-   mkdir "$RECEIPT_DIR"
-   export GREENNODE_RELEASE_RECEIPT="$RECEIPT_DIR/crate-checksums.json"
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" receipt "$TAG" "$STAGE" \
-     "$GREENNODE_RELEASE_RECEIPT" --commit "$COMMIT" --toolchain 1.100.0
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --first
-   ```
+Before any credentialed Cargo command, run the
+[standalone tagged-tree check](#required-checker-changes) from the trusted
+helpers on the NUL-delimited output of
+`git ls-tree -r -z --full-tree "$COMMIT"`. Run
+`check-crate-release.py manifest --release --tag "$TAG"` from the root of the
+fresh checkout of that SHA, using the trusted copy of the script. Use only clean
+checkouts with that exact HEAD. Refuse Cargo configuration in the checkout, in
+any ancestor, or in the Cargo home used for release commands. The publish
+checkout must never have built the tag.
 
-   The owner keeps this receipt and its archives. Do not overwrite them on
-   recovery. The Mac receipt approves Mac bytes, not the Linux Release bytes.
-   `--first` requires both crate names to be unregistered; omit it after the
-   first release, when both names must exist and both new versions be absent.
+Use two disposable macOS checkouts without credentials or write access to the
+trusted checkout, publish checkout, or receipt directory. In the first, run
+[workspace packaging](release.md#workspace-packaging) and inspect both package
+file lists. Require the expected sources, LICENSE and READMEs and exclude any
+private or untracked files. In the second, repeat the dry run with verification.
+Transfer only the archives as data and require the two pairs to match by
+SHA-256. Stage the `--no-verify` pair unchanged.
 
-3. **Owner only.** Confirm the tag and receipt again after the dry run. In
-   crates.io Settings → API Tokens, create a short-lived token with
-   `publish-new` for the first release, or `publish-update` after it, and exact
-   patterns `greennode-sdk` and `greennode`. No wildcard, update, owner or yank
-   scope ([Token scopes]).
+In a credential-free checkout, build the pinned tool with
+`cargo +1.100.0 build --locked --release --package greennode` and export its
+`__command-inventory` with a temporary home and cleared environment. Compare
+that export to `crates/greennode/tests/parity/shipped-commands.json` at the tag
+using `check-crate-release.py shipped CANDIDATE COMMITTED PREVIOUS`. On the
+first release, pass `--first` in place of `PREVIOUS`. For a later release, use
+the committed inventory at the verified signed tag for the most recent crates.io
+`greennode` version, selected by the
+[bounded registry lookup](#required-checker-changes). Verify the previous tag's
+signature and protected `master` ancestry. Stop if the registry lookup or the
+inventory check fails. The GitHub Release workflow runs a separate comparison
+against the previous published GitHub Release.
 
-4. **Owner only.** In the fresh checkout, log in with the built-in provider. The
-   token lives only in the form, the hidden prompt, Cargo, and the isolated
-   `$CARGO_HOME/credentials.toml`, never in arguments, history, a checkout,
-   secrets, logs or chat. The helper reads that file only when
-   `GREENNODE_RELEASE_CARGO_HOME` equals `CARGO_HOME`, it is not `~/.cargo`, and
-   the file is an owner-only regular file.
+Before any upload, keep the staged archives in an owner-only directory next to
+the Mac receipt, outside all checkouts. Use a new directory for the tag, such as
+`~/.local/state/greennode/releases/$TAG`, with an `archives` subdirectory
+holding only the two approved `.crate` files. Use `umask 077` when creating
+these directories and files. With `TRUSTED_SCRIPTS` pointing to the trusted
+helpers and `RECEIPT_DIR` pointing to that directory, create the receipt from
+the saved archives.
 
-   ```bash
-   set +x
-   CARGO_HOME=$(mktemp -d)
-   export CARGO_HOME GREENNODE_RELEASE_CARGO_HOME="$CARGO_HOME"
-   IFS= read -r -s -p 'crates.io API token: ' release_token
-   printf '\n'
-   printf '%s\n' "$release_token" | cargo +1.100.0 login --registry crates-io \
-     --config 'registry.credential-provider="cargo:token"'
-   unset release_token
-   ```
+```bash
+python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" receipt "$TAG" \
+  "$RECEIPT_DIR/archives" "$RECEIPT_DIR/crate-checksums.json" \
+  --commit "$COMMIT" --toolchain 1.100.0
+```
 
-5. **Owner only.** Recheck both names, then publish the SDK. Run the wait check
-   even if Cargo errors. Require the SDK's approved checksum, non-yanked index
-   record and owner before publishing the tool.
+Keep the receipt, both archives, the inventory check inputs, and the local
+upload record for recovery. Before the first upload and on every resume,
+recreate a receipt from the saved archives in a new scratch directory using the
+verified tag and commit and the pinned toolchain. Require the recreated receipt
+to match the saved receipt byte for byte. A missing receipt or archive, a failed
+comparison, or a failed checkout or tree check stops before any credentialed
+Cargo command. Keep the approved receipt and archives unchanged.
 
-   ```bash
-   PROVIDER="registry.credential-provider=['python3','-I','$TRUSTED_SCRIPTS/check-crate-publish-credential.py']"
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --first &&
-     cargo +1.100.0 publish --no-verify --locked --registry crates-io \
-       --package greennode-sdk --config "$PROVIDER" --config net.retry=0
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --wait greennode-sdk
-   ```
+## 3. Check the registry and publish the SDK
 
-6. **Owner only.** With the SDK approved and the tool absent, publish the tool.
-   Cargo starts only after a fresh SDK owners fetch lists user `dannyota` and
-   the state check passes. Run the wait check even on a Cargo error. Confirm
-   both versions, then both crates' owners.
+Run `check-crate-release.py state RECEIPT` against the saved receipt and require
+both versions to report `absent`. Pass `--first` only for the first release,
+when the two crate names must also be unregistered. For later releases, omit
+`--first` and check that both existing names list `dannyota` as a user owner
+using the [bounded owners lookup](#required-checker-changes). Require the same
+state and ownership checks immediately before starting the SDK upload.
 
-   ```bash
-   OWNERS=$(curl -fsS -A greennode-release https://crates.io/api/v1/crates/greennode-sdk/owners) &&
-     jq -e '.users | any(.kind == "user" and .login == "dannyota")' <<< "$OWNERS" &&
-     STATE=$(python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT") &&
-     test "$STATE" = $'greennode-sdk: present-and-approved\ngreennode: absent' &&
-     cargo +1.100.0 publish --no-verify --locked --registry crates-io \
-       --package greennode --config "$PROVIDER" --config net.retry=0
-   python3 -I "$TRUSTED_SCRIPTS/check-crate-release.py" state "$GREENNODE_RELEASE_RECEIPT" --wait greennode
-   ```
+Use a plain Bash session in the fresh publish checkout. Refuse a set
+`CARGO_REGISTRY_TOKEN` or any `CARGO_REGISTRIES_*_TOKEN`, even an empty one.
+Check variable names with the following gate before each upload and stop on
+failure.
 
-7. **Owner only.** Even after interruption, log out, remove the isolated Cargo
-   home, and revoke the token in crates.io Settings → API Tokens. [Cargo logout]
-   removes the local copy, not the server token.
+```bash
+(
+  while IFS= read -r NAME; do
+    case "$NAME" in
+      CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_*_TOKEN) exit 1 ;;
+    esac
+  done < <(compgen -v)
+)
+```
 
-   ```bash
-   cargo +1.100.0 logout --registry crates-io \
-     --config 'registry.credential-provider="cargo:token"'
-   rm -rf -- "$CARGO_HOME"
-   unset CARGO_HOME GREENNODE_RELEASE_CARGO_HOME
-   ```
+Leave `CARGO_HOME` unset and use the owner's default Cargo home. Use the
+built-in token provider with the credentials stored by [Cargo login]. Refuse
+registry, source, provider, build or toolchain overrides. Leave the owner's
+login in place on success, failure or interruption. No Mac upload starts before
+all identity, ancestry, receipt, inventory and registry checks pass and the
+owner has approved publication.
 
-8. **Owner only.** After the first release, set up both Trusted Publishers once
-   the CI publish workflow is proven. Follow
-   [one-time setup](release.md#one-time-setup).
+Only one publish attempt may run at a time. Immediately before starting Cargo,
+record the crate, version and approved checksum as `unknown` in the durable Mac
+upload record. Keep that entry until reconciliation confirms the result, even if
+the shell exits. Run the SDK upload with the pinned toolchain.
+
+```bash
+cargo +1.100.0 publish --no-verify --locked --registry crates-io \
+  --package greennode-sdk --config net.retry=0
+```
+
+Always run `check-crate-release.py state RECEIPT --wait greennode-sdk` after
+Cargo returns, including on a Cargo error. Require `present-and-approved` for
+the SDK in both registry readers and confirm its owner before proceeding. Cargo
+repackages when it publishes. On this path the local receipt approves the
+dry-run bytes and reconciliation detects any difference after an upload. The
+[CI checksum provider](release.md#approve-the-bytes-cargo-uploads) checks actual
+bytes before upload on the CI path.
+
+## 4. Publish the tool and confirm the pair
+
+Recheck the SDK owner and require `present-and-approved` for the SDK and
+`absent` for the tool using `state` without `--first`. For the first release,
+require the tool name to remain unregistered. For later releases, require
+`dannyota` to remain a user owner of the tool name. Any unresolved earlier
+attempt to upload the tool blocks a new attempt. Recheck the credential
+environment, record the pending tool upload as in step 3, and run:
+
+```bash
+cargo +1.100.0 publish --no-verify --locked --registry crates-io \
+  --package greennode --config net.retry=0
+```
+
+Always run `check-crate-release.py state RECEIPT --wait greennode` after Cargo
+returns. Require `present-and-approved` for both crates and `dannyota` as a user
+owner of both names. Record the confirmed results against the saved receipt.
 
 ## Resume a release
 
-Repeat the step 1 checks. Use the saved Mac receipt and another fresh checkout
-that never built the tag. Run `state` without `--first`. If both match, do not
-upload. If the SDK matches and the tool name is unregistered, create a new
-`publish-new` token scoped only to `greennode`. Repeat steps 4, 6 and 7 and set
-`PROVIDER` as in step 5 without uploading the SDK. Do not retry an unknown
-upload. Stop without the original receipt or exact-run evidence. If the evidence
-expired and only the SDK exists, cut a new shared tag. Omit `--first` for that
-bootstrap, check SDK ownership and both new versions absent, and use separate
-tokens: `publish-update` scoped to the SDK, then `publish-new` scoped to the
-tool. Never widen one token or automatically yank the old SDK.
+Get the owner's approval for the retry. Repeat the commit, signature, remote
+tag, local tree and saved receipt checks in steps 1 and 2 using a new publish
+checkout. Reuse the saved inventory inputs and recheck the registry and crate
+ownership. Recovery uses the Mac record and archived packages, with no
+requirement for a GitHub Release, its receipt, or its workflow artifacts.
 
-[Cargo logout]: https://doc.rust-lang.org/cargo/commands/cargo-logout.html
-[Token scopes]:
-  https://rust-lang.github.io/rfcs/2947-crates-io-token-scopes.html
+Run `state` without `--first` to reconcile the pair. If both versions are
+approved, check both owners and end the attempt. If the SDK is approved and only
+the tool is confirmed absent, run step 4. This covers both the first release,
+when the tool name is still unregistered, and later releases, when the owner
+must already own the tool name. If both uploads are confirmed absent, repeat
+steps 3 and 4 with the original first or later checks. A tool version present
+without its approved SDK stops recovery.
+
+If an upload may have started, a subsequent `absent` is insufficient. Require
+both registry readers to confirm the approved bytes or get confirmation from
+crates.io that the attempted upload did not land and is no longer in flight.
+Preserve `unknown` until then. Stop on missing local records, invalid evidence,
+yanks, mismatches, or unresolved uploads. Never overwrite the saved receipt.
+
+## Required checker changes
+
+The following checks need standalone support in `scripts/check-crate-release.py`
+before the Mac procedure can run. The existing `evidence` command couples the
+tagged tree and owners checks to GitHub Release evidence. `manifest`, `receipt`,
+`shipped`, and `state` already work locally without it.
+
+- Extract the tagged-tree validator from `evidence` and expose it on its own.
+  Apply the existing 8 MiB bound and NUL-delimited tree checks. Require unique
+  canonical paths to regular Git blobs. Reject symlinks, submodules, malformed
+  entries and `.cargo/config` or `.cargo/config.toml` anywhere in the tree,
+  case-insensitively. Return failure without consulting a Release or run.
+- For each requested crate, use the existing bounded HTTPS reader for
+  `https://crates.io/api/v1/crates/CRATE/owners`. Cap each lookup at 30 seconds
+  total and 1 MiB with no redirects, credentials or cache reuse. For registered
+  names, require a valid HTTP 200 `users` array of objects with a `user` entry
+  whose `login` is `dannyota`. Where an unregistered name is expected, require
+  HTTP 404 and the exact crate-specific not-found body. Fail on any other
+  response, timeout or decode error.
+- Use that bounded reader for the `greennode` sparse index to find the highest
+  published `X.Y.Z` tool version, including yanked versions. Require valid index
+  framing, unique version records and a version strictly below the candidate.
+  Recheck the chosen version against the version API and require agreement on
+  its name, version, checksum and yank status. Missing or inconsistent data
+  blocks a later release.
+
+[Cargo login]: https://doc.rust-lang.org/cargo/commands/cargo-login.html

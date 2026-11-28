@@ -14,8 +14,7 @@ GreenNode or VNG.
 greennode is a Rust SDK and CLI for GreenNode, compatible with
 [vngcloud](https://github.com/dannyota/vngcloud). The CLI ships
 `greennode version`, `greennode configure`, and the service commands that
-[CLI.md](docs/wiki/CLI.md) lists. Work continues service by service. No release
-exists, and nothing is on crates.io.
+[CLI.md](docs/wiki/CLI.md) lists. Work continues service by service.
 
 Use [vngcloud](https://github.com/dannyota/vngcloud) for real work until the
 commands you need ship. The [architecture](docs/design/architecture.md)

@@ -2,17 +2,17 @@
 
 One `vMAJOR.MINOR.PATCH` tag releases two crates at one version. Publish
 `greennode-sdk` first, then `greennode`, whose packaged manifest must require
-exactly `=VERSION` of the SDK. The owner publishes from the Mac until the CI
-publish workflow is proven, then through GitHub Actions. Uploads are permanent
-([Cargo publishing]).
+exactly `=VERSION` of the SDK. Mac publishing is active until the owner approves
+cutover to a proven CI publish workflow. Uploads are permanent ([Cargo
+publishing]).
 
 ## Approaches
 
-| Approach                                                              | Trade-off                                                                                      |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Publish from a tag or release job                                     | Fewer steps, but no separate owner decision and one job can write to GitHub and crates.io.     |
-| Upload with `cargo publish --workspace`                               | Cargo orders dependencies, but uploads are not atomic and a retry must omit existing versions. |
-| Separate release and manual publish workflows, with per-crate uploads | Use this approach. It keeps [duolane]'s gates and retries only missing uploads.                |
+| Approach                                             | Trade-off                                                                                       |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Publish each crate from the Mac                      | Use now. The owner controls each release and can reconcile the two uploads independently.       |
+| Publish from a tag or release job                    | One job can write to GitHub and crates.io, without a separate approval for the registry upload. |
+| Dispatch a separate workflow with Trusted Publishing | Use after proof and approval. It keeps [duolane]'s separate approval and per-crate recovery.    |
 
 ## Versions
 
@@ -34,9 +34,10 @@ then repeat with `--locked`. Do not edit a member's inherited version.
 
 ## Releases from the owner's Mac
 
-Every `0.x.y` release is published by hand, as the
-[Mac release](release-first.md) design specifies, until the CI publish workflow
-is proven.
+The [Mac release procedure](release-first.md) uses the owner's existing Cargo
+login, approved Mac archives and a saved local receipt. The tag push still runs
+the GitHub Release workflow. CI packaging evidence applies to the separate CI
+crates.io upload.
 
 ## Release workflow
 
@@ -81,17 +82,16 @@ notes] and compare endpoints, listing non-merge commit subjects. No release job
 has OIDC or registry write credentials. The receipt is written on a fresh runner
 that never built the tag, from the staged archives the packaging job uploads.
 
-### Release evidence
+### Release evidence for CI publishing
 
-Require a published immutable GitHub Release, tag commit in protected `master`'s
-history, and a successful `release.yml` tag-push run for the exact tag and
-commit. Compare each expected uploaded asset's SHA-256 with the corresponding
-downloaded build artifact from that run. No missing artifacts, expired artifacts
-or digest mismatches pass. Bootstrap, dispatch and recovery must finish within
-[GitHub artifact retention]. After that, never rebuild for new evidence: cut and
-publish a new shared version; a lone SDK version stays published. The immutable
-Release receipt preserves the checksums but cannot replace the exact-run
-evidence.
+The CI crates.io workflow requires a published immutable GitHub Release, the tag
+commit in protected `master`'s history, and a successful `release.yml` tag-push
+run for the exact tag and commit. Compare each expected uploaded asset's SHA-256
+with the corresponding downloaded build artifact from that run. Dispatch and
+recovery must finish within [GitHub artifact retention]. A missing artifact or
+digest mismatch blocks CI publishing. If the artifacts expire, cut and publish a
+new shared version. A lone SDK version stays published. The immutable Release
+receipt preserves the checksums but cannot replace the exact-run evidence.
 
 ### Workspace packaging
 
@@ -174,23 +174,23 @@ attempt, not a rerun. Default permissions are `{}`.
    action revokes the token in its post step; crates.io expires it after 30
    minutes ([crates.io guide source]).
 3. Publish only missing versions in SDK-first order. Use a fresh empty Cargo
-   home, pinned Rust and the same guarded `cargo publish` commands as on the
-   Mac. No compilation or restored build cache. Give `CARGO_REGISTRY_TOKEN` only
-   to Cargo and its provider for uploads, never workflow-wide or in files.
+   home, pinned Rust and the checksum-checking provider. No compilation or
+   restored build cache. Give `CARGO_REGISTRY_TOKEN` only to Cargo and its
+   provider for uploads, never workflow-wide or in files.
 
 ### Approve the bytes Cargo uploads
 
 `cargo publish` packages again. Cargo 1.100 computes SHA-256 of the actual
 archive and asks its credential provider for the `publish` operation with the
 name, version and checksum before uploading ([Cargo credential protocol], [Cargo
-1.100 publish source]). Set `registry.credential-provider` explicitly to the
-checksum-checking helper. Give a token for `publish` only if the registry is
+1.100 publish source]). In CI, set `registry.credential-provider` explicitly to
+the checksum-checking helper. Give a token for `publish` only if the registry is
 crates.io and the name, version and checksum match the current upload and
 validated receipt. Allow a `read` credential only for that registry. Allow no
 other write. Set `cache: "never"` and `operation_independent: false`. No
-fallback provider or `--token`. Read `CARGO_REGISTRY_TOKEN` in CI ([Cargo token
-config]) or the isolated [Cargo login] file on the Mac. Send the token only
-through the provider protocol. Refuse different bytes before upload.
+fallback provider or `--token`. Read `CARGO_REGISTRY_TOKEN` ([Cargo token
+config]) and send it only through the provider protocol. Refuse different bytes
+before upload.
 
 ## Registry gate and recovery
 
@@ -213,51 +213,62 @@ the upload landed. If still unconfirmed, record crate, version, checksum and
 `unknown` in the summary. Stop without retrying or proceeding to the tool. A
 stopped job that started Cargo without confirming the upload is also unknown.
 
-The owner checks the preceding attempt before dispatching again. If both readers
+The owner checks the preceding attempt before another upload. If both readers
 still say absent after an ambiguous write, get confirmation from crates.io that
 the write did not land and is no longer in flight. A red job, old 404 or elapsed
-time does not clear it. While the release run artifacts still exist, dispatch
-the same tag for a new approval and publish only missing crates. A yanked
-version is not absent. Investigate yanks and mismatches before any write. Never
-automatically unyank or retag. Correct an accidental yank only after verifying
-the approved bytes. A version with different bytes needs a new shared tag.
+time does not clear it. For Mac recovery, use the
+[saved local receipt and archives](release-first.md#resume-a-release). For CI
+recovery, dispatch the same tag for a new approval while the exact-run artifacts
+still exist. Publish only confirmed missing versions. Investigate yanks and
+mismatches before any write. Never automatically unyank or retag. Correct an
+accidental yank only after verifying the approved bytes. A version with
+different bytes needs a new shared tag.
 
-## One-time setup
+## GitHub Release setup
 
-- Enable immutable GitHub Releases, allow 90-day artifact retention, and protect
-  `master`. Add a tag ruleset on `v*` that blocks updates and deletions and lets
-  only the owner create tags. Create environment `crates-io`, restrict it to
-  `master`, require the owner and disallow bypass. Allow self-review while the
-  owner is the only reviewer. Allow the pinned workflow actions, including
-  `softprops/action-gh-release` and `rust-lang/crates-io-auth-action` at
-  `3268eb413133e2960fa4ae0e963ca76380c54cd9`.
-- Only the owner adds both crates' Trusted Publishers after initial publication
-  ([RFC 3691], [crates.io guide source]). In each crate's Settings → Trusted
-  Publishing, select GitHub. Set owner `dannyota`, repository `greennode`,
-  workflow `publish-crates.yml` and environment `crates-io`.
-- Never put a crates.io API token in GitHub secrets. The bootstrap token stays
-  local; later jobs use OIDC.
+Protect `master`, enable immutable GitHub Releases and allow 90-day artifact
+retention. Add a tag ruleset on `v*` that blocks updates and deletions and lets
+only the owner create tags. Allow the pinned actions for the Release workflow,
+including `softprops/action-gh-release`.
+
+## Packaging proof
+
+Use `scripts/test/loopback-registry-proof.py` with Cargo 1.100.0 and two toy
+crates. From empty paths, check dry-run staging and equality with the individual
+publish archive checksums before and after the SDK is indexed. The proof also
+checks that the CI checksum provider prevents a mismatched upload. Cargo
+rebuilds the packaged lockfile, so byte equality must be established by the
+proof. A mismatch blocks the affected publish path.
+
+The Mac path requires a passing macOS proof with the pinned Cargo version. The
+script passed on macOS on 2026-11-26 for both toy secret sources. The Ubuntu
+proof is a prerequisite for the first CI upload and is still to run.
+
+## CI cutover
+
+1. Pass the Ubuntu packaging proof. Create the `crates-io` environment, restrict
+   it to `master`, require the owner and disallow bypass. Allow self-review
+   while the owner is the only reviewer. Allow the pinned
+   `rust-lang/crates-io-auth-action` at
+   `3268eb413133e2960fa4ae0e963ca76380c54cd9`.
+2. After both names exist, only the owner adds their Trusted Publishers ([RFC
+   3691], [crates.io guide source]). In each crate's Settings → Trusted
+   Publishing, select GitHub. Set owner `dannyota`, repository `greennode`,
+   workflow `publish-crates.yml` and environment `crates-io`. CI uses OIDC. Keep
+   the Mac token out of GitHub secrets.
+3. For a release chosen by the owner, confirm the `gh` Release and exact-run
+   fields against live output in a preflight-only dispatch. Pass that preflight
+   and obtain the owner's approval for the first live CI dispatch. Prove both
+   uploads, their approved checksums and ownership. Recover a partial CI upload
+   through the CI path for that tag. After the proof succeeds, the owner
+   approves moving subsequent releases to CI.
 
 ## Unverified
 
-- The crates.io forms come from their source, not the rendered guide; the owner
-  checks the deployed forms.
-- Accepted limits of the registry check: crates.io's not-found bodies were
-  observed on 2026-11-25, not documented; a reset during the response head and a
-  TLS timeout behind a proxy are not retried precisely.
-- Before any release, test two toy crates on a loopback registry with Cargo
-  1.100.0 on macOS and Ubuntu. From empty paths, check dry-run staging, equality
-  with the individual publish operation's checksums before and after the SDK is
-  indexed, and no upload on mismatch. Test both secret sources. Cargo rebuilds
-  the packaged lockfile, so byte equality is not guaranteed. A mismatch blocks
-  release; do not weaken the gate. `scripts/test/loopback-registry-proof.py`
-  runs it; it passed on macOS on 2026-11-26 for both secret sources. Ubuntu is
-  still to run.
-- Environment and Trusted Publishers stay untested until the first CI publish.
-  The environment and run-approval reads rely on GitHub's documented repository
-  read access, as duolane's do; the first dispatch confirms them.
-- The `gh` field names the [first release](release-first.md) gathers are checked
-  against live output before that release.
+- The owner checks the deployed Trusted Publishing forms against their source
+  and verifies the environment and run-approval reads on the first CI dispatch.
+- The crates.io not-found bodies were observed on 2026-11-25. A reset during the
+  response head or a TLS timeout behind a proxy may stop the registry check.
 
 [duolane]:
   https://github.com/dannyota/duolane/blob/master/docs/design/release.md
@@ -266,7 +277,6 @@ the approved bytes. A version with different bytes needs a new shared tag.
   https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations
 [dry runs]:
   https://blog.rust-lang.org/2025/09/18/Rust-1.90.0/#cargo-adds-native-support-for-workspace-publishing
-[Cargo login]: https://doc.rust-lang.org/cargo/commands/cargo-login.html
 [Cargo token config]:
   https://doc.rust-lang.org/cargo/reference/config.html#registrytoken
 [Cargo credential protocol]:
