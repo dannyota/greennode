@@ -623,3 +623,23 @@ async fn billing_history_exit_refuses_a_reflected_redaction_marker() {
     assert_eq!(server.requests(), 1);
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn resources_refuse_encoded_credentials_in_unknown_fields() {
+    let body = format!(
+        r#"{{"code":200,"data":{{"data":[],"unknown":{{"hint":"{}"}}}}}}"#,
+        BEARER.replace('-', "%2D")
+    );
+    let server = Server::start(vec![response("200 OK", body.as_bytes())]);
+    let (ctx, _) = RequestContext::new();
+    let result = client(&server, BEARER)
+        .list_resources(&ctx, ListResourcesInput {})
+        .await;
+    assert!(result.is_err());
+    let failure = result.unwrap_err();
+    assert_eq!(
+        failure.error().api_error().unwrap().code(),
+        "InvalidResponse"
+    );
+    assert!(failure.partial().is_none());
+}

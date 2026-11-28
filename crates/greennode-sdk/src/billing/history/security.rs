@@ -6,7 +6,6 @@ use std::{fmt::Write, ops::Range};
 use zeroize::Zeroizing;
 
 pub(super) const HISTORY_WITHHELD: &str = "billing history response withheld";
-pub(super) const RESOURCE_WITHHELD: &str = "billing response withheld";
 const AUTH_WITHHELD: &str = "billing history authentication failed";
 const REDACTED: &str = "[redacted]";
 const MAX_WORK: usize = 8 << 20;
@@ -97,9 +96,6 @@ pub(super) fn safe_request_error(
     let status = api.and_then(|api| StatusCode::from_u16(api.observed_status()?).ok());
     let overflow = error.is_body_too_large();
     let mut safe = match status {
-        _ if overflow && message == RESOURCE_WITHHELD => {
-            response_error(operation, status, "InvalidResponse", message, false)
-        }
         Some(status) => status_error(operation, status, message),
         None => response_error(
             operation,

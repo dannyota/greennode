@@ -364,6 +364,27 @@ mod tests {
         assert!(format!("{:x?}", result.items[0]) == format!("{:?}", result.items[0]));
     }
 
+    #[tokio::test]
+    async fn integer_id_allows_a_bearer_matching_only_the_float_spelling() {
+        let credentials = SentCredentials::for_test(vec![crate::Secret::new("403.0")]);
+        let integer = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Ok(crate::globalloadbalancer::RegionalPackage {
+                id: 403,
+                ..Default::default()
+            })
+        });
+        assert!(integer.is_ok());
+        let float = finish!(async {
+            record(&credentials, &credentials, WriteDispatch::NotAWrite);
+            Ok(crate::billing::Resource {
+                cost: Some(403.0),
+                ..Default::default()
+            })
+        });
+        assert!(float.is_err());
+    }
+
     #[test]
     fn public_form_fields_do_not_use_caller_debug_flags() {
         fn check(value: impl std::fmt::Debug) {

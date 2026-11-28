@@ -615,6 +615,7 @@ async fn run_inner(
                 );
                 let resending =
                     decision.resend && matches!(auth, Auth::Bearer(source) if source.refreshable());
+                evidence.status = evidence.status.filter(|_| !resending);
                 if let (Auth::Bearer(source), Some(sent)) = (auth, decision.rejected) {
                     let rejected = match bounded(&ctx, clock, || {
                         source.rejected(&ctx, sent, decision.invalidate.is_some())
@@ -634,7 +635,6 @@ async fn run_inner(
                     })?;
                 }
                 if resending && let Auth::Bearer(source) = auth {
-                    evidence.status = None;
                     bearer = Some(acquire_bearer(&ctx, clock, source, reflection).await?);
                     recovered = true;
                     attempt = 0;

@@ -204,24 +204,42 @@ pub(super) fn output_reflects(evidence: &super::Evidence, body: &[u8]) -> Screen
 }
 
 pub(super) fn output_with_matcher(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
-    matcher
-        .scan(body, false)
-        .then(|| check_output(matcher, body, false))
+    matcher.scan(body, false).then(|| {
+        check_output(body, false, false, &|text, identifier| {
+            matcher.scan(text.as_bytes(), identifier)
+        })
+    })
 }
 
 pub(super) fn output_identifier_reflects(matcher: &BodyMatcher<'_>, body: &[u8]) -> Screen {
-    check_output(matcher, body, true)
+    check_output(body, true, false, &|text, identifier| {
+        matcher.scan(text.as_bytes(), identifier)
+    })
 }
 
-fn check_output(matcher: &BodyMatcher<'_>, body: &[u8], identifiers: bool) -> Screen {
+pub(in crate::wire::product) fn raw_output_with(
+    body: &str,
+    identifiers: bool,
+    matches: &impl Fn(&str, bool) -> Screen,
+) -> Screen {
+    matches(body, identifiers).then(|| check_output(body.as_bytes(), identifiers, true, matches))
+}
+
+fn check_output(
+    body: &[u8],
+    identifiers: bool,
+    raw_numbers: bool,
+    matches: &impl Fn(&str, bool) -> Screen,
+) -> Screen {
+    let text = crate::model::wire::go_json(body);
     check_decoded(
-        body,
+        text.as_bytes(),
         identifiers,
         identifier_key,
         &|text, identifier, number| {
-            matcher.scan(text.as_bytes(), identifier).then(|| {
+            matches(text, identifier).then(|| {
                 if number {
-                    output_number_reflects(matcher, text, identifier)
+                    output_number_reflects(text, identifier, raw_numbers, matches)
                 } else {
                     Screen::Clean
                 }
@@ -230,27 +248,32 @@ fn check_output(matcher: &BodyMatcher<'_>, body: &[u8], identifiers: bool) -> Sc
     )
 }
 
-fn output_number_reflects(matcher: &BodyMatcher<'_>, text: &str, identifier: bool) -> Screen {
-    let Ok(number) = text.parse::<f64>() else {
+fn output_number_reflects(
+    text: &str,
+    identifier: bool,
+    raw_numbers: bool,
+    matches: &impl Fn(&str, bool) -> Screen,
+) -> Screen {
+    let Some(number) = text.parse::<f64>().ok().filter(|number| number.is_finite()) else {
         return Screen::Clean;
     };
-    if !identifier
+    if !raw_numbers
+        && !identifier
         && text.parse::<i64>().is_err()
         && text.parse::<u64>().is_err()
         && serde_json::to_string(&number).is_ok_and(|canonical| canonical != text)
     {
         return Screen::Clean;
     }
-    let screen = std::cell::Cell::new(Screen::Clean);
+    let mut screen = Screen::Clean;
     if crate::output_number::any_spelling(number, false, |spelling| {
-        let matched = matcher.scan(spelling.as_bytes(), identifier);
-        screen.set(matched);
-        !matched.is_clean()
-    }) && screen.get().is_clean()
+        screen = matches(spelling, identifier);
+        !screen.is_clean()
+    }) && screen.is_clean()
     {
         return Screen::Indeterminate;
     }
-    screen.get()
+    screen
 }
 
 fn check_decoded<F: Fn(&str, bool, bool) -> Screen>(

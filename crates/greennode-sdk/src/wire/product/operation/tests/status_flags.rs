@@ -160,6 +160,10 @@ pub(crate) fn assert_matches_go(operation: &Operation, options: &Options<'_>) {
             | "monitor.GetNotificationQuota",
             _,
         ) => monitor_flags(id, method, operation.template),
+        ("billingresources.GetAccount", "GET") => KEEP | NO_FOLLOW,
+        (_, "PUT") if operation.template == "gateway/api/v1/resources/autoRenew" => {
+            KEEP | NO_FOLLOW
+        }
         _ => GO_FLAGS
             .iter()
             .find(|&&(op, verb, _)| (op, verb) == (id, method))
