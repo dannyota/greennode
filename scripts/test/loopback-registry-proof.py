@@ -11,10 +11,15 @@ import threading
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PROVIDER = ROOT / "scripts/check-crate-publish-credential.py"
+PUBLISH_CONFIG = ROOT / "scripts/publish-cargo.toml"
 TOKEN = "toy-loopback-token"
 NAMES = ("greennode-sdk", "greennode")
 VERSION = "0.1.0"
+
+
+def upload_args(name, config):
+    return ("publish", "--no-verify", "--locked", "--registry", "crates-io", "--package", name,
+            "--config", str(config), "--config", "net.retry=0")
 
 
 def digest(data):
@@ -34,7 +39,7 @@ class Registry(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/index/config.json":
             body = json.dumps({"dl": self.server.base + "/download/{crate}/{version}",
-                               "api": self.server.base, "auth-required": True}).encode()
+                               "api": self.server.base}).encode()
             self.reply(200, body)
         elif self.path.startswith("/index/gr/ee/") and self.path.rsplit("/", 1)[-1] in self.server.archives:
             name = self.path.rsplit("/", 1)[-1]
@@ -79,7 +84,7 @@ def run_case(root, cargo, rustup_home, source):
     for name in NAMES:
         crate = workspace / name
         (crate / "src").mkdir(parents=True)
-        dependency = ('\n[dependencies]\ngreennode-sdk = { path = "../greennode-sdk", version = "=0.1.0", registry = "proof" }\n'
+        dependency = ('\n[dependencies]\ngreennode-sdk = { path = "../greennode-sdk", version = "=0.1.0" }\n'
                       if name == NAMES[1] else "")
         (crate / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "{VERSION}"\nedition = "2021"\nlicense = "MIT"\n{dependency}')
         (crate / "src/lib.rs").write_text("pub fn toy() {}\n")
@@ -95,26 +100,12 @@ def run_case(root, cargo, rustup_home, source):
     thread.start()
     try:
         index = "sparse+" + server.base + "/index/"
-        provider = root / "provider.py"
-        log = root / "requests.jsonl"
-        code = PROVIDER.read_text()
-        original = 'INDEXES = {"sparse+https://index.crates.io/", "https://github.com/rust-lang/crates.io-index"}'
-        assert code.count(original) == 1
-        code = code.replace(original, f'INDEXES = {{{index!r}}}')
-        original = '        result = response(request, env)'
-        assert code.count(original) == 1
-        code = code.replace(original, '        with open(env["PROOF_REQUEST_LOG"], "a") as log:\n            log.write(json.dumps(request) + "\\n")\n' + original)
-        python = shutil.which("python3")
-        provider.write_text(f"#!{python}\n" + code)
-        provider.chmod(0o700)
-        (cargo_home / "config.toml").write_text(
-            f'[registries.proof]\nindex = "{index}"\ncredential-provider = "{provider}"\n'
-            f'[source.crates-io]\nreplace-with = "local-only"\n[source.local-only]\nregistry = "{index}"\n')
         receipt = root / "receipt.json"
         env = {"PATH": os.environ["PATH"], "HOME": str(home), "CARGO_HOME": str(cargo_home),
                "RUSTUP_HOME": rustup_home, "RUSTUP_AUTO_INSTALL": "0", "CARGO_BUILD_JOBS": "4",
                "GREENNODE_RELEASE_CARGO_HOME": str(cargo_home), "GREENNODE_RELEASE_RECEIPT": str(receipt),
-               "PROOF_REQUEST_LOG": str(log), "CARGO_HTTP_PROXY": "", "NO_PROXY": "*"}
+               "CARGO_HTTP_PROXY": server.base, "NO_PROXY": "127.0.0.1",
+               "__CARGO_TEST_CRATES_IO_URL_DO_NOT_USE_THIS": index}
         if source == "environment":
             env["CARGO_REGISTRY_TOKEN"] = TOKEN
         else:
@@ -123,7 +114,7 @@ def run_case(root, cargo, rustup_home, source):
             credentials.chmod(0o600)
 
         def cargo_run(*args, success=True):
-            result = subprocess.run([cargo, "+1.100.0", *args, "--manifest-path", str(manifest)],
+            result = subprocess.run([cargo, "+1.100.0", *args],
                                     cwd=workspace, env=env, text=True, capture_output=True, timeout=120)
             assert TOKEN not in result.stdout and TOKEN not in result.stderr
             if (result.returncode == 0) != success:
@@ -134,7 +125,7 @@ def run_case(root, cargo, rustup_home, source):
         build = root / "build"
         env["CARGO_TARGET_DIR"] = str(root / "target")
         env["CARGO_BUILD_BUILD_DIR"] = str(build)
-        cargo_run("publish", "--workspace", "--dry-run", "--no-verify", "--locked", "--registry", "proof")
+        cargo_run("publish", "--workspace", "--dry-run", "--no-verify", "--locked", "--registry", "crates-io")
         staged = {name: (build / "package/tmp-crate" / f"{name}-{VERSION}.crate").read_bytes() for name in NAMES}
         hashes = {name: digest(data) for name, data in staged.items()}
 
@@ -144,30 +135,21 @@ def run_case(root, cargo, rustup_home, source):
             receipt.write_text(json.dumps({"tag": "v0.1.0", "commit": "0" * 40,
                                            "toolchain": "1.100.0", "crates": crates}))
 
-        def publish(name, success):
-            log.write_text("")
-            cargo_run("publish", "--package", name, "--no-verify", "--locked", "--registry", "proof", success=success)
-            requests = [json.loads(line) for line in log.read_text().splitlines()]
-            matches = [r for r in requests if r.get("operation") == "publish" and r.get("name") == name]
-            assert matches and matches[-1]["vers"] == VERSION
-            return matches[-1]["cksum"]
-
-        write_receipt(True)
-        observed_sdk = publish(NAMES[0], False)
-        assert not server.uploads and server.attempts == 0
-        write_receipt()
-        assert observed_sdk == hashes[NAMES[0]]
-        assert publish(NAMES[0], True) == hashes[NAMES[0]]
-        assert server.uploads == [NAMES[0]] and digest(server.archives[NAMES[0]]) == hashes[NAMES[0]]
-        server.indexed = True
-        write_receipt(True)
-        observed_tool = publish(NAMES[1], False)
-        assert server.uploads == [NAMES[0]] and server.attempts == 1
-        write_receipt()
-        assert observed_tool == hashes[NAMES[1]]
-        assert publish(NAMES[1], True) == hashes[NAMES[1]]
-        assert server.uploads == list(NAMES) and digest(server.archives[NAMES[1]]) == hashes[NAMES[1]]
-        print(f"{source}: staged checksums match both publish requests; mismatches refused; uploads matched")
+        for name in NAMES:
+            upload = upload_args(name, PUBLISH_CONFIG)
+            previous_attempts = server.attempts
+            write_receipt(True)
+            refused = cargo_run(*upload, success=False)
+            if "credential request refused" not in refused.stderr:
+                raise RuntimeError(f"credential provider did not refuse the receipt for {name}:\n{refused.stderr}")
+            assert server.attempts == previous_attempts
+            write_receipt()
+            cargo_run(*upload)
+            assert server.attempts == previous_attempts + 1
+            assert digest(server.archives[name]) == hashes[name]
+            server.indexed = True
+        assert server.uploads == list(NAMES)
+        print(f"{source}: mismatched receipts refused; both uploads matched staged checksums")
     finally:
         server.shutdown()
         thread.join()

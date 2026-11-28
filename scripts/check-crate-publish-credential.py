@@ -1,4 +1,4 @@
-# Usage: python3 -I scripts/check-crate-publish-credential.py --cargo-plugin
+#!/usr/bin/env -S python3 -I
 import json
 import os
 import pwd
